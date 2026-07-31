@@ -8,6 +8,13 @@
 			"when": 1785502800000,
 			"tag": "0000_booking_domain",
 			"breakpoints": true
+		},
+		{
+			"idx": 1,
+			"version": "6",
+			"when": 1785502801000,
+			"tag": "0001_subject_scopes_and_outbox_claim",
+			"breakpoints": true
 		}
 	]
 }

@@ -135,6 +135,7 @@ export const notificationOutbox = sqliteTable(
 			.default("pending"),
 		attemptCount: integer("attempt_count").notNull().default(0),
 		nextAttemptAt: text("next_attempt_at").notNull(),
+		claimToken: text("claim_token"),
 		lastError: text("last_error"),
 		createdAt: text("created_at").notNull(),
 		sentAt: text("sent_at"),

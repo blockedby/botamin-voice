@@ -144,6 +144,96 @@ describe("lead notifiers and outbox", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("does not let an expired claimant overwrite or report after reclaim failure", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "botamin-outbox-race-"));
+		directories.push(directory);
+		const database = openDomainDatabase({
+			filename: join(directory, "domain.db"),
+		});
+		const conversationId = Bun.randomUUIDv7();
+		new ConversationStore(database).create({
+			id: conversationId,
+			stage: "COLLECT_BOOKING",
+			promptVersion: "e".repeat(64),
+			source: "landing",
+			locale: "ru-RU",
+			qualificationEnabled: true,
+			consentAt: at,
+			startedAt: at,
+		});
+		await new SqliteBookingService(database, {
+			notifierKind: "webhook",
+			now: () => new Date(at),
+		}).createBooking({
+			conversationId,
+			idempotencyKey: "outbox-race-booking-01",
+			name: "Александр",
+			contacts: [{ channel: "telegram", value: "@alex" }],
+			consentConfirmed: true,
+		});
+		const eventId = database.select().from(notificationOutbox).get()?.eventId;
+		if (eventId === undefined) throw new Error("Expected pending notification");
+
+		let releaseFirst: () => void = () => undefined;
+		let markFirstPublishing: () => void = () => undefined;
+		const firstGate = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const firstPublishing = new Promise<void>((resolve) => {
+			markFirstPublishing = resolve;
+		});
+		const attemptedEventIds: string[] = [];
+		let firstNow = new Date(at);
+		const firstNotifier: NamedLeadNotifier = {
+			kind: "webhook",
+			async publish(payload) {
+				attemptedEventIds.push(payload.eventId);
+				markFirstPublishing();
+				await firstGate;
+			},
+		};
+		const secondNotifier: NamedLeadNotifier = {
+			kind: "webhook",
+			async publish(payload) {
+				attemptedEventIds.push(payload.eventId);
+				throw new Error("deterministic second-worker failure");
+			},
+		};
+		const firstWorker = new NotificationOutboxWorker(database, firstNotifier, {
+			now: () => firstNow,
+			leaseMs: 1_000,
+			claimTokenFactory: () => "claim-a",
+		});
+		const secondWorker = new NotificationOutboxWorker(
+			database,
+			secondNotifier,
+			{
+				now: () => new Date("2026-07-30T20:22:02.000Z"),
+				leaseMs: 1_000,
+				claimTokenFactory: () => "claim-b",
+			},
+		);
+
+		const firstResult = firstWorker.processEvent(eventId);
+		await firstPublishing;
+		const secondResult = await secondWorker.processEvent(eventId);
+		firstNow = new Date("2026-07-30T20:22:03.000Z");
+		releaseFirst();
+
+		expect(secondResult.delivered).toBe(false);
+		expect((await firstResult).delivered).toBe(false);
+		expect(attemptedEventIds).toEqual([eventId, eventId]);
+		expect(database.select().from(notificationOutbox).get()).toMatchObject({
+			status: "failed",
+			attemptCount: 2,
+			claimToken: null,
+			lastError: "NOTIFIER_FAILED",
+			nextAttemptAt: "2026-07-30T20:22:04.000Z",
+			sentAt: null,
+		});
+		closeDomainDatabase(database);
+	});
+
 	test("retries a failed persisted notification without recreating booking", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "botamin-outbox-"));
 		directories.push(directory);

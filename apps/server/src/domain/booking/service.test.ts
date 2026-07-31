@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { CreateBookingInput } from "@botamin/contracts";
 import { count, eq } from "drizzle-orm";
 import { ConversationStore } from "../../db/conversation-store";
@@ -145,6 +145,75 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("scopes one key independently across conversations and bookings", async () => {
+		const { database, input } = fixture();
+		const secondConversationId = Bun.randomUUIDv7();
+		new ConversationStore(database).create({
+			id: secondConversationId,
+			stage: "COLLECT_BOOKING",
+			promptVersion,
+			source: "landing",
+			locale: "ru-RU",
+			qualificationEnabled: true,
+			consentAt: timestamp,
+			startedAt: timestamp,
+		});
+		const service = new SqliteBookingService(database);
+		const first = await service.createBooking(input);
+		const secondInput: CreateBookingInput = {
+			...input,
+			conversationId: secondConversationId,
+			name: "Мария",
+		};
+		const second = await service.createBooking(secondInput);
+
+		expect(first.created).toBe(true);
+		expect(second.created).toBe(true);
+		expect(second.bookingId).not.toBe(first.bookingId);
+		expect(await service.createBooking(input)).toMatchObject({
+			bookingId: first.bookingId,
+			created: false,
+		});
+		await expect(
+			service.createBooking({ ...input, name: "Changed within first subject" }),
+		).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+
+		const qualificationKey = "shared-qualification-key";
+		const firstQualification = {
+			bookingId: first.bookingId,
+			idempotencyKey: qualificationKey,
+			patch: { role: "CEO" },
+			completion: "partial" as const,
+		};
+		const secondQualification = {
+			bookingId: second.bookingId,
+			idempotencyKey: qualificationKey,
+			patch: { role: "CMO" },
+			completion: "partial" as const,
+		};
+		await service.appendQualification(firstQualification);
+		await service.appendQualification(secondQualification);
+		expect(await service.appendQualification(firstQualification)).toMatchObject(
+			{
+				bookingId: first.bookingId,
+				updatedFields: ["role"],
+			},
+		);
+		await expect(
+			service.appendQualification({
+				...firstQualification,
+				patch: { role: "CFO" },
+			}),
+		).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+		expect((await service.findById(first.bookingId))?.qualification?.role).toBe(
+			"CEO",
+		);
+		expect(
+			(await service.findById(second.bookingId))?.qualification?.role,
+		).toBe("CMO");
+		closeDomainDatabase(database);
+	});
+
 	test("preserves booking and replay state across a process-style restart", async () => {
 		const { database, filename, input } = fixture();
 		const created = await new SqliteBookingService(database).createBooking(
@@ -167,7 +236,7 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(restarted);
 	});
 
-	test("serializes concurrent retries from separate SQLite processes", async () => {
+	test("serializes concurrent retries from apps/server as a non-root cwd", async () => {
 		const { database, filename, input } = fixture();
 		closeDomainDatabase(database);
 		const worker = join(import.meta.dir, "concurrency-worker.ts");
@@ -180,7 +249,11 @@ describe("SQLite booking transaction", () => {
 					input.conversationId,
 					input.idempotencyKey,
 				],
-				{ cwd: process.cwd(), stderr: "pipe", stdout: "pipe" },
+				{
+					cwd: resolve(import.meta.dir, "../../../"),
+					stderr: "pipe",
+					stdout: "pipe",
+				},
 			),
 		);
 		const outputs = await Promise.all(

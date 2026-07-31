@@ -1,8 +1,12 @@
 import { BookingDomainEventSchema } from "@botamin/contracts";
-import { and, asc, eq, inArray, lte, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, lte } from "drizzle-orm";
 import type { DomainDatabase } from "../db/database";
 import { notificationOutbox } from "../db/schema";
-import type { Clock } from "../domain/booking/support";
+import {
+	type Clock,
+	createEntityId,
+	type IdFactory,
+} from "../domain/booking/support";
 import { safeOperationalError } from "../domain/privacy/redaction";
 import type { NamedLeadNotifier } from "./notifier";
 
@@ -15,19 +19,28 @@ interface ClaimedNotification {
 	id: string;
 	payloadJson: string;
 	attemptCount: number;
+	claimToken: string;
+}
+
+export interface NotificationOutboxWorkerOptions {
+	now?: Clock;
+	leaseMs?: number;
+	claimTokenFactory?: IdFactory;
 }
 
 export class NotificationOutboxWorker {
 	private readonly now: Clock;
 	private readonly leaseMs: number;
+	private readonly claimTokenFactory: IdFactory;
 
 	constructor(
 		private readonly database: DomainDatabase,
 		private readonly notifier: NamedLeadNotifier,
-		options: { now?: Clock; leaseMs?: number } = {},
+		options: NotificationOutboxWorkerOptions = {},
 	) {
 		this.now = options.now ?? (() => new Date());
 		this.leaseMs = options.leaseMs ?? 30_000;
+		this.claimTokenFactory = options.claimTokenFactory ?? createEntityId;
 	}
 
 	async processEvent(eventId: string): Promise<OutboxDeliveryResult> {
@@ -51,44 +64,32 @@ export class NotificationOutboxWorker {
 				JSON.parse(claimed.payloadJson),
 			);
 			await this.notifier.publish(event);
-			this.database
-				.update(notificationOutbox)
-				.set({
-					lastError: null,
-					sentAt: this.now().toISOString(),
-					status: "sent",
-				})
-				.where(
-					and(
-						eq(notificationOutbox.id, claimed.id),
-						eq(notificationOutbox.attemptCount, claimed.attemptCount),
-						ne(notificationOutbox.status, "sent"),
-					),
-				)
-				.run();
-			return { eventId, delivered: true };
+			const completion = this.database.$client.run(
+				`UPDATE notification_outbox
+				 SET last_error = NULL, sent_at = ?, status = 'sent', claim_token = NULL
+				 WHERE id = ? AND claim_token = ? AND status = 'pending'`,
+				[this.now().toISOString(), claimed.id, claimed.claimToken],
+			);
+			return { eventId, delivered: completion.changes === 1 };
 		} catch (error) {
 			const retryDelayMs = Math.min(
 				60_000,
 				1_000 * 2 ** (claimed.attemptCount - 1),
 			);
-			this.database
-				.update(notificationOutbox)
-				.set({
-					lastError: safeOperationalError(error),
-					nextAttemptAt: new Date(
-						this.now().getTime() + retryDelayMs,
-					).toISOString(),
-					status: "failed",
-				})
-				.where(
-					and(
-						eq(notificationOutbox.id, claimed.id),
-						eq(notificationOutbox.attemptCount, claimed.attemptCount),
-						ne(notificationOutbox.status, "sent"),
-					),
-				)
-				.run();
+			const failure = this.database.$client.run(
+				`UPDATE notification_outbox
+				 SET last_error = ?, next_attempt_at = ?, status = 'failed', claim_token = NULL
+				 WHERE id = ? AND claim_token = ? AND status = 'pending'`,
+				[
+					safeOperationalError(error),
+					new Date(this.now().getTime() + retryDelayMs).toISOString(),
+					claimed.id,
+					claimed.claimToken,
+				],
+			);
+			if (failure.changes !== 1) {
+				return { eventId, delivered: false };
+			}
 			return { eventId, delivered: false };
 		}
 	}
@@ -137,16 +138,23 @@ export class NotificationOutboxWorker {
 					return null;
 				}
 				const attemptCount = row.attemptCount + 1;
+				const claimToken = this.claimTokenFactory();
 				transaction
 					.update(notificationOutbox)
 					.set({
 						attemptCount,
+						claimToken,
 						nextAttemptAt: new Date(now.getTime() + this.leaseMs).toISOString(),
 						status: "pending",
 					})
 					.where(eq(notificationOutbox.id, row.id))
 					.run();
-				return { id: row.id, payloadJson: row.payloadJson, attemptCount };
+				return {
+					id: row.id,
+					payloadJson: row.payloadJson,
+					attemptCount,
+					claimToken,
+				};
 			},
 			{ behavior: "immediate" },
 		);

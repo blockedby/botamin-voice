@@ -39,6 +39,14 @@ import {
 const CREATE_SCOPE = "booking:create";
 const QUALIFICATION_SCOPE = "booking:qualification";
 
+function createIdempotencyScope(conversationId: string): string {
+	return `${CREATE_SCOPE}:${conversationId}`;
+}
+
+function qualificationIdempotencyScope(bookingId: string): string {
+	return `${QUALIFICATION_SCOPE}:${bookingId}`;
+}
+
 type BookingRow = typeof bookings.$inferSelect;
 
 export class BookingDomainError extends Error {
@@ -110,6 +118,7 @@ export class SqliteBookingService implements BookingService {
 	async createBooking(input: CreateBookingInput): Promise<CreateBookingResult> {
 		const parsed = this.parseCreateInput(input);
 		const hash = requestHash(parsed);
+		const idempotencyScope = createIdempotencyScope(parsed.conversationId);
 		const committed = this.database.transaction(
 			(transaction): CommittedOperation<CreateBookingResult> => {
 				const replay = transaction
@@ -117,7 +126,7 @@ export class SqliteBookingService implements BookingService {
 					.from(idempotencyKeys)
 					.where(
 						and(
-							eq(idempotencyKeys.scope, CREATE_SCOPE),
+							eq(idempotencyKeys.scope, idempotencyScope),
 							eq(idempotencyKeys.key, parsed.idempotencyKey),
 						),
 					)
@@ -146,7 +155,7 @@ export class SqliteBookingService implements BookingService {
 					transaction
 						.insert(idempotencyKeys)
 						.values({
-							scope: CREATE_SCOPE,
+							scope: idempotencyScope,
 							key: parsed.idempotencyKey,
 							requestHash: hash,
 							resultJson: canonicalJson(result),
@@ -214,7 +223,7 @@ export class SqliteBookingService implements BookingService {
 				transaction
 					.insert(idempotencyKeys)
 					.values({
-						scope: CREATE_SCOPE,
+						scope: idempotencyScope,
 						key: parsed.idempotencyKey,
 						requestHash: hash,
 						resultJson: canonicalJson(result),
@@ -236,6 +245,7 @@ export class SqliteBookingService implements BookingService {
 	): Promise<AppendQualificationResult> {
 		const parsed = this.parseQualificationInput(input);
 		const hash = requestHash(parsed);
+		const idempotencyScope = qualificationIdempotencyScope(parsed.bookingId);
 		const committed = this.database.transaction(
 			(transaction): CommittedOperation<AppendQualificationResult> => {
 				const replay = transaction
@@ -243,7 +253,7 @@ export class SqliteBookingService implements BookingService {
 					.from(idempotencyKeys)
 					.where(
 						and(
-							eq(idempotencyKeys.scope, QUALIFICATION_SCOPE),
+							eq(idempotencyKeys.scope, idempotencyScope),
 							eq(idempotencyKeys.key, parsed.idempotencyKey),
 						),
 					)
@@ -309,7 +319,7 @@ export class SqliteBookingService implements BookingService {
 				transaction
 					.insert(idempotencyKeys)
 					.values({
-						scope: QUALIFICATION_SCOPE,
+						scope: idempotencyScope,
 						key: parsed.idempotencyKey,
 						requestHash: hash,
 						resultJson: canonicalJson(result),

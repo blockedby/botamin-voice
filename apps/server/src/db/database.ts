@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { schema } from "./schema";
@@ -17,6 +18,22 @@ export interface OpenDomainDatabaseOptions {
 
 function sqliteFilename(value: string): string {
 	return value.startsWith("file:") ? value.slice("file:".length) : value;
+}
+
+function defaultMigrationsFolder(): string {
+	const candidates = [
+		resolve(import.meta.dir, "../../../../drizzle"),
+		resolve(import.meta.dir, "../../../drizzle"),
+	];
+	const folder = candidates.find((candidate) =>
+		existsSync(join(candidate, "meta", "_journal.json")),
+	);
+	if (folder === undefined) {
+		throw new Error(
+			"Domain migrations were not found relative to the server module; configure migrationsFolder",
+		);
+	}
+	return folder;
 }
 
 /**
@@ -37,10 +54,14 @@ export function openDomainDatabase(
 
 	const database = drizzle(client, { schema });
 	if (options.applyMigrations !== false) {
-		migrate(database, {
-			migrationsFolder:
-				options.migrationsFolder ?? resolve(process.cwd(), "drizzle"),
-		});
+		try {
+			migrate(database, {
+				migrationsFolder: options.migrationsFolder ?? defaultMigrationsFolder(),
+			});
+		} catch (error) {
+			client.close(false);
+			throw error;
+		}
 	}
 	return database;
 }

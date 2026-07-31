@@ -188,15 +188,18 @@ export class AudioWorkletCapture {
 					noiseSuppression: true,
 				},
 			});
+			this.throwIfStoppedDuringStart();
 			this.context = this.options.apis.createAudioContext({
 				sampleRate: TARGET_SAMPLE_RATE,
 			});
+			this.throwIfStoppedDuringStart();
 			if (!this.context.audioWorklet) {
 				throw new Error("AudioWorklet is unavailable");
 			}
 			moduleUrl =
 				this.options.apis.createWorkletModuleUrl(AUDIO_WORKLET_SOURCE);
 			await this.context.audioWorklet.addModule(moduleUrl);
+			this.throwIfStoppedDuringStart();
 			this.node = this.options.apis.createWorkletNode(
 				this.context,
 				AUDIO_WORKLET_PROCESSOR_NAME,
@@ -216,6 +219,7 @@ export class AudioWorkletCapture {
 			this.source = this.context.createMediaStreamSource(this.stream);
 			this.source.connect(this.node);
 			await this.context.resume?.();
+			this.throwIfStoppedDuringStart();
 			this.active = true;
 		} catch (error) {
 			await this.cleanup();
@@ -273,6 +277,10 @@ export class AudioWorkletCapture {
 	private emitFinalFrame(): void {
 		const finalFrame = this.batcher.finish();
 		if (finalFrame) this.options.onFrame(finalFrame);
+	}
+
+	private throwIfStoppedDuringStart(): void {
+		if (this.completed) throw new Error("Audio capture start was cancelled");
 	}
 
 	private async cleanup(): Promise<void> {

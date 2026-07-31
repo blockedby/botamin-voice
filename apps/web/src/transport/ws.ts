@@ -90,8 +90,8 @@ export class VoiceTransport {
 		this.scheduler = options.scheduler ?? browserScheduler;
 	}
 
-	connect(): void {
-		if (this.stopped) return;
+	connect(): boolean {
+		if (this.stopped) return false;
 		this.cancelReconnect();
 		this.sessionReady = false;
 		this.options.onStatus?.(
@@ -104,7 +104,7 @@ export class VoiceTransport {
 		} catch (error) {
 			this.reportProtocolError(toError(error, "WebSocket creation failed"));
 			this.scheduleReconnect();
-			return;
+			return false;
 		}
 		this.socket = socket;
 		socket.binaryType = "arraybuffer";
@@ -136,6 +136,7 @@ export class VoiceTransport {
 			}
 			this.scheduleReconnect();
 		};
+		return true;
 	}
 
 	/** Begin a fresh local utterance after the prior final transcript. */
@@ -399,6 +400,7 @@ export class VoiceTransport {
 		const delay = Math.min(maxDelay, initialDelay * 2 ** this.reconnectAttempt);
 		this.reconnectAttempt += 1;
 		this.options.onStatus?.("reconnecting");
+		if (this.stopped) return;
 		this.reconnectHandle = this.scheduler.schedule(() => {
 			this.reconnectHandle = null;
 			this.connect();

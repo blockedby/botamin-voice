@@ -1,18 +1,18 @@
 import {
+	type ConversationStage,
 	CreateConversationRequestSchema,
 	CreateConversationResponseSchema,
-	type ConversationStage,
 	type ServerWsEvent,
 } from "@botamin/contracts";
 import {
 	AudioWorkletCapture,
-	createBrowserAudioCaptureApis,
 	type CaptureStats,
+	createBrowserAudioCaptureApis,
 } from "../audio/capture";
 import {
+	type CompletePlaybackSegment,
 	createBrowserAudioPlaybackApis,
 	PhrasePlaybackQueue,
-	type CompletePlaybackSegment,
 } from "../audio/playback";
 import type {
 	FinalTranscriptEntry,
@@ -136,8 +136,10 @@ export class BrowserVoiceSession {
 	private starting = false;
 	private committing = false;
 	private captureStarting = false;
+	private captureArmed = false;
 	private captureAttempt = 0;
 	private captureCleanup: Promise<void> = Promise.resolve();
+	private sessionEstablished = false;
 	private disposed = false;
 	private playbackUnavailable = false;
 
@@ -166,6 +168,8 @@ export class BrowserVoiceSession {
 		this.bookingId = null;
 		this.qualificationStatus = "none";
 		this.completedAssistantGenerations.clear();
+		this.captureArmed = false;
+		this.sessionEstablished = false;
 		this.setSnapshot({
 			state: { kind: "connecting" },
 			transcript: [],
@@ -175,18 +179,38 @@ export class BrowserVoiceSession {
 			this.projectControllerState(state),
 		);
 		this.controller.setConnecting();
-		this.preparePlayback();
-		this.abortController = (
-			this.factories.createAbortController ?? (() => new AbortController())
-		)();
 
 		try {
+			const captureAttempt = ++this.captureAttempt;
+			const capture = this.createCapture(epoch, captureAttempt);
+			this.capture = capture;
+			this.captureStarting = true;
+			try {
+				await capture.start();
+			} finally {
+				if (captureAttempt === this.captureAttempt) {
+					this.captureStarting = false;
+				}
+			}
+			if (
+				!this.isCurrent(epoch) ||
+				captureAttempt !== this.captureAttempt ||
+				this.capture !== capture
+			) {
+				await capture.stop();
+				return false;
+			}
+			capture.setMuted(this.snapshot.muted);
+
 			const request = CreateConversationRequestSchema.parse({
 				source: "landing",
 				locale: "ru-RU",
 				qualificationEnabled: true,
 				consent,
 			});
+			this.abortController = (
+				this.factories.createAbortController ?? (() => new AbortController())
+			)();
 			const response = await this.factories.fetch(CONVERSATIONS_ENDPOINT, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
@@ -194,12 +218,20 @@ export class BrowserVoiceSession {
 				signal: this.abortController.signal,
 				credentials: "same-origin",
 			});
-			if (!response.ok)
+			if (!response.ok) {
 				throw new Error(`Conversation request failed (${response.status})`);
+			}
 			const created = CreateConversationResponseSchema.parse(
 				await response.json(),
 			);
-			if (!this.isCurrent(epoch)) return false;
+			if (!this.isCurrent(epoch)) {
+				this.notifyConversationStop(
+					created.conversationId,
+					this.disposed ? "page_unload" : "client_error",
+				);
+				return false;
+			}
+			this.conversationId = created.conversationId;
 			if (new Date(created.expiresAt).getTime() <= this.now().getTime()) {
 				throw new Error("Conversation response is already expired");
 			}
@@ -207,7 +239,7 @@ export class BrowserVoiceSession {
 				created.wsUrl,
 				this.factories.baseUrl,
 			);
-			this.conversationId = created.conversationId;
+			this.preparePlayback();
 			this.transport = new VoiceTransport({
 				conversationId: created.conversationId,
 				url: socketUrl,
@@ -226,16 +258,21 @@ export class BrowserVoiceSession {
 					// Contract/parser details remain internal; the transport can still reconnect.
 				},
 			});
-			this.transport.connect();
+			if (!this.transport.connect()) {
+				throw new Error("WebSocket creation failed");
+			}
 			return true;
 		} catch (error) {
 			if (this.isCurrent(epoch)) {
-				await this.releaseResources("client_error", false);
-				this.setState(
-					isPermissionDenied(error)
-						? { kind: "permission-denied" }
-						: { kind: "error" },
-				);
+				const cleanupEpoch = epoch + 1;
+				await this.releaseResources("client_error", true);
+				if (!this.disposed && this.epoch === cleanupEpoch) {
+					this.setState(
+						isPermissionDenied(error)
+							? { kind: "permission-denied" }
+							: { kind: "error" },
+					);
+				}
 			}
 			return false;
 		} finally {
@@ -257,6 +294,7 @@ export class BrowserVoiceSession {
 		this.committing = true;
 		const capture = this.capture;
 		this.capture = null;
+		this.captureArmed = false;
 		try {
 			await capture.finish();
 			const accepted = this.controller.commit(
@@ -345,6 +383,29 @@ export class BrowserVoiceSession {
 		this.listeners.clear();
 	}
 
+	private createCapture(epoch: number, attempt: number): CaptureAdapter {
+		return this.factories.createCapture({
+			onFrame: (frame) => {
+				if (
+					this.isCurrent(epoch) &&
+					attempt === this.captureAttempt &&
+					this.captureArmed
+				) {
+					this.transport?.sendPcmFrame(frame);
+				}
+			},
+			onLimit: () => {
+				if (
+					this.isCurrent(epoch) &&
+					attempt === this.captureAttempt &&
+					this.captureArmed
+				) {
+					void this.commit();
+				}
+			},
+		});
+	}
+
 	private preparePlayback(): void {
 		this.playbackUnavailable = false;
 		try {
@@ -395,14 +456,7 @@ export class BrowserVoiceSession {
 			) {
 				return;
 			}
-			const capture = this.factories.createCapture({
-				onFrame: (frame) => {
-					if (this.isCurrent(epoch)) this.transport?.sendPcmFrame(frame);
-				},
-				onLimit: () => {
-					void this.commit();
-				},
-			});
+			const capture = this.createCapture(epoch, attempt);
 			this.capture = capture;
 			try {
 				await capture.start();
@@ -416,6 +470,7 @@ export class BrowserVoiceSession {
 					return;
 				}
 				capture.setMuted(this.snapshot.muted);
+				this.captureArmed = true;
 				this.controller?.beginListening();
 				this.setState(this.activeState("listening"));
 			} catch (error) {
@@ -425,6 +480,7 @@ export class BrowserVoiceSession {
 					this.capture === capture
 				) {
 					this.capture = null;
+					this.captureArmed = false;
 					this.setState(
 						this.activeState(
 							isPermissionDenied(error) ? "permission-denied" : "error",
@@ -440,6 +496,15 @@ export class BrowserVoiceSession {
 		}
 	}
 
+	private async failStartup(epoch: number): Promise<void> {
+		if (!this.isCurrent(epoch) || this.sessionEstablished) return;
+		const cleanupEpoch = epoch + 1;
+		await this.releaseResources("client_error", true);
+		if (!this.disposed && this.epoch === cleanupEpoch) {
+			this.setState({ kind: "error" });
+		}
+	}
+
 	private receiveTransportStatus(
 		status: VoiceTransportStatus,
 		epoch: number,
@@ -450,18 +515,31 @@ export class BrowserVoiceSession {
 				this.setState(this.activeState("connecting"));
 				break;
 			case "reconnecting": {
+				if (!this.sessionEstablished) {
+					void this.failStartup(epoch);
+					break;
+				}
 				const capture = this.capture;
 				const startWasPending = this.captureStarting;
 				this.capture = null;
+				this.captureArmed = false;
 				if (!startWasPending) this.captureAttempt += 1;
-				this.captureCleanup = capture
-					? capture.stop().catch(() => undefined)
-					: Promise.resolve();
+				if (capture) {
+					const previousCleanup = this.captureCleanup;
+					this.captureCleanup = Promise.allSettled([
+						previousCleanup,
+						capture.stop(),
+					]).then(() => undefined);
+				}
 				this.setState(this.activeState("reconnecting"));
 				break;
 			}
 			case "error":
-				this.setState(this.activeState("disconnected"));
+				if (!this.sessionEstablished) {
+					void this.failStartup(epoch);
+				} else {
+					this.setState(this.activeState("disconnected"));
+				}
 				break;
 			case "ready":
 				break;
@@ -473,10 +551,20 @@ export class BrowserVoiceSession {
 	private receiveEvent(event: ServerWsEvent, epoch: number): void {
 		if (!this.isCurrent(epoch) || !this.controller) return;
 		switch (event.type) {
-			case "session.ready":
+			case "session.ready": {
+				this.sessionEstablished = true;
+				const capture = this.capture;
+				if (capture?.isActive && this.transport?.beginUtterance()) {
+					this.captureArmed = true;
+					capture.setMuted(this.snapshot.muted);
+				} else if (capture) {
+					this.capture = null;
+					void capture.stop();
+				}
 				this.controller.acceptEvent(event);
-				void this.beginCapture(epoch);
+				if (!this.captureArmed) void this.beginCapture(epoch);
 				break;
+			}
 			case "transcript.final":
 				if (this.controller.acceptEvent(event)) {
 					this.appendTranscript({
@@ -683,6 +771,8 @@ export class BrowserVoiceSession {
 		++this.epoch;
 		this.captureAttempt += 1;
 		this.captureStarting = false;
+		this.captureArmed = false;
+		this.sessionEstablished = false;
 		this.abortController?.abort();
 		this.abortController = null;
 		const transport = this.transport;
@@ -700,20 +790,27 @@ export class BrowserVoiceSession {
 		this.committing = false;
 		this.starting = false;
 		if (notifyServer && conversationId) {
-			void this.factories
-				.fetch(
-					`${CONVERSATIONS_ENDPOINT}/${encodeURIComponent(conversationId)}/stop`,
-					{
-						method: "POST",
-						headers: { "content-type": "application/json" },
-						body: JSON.stringify({ reason }),
-						credentials: "same-origin",
-						keepalive: reason === "page_unload",
-					},
-				)
-				.catch(() => undefined);
+			this.notifyConversationStop(conversationId, reason);
 		}
 		this.conversationId = null;
+	}
+
+	private notifyConversationStop(
+		conversationId: string,
+		reason: "user_requested" | "page_unload" | "client_error",
+	): void {
+		void this.factories
+			.fetch(
+				`${CONVERSATIONS_ENDPOINT}/${encodeURIComponent(conversationId)}/stop`,
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ reason }),
+					credentials: "same-origin",
+					keepalive: reason === "page_unload",
+				},
+			)
+			.catch(() => undefined);
 	}
 
 	private activeState(

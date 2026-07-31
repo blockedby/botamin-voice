@@ -6,6 +6,7 @@ import {
 	encodeBinaryAudioFrame,
 } from "@botamin/contracts";
 import { createDeterministicMp3Fixture } from "../../../../packages/test-fixtures/src";
+import type { ReconnectScheduler, WebSocketLike } from "../transport/ws";
 import type {
 	CaptureAdapter,
 	CaptureFactoryOptions,
@@ -17,7 +18,6 @@ import {
 	BrowserVoiceSession,
 	resolveSameOriginWebSocketUrl,
 } from "./browserVoiceSession";
-import type { ReconnectScheduler, WebSocketLike } from "../transport/ws";
 
 const conversationId = "01J00000000000000000000000";
 const turnId = "01J00000000000000000000003";
@@ -53,6 +53,9 @@ class FakeSocket implements WebSocketLike {
 		this.readyState = 3;
 		this.onclose?.();
 	}
+	fail(): void {
+		this.onerror?.(new Error("network failure"));
+	}
 	server(value: unknown): void {
 		this.onmessage?.({ data: JSON.stringify(value) });
 	}
@@ -72,6 +75,7 @@ class FakeCapture implements CaptureAdapter {
 		readonly options: CaptureFactoryOptions,
 		private readonly startError?: Error,
 		private readonly startGate?: Promise<void>,
+		private readonly stopGate?: Promise<void>,
 	) {}
 	async start(): Promise<void> {
 		this.startCalls += 1;
@@ -87,6 +91,7 @@ class FakeCapture implements CaptureAdapter {
 	async stop(): Promise<void> {
 		this.stopCalls += 1;
 		this.active = false;
+		await this.stopGate;
 	}
 	setMuted(muted: boolean): void {
 		this.muted = muted;
@@ -196,6 +201,8 @@ function harness(
 		fetch?: FetchLike;
 		captureError?: Error;
 		firstCaptureGate?: Promise<void>;
+		firstCaptureStopGate?: Promise<void>;
+		createSocketError?: Error;
 	} = {},
 ) {
 	const sockets: FakeSocket[] = [];
@@ -203,16 +210,18 @@ function harness(
 	const playbacks: FakePlayback[] = [];
 	const requests: Array<{ input: string; init?: RequestInit }> = [];
 	const scheduler = new FakeScheduler();
-	const fetch: FetchLike =
+	const fetchImplementation: FetchLike =
 		options.fetch ??
-		(async (input, init) => {
-			requests.push({ input, ...(init ? { init } : {}) });
-			return { ok: true, status: 201, json: async () => response() };
-		});
+		(async () => ({ ok: true, status: 201, json: async () => response() }));
+	const fetch: FetchLike = async (input, init) => {
+		requests.push({ input, ...(init ? { init } : {}) });
+		return fetchImplementation(input, init);
+	};
 	const session = new BrowserVoiceSession({
 		baseUrl: "https://botamin.test/landing",
 		fetch,
 		createSocket: () => {
+			if (options.createSocketError) throw options.createSocketError;
 			const socket = new FakeSocket();
 			sockets.push(socket);
 			return socket;
@@ -222,6 +231,7 @@ function harness(
 				captureOptions,
 				options.captureError,
 				captures.length === 0 ? options.firstCaptureGate : undefined,
+				captures.length === 0 ? options.firstCaptureStopGate : undefined,
 			);
 			captures.push(capture);
 			return capture;
@@ -258,6 +268,79 @@ describe("production browser voice integration", () => {
 		expect(value.requests).toHaveLength(0);
 		expect(value.sockets).toHaveLength(0);
 		expect(value.captures).toHaveLength(0);
+	});
+
+	test("acquires microphone before REST/WS and gates frames until session.ready", async () => {
+		let allowPermission: () => void = () => undefined;
+		const permissionGate = new Promise<void>((resolve) => {
+			allowPermission = resolve;
+		});
+		const value = harness({ firstCaptureGate: permissionGate });
+		const starting = value.session.start(consent);
+
+		expect(value.captures).toHaveLength(1);
+		expect(value.captures[0]?.startCalls).toBe(1);
+		expect(value.requests).toHaveLength(0);
+		expect(value.sockets).toHaveLength(0);
+
+		allowPermission();
+		expect(await starting).toBe(true);
+		expect(value.requests.map((request) => request.input)).toEqual([
+			"/api/v1/conversations",
+		]);
+		expect(value.sockets).toHaveLength(1);
+
+		const socket = value.sockets[0] as FakeSocket;
+		const capture = value.captures[0] as FakeCapture;
+		socket.open();
+		capture.emit(new Uint8Array([1, 0]));
+		expect(socket.sent.some((item) => item instanceof Uint8Array)).toBe(false);
+
+		socket.server(sessionReady());
+		await flush();
+		capture.emit(new Uint8Array([1, 0]));
+		expect(socket.sent.some((item) => item instanceof Uint8Array)).toBe(true);
+		await value.session.stop();
+	});
+
+	test("initial microphone denial has zero REST/WS effects and no live capture", async () => {
+		const value = harness({
+			captureError: new DOMException(
+				"private browser detail",
+				"NotAllowedError",
+			),
+		});
+
+		expect(await value.session.start(consent)).toBe(false);
+		expect(value.session.getSnapshot().state).toEqual({
+			kind: "permission-denied",
+		});
+		expect(value.requests).toHaveLength(0);
+		expect(value.sockets).toHaveLength(0);
+		expect(value.playbacks).toHaveLength(0);
+		expect(value.captures).toHaveLength(1);
+		expect(value.captures[0]?.active).toBe(false);
+		expect(value.captures[0]?.stopCalls).toBeGreaterThan(0);
+	});
+
+	test("stop and dispose during permission prompt suppress late startup and capture", async () => {
+		for (const action of ["stop", "dispose"] as const) {
+			let allowPermission: () => void = () => undefined;
+			const permissionGate = new Promise<void>((resolve) => {
+				allowPermission = resolve;
+			});
+			const value = harness({ firstCaptureGate: permissionGate });
+			const starting = value.session.start(consent);
+			const capture = value.captures[0] as FakeCapture;
+
+			await value.session[action]();
+			allowPermission();
+			expect(await starting).toBe(false);
+			expect(value.requests).toHaveLength(0);
+			expect(value.sockets).toHaveLength(0);
+			expect(capture.active).toBe(false);
+			expect(capture.stopCalls).toBeGreaterThanOrEqual(2);
+		}
 	});
 
 	test("start POSTs consent, resolves same-origin WS, requests media, sends PCM and one commit", async () => {
@@ -411,26 +494,22 @@ describe("production browser voice integration", () => {
 	});
 
 	test("serializes capture startup across reconnect cleanup", async () => {
-		let releaseFirst: () => void = () => undefined;
-		const firstGate = new Promise<void>((resolve) => {
-			releaseFirst = resolve;
+		let releaseFirstStop: () => void = () => undefined;
+		const firstStopGate = new Promise<void>((resolve) => {
+			releaseFirstStop = resolve;
 		});
-		const value = harness({ firstCaptureGate: firstGate });
-		expect(await value.session.start(consent)).toBe(true);
-		const firstSocket = value.sockets[0] as FakeSocket;
-		firstSocket.open();
-		firstSocket.server(sessionReady());
-		await flush();
-		expect(value.captures).toHaveLength(1);
+		const value = await readySession(
+			harness({ firstCaptureStopGate: firstStopGate }),
+		);
 
-		firstSocket.disconnect();
+		value.socket.disconnect();
 		value.session.reconnect();
 		const resumed = value.sockets[1] as FakeSocket;
 		resumed.open();
 		resumed.server(sessionReady(2, "resume-token-0002"));
 		await flush();
 		expect(value.captures).toHaveLength(1);
-		releaseFirst();
+		releaseFirstStop();
 		await flush();
 		await flush();
 		expect(value.captures).toHaveLength(2);
@@ -513,31 +592,64 @@ describe("production browser voice integration", () => {
 		expect(value.socket.closed).toBe(true);
 	});
 
-	test("permission/network errors are localized and never expose provider or stack details", async () => {
-		const denied = await readySession(
-			harness({
-				captureError: new DOMException(
-					"private browser detail",
-					"NotAllowedError",
-				),
-			}),
-		);
-		expect(denied.session.getSnapshot().state).toEqual({
-			kind: "permission-denied",
-		});
-
+	test("REST startup failure releases capture and localizes network details", async () => {
 		const failed = harness({
 			fetch: async () => {
 				throw new Error("OpenRouter secret provider stack trace");
 			},
 		});
 		expect(await failed.session.start(consent)).toBe(false);
+		expect(failed.requests.map((request) => request.input)).toEqual([
+			"/api/v1/conversations",
+		]);
+		expect(failed.sockets).toHaveLength(0);
+		expect(failed.captures[0]?.active).toBe(false);
+		expect(failed.captures[0]?.stopCalls).toBeGreaterThan(0);
+		expect(failed.playbacks).toHaveLength(0);
 		const visible = JSON.stringify(failed.session.getSnapshot());
 		expect(visible).toContain('"kind":"error"');
 		expect(visible).not.toContain("OpenRouter");
 		expect(visible).not.toContain("provider");
 		expect(visible).not.toContain("stack");
 		expect(visible).not.toContain("booked");
+	});
+
+	test("WebSocket construction failure cleans media and fallback-stops REST session", async () => {
+		const failed = harness({
+			createSocketError: new Error("WebSocket construction failed"),
+		});
+		expect(await failed.session.start(consent)).toBe(false);
+		await flush();
+
+		expect(failed.sockets).toHaveLength(0);
+		expect(failed.scheduler.jobs).toHaveLength(0);
+		expect(failed.captures[0]?.active).toBe(false);
+		expect(failed.captures[0]?.stopCalls).toBeGreaterThan(0);
+		expect(failed.playbacks[0]?.disposeCalls).toBe(1);
+		expect(failed.requests.map((request) => request.input)).toEqual([
+			"/api/v1/conversations",
+			`/api/v1/conversations/${conversationId}/stop`,
+		]);
+		expect(failed.session.getSnapshot().state).toEqual({ kind: "error" });
+	});
+
+	test("initial WebSocket network failure closes transport, media, and REST session", async () => {
+		const failed = harness();
+		expect(await failed.session.start(consent)).toBe(true);
+		const socket = failed.sockets[0] as FakeSocket;
+		socket.fail();
+		await flush();
+		await flush();
+
+		expect(socket.closed).toBe(true);
+		expect(failed.captures[0]?.active).toBe(false);
+		expect(failed.captures[0]?.stopCalls).toBeGreaterThan(0);
+		expect(failed.playbacks[0]?.disposeCalls).toBe(1);
+		expect(failed.requests.map((request) => request.input)).toEqual([
+			"/api/v1/conversations",
+			`/api/v1/conversations/${conversationId}/stop`,
+		]);
+		expect(failed.session.getSnapshot().state).toEqual({ kind: "error" });
 	});
 
 	test("rejects cross-origin WS resolution", () => {

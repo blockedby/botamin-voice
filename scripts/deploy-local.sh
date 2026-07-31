@@ -20,6 +20,7 @@ if grep -Eq 'Bearer [A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}' "$config_file"; th
 fi
 
 docker compose build --pull
+scripts/assert-image-content.sh "${APP_IMAGE:-botamin-voice:local}"
 docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate
 docker compose up -d
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
 	accessSync,
 	chmodSync,
@@ -12,8 +12,9 @@ import {
 	readFileSync,
 	renameSync,
 	rmSync,
+	writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
 	closeDomainDatabase,
 	openDomainDatabase,
@@ -65,6 +66,51 @@ function digest(path: string): string {
 	return hasher.digest("hex");
 }
 
+function checksumPath(path: string): string {
+	return `${path}.sha256`;
+}
+
+function writeChecksum(path: string): string {
+	const checksum = digest(path);
+	const sidecar = checksumPath(path);
+	writeFileSync(sidecar, `${checksum}  ${basename(path)}\n`, {
+		encoding: "utf8",
+		flag: "wx",
+		mode: 0o600,
+	});
+	chmodSync(sidecar, 0o600);
+	return checksum;
+}
+
+function assertDigest(path: string, expectedHex: string): void {
+	const expected = Buffer.from(expectedHex, "hex");
+	const actual = Buffer.from(digest(path), "hex");
+	if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+		fail(`SHA-256 mismatch for backup: ${path}`);
+	}
+}
+
+function verifyChecksum(path: string): string {
+	const sidecar = checksumPath(path);
+	assertRegularFile(sidecar, "SHA-256 sidecar");
+	const sidecarStat = lstatSync(sidecar);
+	if ((sidecarStat.mode & 0o077) !== 0) {
+		fail(
+			`SHA-256 sidecar must not grant group or other permissions: ${sidecar}`,
+		);
+	}
+	const contents = readFileSync(sidecar, "utf8");
+	const match = /^([0-9a-f]{64}) {2}([^\n]+)\n$/.exec(contents);
+	if (!match || match[2] !== basename(path)) {
+		fail(
+			`SHA-256 sidecar has an invalid protected-backup contract: ${sidecar}`,
+		);
+	}
+	const expectedHex = match[1];
+	assertDigest(path, expectedHex);
+	return expectedHex;
+}
+
 function timestamp(): string {
 	return new Date().toISOString().replaceAll(":", "").replaceAll(".", "-");
 }
@@ -85,6 +131,22 @@ function vacuumInto(source: string, destination: string): void {
 	integrity(destination);
 }
 
+function protectedBackup(source: string, destination: string): string {
+	if (existsSync(destination))
+		fail(`destination already exists: ${destination}`);
+	if (existsSync(checksumPath(destination))) {
+		fail(`checksum destination already exists: ${checksumPath(destination)}`);
+	}
+	try {
+		vacuumInto(source, destination);
+		return writeChecksum(destination);
+	} catch (error) {
+		rmSync(destination, { force: true });
+		rmSync(checksumPath(destination), { force: true });
+		throw error;
+	}
+}
+
 function migrate(path: string): void {
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	const database = openDomainDatabase({
@@ -101,10 +163,19 @@ function backup(destinationArgument?: string): void {
 	const destination = destinationArgument
 		? resolve(destinationArgument)
 		: join(dirname(source), "backups", `app-${timestamp()}.db`);
-	vacuumInto(source, destination);
+	const sha256 = protectedBackup(source, destination);
 	process.stdout.write(
-		`${JSON.stringify({ operation: "backup", path: destination, sha256: digest(destination) })}\n`,
+		`${JSON.stringify({ operation: "backup", path: destination, checksumPath: checksumPath(destination), sha256 })}\n`,
 	);
+}
+
+function verifyBackup(sourceArgument?: string): string {
+	if (!sourceArgument) fail("backup verification requires a backup path");
+	const source = resolve(sourceArgument);
+	assertRegularFile(source, "backup");
+	const sha256 = verifyChecksum(source);
+	integrity(source);
+	return sha256;
 }
 
 function restore(sourceArgument?: string): void {
@@ -113,8 +184,7 @@ function restore(sourceArgument?: string): void {
 	}
 	if (!sourceArgument) fail("restore requires a backup path");
 	const source = resolve(sourceArgument);
-	assertRegularFile(source, "backup");
-	integrity(source);
+	const sourceSha256 = verifyBackup(source);
 
 	const target = databasePath();
 	mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
@@ -125,12 +195,15 @@ function restore(sourceArgument?: string): void {
 	chmodSync(temporary, 0o600);
 
 	try {
+		// Bind the restore candidate to the digest verified before this copy. A
+		// replacement of the source between verification and copy is rejected.
+		assertDigest(temporary, sourceSha256);
 		migrate(temporary);
 		integrity(temporary);
 		const rollback = existsSync(target)
 			? join(dirname(target), "backups", `pre-restore-${timestamp()}.db`)
 			: undefined;
-		if (rollback) vacuumInto(target, rollback);
+		if (rollback) protectedBackup(target, rollback);
 
 		rmSync(`${target}-wal`, { force: true });
 		rmSync(`${target}-shm`, { force: true });
@@ -148,7 +221,7 @@ function restore(sourceArgument?: string): void {
 		}
 		integrity(target);
 		process.stdout.write(
-			`${JSON.stringify({ operation: "restore", path: target, sourceSha256: digest(source), rollback })}\n`,
+			`${JSON.stringify({ operation: "restore", path: target, sourceSha256, rollback })}\n`,
 		);
 	} finally {
 		rmSync(temporary, { force: true });
@@ -180,7 +253,7 @@ function permissions(): void {
 
 function usage(): never {
 	fail(
-		"usage: db.js migrate | backup [PATH] | restore BACKUP_PATH | integrity [PATH] | permissions",
+		"usage: db.js migrate | backup [PATH] | verify-backup BACKUP_PATH | restore BACKUP_PATH | integrity [PATH] | permissions",
 	);
 }
 
@@ -198,6 +271,13 @@ try {
 		case "backup":
 			backup(argument);
 			break;
+		case "verify-backup": {
+			const sha256 = verifyBackup(argument);
+			process.stdout.write(
+				`${JSON.stringify({ operation: "verify-backup", path: resolve(argument ?? ""), sha256 })}\n`,
+			);
+			break;
+		}
 		case "restore":
 			restore(argument);
 			break;

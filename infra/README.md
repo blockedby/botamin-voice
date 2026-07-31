@@ -1,8 +1,10 @@
 # Local-first Docker and operations runbook
 
-This is the single production-shaped Compose path for spec `0.4-demo`: one Bun
-`app`, one pinned Caddy proxy, SQLite data, and persistent Codex auth. There is
-no Python runtime, TTS sidecar, or provider key in the image.
+This is the single production-shaped Compose path for spec `0.5-demo`: one Bun
+`app`, one pinned Caddy proxy, SQLite data, and persistent Codex auth. OpenRouter
+is the only voice gateway: one runtime-only `OPENROUTER_API_KEY` authorizes both
+phrase-level STT and complete-segment TTS. There is no second voice provider,
+Python runtime, voice sidecar, or provider key in the image.
 
 ## Pinned runtime
 
@@ -17,8 +19,13 @@ before migration or liveness. That brain directory contains only `AGENTS.md`.
 
 ## First local start (HTTP, no domain)
 
-OpenRouter is intentionally blank locally, so startup logs a text-only fallback
-warning and does not spend paid usage.
+OpenRouter is intentionally blank locally, so startup reports degraded voice:
+STT returns a retry/error without substituting typed input and TTS may use its
+configured text-only output fallback. Local startup does not spend paid usage.
+`CODEX_TOOL_MODE=envelope` is the safe default because environment-only app
+wiring cannot inject the awaited backend executor required by A3 dynamic mode.
+A later orchestrator may explicitly select `dynamic` only when it supplies that
+executor.
 
 ```bash
 cp .env.example .env
@@ -46,10 +53,15 @@ Codex auth.
 
 At this branch point the server exposes `/health/live`, but does not yet expose
 `/health/ready`, static frontend routes, the application WebSocket, Codex
-preflight, or the A2-owned `scripts/openrouter-tts-smoke.ts`. The image,
-migration, prompt, proxy, and liveness paths are directly testable. Production
-readiness and the paid smoke must fail rather than be simulated until those
-integration routes/scripts land.
+preflight, or the A2-owned `scripts/openrouter-stt-smoke.ts` and
+`scripts/openrouter-tts-smoke.ts`. The Docker build copies repository scripts
+and conditionally bundles either provider smoke entrypoint when its source is
+present. `scripts/assert-image-content.sh` proves required runtime files are in
+the image and compares provider-smoke presence with the checkout. Until A2
+lands, `/app/scripts/run-openrouter-smoke.sh stt|tts` fails explicitly with a
+missing-integration error; it cannot return false success or raw `ENOENT`.
+Production readiness and paid smokes must fail rather than be simulated until
+their integration routes/scripts land.
 
 ## Secrets and Codex device auth
 
@@ -90,13 +102,13 @@ APP_ORIGIN=https://voice.example.com
 OPENROUTER_HTTP_REFERER=https://voice.example.com
 ```
 
-Fill backend-only `XAI_API_KEY` and `OPENROUTER_API_KEY`, then export operational
-Compose controls (they are intentionally not application env) and deploy:
+Fill the one backend-only `OPENROUTER_API_KEY`, then export operational Compose
+controls (they are intentionally not application env) and deploy:
 
 ```bash
 export SITE_ADDRESS=voice.example.com
 export HTTP_PORT=80 HTTPS_PORT=443
-export APP_IMAGE=botamin-voice:0.4-demo-<git-sha>
+export APP_IMAGE=botamin-voice:0.5-demo-<git-sha>
 ./scripts/device-auth.sh
 ./scripts/deploy-production.sh
 ```
@@ -104,22 +116,36 @@ export APP_IMAGE=botamin-voice:0.4-demo-<git-sha>
 Caddy obtains TLS automatically for `SITE_ADDRESS`; its `reverse_proxy` supports
 HTTPS and WSS on the same origin. Production deployment checks
 `/health/ready`, so it intentionally cannot pass while that application route
-or Codex preflight is missing.
+or Codex preflight is missing. Public DNS/TLS, persisted device auth, provider
+credits, and paid probes remain target-VPS follow-up evidence (REV-005); local
+checks do not claim them.
 
-The external OpenRouter Russian MP3 smoke is paid and deploy/manual only:
+The external Russian STT and MP3 TTS smokes are separately paid and
+separately opt-in on the target VPS:
 
 ```bash
-RUN_OPENROUTER_SMOKE=true ./scripts/deploy-production.sh
-# direct target-host form after A2 integration:
+RUN_OPENROUTER_STT_SMOKE=true ./scripts/deploy-production.sh
+RUN_OPENROUTER_TTS_SMOKE=true ./scripts/deploy-production.sh
+# Run both only after both paid probes are explicitly approved:
+RUN_OPENROUTER_STT_SMOKE=true RUN_OPENROUTER_TTS_SMOKE=true \
+  ./scripts/deploy-production.sh
+
+# direct image forms after A2 integration:
 docker compose run --rm -e AUTO_MIGRATE=false app \
-  bun run scripts/openrouter-tts-smoke.ts
+  /app/scripts/run-openrouter-smoke.sh stt
+docker compose run --rm -e AUTO_MIGRATE=false app \
+  /app/scripts/run-openrouter-smoke.sh tts
 ```
 
-Never run this in local startup, image build, healthchecks, or default CI.
-`401` and `404` mean key/profile configuration failure; `402` means exhausted
-credits. None should be retried by deployment loops. With
-`TTS_TEXT_ONLY_FALLBACK=true`, the application reports degraded TTS while text
-and booking continue; `false` makes missing TTS configuration fail closed.
+The guarded image commands execute `/app/scripts/openrouter-stt-smoke.ts` and
+`/app/scripts/openrouter-tts-smoke.ts`, respectively. Never run either paid
+probe in local startup, image build, healthchecks, or default CI. No script
+prints the key. `401` and `404` mean key/model/profile configuration failure;
+`402` means exhausted credits. None should be retried by deployment loops.
+With `TTS_TEXT_ONLY_FALLBACK=true`, the application reports degraded TTS while
+text and booking continue; `false` makes missing shared voice configuration
+fail closed. `STT_TEXT_ONLY_INPUT_FALLBACK=false` always prevents silent typed
+input substitution after transcription failure.
 
 ## Migration, backup, restore, and rollback
 
@@ -130,7 +156,8 @@ are also available explicitly:
 docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate
 ```
 
-Backups use SQLite `VACUUM INTO`, not a raw copy of a live DB/WAL:
+Backups use SQLite `VACUUM INTO`, not a raw copy of a live DB/WAL, and write a
+mode-`0600` `<backup>.sha256` sidecar bound to the backup basename:
 
 ```bash
 ./scripts/backup.sh
@@ -138,8 +165,11 @@ Backups use SQLite `VACUUM INTO`, not a raw copy of a live DB/WAL:
 ./scripts/backup.sh /data/backups/before-release.db
 ```
 
-Restore stops the app, validates `PRAGMA integrity_check`, migrates a temporary
-copy, atomically swaps it, and retains a consistent pre-restore rollback copy:
+Keep each `.db` and `.db.sha256` together. Restore verifies sidecar permissions,
+SHA-256, and `PRAGMA integrity_check` before stopping the app, verifies again
+after stop, migrates a temporary copy, atomically swaps it, and retains a
+protected pre-restore rollback backup. It reports success only after the app
+passes bounded `/health/ready` checks:
 
 ```bash
 ./scripts/restore.sh /data/backups/before-release.db
@@ -149,14 +179,16 @@ Rollback to an already built/pulled immutable app image, optionally with a DB
 backup:
 
 ```bash
-./scripts/rollback.sh botamin-voice:0.4-demo-<previous-sha>
-./scripts/rollback.sh botamin-voice:0.4-demo-<previous-sha> \
+./scripts/rollback.sh botamin-voice:0.5-demo-<previous-sha>
+./scripts/rollback.sh botamin-voice:0.5-demo-<previous-sha> \
   /data/backups/before-release.db
 ```
 
-After a successful rollback, keep that `APP_IMAGE` exported in the host's
-deployment wrapper. SQLite migrations are forward-only; use the matching
-pre-release backup when the old image cannot read the new schema.
+Restore and rollback reject live-but-unready responses and use bounded request,
+retry, and interval settings. After a successful rollback, keep that `APP_IMAGE`
+exported in the host's deployment wrapper. SQLite migrations are forward-only;
+use the matching pre-release backup when the old image cannot read the new
+schema.
 
 ## Safe diagnostics
 
@@ -165,6 +197,7 @@ docker compose run --rm -e AUTO_MIGRATE=false app codex --version
 docker compose run --rm -e AUTO_MIGRATE=false app id
 docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js permissions
 docker compose exec -T app bun /app/ops/db.js integrity
+scripts/assert-image-content.sh "${APP_IMAGE:-botamin-voice:local}"
 docker compose logs --tail=100 app caddy
 ```
 

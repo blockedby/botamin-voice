@@ -19,11 +19,16 @@ if [ -n "$backup" ]; then
   esac
 fi
 
+if [ -n "$backup" ]; then
+  # Reject a substituted backup before stopping or touching the active database.
+  docker compose run --rm --no-deps --entrypoint bun app \
+    /app/ops/db.js verify-backup "$backup" >/dev/null
+fi
+
 if ! docker image inspect "$image" >/dev/null 2>&1; then
   docker pull "$image"
 fi
 
-export APP_IMAGE="$image"
 app_stopped=false
 restart_on_failure() {
   if [ "$app_stopped" = "true" ]; then
@@ -38,28 +43,27 @@ docker compose stop app
 app_stopped=true
 
 if [ -n "$backup" ]; then
-  docker compose run --rm --no-deps \
-    -e AUTO_MIGRATE=false \
+  # Use the current trusted ops image to verify again and perform the DB swap.
+  docker compose run --rm --no-deps --entrypoint bun \
     -e BOTAMIN_RESTORE_CONFIRMED=true \
-    app bun /app/ops/db.js restore "$backup"
+    app /app/ops/db.js restore "$backup"
 fi
 
+export APP_IMAGE="$image"
 docker compose run --rm --no-deps -e AUTO_MIGRATE=false \
   app bun /app/ops/db.js migrate
 docker compose up -d --no-build
 app_stopped=false
 trap - EXIT HUP INT TERM
 
-health_url="${ROLLBACK_HEALTH_URL:-http://localhost:${HTTP_PORT:-5173}/health/live}"
-attempt=0
-until curl -fsS "$health_url" >/dev/null; do
-  attempt=$((attempt + 1))
-  if [ "$attempt" -ge 30 ]; then
-    docker compose ps >&2
-    printf '%s\n' "Rollback image started but health verification failed." >&2
-    exit 1
-  fi
-  sleep 2
-done
+health_url="${ROLLBACK_READY_URL:-http://localhost:${HTTP_PORT:-5173}/health/ready}"
+if ! READY_MAX_ATTEMPTS="${ROLLBACK_READY_MAX_ATTEMPTS:-30}" \
+  READY_INTERVAL_SECONDS="${ROLLBACK_READY_INTERVAL_SECONDS:-2}" \
+  scripts/wait-ready.sh "$health_url"; then
+  docker compose ps >&2
+  docker compose logs --tail=100 app caddy >&2
+  printf '%s\n' "Rollback image started but readiness verification failed; rollback is not successful." >&2
+  exit 1
+fi
 
-printf '%s\n' "Rollback is healthy on image $image. Export APP_IMAGE=$image for later Compose invocations."
+printf '%s\n' "Rollback is ready on image $image. Export APP_IMAGE=$image for later Compose invocations."

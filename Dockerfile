@@ -31,8 +31,15 @@ COPY prompts ./prompts
 COPY knowledge ./knowledge
 COPY drizzle ./drizzle
 COPY infra/ops ./infra/ops
+COPY scripts ./scripts
 RUN bun run build \
     && bun build ./infra/ops/db.ts --outdir ./dist/ops --target bun \
+    && mkdir -p /opt/runtime-smokes \
+    && for smoke in openrouter-stt-smoke openrouter-tts-smoke; do \
+         if [ -f "./scripts/${smoke}.ts" ]; then \
+           bun build "./scripts/${smoke}.ts" --outfile "/opt/runtime-smokes/${smoke}.ts" --target bun; \
+         fi; \
+       done \
     && mkdir -p /opt/runtime-check \
     && bun ./packages/prompt-compiler/dist/src/cli.js \
        --source-root /app \
@@ -46,7 +53,7 @@ FROM ${BUN_IMAGE} AS runtime
 ARG CODEX_CLI_VERSION=0.146.0
 LABEL org.opencontainers.image.title="Botamin Voice" \
       org.opencontainers.image.description="Local-first Botamin Bun application with pinned Codex CLI" \
-      org.opencontainers.image.version="0.4-demo" \
+      org.opencontainers.image.version="0.5-demo" \
       io.botamin.bun.version="1.3.14" \
       io.botamin.codex.version="${CODEX_CLI_VERSION}"
 
@@ -67,6 +74,7 @@ RUN mkdir -p \
       /app/apps/web/dist \
       /app/prompt-compiler \
       /app/prompt-source/prompts \
+      /app/scripts \
       /app/prompt-source/knowledge \
       /app/runtime-brain-image \
       /codex-home \
@@ -84,8 +92,11 @@ COPY --from=build --chown=bun:bun /app/knowledge/ /app/prompt-source/knowledge/
 COPY --from=build --chown=bun:bun /app/drizzle/ /app/drizzle/
 COPY --from=build --chown=bun:bun /app/dist/ops/ /app/ops/
 COPY --from=build --chown=bun:bun /opt/runtime-check/AGENTS.md /app/runtime-brain-image/AGENTS.md
+COPY --chown=bun:bun scripts/ /app/scripts/
+COPY --from=build --chown=bun:bun /opt/runtime-smokes/ /app/scripts/
 COPY --chown=bun:bun infra/entrypoint.sh /usr/local/bin/botamin-entrypoint
 RUN chmod 0555 /usr/local/bin/botamin-entrypoint \
+    && find /app/scripts -type f -name '*.sh' -exec chmod 0555 {} + \
     && find /app/prompt-source /app/drizzle -type d -exec chmod 0555 {} + \
     && find /app/prompt-source /app/drizzle -type f -exec chmod 0444 {} + \
     && chmod 0444 /app/runtime-brain-image/AGENTS.md

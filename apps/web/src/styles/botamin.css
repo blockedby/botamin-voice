@@ -323,6 +323,11 @@ button {
 	border-bottom: 1px solid var(--line);
 }
 
+.voice-status:focus {
+	outline: 3px solid var(--accent-dark);
+	outline-offset: 3px;
+}
+
 .status-orbit {
 	display: grid;
 	width: 2rem;

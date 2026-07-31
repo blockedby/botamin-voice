@@ -2,8 +2,17 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { VoiceDemoProps, VoiceUiState } from "./VoiceDemo";
-import { VoiceDemo } from "./VoiceDemo";
+import type {
+	FinalTranscriptEntry,
+	VoiceDemoProps,
+	VoiceUiState,
+} from "./VoiceDemo";
+import {
+	completeVoiceSession,
+	handOffVoiceControlFocus,
+	stopVoiceSession,
+	VoiceDemo,
+} from "./VoiceDemo";
 
 const noop = () => undefined;
 
@@ -42,10 +51,22 @@ describe("VoiceDemo state semantics", () => {
 		[{ kind: "speaking" }, "AI-продавец отвечает"],
 		[{ kind: "booked" }, "Следующий шаг записан"],
 		[
-			{ kind: "qualification", questionNumber: 2, questionCount: 5 },
+			{
+				kind: "qualification",
+				bookingOutcome: "committed",
+				questionNumber: 2,
+				questionCount: 5,
+			},
 			"Дополнительный вопрос 2 из 5",
 		],
-		[{ kind: "complete", qualificationStatus: "partial" }, "Разговор завершён"],
+		[
+			{
+				kind: "complete",
+				bookingOutcome: "committed",
+				qualificationStatus: "partial",
+			},
+			"Разговор завершён",
+		],
 		[{ kind: "audio-error" }, "Продолжаем текстом"],
 		[{ kind: "disconnected" }, "Связь прервана"],
 		[{ kind: "reconnecting", attempt: 3 }, "Попытка 3"],
@@ -116,6 +137,73 @@ describe("VoiceDemo controls and transcript", () => {
 		expect(html).toContain("Управление разговором");
 	});
 
+	test("mute exposes one stable name whose pressed state means muting is active", () => {
+		const unmuted = renderVoice({ kind: "listening" }, { muted: false });
+		const muted = renderVoice({ kind: "listening" }, { muted: true });
+		for (const html of [unmuted, muted]) {
+			expect(html.match(/aria-label="Отключение микрофона"/g)?.length).toBe(1);
+		}
+		expect(unmuted).toContain('aria-pressed="false"');
+		expect(muted).toContain('aria-pressed="true"');
+	});
+
+	test("hands focus from controls that disappear to a stable exact target", () => {
+		const focused: string[] = [];
+		const targets = {
+			mute: { focus: () => focused.push("mute") },
+			status: { focus: () => focused.push("status") },
+		};
+		handOffVoiceControlFocus("interrupt", targets);
+		handOffVoiceControlFocus("session", targets);
+		expect(focused).toEqual(["mute", "status"]);
+	});
+
+	test("only a committed booking state can produce a booked completion", () => {
+		expect(completeVoiceSession({ kind: "connecting" })).toEqual({
+			kind: "complete",
+			bookingOutcome: "none",
+		});
+		expect(completeVoiceSession({ kind: "listening" })).toEqual({
+			kind: "complete",
+			bookingOutcome: "none",
+		});
+		expect(completeVoiceSession({ kind: "booked" })).toEqual({
+			kind: "complete",
+			bookingOutcome: "committed",
+			qualificationStatus: "skipped",
+		});
+		expect(
+			completeVoiceSession({
+				kind: "qualification",
+				bookingOutcome: "committed",
+				questionNumber: 2,
+				questionCount: 4,
+			}),
+		).toEqual({
+			kind: "complete",
+			bookingOutcome: "committed",
+			qualificationStatus: "partial",
+		});
+	});
+
+	test("stopping before booking clears even supplied transcript history", () => {
+		const fabricated: readonly FinalTranscriptEntry[] = [
+			{ id: "fixture", speaker: "agent", text: "fixture history" },
+		];
+		expect(stopVoiceSession({ kind: "speaking" }, fabricated)).toEqual({
+			state: { kind: "complete", bookingOutcome: "none" },
+			transcript: [],
+		});
+		expect(stopVoiceSession({ kind: "booked" }, fabricated)).toEqual({
+			state: {
+				kind: "complete",
+				bookingOutcome: "committed",
+				qualificationStatus: "skipped",
+			},
+			transcript: fabricated,
+		});
+	});
+
 	test("booked confirms only the recorded lead and makes qualification optional", () => {
 		const html = renderVoice({ kind: "booked" });
 		expect(html).toContain("Лид и следующий шаг записаны");
@@ -123,6 +211,44 @@ describe("VoiceDemo controls and transcript", () => {
 		expect(html).toContain("3–5 необязательных вопросов");
 		expect(html).toContain("Да, продолжить");
 		expect(html).toContain("Нет, завершить");
+	});
+
+	test("uses exactly one booking live region while keeping visual status and transcript", () => {
+		const html = renderVoice(
+			{ kind: "booked" },
+			{
+				transcript: [
+					{
+						id: "committed",
+						speaker: "agent",
+						text: "Контакт и следующий шаг записаны.",
+					},
+				],
+			},
+		);
+		expect(html.match(/role="status"/g)?.length).toBe(1);
+		expect(html.match(/aria-live="polite"/g)?.length).toBe(1);
+		expect(html).toContain("Следующий шаг записан");
+		expect(html).toContain("Контакт и следующий шаг записаны.");
+	});
+
+	test("pre-booking completion is neutral and makes no saved-data claim", () => {
+		const html = renderVoice({ kind: "complete", bookingOutcome: "none" });
+		expect(html).toContain("Сессия остановлена");
+		expect(html).toContain("Лид и контакт не записывались");
+		expect(html).not.toContain("Лид и следующий шаг записаны");
+		expect(html).not.toContain("Это не календарная встреча");
+	});
+
+	test("committed completion keeps the no-calendar confirmation", () => {
+		const html = renderVoice({
+			kind: "complete",
+			bookingOutcome: "committed",
+			qualificationStatus: "skipped",
+		});
+		expect(html).toContain("Лид и следующий шаг записаны");
+		expect(html).toContain("Это не календарная встреча");
+		expect(html).not.toContain("Лид и контакт не записывались");
 	});
 
 	test("audio failure preserves text-only output", () => {
@@ -136,5 +262,6 @@ describe("VoiceDemo controls and transcript", () => {
 		);
 		expect(html).toContain(answer);
 		expect(html).toContain("Звук ответа сейчас недоступен");
+		expect(html).not.toContain("уже записанный следующий шаг");
 	});
 });

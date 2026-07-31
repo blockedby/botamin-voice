@@ -1,4 +1,5 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
+import { useRef } from "react";
 
 export type VoiceUiState =
 	| { kind: "idle" }
@@ -9,9 +10,19 @@ export type VoiceUiState =
 	| { kind: "thinking" }
 	| { kind: "speaking" }
 	| { kind: "booked" }
-	| { kind: "qualification"; questionNumber: number; questionCount: number }
+	| {
+			kind: "qualification";
+			bookingOutcome: "committed";
+			questionNumber: number;
+			questionCount: number;
+	  }
 	| {
 			kind: "complete";
+			bookingOutcome: "none";
+	  }
+	| {
+			kind: "complete";
+			bookingOutcome: "committed";
 			qualificationStatus?: "complete" | "partial" | "skipped";
 	  }
 	| { kind: "audio-error" }
@@ -124,22 +135,27 @@ export function getVoiceStatePresentation(
 				tone: "active",
 			};
 		case "complete":
-			return {
-				label: "Разговор завершён",
-				detail: "Спасибо. Лид и согласованный следующий шаг записаны.",
-				tone: "success",
-			};
+			return state.bookingOutcome === "committed"
+				? {
+						label: "Разговор завершён",
+						detail: "Спасибо. Лид и согласованный следующий шаг записаны.",
+						tone: "success",
+					}
+				: {
+						label: "Разговор завершён",
+						detail: "Сессия остановлена. Лид и контакт не записывались.",
+						tone: "neutral",
+					};
 		case "audio-error":
 			return {
 				label: "Продолжаем текстом",
-				detail:
-					"Звук ответа сейчас недоступен, но текст и уже записанный следующий шаг сохраняются.",
+				detail: "Звук ответа сейчас недоступен, но видимый текст остаётся.",
 				tone: "warning",
 			};
 		case "disconnected":
 			return {
 				label: "Связь прервана",
-				detail: "Можно восстановить этот разговор без повторной записи лида.",
+				detail: "Можно попробовать восстановить этот разговор.",
 				tone: "warning",
 			};
 		case "reconnecting":
@@ -153,8 +169,7 @@ export function getVoiceStatePresentation(
 		case "error":
 			return {
 				label: "Разговор не удалось продолжить",
-				detail:
-					"Попробуйте начать заново. Если лид уже был записан, он останется у команды.",
+				detail: "Попробуйте начать заново.",
 				tone: "danger",
 			};
 	}
@@ -185,16 +200,72 @@ const ACTIVE_STATES = new Set<VoiceUiState["kind"]>([
 	"reconnecting",
 ]);
 
+interface FocusableTarget {
+	focus: () => void;
+}
+
+export function handOffVoiceControlFocus(
+	control: "interrupt" | "session",
+	targets: {
+		mute: FocusableTarget | null;
+		status: FocusableTarget | null;
+	},
+) {
+	if (control === "interrupt") {
+		targets.mute?.focus();
+		return;
+	}
+	targets.status?.focus();
+}
+
+export function hasCommittedBooking(state: VoiceUiState): boolean {
+	return (
+		state.kind === "booked" ||
+		(state.kind === "qualification" && state.bookingOutcome === "committed") ||
+		(state.kind === "complete" && state.bookingOutcome === "committed")
+	);
+}
+
+export function completeVoiceSession(
+	state: VoiceUiState,
+): Extract<VoiceUiState, { kind: "complete" }> {
+	if (!hasCommittedBooking(state)) {
+		return { kind: "complete", bookingOutcome: "none" };
+	}
+	if (state.kind === "complete") return state;
+	return {
+		kind: "complete",
+		bookingOutcome: "committed",
+		qualificationStatus: state.kind === "qualification" ? "partial" : "skipped",
+	};
+}
+
+export function stopVoiceSession(
+	state: VoiceUiState,
+	transcript: readonly FinalTranscriptEntry[],
+): {
+	state: Extract<VoiceUiState, { kind: "complete" }>;
+	transcript: readonly FinalTranscriptEntry[];
+} {
+	return {
+		state: completeVoiceSession(state),
+		transcript: hasCommittedBooking(state) ? transcript : [],
+	};
+}
+
 function ControlButton({
 	children,
 	className = "",
+	buttonRef,
 	...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
 	children: ReactNode;
+	buttonRef?: Ref<HTMLButtonElement>;
 }) {
 	return (
 		<button
 			className={`voice-control ${className}`.trim()}
+			ref={buttonRef}
 			type="button"
 			{...props}
 		>
@@ -246,14 +317,24 @@ function ConsentPanel({
 	);
 }
 
-function Transcript({ entries }: { entries: readonly FinalTranscriptEntry[] }) {
+function Transcript({
+	entries,
+	announceUpdates,
+}: {
+	entries: readonly FinalTranscriptEntry[];
+	announceUpdates: boolean;
+}) {
 	return (
 		<section className="transcript" aria-labelledby="transcript-title">
 			<div className="transcript-heading">
 				<h3 id="transcript-title">Текст разговора</h3>
 				<span>только финальные реплики</span>
 			</div>
-			<div className="transcript-log" aria-live="polite" aria-atomic="false">
+			<div
+				className="transcript-log"
+				aria-live={announceUpdates ? "polite" : undefined}
+				aria-atomic={announceUpdates ? "false" : undefined}
+			>
 				{entries.length === 0 ? (
 					<p className="transcript-empty">
 						Здесь появятся ваши завершённые реплики и ответы агента.
@@ -357,11 +438,43 @@ function StateActions(props: VoiceDemoProps) {
 export function VoiceDemo(props: VoiceDemoProps) {
 	const presentation = getVoiceStatePresentation(props.state, props.muted);
 	const isActive = ACTIVE_STATES.has(props.state.kind);
+	const bookingCommitted = hasCommittedBooking(props.state);
 	const showSessionControls =
 		isActive &&
 		props.state.kind !== "connecting" &&
 		props.state.kind !== "reconnecting" &&
 		props.state.kind !== "booked";
+	const muteButtonRef = useRef<HTMLButtonElement>(null);
+	const statusRef = useRef<HTMLDivElement>(null);
+	const focusTargets = () => ({
+		mute: muteButtonRef.current,
+		status: statusRef.current,
+	});
+	const handOffSessionFocus = () =>
+		handOffVoiceControlFocus("session", focusTargets());
+	const stateActions: VoiceDemoProps = {
+		...props,
+		onRetryPermission: () => {
+			handOffSessionFocus();
+			props.onRetryPermission();
+		},
+		onStop: () => {
+			handOffSessionFocus();
+			props.onStop();
+		},
+		onReconnect: () => {
+			handOffSessionFocus();
+			props.onReconnect();
+		},
+		onRestart: () => {
+			handOffSessionFocus();
+			props.onRestart();
+		},
+		onQualificationChoice: (accepted) => {
+			handOffSessionFocus();
+			props.onQualificationChoice(accepted);
+		},
+	};
 
 	return (
 		<section
@@ -379,8 +492,10 @@ export function VoiceDemo(props: VoiceDemoProps) {
 
 			<div
 				className={`voice-status tone-${presentation.tone}`}
-				role="status"
-				aria-live="polite"
+				ref={statusRef}
+				tabIndex={-1}
+				role={bookingCommitted ? undefined : "status"}
+				aria-live={bookingCommitted ? undefined : "polite"}
 			>
 				<div className="status-orbit" aria-hidden="true">
 					<span />
@@ -406,8 +521,13 @@ export function VoiceDemo(props: VoiceDemoProps) {
 				/>
 			) : null}
 
-			{props.state.kind === "booked" || props.state.kind === "complete" ? (
-				<div className="booking-confirmation" role="status">
+			{bookingCommitted ? (
+				<div
+					className="booking-confirmation"
+					role="status"
+					aria-live="polite"
+					aria-atomic="true"
+				>
 					<strong>Лид и следующий шаг записаны</strong>
 					<p>
 						Это не календарная встреча. Команда Botamin получила договорённость
@@ -416,26 +536,34 @@ export function VoiceDemo(props: VoiceDemoProps) {
 				</div>
 			) : null}
 
-			<Transcript entries={props.transcript} />
+			<Transcript
+				entries={props.transcript}
+				announceUpdates={!bookingCommitted}
+			/>
 
 			<div className="voice-actions">
-				<StateActions {...props} />
+				<StateActions {...stateActions} />
 				{showSessionControls ? (
 					<fieldset className="session-controls">
 						<legend className="visually-hidden">Управление разговором</legend>
 						<ControlButton
+							buttonRef={muteButtonRef}
+							aria-label="Отключение микрофона"
 							aria-pressed={props.muted}
 							onClick={props.onToggleMute}
 						>
-							<span className="control-icon" aria-hidden="true">
-								{props.muted ? "×" : "│"}
+							<span aria-hidden="true">
+								<span className="control-icon">{props.muted ? "×" : "│"}</span>
+								{props.muted ? "Включить микрофон" : "Выключить микрофон"}
 							</span>
-							{props.muted ? "Включить микрофон" : "Выключить микрофон"}
 						</ControlButton>
 						{props.state.kind === "speaking" ? (
 							<ControlButton
 								className="is-interrupt"
-								onClick={props.onInterrupt}
+								onClick={() => {
+									handOffVoiceControlFocus("interrupt", focusTargets());
+									props.onInterrupt();
+								}}
 							>
 								<span className="control-icon" aria-hidden="true">
 									↳
@@ -443,7 +571,7 @@ export function VoiceDemo(props: VoiceDemoProps) {
 								Перебить агента
 							</ControlButton>
 						) : null}
-						<ControlButton className="is-stop" onClick={props.onStop}>
+						<ControlButton className="is-stop" onClick={stateActions.onStop}>
 							<span className="control-icon" aria-hidden="true">
 								■
 							</span>

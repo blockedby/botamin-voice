@@ -67,6 +67,8 @@ describe("Botamin landing narrative", () => {
 		expect(html).toContain("Ваши данные не публикуются в открытом разговоре");
 		expect(html).toContain("Микрофон и разговор выключаются в любой момент");
 		expect(html).toContain("Реальная встреча в этом демо не создаётся");
-		expect(html).toContain("фиксируются лид и следующий шаг");
+		expect(html).toContain(
+			"Лид и следующий шаг считаются записанными только после явного подтверждения",
+		);
 	});
 });

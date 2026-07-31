@@ -40,15 +40,24 @@ const supervisor = new CodexProcessSupervisor({
 	restartMaxDelayMs: 10_000,
 	env: process.env,
 });
-const brain = new CodexAppServerBrain({
+let streamedDelta = false;
+let interruptSent = false;
+let interruptPromise: Promise<void> | undefined;
+let brain!: CodexAppServerBrain;
+brain = new CodexAppServerBrain({
 	model,
 	effort,
-	toolMode: "dynamic",
+	toolMode: "envelope",
 	runtimeCwd,
 	turnTimeoutMs: 45_000,
 	supervisor,
 	onProtocolEvidence: (event) => {
 		if (event.type === "thread_verified") instructionSourcesVerified = true;
+		if (event.type === "provider_delta" && event.turnId && !interruptSent) {
+			streamedDelta = true;
+			interruptSent = true;
+			interruptPromise = brain.interrupt(event.threadId, event.turnId);
+		}
 		if (event.type === "turn_terminal" && event.status)
 			terminalStatuses.push(event.status);
 	},
@@ -71,9 +80,7 @@ try {
 		const promptVersion = createHash("sha256")
 			.update(promptBytes)
 			.digest("hex");
-		let streamedDelta = false;
 		let completion = false;
-		let interruptSent = false;
 		const controller = new AbortController();
 		for await (const delta of brain.runTurn(
 			{
@@ -91,16 +98,10 @@ try {
 			},
 			controller.signal,
 		)) {
-			if (delta.type === "speech.delta") {
-				streamedDelta = true;
-				if (!interruptSent) {
-					interruptSent = true;
-					await brain.interrupt(threadId, turnId);
-				}
-			}
 			if (delta.type === "turn.completed") completion = true;
 			if (delta.type === "error") throw new Error(delta.error.code);
 		}
+		await interruptPromise;
 		const interrupted = terminalStatuses.includes("interrupted");
 		const ok =
 			instructionSourcesVerified &&

@@ -1,15 +1,32 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	lstat,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrainDelta, BrainTurnInput } from "@botamin/contracts";
-import { CodexAppServerBrain } from "./brain";
+import {
+	assertStructuredOutputSchema,
+	BRAIN_ENVELOPE_OUTPUT_SCHEMA,
+	CodexAppServerBrain,
+	type CodexBrainOptions,
+	createCodexBrainFromEnv,
+} from "./brain";
 import {
 	type CodexChildProcess,
 	type CodexStdin,
 	JsonlRpcClient,
 } from "./jsonl-client";
-import { CodexProcessSupervisor } from "./supervisor";
+import { parseDynamicToolCall } from "./protocol";
+import {
+	CodexProcessSupervisor,
+	restrictedAppServerCommand,
+} from "./supervisor";
 
 const CONVERSATION_ID = "01890f3a-8b7c-7def-8123-456789abcdef";
 const EXTERNAL_TURN_ID = "01890f3a-8b7c-7def-9234-56789abcdef0";
@@ -41,6 +58,7 @@ class FakeCodexProcess implements CodexChildProcess {
 	private exitResolve!: (code: number) => void;
 	private input = "";
 	private exitedOnce = false;
+	readonly killSignals: Array<number | NodeJS.Signals | undefined> = [];
 	private readonly encoder = new TextEncoder();
 
 	constructor(
@@ -86,7 +104,8 @@ class FakeCodexProcess implements CodexChildProcess {
 		);
 	}
 
-	kill(): void {
+	kill(signal?: number | NodeJS.Signals): void {
+		this.killSignals.push(signal);
 		this.exit(0);
 	}
 
@@ -136,16 +155,22 @@ function createBrain(
 		message: Record<string, unknown>,
 		process: FakeCodexProcess,
 	) => void | Promise<void>,
-	toolMode: "dynamic" | "envelope" = "dynamic",
+	options: {
+		toolMode?: "dynamic" | "envelope";
+		executeTool?: CodexBrainOptions["executeTool"];
+		requestTimeoutMs?: number;
+		restartDelayMs?: number;
+		codexHome?: string;
+	} = {},
 ): { brain: CodexAppServerBrain; processes: FakeCodexProcess[] } {
 	const processes: FakeCodexProcess[] = [];
 	const supervisor = new CodexProcessSupervisor({
 		codexBin: "/pinned/codex",
-		codexHome: "/safe/codex-home",
+		codexHome: options.codexHome ?? "/safe/codex-home",
 		runtimeCwd: cwd,
-		requestTimeoutMs: 500,
-		restartBaseDelayMs: 100,
-		restartMaxDelayMs: 100,
+		requestTimeoutMs: options.requestTimeoutMs ?? 500,
+		restartBaseDelayMs: options.restartDelayMs ?? 100,
+		restartMaxDelayMs: options.restartDelayMs ?? 100,
 		env: {
 			PATH: "/usr/bin",
 			HOME: "/safe/home",
@@ -161,10 +186,11 @@ function createBrain(
 	const brain = new CodexAppServerBrain({
 		model: "gpt-5.6-luna",
 		effort: "low",
-		toolMode,
+		toolMode: options.toolMode ?? "envelope",
 		runtimeCwd: cwd,
 		turnTimeoutMs: 1_000,
 		supervisor,
+		...(options.executeTool ? { executeTool: options.executeTool } : {}),
 	});
 	brains.push(brain);
 	return { brain, processes };
@@ -183,6 +209,17 @@ async function standardResponse(
 				codexHome: "/safe/codex-home",
 				platformFamily: "unix",
 				platformOs: "linux",
+			},
+		});
+		return true;
+	}
+	if (message.method === "config/read") {
+		await process.send({
+			id: message.id,
+			result: {
+				config: { model_provider: "openai" },
+				origins: {},
+				layers: null,
 			},
 		});
 		return true;
@@ -229,7 +266,11 @@ describe("Codex app-server brain with deterministic fake process", () => {
 						threadId: PROVIDER_THREAD_ID,
 						turnId: PROVIDER_TURN_ID,
 						itemId: "item_1",
-						delta: "Добрый день!",
+						delta: JSON.stringify({
+							speech: "Добрый день!",
+							nextStage: "DISCOVERY",
+							action: { type: "none" },
+						}),
 					},
 				});
 				await process.send({
@@ -271,9 +312,21 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		).toHaveLength(1);
 		expect(processRef?.environment.XAI_API_KEY).toBeUndefined();
 		expect(processRef?.environment.DATABASE_URL).toBeUndefined();
-		expect(processRef?.environment.CODEX_HOME).toBe("/safe/codex-home");
+		const isolatedHome = processRef?.environment.CODEX_HOME;
+		expect(isolatedHome).toStartWith("/tmp/botamin-codex-app-home-");
+		expect(isolatedHome).not.toBe("/safe/codex-home");
+		expect(
+			await readFile(join(isolatedHome ?? "", "config.toml"), "utf8"),
+		).toBe("");
+		expect(
+			(await lstat(join(isolatedHome ?? "", "auth.json"))).isSymbolicLink(),
+		).toBe(true);
 		expect(processRef?.command).toContain("features.shell_tool=false");
 		expect(processRef?.command).toContain('web_search="disabled"');
+		expect(processRef?.command).toContain('model_provider="openai"');
+		expect(processRef?.command).toContain("model_providers={}");
+		expect(processRef?.command).toContain("notify=[]");
+		expect(processRef?.command).toContain("hooks={}");
 		expect(
 			processRef?.messages.find(
 				(message) => message.id === "forbidden_command" && "error" in message,
@@ -284,6 +337,14 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		);
 		expect(threadStart?.params).toMatchObject({
 			cwd,
+			modelProvider: "openai",
+			allowProviderModelFallback: false,
+			config: {
+				model_provider: "openai",
+				model_providers: {},
+				notify: [],
+				hooks: {},
+			},
 			approvalPolicy: "never",
 			sandbox: "read-only",
 			runtimeWorkspaceRoots: [cwd],
@@ -354,46 +415,64 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		]);
 	});
 
-	test("dynamic tools are flag-gated, shared-contract validated, and policy checked", async () => {
+	test("dynamic tools await execution and accept omitted top-level namespace", async () => {
 		const { cwd, agentsPath } = await runtime();
 		let toolResponse: Record<string, unknown> | undefined;
-		const { brain } = createBrain(cwd, async (message, process) => {
-			if (await standardResponse(message, process, agentsPath)) return;
-			if (message.method === "turn/start") {
-				await process.send({
-					id: message.id,
-					result: { turn: { id: PROVIDER_TURN_ID, status: "inProgress" } },
-				});
-				await process.send({
-					id: "server_tool_1",
-					method: "item/tool/call",
-					params: {
-						threadId: PROVIDER_THREAD_ID,
-						turnId: PROVIDER_TURN_ID,
-						callId: "call_1",
-						namespace: null,
-						tool: "create_booking",
-						arguments: {
-							conversationId: CONVERSATION_ID,
-							idempotencyKey: "booking-key-123",
-							name: "Иван",
-							contacts: [{ channel: "telegram", value: "@ivan" }],
-							consentConfirmed: true,
+		let executions = 0;
+		const { brain } = createBrain(
+			cwd,
+			async (message, process) => {
+				if (await standardResponse(message, process, agentsPath)) return;
+				if (message.method === "turn/start") {
+					await process.send({
+						id: message.id,
+						result: {
+							turn: { id: PROVIDER_TURN_ID, status: "inProgress" },
 						},
-					},
-				});
-			}
-			if (message.id === "server_tool_1" && "result" in message) {
-				toolResponse = message;
-				await process.send({
-					method: "turn/completed",
-					params: {
-						threadId: PROVIDER_THREAD_ID,
-						turn: { id: PROVIDER_TURN_ID, status: "completed", error: null },
-					},
-				});
-			}
-		});
+					});
+					await process.send({
+						id: "server_tool_1",
+						method: "item/tool/call",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							callId: "call_1",
+							tool: "create_booking",
+							arguments: {
+								conversationId: CONVERSATION_ID,
+								idempotencyKey: "booking-key-123",
+								name: "Иван",
+								contacts: [{ channel: "telegram", value: "@ivan" }],
+								company: null,
+								preferredTimeText: null,
+								consentConfirmed: true,
+							},
+						},
+					});
+				}
+				if (message.id === "server_tool_1" && "result" in message) {
+					toolResponse = message;
+					await process.send({
+						method: "turn/completed",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turn: {
+								id: PROVIDER_TURN_ID,
+								status: "completed",
+								error: null,
+							},
+						},
+					});
+				}
+			},
+			{
+				toolMode: "dynamic",
+				executeTool: async () => {
+					executions += 1;
+					return { ok: true };
+				},
+			},
+		);
 		const threadId = await brain.createThread(CONVERSATION_ID);
 		const deltas = await collect(
 			brain.runTurn(
@@ -405,13 +484,24 @@ describe("Codex app-server brain with deterministic fake process", () => {
 				new AbortController().signal,
 			),
 		);
-		expect(deltas[0]).toMatchObject({
-			type: "tool.request",
-			turnId: EXTERNAL_TURN_ID,
-			generationId: GENERATION_ID,
-			tool: { name: "create_booking", callId: "call_1" },
-		});
+		expect(executions).toBe(1);
+		expect(deltas).toEqual([
+			{
+				type: "turn.completed",
+				turnId: EXTERNAL_TURN_ID,
+				generationId: GENERATION_ID,
+			},
+		]);
 		expect(toolResponse?.result).toMatchObject({ success: true });
+		expect(
+			parseDynamicToolCall({
+				threadId: "thread",
+				turnId: "turn",
+				callId: "call",
+				tool: "create_booking",
+				arguments: {},
+			}).namespace,
+		).toBeNull();
 	});
 
 	test("envelope mode suppresses JSON deltas and emits validated fallback output", async () => {
@@ -452,7 +542,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 					});
 				}
 			},
-			"envelope",
+			{ toolMode: "envelope" },
 		);
 		const threadId = await brain.createThread(CONVERSATION_ID);
 		const deltas = await collect(
@@ -471,6 +561,182 @@ describe("Codex app-server brain with deterministic fake process", () => {
 				generationId: GENERATION_ID,
 			},
 		]);
+	});
+
+	test("structured envelope schema is provider-compatible and normalizes nullable optionals", async () => {
+		assertStructuredOutputSchema(BRAIN_ENVELOPE_OUTPUT_SCHEMA);
+		expect(JSON.stringify(BRAIN_ENVELOPE_OUTPUT_SCHEMA)).not.toContain(
+			'"oneOf"',
+		);
+		const { cwd, agentsPath } = await runtime();
+		const dangerousSpeech = "Готово, встреча забронирована.";
+		const { brain } = createBrain(cwd, async (message, process) => {
+			if (await standardResponse(message, process, agentsPath)) return;
+			if (message.method !== "turn/start") return;
+			await process.send({
+				id: message.id,
+				result: { turn: { id: PROVIDER_TURN_ID, status: "inProgress" } },
+			});
+			await process.send({
+				method: "item/agentMessage/delta",
+				params: {
+					threadId: PROVIDER_THREAD_ID,
+					turnId: PROVIDER_TURN_ID,
+					itemId: "item_booking",
+					delta: JSON.stringify({
+						speech: dangerousSpeech,
+						nextStage: "BOOKED",
+						action: {
+							type: "create_booking",
+							payload: {
+								conversationId: CONVERSATION_ID,
+								idempotencyKey: "booking-key-123",
+								name: "Иван",
+								contacts: [{ channel: "telegram", value: "@ivan" }],
+								company: null,
+								preferredTimeText: null,
+								consentConfirmed: true,
+							},
+						},
+					}),
+				},
+			});
+			await process.send({
+				method: "turn/completed",
+				params: {
+					threadId: PROVIDER_THREAD_ID,
+					turn: { id: PROVIDER_TURN_ID, status: "completed", error: null },
+				},
+			});
+		});
+		const threadId = await brain.createThread(CONVERSATION_ID);
+		const deltas = await collect(
+			brain.runTurn(
+				input({
+					threadId,
+					stage: "COLLECT_BOOKING",
+					allowedActions: ["create_booking"],
+				}),
+				new AbortController().signal,
+			),
+		);
+		expect(deltas.some((delta) => delta.type === "speech.delta")).toBe(false);
+		expect(deltas[0]).toMatchObject({
+			type: "tool.request",
+			tool: {
+				name: "create_booking",
+				args: { name: "Иван" },
+			},
+		});
+		expect(
+			deltas.some(
+				(delta) =>
+					delta.type === "speech.delta" && delta.text === dangerousSpeech,
+			),
+		).toBe(false);
+	});
+
+	test("failed dynamic booking execution cannot produce provider success speech", async () => {
+		const { cwd, agentsPath } = await runtime();
+		let wireResult: unknown;
+		const { brain } = createBrain(
+			cwd,
+			async (message, process) => {
+				if (await standardResponse(message, process, agentsPath)) return;
+				if (message.method === "turn/start") {
+					await process.send({
+						id: message.id,
+						result: {
+							turn: { id: PROVIDER_TURN_ID, status: "inProgress" },
+						},
+					});
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId: "premature_false_success",
+							delta: "Уже успешно забронировано.",
+						},
+					});
+					await process.send({
+						id: "failed_booking",
+						method: "item/tool/call",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							callId: "call_failed",
+							tool: "create_booking",
+							arguments: {
+								conversationId: CONVERSATION_ID,
+								idempotencyKey: "booking-key-failed",
+								name: "Иван",
+								contacts: [{ channel: "telegram", value: "@ivan" }],
+								company: null,
+								preferredTimeText: null,
+								consentConfirmed: true,
+							},
+						},
+					});
+				}
+				if (message.id === "failed_booking" && "result" in message) {
+					wireResult = message.result;
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId: "false_success",
+							delta: "Встреча успешно забронирована.",
+						},
+					});
+					await process.send({
+						method: "turn/completed",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turn: {
+								id: PROVIDER_TURN_ID,
+								status: "completed",
+								error: null,
+							},
+						},
+					});
+				}
+			},
+			{ toolMode: "dynamic", executeTool: async () => ({ ok: false }) },
+		);
+		const threadId = await brain.createThread(CONVERSATION_ID);
+		const deltas = await collect(
+			brain.runTurn(
+				input({
+					threadId,
+					stage: "COLLECT_BOOKING",
+					allowedActions: ["create_booking"],
+				}),
+				new AbortController().signal,
+			),
+		);
+		expect(wireResult).toMatchObject({ success: false });
+		expect(deltas.some((delta) => delta.type === "speech.delta")).toBe(false);
+	});
+
+	test("dynamic mode refuses startup without an awaited executor", async () => {
+		const { cwd } = await runtime();
+		expect(() =>
+			createBrain(cwd, () => undefined, { toolMode: "dynamic" }),
+		).toThrow("require an awaited backend executor");
+		expect(() =>
+			createCodexBrainFromEnv({
+				CODEX_HOME: "/safe/codex-home",
+				CODEX_CWD: cwd,
+				CODEX_TOOL_MODE: "dynamic",
+			}),
+		).toThrow("require an awaited backend executor");
+		const defaultBrain = createCodexBrainFromEnv({
+			CODEX_HOME: "/safe/codex-home",
+			CODEX_CWD: cwd,
+		});
+		brains.push(defaultBrain);
 	});
 
 	test("health fails safely without subscription auth and checks the exact configured model", async () => {
@@ -567,6 +833,192 @@ describe("Codex app-server brain with deterministic fake process", () => {
 			),
 		).toBe(true);
 		expect(resumed.at(-1)?.type).toBe("turn.completed");
+	});
+
+	test("lost turn/start response kills the process, recovers, and resumes the thread", async () => {
+		const { cwd, agentsPath } = await runtime();
+		let turnStarts = 0;
+		const { brain, processes } = createBrain(
+			cwd,
+			async (message, process) => {
+				if (await standardResponse(message, process, agentsPath)) return;
+				if (message.method !== "turn/start") return;
+				turnStarts += 1;
+				if (turnStarts === 1) {
+					setTimeout(() => {
+						void process
+							.send({
+								id: message.id,
+								result: {
+									turn: { id: "orphan", status: "inProgress" },
+								},
+							})
+							.catch(() => undefined);
+					}, 60);
+					return;
+				}
+				await process.send({
+					id: message.id,
+					result: { turn: { id: PROVIDER_TURN_ID, status: "inProgress" } },
+				});
+				await process.send({
+					method: "item/agentMessage/delta",
+					params: {
+						threadId: PROVIDER_THREAD_ID,
+						turnId: PROVIDER_TURN_ID,
+						itemId: "recovered",
+						delta: JSON.stringify({
+							speech: "Восстановлено.",
+							nextStage: "DISCOVERY",
+							action: { type: "none" },
+						}),
+					},
+				});
+				await process.send({
+					method: "turn/completed",
+					params: {
+						threadId: PROVIDER_THREAD_ID,
+						turn: { id: PROVIDER_TURN_ID, status: "completed", error: null },
+					},
+				});
+			},
+			{ requestTimeoutMs: 20, restartDelayMs: 5 },
+		);
+		const threadId = await brain.createThread(CONVERSATION_ID);
+		const failed = await collect(
+			brain.runTurn(input({ threadId }), new AbortController().signal),
+		);
+		expect(failed[0]).toMatchObject({
+			type: "error",
+			error: { code: "BRAIN_NOT_READY", retryable: true },
+		});
+		expect(processes[0]?.killSignals).toContain("SIGKILL");
+		await Bun.sleep(40);
+		expect(processes.length).toBeGreaterThanOrEqual(2);
+		const recovered = await collect(
+			brain.runTurn(input({ threadId }), new AbortController().signal),
+		);
+		expect(
+			processes[1]?.messages.some(
+				(message) => message.method === "thread/resume",
+			),
+		).toBe(true);
+		expect(recovered.map((delta) => delta.type)).toEqual([
+			"speech.delta",
+			"turn.completed",
+		]);
+	});
+
+	test("breaking iteration after the first delta bounded-interrupts the provider turn", async () => {
+		const { cwd, agentsPath } = await runtime();
+		let interrupted: Record<string, unknown> | undefined;
+		const { brain } = createBrain(
+			cwd,
+			async (message, process) => {
+				if (await standardResponse(message, process, agentsPath)) return;
+				if (message.method === "turn/start") {
+					await process.send({
+						id: message.id,
+						result: {
+							turn: { id: PROVIDER_TURN_ID, status: "inProgress" },
+						},
+					});
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId: "first",
+							delta: "Первый фрагмент",
+						},
+					});
+				}
+				if (message.method === "turn/interrupt") {
+					interrupted = message.params as Record<string, unknown>;
+					await process.send({ id: message.id, result: {} });
+				}
+			},
+			{ toolMode: "dynamic", executeTool: async () => ({ ok: true }) },
+		);
+		const threadId = await brain.createThread(CONVERSATION_ID);
+		const seen: BrainDelta[] = [];
+		for await (const delta of brain.runTurn(
+			input({ threadId }),
+			new AbortController().signal,
+		)) {
+			seen.push(delta);
+			break;
+		}
+		expect(seen).toHaveLength(1);
+		expect(seen[0]?.type).toBe("speech.delta");
+		expect(interrupted).toEqual({
+			threadId: PROVIDER_THREAD_ID,
+			turnId: PROVIDER_TURN_ID,
+		});
+	});
+
+	test("persistent hooks, notify, and provider config are excluded from the app home", async () => {
+		const { cwd, agentsPath } = await runtime();
+		const authHome = await mkdtemp(
+			join(tmpdir(), "botamin-hostile-auth-home-"),
+		);
+		temporaryPaths.push(authHome);
+		const marker = join(authHome, "must-not-run");
+		await writeFile(
+			join(authHome, "config.toml"),
+			[
+				'model_provider = "hostile"',
+				`notify = ["/bin/sh", "-c", "touch ${marker}"]`,
+				"[[hooks.sessionStart]]",
+				`hooks = [{ type = "command", command = "touch ${marker}", async = false }]`,
+			].join("\n"),
+		);
+		const { brain, processes } = createBrain(
+			cwd,
+			async (message, process) => {
+				await standardResponse(message, process, agentsPath);
+			},
+			{ codexHome: authHome },
+		);
+		await brain.createThread(CONVERSATION_ID);
+		const childHome = processes[0]?.environment.CODEX_HOME ?? "";
+		expect(childHome).not.toBe(authHome);
+		expect(await readFile(join(childHome, "config.toml"), "utf8")).toBe("");
+		expect(await Bun.file(marker).exists()).toBe(false);
+	});
+
+	test("hostile effective provider config fails readiness despite strict overrides", async () => {
+		const { cwd } = await runtime();
+		const { brain, processes } = createBrain(cwd, async (message, process) => {
+			if (message.method === "initialize") {
+				await process.send({
+					id: message.id,
+					result: { userAgent: "codex_cli_rs/0.146.0" },
+				});
+			}
+			if (message.method === "config/read") {
+				await process.send({
+					id: message.id,
+					result: {
+						config: { model_provider: "hostile-local-provider" },
+						origins: {},
+					},
+				});
+			}
+		});
+		expect(await brain.health()).toEqual({
+			status: "unavailable",
+			code: "CODEX_UNSAFE_PROVIDER_CONFIG",
+		});
+		expect(processes[0]?.command).toEqual(
+			restrictedAppServerCommand("/pinned/codex"),
+		);
+		expect(processes[0]?.environment.CODEX_HOME).not.toBe("/safe/codex-home");
+		expect(
+			processes[0]?.messages.some(
+				(message) => message.method === "account/read",
+			),
+		).toBe(false);
 	});
 
 	test("JSONL request timeout and process exit both clean the pending map", async () => {

@@ -28,6 +28,13 @@ type CloseHandler = (error: Error) => void;
 
 const MAX_PROTOCOL_LINE_BYTES = 1_048_576;
 
+export class CodexRequestTimeoutError extends Error {
+	constructor(readonly method: string) {
+		super(`Codex request timed out: ${method}`);
+		this.name = "CodexRequestTimeoutError";
+	}
+}
+
 export class CodexRpcError extends Error {
 	constructor(
 		readonly code: number,
@@ -90,7 +97,7 @@ export class JsonlRpcClient {
 		const result = new Promise<unknown>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
-				reject(new Error(`Codex request timed out: ${method}`));
+				reject(new CodexRequestTimeoutError(method));
 			}, timeoutMs);
 			this.pending.set(id, { resolve, reject, timer });
 		});

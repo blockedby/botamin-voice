@@ -1,4 +1,5 @@
 export {
+	assertStructuredOutputSchema,
 	BRAIN_ENVELOPE_OUTPUT_SCHEMA,
 	CodexAppServerBrain,
 	type CodexBrainOptions,
@@ -11,5 +12,6 @@ export {
 	type CodexSpawn,
 	type CodexSupervisorOptions,
 	PINNED_CODEX_CLI_VERSION,
+	REQUIRED_CODEX_MODEL_PROVIDER,
 	restrictedAppServerCommand,
 } from "./supervisor";

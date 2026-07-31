@@ -8,14 +8,16 @@ import {
 	type BrainTurnInput,
 	BrainTurnInputSchema,
 	type ProviderHealth,
+	type ToolRequest,
 	ToolRequestSchema,
 } from "@botamin/contracts";
 import { AsyncQueue } from "./async-queue";
-import type { JsonlRpcClient } from "./jsonl-client";
+import { CodexRequestTimeoutError, type JsonlRpcClient } from "./jsonl-client";
 import {
 	isRecord,
 	parseAccountReadResult,
 	parseAgentMessageDelta,
+	parseConfigReadResult,
 	parseDynamicToolCall,
 	parseModelListResult,
 	parseThreadStartResult,
@@ -27,6 +29,7 @@ import {
 	CODEX_PROTOCOL_SCHEMA_REVISION,
 	CodexProcessSupervisor,
 	type CodexSupervisorOptions,
+	REQUIRED_CODEX_MODEL_PROVIDER,
 } from "./supervisor";
 
 const CONVERSATION_STAGES = [
@@ -46,8 +49,12 @@ const CONVERSATION_STAGES = [
 	"ERROR",
 ] as const;
 
+function nullable<const T extends Record<string, unknown>>(schema: T) {
+	return { anyOf: [schema, { type: "null" }] } as const;
+}
+
 const CONTACT_SCHEMA = {
-	oneOf: [
+	anyOf: [
 		{
 			type: "object",
 			additionalProperties: false,
@@ -63,7 +70,7 @@ const CONTACT_SCHEMA = {
 			required: ["channel", "value"],
 			properties: {
 				channel: { const: "email" },
-				value: { type: "string", format: "email", maxLength: 254 },
+				value: { type: "string", maxLength: 254 },
 			},
 		},
 		{
@@ -78,29 +85,41 @@ const CONTACT_SCHEMA = {
 	],
 } as const;
 
-const QUALIFICATION_PROPERTIES = {
-	role: { type: "string", minLength: 1, maxLength: 200 },
-	industry: { type: "string", minLength: 1, maxLength: 200 },
-	companySize: { type: "string", minLength: 1, maxLength: 100 },
-	monthlyLeadVolume: { type: "string", minLength: 1, maxLength: 100 },
-	currentChannels: {
+const QUALIFICATION_OUTPUT_PROPERTIES = {
+	role: nullable({ type: "string", minLength: 1, maxLength: 200 }),
+	industry: nullable({ type: "string", minLength: 1, maxLength: 200 }),
+	companySize: nullable({ type: "string", minLength: 1, maxLength: 100 }),
+	monthlyLeadVolume: nullable({
+		type: "string",
+		minLength: 1,
+		maxLength: 100,
+	}),
+	currentChannels: nullable({
 		type: "array",
 		maxItems: 10,
 		items: { type: "string", minLength: 1, maxLength: 80 },
-	},
-	crm: { type: "string", minLength: 1, maxLength: 120 },
-	currentProcess: { type: "string", minLength: 1, maxLength: 1000 },
-	pains: {
+	}),
+	crm: nullable({ type: "string", minLength: 1, maxLength: 120 }),
+	currentProcess: nullable({
+		type: "string",
+		minLength: 1,
+		maxLength: 1000,
+	}),
+	pains: nullable({
 		type: "array",
 		maxItems: 10,
 		items: { type: "string", minLength: 1, maxLength: 300 },
-	},
-	desiredUseCase: { type: "string", minLength: 1, maxLength: 500 },
-	timeline: { type: "string", minLength: 1, maxLength: 200 },
-	notes: { type: "string", minLength: 1, maxLength: 1500 },
+	}),
+	desiredUseCase: nullable({
+		type: "string",
+		minLength: 1,
+		maxLength: 500,
+	}),
+	timeline: nullable({ type: "string", minLength: 1, maxLength: 200 }),
+	notes: nullable({ type: "string", minLength: 1, maxLength: 1500 }),
 } as const;
 
-const CREATE_BOOKING_INPUT_SCHEMA = {
+const CREATE_BOOKING_OUTPUT_INPUT_SCHEMA = {
 	type: "object",
 	additionalProperties: false,
 	required: [
@@ -108,6 +127,8 @@ const CREATE_BOOKING_INPUT_SCHEMA = {
 		"idempotencyKey",
 		"name",
 		"contacts",
+		"company",
+		"preferredTimeText",
 		"consentConfirmed",
 	],
 	properties: {
@@ -120,13 +141,17 @@ const CREATE_BOOKING_INPUT_SCHEMA = {
 			maxItems: 3,
 			items: CONTACT_SCHEMA,
 		},
-		company: { type: "string", minLength: 1, maxLength: 200 },
-		preferredTimeText: { type: "string", minLength: 1, maxLength: 500 },
+		company: nullable({ type: "string", minLength: 1, maxLength: 200 }),
+		preferredTimeText: nullable({
+			type: "string",
+			minLength: 1,
+			maxLength: 500,
+		}),
 		consentConfirmed: { const: true },
 	},
 } as const;
 
-const APPEND_QUALIFICATION_INPUT_SCHEMA = {
+const APPEND_QUALIFICATION_OUTPUT_INPUT_SCHEMA = {
 	type: "object",
 	additionalProperties: false,
 	required: ["bookingId", "idempotencyKey", "patch", "completion"],
@@ -136,13 +161,14 @@ const APPEND_QUALIFICATION_INPUT_SCHEMA = {
 		patch: {
 			type: "object",
 			additionalProperties: false,
-			properties: QUALIFICATION_PROPERTIES,
+			required: Object.keys(QUALIFICATION_OUTPUT_PROPERTIES),
+			properties: QUALIFICATION_OUTPUT_PROPERTIES,
 		},
 		completion: { enum: ["partial", "complete", "skipped"] },
 	},
 } as const;
 
-export const BRAIN_ENVELOPE_OUTPUT_SCHEMA = {
+const BRAIN_ENVELOPE_SCHEMA_SOURCE = {
 	type: "object",
 	additionalProperties: false,
 	required: ["speech", "nextStage", "action"],
@@ -150,7 +176,7 @@ export const BRAIN_ENVELOPE_OUTPUT_SCHEMA = {
 		speech: { type: "string", maxLength: 10_000 },
 		nextStage: { enum: CONVERSATION_STAGES },
 		action: {
-			oneOf: [
+			anyOf: [
 				{
 					type: "object",
 					additionalProperties: false,
@@ -163,7 +189,7 @@ export const BRAIN_ENVELOPE_OUTPUT_SCHEMA = {
 					required: ["type", "payload"],
 					properties: {
 						type: { const: "create_booking" },
-						payload: CREATE_BOOKING_INPUT_SCHEMA,
+						payload: CREATE_BOOKING_OUTPUT_INPUT_SCHEMA,
 					},
 				},
 				{
@@ -172,7 +198,7 @@ export const BRAIN_ENVELOPE_OUTPUT_SCHEMA = {
 					required: ["type", "payload"],
 					properties: {
 						type: { const: "append_booking_qualification" },
-						payload: APPEND_QUALIFICATION_INPUT_SCHEMA,
+						payload: APPEND_QUALIFICATION_OUTPUT_INPUT_SCHEMA,
 					},
 				},
 			],
@@ -180,22 +206,93 @@ export const BRAIN_ENVELOPE_OUTPUT_SCHEMA = {
 	},
 } as const;
 
+function providerSupportedSchema(node: unknown): unknown {
+	if (Array.isArray(node)) return node.map(providerSupportedSchema);
+	if (!isRecord(node)) return node;
+	const result: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(node)) {
+		if (
+			["minLength", "maxLength", "minItems", "maxItems", "format"].includes(key)
+		)
+			continue;
+		if (key === "const") result.enum = [value];
+		else result[key] = providerSupportedSchema(value);
+	}
+	return result;
+}
+
+export const BRAIN_ENVELOPE_OUTPUT_SCHEMA = providerSupportedSchema(
+	BRAIN_ENVELOPE_SCHEMA_SOURCE,
+);
+
+/** Throws if a schema leaves an object key optional or uses unsupported keywords. */
+export function assertStructuredOutputSchema(schema: unknown): void {
+	const visit = (node: unknown, path: string): void => {
+		if (Array.isArray(node)) {
+			for (const [index, entry] of node.entries())
+				visit(entry, `${path}[${index}]`);
+			return;
+		}
+		if (!isRecord(node)) return;
+		for (const unsupported of [
+			"oneOf",
+			"const",
+			"minLength",
+			"maxLength",
+			"minItems",
+			"maxItems",
+			"format",
+		])
+			if (unsupported in node)
+				throw new Error(
+					`Structured output schema uses ${unsupported} at ${path}`,
+				);
+		if (node.type === "object") {
+			if (!isRecord(node.properties) || node.additionalProperties !== false)
+				throw new Error(`Structured output object is not closed at ${path}`);
+			const properties = Object.keys(node.properties).sort();
+			const required = Array.isArray(node.required)
+				? node.required.map(String).sort()
+				: [];
+			if (JSON.stringify(properties) !== JSON.stringify(required))
+				throw new Error(
+					`Structured output object has optional keys at ${path}`,
+				);
+		}
+		for (const [key, value] of Object.entries(node))
+			visit(value, `${path}.${key}`);
+	};
+	visit(schema, "$");
+}
+
+assertStructuredOutputSchema(BRAIN_ENVELOPE_OUTPUT_SCHEMA);
+
 const DYNAMIC_TOOLS = [
 	{
 		type: "function",
 		name: "create_booking",
 		description:
-			"Request deterministic backend creation of an internal Botamin booking. This is not a calendar event.",
-		inputSchema: CREATE_BOOKING_INPUT_SCHEMA,
+			"Create the internal Botamin booking and wait for the backend result.",
+		inputSchema: providerSupportedSchema(CREATE_BOOKING_OUTPUT_INPUT_SCHEMA),
 	},
 	{
 		type: "function",
 		name: "append_booking_qualification",
 		description:
-			"Request a qualification update only after an internal booking has been committed.",
-		inputSchema: APPEND_QUALIFICATION_INPUT_SCHEMA,
+			"Update qualification only after an internal booking is committed.",
+		inputSchema: providerSupportedSchema(
+			APPEND_QUALIFICATION_OUTPUT_INPUT_SCHEMA,
+		),
 	},
 ] as const;
+
+const SAFE_THREAD_CONFIG = {
+	model_provider: REQUIRED_CODEX_MODEL_PROVIDER,
+	model_providers: {},
+	forced_login_method: "chatgpt",
+	notify: [],
+	hooks: {},
+} as const;
 
 export interface CodexBrainOptions {
 	model: string;
@@ -204,9 +301,15 @@ export interface CodexBrainOptions {
 	runtimeCwd: string;
 	turnTimeoutMs: number;
 	supervisor: CodexProcessSupervisor;
+	/** Required for dynamic mode; must resolve only after actual backend execution. */
+	executeTool?: (
+		request: ToolRequest,
+		input: BrainTurnInput,
+	) => Promise<{ ok: boolean }>;
 	onProtocolEvidence?: (event: {
-		type: "thread_verified" | "turn_terminal";
+		type: "thread_verified" | "provider_delta" | "turn_terminal";
 		threadId: string;
+		turnId?: string;
 		status?: TurnCompletedParams["turn"]["status"];
 	}) => void;
 }
@@ -219,6 +322,10 @@ interface ActiveTurn {
 	envelopeText: string;
 	terminal: boolean;
 	buffered: Array<{ method: string; params: unknown }>;
+	interruptPromise?: Promise<void>;
+	suppressSpeech: boolean;
+	dynamicSpeechBuffer: string[];
+	dynamicExecutionSucceeded: boolean;
 }
 
 export class CodexAppServerBrain implements BrainPort {
@@ -231,6 +338,10 @@ export class CodexAppServerBrain implements BrainPort {
 	private runtimeAgentsPath: string | undefined;
 
 	constructor(private readonly options: CodexBrainOptions) {
+		if (options.toolMode === "dynamic" && !options.executeTool)
+			throw new Error(
+				"Codex dynamic tools require an awaited backend executor",
+			);
 		options.supervisor.onRestart((error) => {
 			this.loadedThreads.clear();
 			for (const active of this.activeByThread.values()) {
@@ -259,8 +370,11 @@ export class CodexAppServerBrain implements BrainPort {
 		const client = await this.getClient();
 		const agentsPath = await this.assertRuntimeIsolation();
 		const result = parseThreadStartResult(
-			await client.request("thread/start", {
+			await this.mutatingRequest(client, "thread/start", {
 				model: this.options.model,
+				modelProvider: REQUIRED_CODEX_MODEL_PROVIDER,
+				allowProviderModelFallback: false,
+				config: SAFE_THREAD_CONFIG,
 				cwd: this.options.runtimeCwd,
 				runtimeWorkspaceRoots: [this.options.runtimeCwd],
 				approvalPolicy: "never",
@@ -323,16 +437,21 @@ export class CodexAppServerBrain implements BrainPort {
 			envelopeText: "",
 			terminal: false,
 			buffered: [],
+			suppressSpeech: false,
+			dynamicSpeechBuffer: [],
+			dynamicExecutionSucceeded: false,
 		};
 		this.activeByThread.set(threadId, active);
 		let timeout: ReturnType<typeof setTimeout> | undefined;
+		let client: JsonlRpcClient | undefined;
+		let consumingQueue = false;
 		const abort = (): void => {
 			void this.interrupt(threadId, input.turnId).catch(() => undefined);
 		};
 		signal.addEventListener("abort", abort, { once: true });
 
 		try {
-			const client = await this.getClient();
+			client = await this.getClient();
 			await this.ensureResumed(client, threadId);
 			const context = JSON.stringify({
 				stage: input.stage,
@@ -342,7 +461,7 @@ export class CodexAppServerBrain implements BrainPort {
 				promptVersion: input.promptVersion,
 			});
 			const turn = parseTurnStartResult(
-				await client.request("turn/start", {
+				await this.mutatingRequest(client, "turn/start", {
 					threadId,
 					input: [
 						{
@@ -386,18 +505,26 @@ export class CodexAppServerBrain implements BrainPort {
 				active.terminal = true;
 			}, this.options.turnTimeoutMs);
 
+			consumingQueue = true;
 			for await (const delta of active.queue) yield delta;
 		} catch {
-			if (!active.terminal)
+			if (active.terminal && !consumingQueue) {
+				for await (const delta of active.queue) yield delta;
+			} else if (!active.terminal) {
 				yield safeError(
 					input,
 					"BRAIN_PROTOCOL_ERROR",
 					true,
 					"Brain protocol failed",
 				);
+			}
 		} finally {
 			if (timeout) clearTimeout(timeout);
 			signal.removeEventListener("abort", abort);
+			if (!active.terminal && active.providerTurnId && client)
+				await this.interruptActive(active, client).catch(() => undefined);
+			else if (active.interruptPromise)
+				await active.interruptPromise.catch(() => undefined);
 			active.terminal = true;
 			this.providerTurnByExternal.delete(turnKey(threadId, input.turnId));
 			if (this.activeByThread.get(threadId) === active)
@@ -406,21 +533,27 @@ export class CodexAppServerBrain implements BrainPort {
 	}
 
 	async interrupt(threadId: string, turnId: string): Promise<void> {
-		const client = await this.getClient();
-		const providerTurnId = this.providerTurnByExternal.get(
-			turnKey(threadId, turnId),
-		);
-		if (!providerTurnId) throw new Error("Codex turn is not addressable");
-		await client.request("turn/interrupt", {
-			threadId,
-			turnId: providerTurnId,
-		});
+		const active = this.activeByThread.get(threadId);
+		if (!active || active.input.turnId !== turnId || !active.providerTurnId)
+			throw new Error("Codex turn is not addressable");
+		await this.interruptActive(active, await this.getClient());
 	}
 
 	async health(): Promise<ProviderHealth> {
 		try {
 			await this.assertRuntimeIsolation();
 			const client = await this.getClient();
+			const config = parseConfigReadResult(
+				await client.request("config/read", {
+					cwd: this.options.runtimeCwd,
+					includeLayers: false,
+				}),
+			);
+			if (config.modelProvider !== REQUIRED_CODEX_MODEL_PROVIDER)
+				return {
+					status: "unavailable",
+					code: "CODEX_UNSAFE_PROVIDER_CONFIG",
+				};
 			const account = parseAccountReadResult(
 				await client.request("account/read", { refreshToken: false }),
 			);
@@ -475,9 +608,10 @@ export class CodexAppServerBrain implements BrainPort {
 			client.onNotification((notification) =>
 				this.routeNotification(notification.method, notification.params),
 			);
-			client.onServerRequest("item/tool/call", (params) =>
-				this.handleDynamicToolCall(params),
-			);
+			if (this.options.toolMode === "dynamic")
+				client.onServerRequest("item/tool/call", (params) =>
+					this.handleDynamicToolCall(params),
+				);
 		}
 		return client;
 	}
@@ -489,9 +623,11 @@ export class CodexAppServerBrain implements BrainPort {
 		if (this.loadedThreads.has(threadId)) return;
 		const agentsPath = await this.assertRuntimeIsolation();
 		const result = parseThreadStartResult(
-			await client.request("thread/resume", {
+			await this.mutatingRequest(client, "thread/resume", {
 				threadId,
 				model: this.options.model,
+				modelProvider: REQUIRED_CODEX_MODEL_PROVIDER,
+				config: SAFE_THREAD_CONFIG,
 				cwd: this.options.runtimeCwd,
 				runtimeWorkspaceRoots: [this.options.runtimeCwd],
 				approvalPolicy: "never",
@@ -518,13 +654,19 @@ export class CodexAppServerBrain implements BrainPort {
 			if (active.providerTurnId !== delta.turnId) return;
 			if (this.options.toolMode === "envelope")
 				active.envelopeText += delta.delta;
-			else
-				active.queue.push({
-					type: "speech.delta",
-					turnId: active.input.turnId,
-					generationId: active.input.generationId,
-					text: delta.delta,
-				});
+			else if (!active.suppressSpeech) {
+				if (
+					active.input.allowedActions.length === 0 ||
+					active.dynamicExecutionSucceeded
+				)
+					this.pushSpeech(active, delta.delta);
+				else active.dynamicSpeechBuffer.push(delta.delta);
+			}
+			this.options.onProtocolEvidence?.({
+				type: "provider_delta",
+				threadId: active.threadId,
+				turnId: active.input.turnId,
+			});
 			return;
 		}
 		if (method === "turn/completed") {
@@ -573,7 +715,9 @@ export class CodexAppServerBrain implements BrainPort {
 					),
 				);
 			} else {
-				if (envelope.speech)
+				// BrainPort has no backend-result channel. Never emit model speech from
+				// an action envelope because it could claim success before execution.
+				if (envelope.action.type === "none" && envelope.speech)
 					active.queue.push({
 						type: "speech.delta",
 						turnId: active.input.turnId,
@@ -608,6 +752,12 @@ export class CodexAppServerBrain implements BrainPort {
 				}
 			}
 		}
+		if (
+			this.options.toolMode === "dynamic" &&
+			active.input.allowedActions.length > 0 &&
+			!active.dynamicExecutionSucceeded
+		)
+			active.dynamicSpeechBuffer.length = 0;
 		active.queue.push({
 			type: "turn.completed",
 			turnId: active.input.turnId,
@@ -617,43 +767,95 @@ export class CodexAppServerBrain implements BrainPort {
 		active.queue.end();
 	}
 
-	private handleDynamicToolCall(params: unknown): unknown {
-		if (this.options.toolMode !== "dynamic")
+	private async handleDynamicToolCall(params: unknown): Promise<unknown> {
+		const execute = this.options.executeTool;
+		if (this.options.toolMode !== "dynamic" || !execute)
 			throw new Error("Dynamic tools are disabled");
 		const call = parseDynamicToolCall(params);
 		const active = this.activeByThread.get(call.threadId);
-		if (
-			!active ||
-			active.terminal ||
-			active.providerTurnId !== call.turnId ||
-			call.namespace !== null
-		)
+		if (!active || active.terminal || active.providerTurnId !== call.turnId)
 			throw new Error("Dynamic tool call is not active");
+		if (call.namespace !== null) {
+			active.suppressSpeech = true;
+			throw new Error("Dynamic tool namespace is not top-level");
+		}
 		const request = ToolRequestSchema.safeParse({
 			name: call.tool,
 			callId: call.callId,
-			args: call.arguments,
+			args: normalizeDynamicToolArguments(call.tool, call.arguments),
 		});
 		if (
 			!request.success ||
 			!active.input.allowedActions.includes(request.data.name)
-		)
+		) {
+			active.suppressSpeech = true;
 			throw new Error("Dynamic tool call rejected by policy");
-		active.queue.push({
-			type: "tool.request",
-			turnId: active.input.turnId,
-			generationId: active.input.generationId,
-			tool: request.data,
-		});
+		}
+		let execution: { ok: boolean };
+		try {
+			execution = await execute(request.data, active.input);
+		} catch (error) {
+			active.suppressSpeech = true;
+			active.dynamicSpeechBuffer.length = 0;
+			throw error;
+		}
+		if (execution.ok) {
+			active.dynamicExecutionSucceeded = true;
+			for (const text of active.dynamicSpeechBuffer.splice(0))
+				this.pushSpeech(active, text);
+		} else {
+			active.suppressSpeech = true;
+			active.dynamicSpeechBuffer.length = 0;
+		}
 		return {
 			contentItems: [
 				{
 					type: "inputText",
-					text: "Accepted for deterministic Botamin backend validation and execution.",
+					text: execution.ok
+						? "Botamin backend action completed successfully."
+						: "Botamin backend action failed. Do not claim success.",
 				},
 			],
-			success: true,
+			success: execution.ok,
 		};
+	}
+
+	private pushSpeech(active: ActiveTurn, text: string): void {
+		active.queue.push({
+			type: "speech.delta",
+			turnId: active.input.turnId,
+			generationId: active.input.generationId,
+			text,
+		});
+	}
+
+	private async mutatingRequest(
+		client: JsonlRpcClient,
+		method: string,
+		params: unknown,
+	): Promise<unknown> {
+		try {
+			return await client.request(method, params);
+		} catch (error) {
+			if (error instanceof CodexRequestTimeoutError)
+				this.options.supervisor.invalidateClient(client, error);
+			throw error;
+		}
+	}
+
+	private interruptActive(
+		active: ActiveTurn,
+		client: JsonlRpcClient,
+	): Promise<void> {
+		if (!active.providerTurnId)
+			return Promise.reject(new Error("Codex turn is not addressable"));
+		if (!active.interruptPromise) {
+			active.interruptPromise = this.mutatingRequest(client, "turn/interrupt", {
+				threadId: active.threadId,
+				turnId: active.providerTurnId,
+			}).then(() => undefined);
+		}
+		return active.interruptPromise;
 	}
 
 	private async assertRuntimeIsolation(): Promise<string> {
@@ -683,6 +885,8 @@ export class CodexAppServerBrain implements BrainPort {
 	): void {
 		if (result.model !== this.options.model)
 			throw new Error("Codex selected an unexpected model");
+		if (result.modelProvider !== REQUIRED_CODEX_MODEL_PROVIDER)
+			throw new Error("Codex selected an unexpected model provider");
 		const returnedCwd = resolve(result.cwd);
 		if (returnedCwd !== resolve(this.options.runtimeCwd))
 			throw new Error("Codex thread cwd mismatch");
@@ -726,7 +930,7 @@ export function createCodexBrainFromEnv(
 		env,
 		...overrides,
 	});
-	const toolMode = env.CODEX_TOOL_MODE ?? "dynamic";
+	const toolMode = env.CODEX_TOOL_MODE ?? "envelope";
 	if (toolMode !== "dynamic" && toolMode !== "envelope")
 		throw new Error("CODEX_TOOL_MODE must be dynamic or envelope");
 	return new CodexAppServerBrain({
@@ -741,10 +945,52 @@ export function createCodexBrainFromEnv(
 
 function parseEnvelope(text: string) {
 	try {
-		return BrainEnvelopeSchema.safeParse(JSON.parse(text)).data;
+		const parsed = BrainEnvelopeSchema.safeParse(
+			normalizeStructuredEnvelope(JSON.parse(text)),
+		);
+		return parsed.success ? parsed.data : undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+function normalizeStructuredEnvelope(value: unknown): unknown {
+	if (!isRecord(value) || !isRecord(value.action)) return value;
+	const result = { ...value, action: { ...value.action } };
+	const action = result.action;
+	if (!isRecord(action.payload)) return result;
+	const payload = { ...action.payload };
+	action.payload = payload;
+	if (action.type === "create_booking") {
+		for (const key of ["company", "preferredTimeText"])
+			if (payload[key] === null) delete payload[key];
+	}
+	if (
+		action.type === "append_booking_qualification" &&
+		isRecord(payload.patch)
+	) {
+		const patch = { ...payload.patch };
+		payload.patch = patch;
+		for (const [key, entry] of Object.entries(patch))
+			if (entry === null) delete patch[key];
+	}
+	return result;
+}
+
+function normalizeDynamicToolArguments(tool: string, value: unknown): unknown {
+	if (!isRecord(value)) return value;
+	const result = { ...value };
+	if (tool === "create_booking") {
+		for (const key of ["company", "preferredTimeText"])
+			if (result[key] === null) delete result[key];
+	}
+	if (tool === "append_booking_qualification" && isRecord(result.patch)) {
+		const patch = { ...result.patch };
+		result.patch = patch;
+		for (const [key, entry] of Object.entries(patch))
+			if (entry === null) delete patch[key];
+	}
+	return result;
 }
 
 function safeError(

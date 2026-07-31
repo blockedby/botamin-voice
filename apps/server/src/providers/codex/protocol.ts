@@ -18,6 +18,7 @@ export interface RpcServerRequest extends RpcNotification {
 export interface ThreadStartResult {
 	thread: { id: string };
 	model: string;
+	modelProvider: string;
 	cwd: string;
 	instructionSources: string[];
 	approvalPolicy: unknown;
@@ -41,6 +42,10 @@ export interface ModelListResult {
 export interface AccountReadResult {
 	account: null | { type: string };
 	requiresOpenaiAuth: boolean;
+}
+
+export interface ConfigReadResult {
+	modelProvider: string;
 }
 
 export interface DynamicToolCallParams {
@@ -91,6 +96,7 @@ export function parseThreadStartResult(value: unknown): ThreadStartResult {
 	return {
 		thread: { id: requireString(thread.id, "thread.id") },
 		model: requireString(root.model, "model"),
+		modelProvider: requireString(root.modelProvider, "modelProvider"),
 		cwd: requireString(root.cwd, "cwd"),
 		instructionSources: root.instructionSources.map((entry) =>
 			requireString(entry, "instruction source"),
@@ -158,6 +164,17 @@ export function parseAccountReadResult(value: unknown): AccountReadResult {
 	};
 }
 
+export function parseConfigReadResult(value: unknown): ConfigReadResult {
+	const root = requireRecord(value, "config/read response");
+	const config = requireRecord(root.config, "config/read config");
+	return {
+		modelProvider: requireString(
+			config.model_provider,
+			"config.model_provider",
+		),
+	};
+}
+
 export function parseAgentMessageDelta(
 	value: unknown,
 ): AgentMessageDeltaParams {
@@ -195,8 +212,10 @@ export function parseDynamicToolCall(value: unknown): DynamicToolCallParams {
 		threadId: requireString(root.threadId, "tool.threadId"),
 		turnId: requireString(root.turnId, "tool.turnId"),
 		callId: requireString(root.callId, "tool.callId"),
+		// CLI 0.146.0 omits namespace for top-level tools; explicit null is
+		// equivalent on the pinned wire protocol.
 		namespace:
-			root.namespace === null
+			root.namespace === undefined || root.namespace === null
 				? null
 				: requireString(root.namespace, "tool.namespace"),
 		tool: requireString(root.tool, "tool.name"),

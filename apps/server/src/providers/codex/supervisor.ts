@@ -1,7 +1,17 @@
+import {
+	chmodSync,
+	mkdtempSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type CodexChildProcess, JsonlRpcClient } from "./jsonl-client";
 
 export const PINNED_CODEX_CLI_VERSION = "codex-cli 0.146.0";
 export const CODEX_PROTOCOL_SCHEMA_REVISION = "0.146.0-experimental";
+export const REQUIRED_CODEX_MODEL_PROVIDER = "openai";
 
 export interface CodexSupervisorOptions {
 	codexBin: string;
@@ -41,6 +51,18 @@ function defaultSpawn(
  * Builds an allowlisted child environment. In particular, application secrets
  * (xAI, webhook, database and .env-derived values) are not inherited.
  */
+export function createIsolatedCodexAppHome(authHome: string): string {
+	const appHome = mkdtempSync(join(tmpdir(), "botamin-codex-app-home-"));
+	chmodSync(appHome, 0o700);
+	// Link by known path only; auth bytes are never opened, copied, or logged.
+	symlinkSync(join(authHome, "auth.json"), join(appHome, "auth.json"));
+	writeFileSync(join(appHome, "config.toml"), "", {
+		mode: 0o600,
+		flag: "wx",
+	});
+	return appHome;
+}
+
 export function buildSanitizedCodexEnv(
 	codexHome: string,
 	source: Record<string, string | undefined> = process.env,
@@ -68,6 +90,18 @@ export function restrictedAppServerCommand(codexBin: string): string[] {
 		"app-server",
 		"--stdio",
 		"--strict-config",
+		// The isolated CODEX_HOME links subscription auth only; CLI overrides
+		// independently pin every executable or routing-sensitive setting.
+		"-c",
+		'model_provider="openai"',
+		"-c",
+		"model_providers={}",
+		"-c",
+		'forced_login_method="chatgpt"',
+		"-c",
+		"notify=[]",
+		"-c",
+		"hooks={}",
 		"-c",
 		"features.shell_tool=false",
 		"-c",
@@ -113,6 +147,7 @@ export class CodexProcessSupervisor {
 	private restartAttempt = 0;
 	private restartTimer: ReturnType<typeof setTimeout> | undefined;
 	private generation = 0;
+	private isolatedCodexHome: string | undefined;
 	private readonly restartHandlers = new Set<(error: Error) => void>();
 
 	constructor(private readonly options: CodexSupervisorOptions) {}
@@ -133,15 +168,41 @@ export class CodexProcessSupervisor {
 		return this.rpcClient !== undefined;
 	}
 
+	/**
+	 * Invalidates only the currently leased client. This is used after an
+	 * ambiguous mutating-request timeout: the process is killed so a late
+	 * response cannot leave an untracked thread or turn alive.
+	 */
+	invalidateClient(client: JsonlRpcClient, error: Error): boolean {
+		if (this.stopped || this.rpcClient !== client) return false;
+		const child = this.process;
+		++this.generation;
+		this.rpcClient = undefined;
+		this.process = undefined;
+		this.startPromise = undefined;
+		client.close(error);
+		child?.kill("SIGKILL");
+		for (const handler of this.restartHandlers) handler(error);
+		this.scheduleRestart(error);
+		return true;
+	}
+
 	async stop(): Promise<void> {
 		this.stopped = true;
 		if (this.restartTimer) clearTimeout(this.restartTimer);
 		this.restartTimer = undefined;
 		this.rpcClient?.close(new Error("Codex supervisor stopped"));
 		this.rpcClient = undefined;
-		this.process?.kill("SIGTERM");
+		const child = this.process;
+		child?.kill("SIGTERM");
 		this.process = undefined;
 		this.startPromise = undefined;
+		if (child)
+			await Promise.race([child.exited.catch(() => -1), Bun.sleep(1_000)]);
+		if (this.isolatedCodexHome) {
+			rmSync(this.isolatedCodexHome, { recursive: true, force: true });
+			this.isolatedCodexHome = undefined;
+		}
 	}
 
 	private async start(): Promise<JsonlRpcClient> {
@@ -149,10 +210,13 @@ export class CodexProcessSupervisor {
 		const spawn = this.options.spawn ?? defaultSpawn;
 		let child: CodexChildProcess;
 		try {
+			this.isolatedCodexHome ??= createIsolatedCodexAppHome(
+				this.options.codexHome,
+			);
 			child = spawn(restrictedAppServerCommand(this.options.codexBin), {
 				cwd: this.options.runtimeCwd,
 				env: buildSanitizedCodexEnv(
-					this.options.codexHome,
+					this.isolatedCodexHome,
 					this.options.env ?? process.env,
 				),
 			});

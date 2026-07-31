@@ -26,16 +26,15 @@ Compilation writes one file and sets it to mode `0444`. It does not copy the sou
 No credentials or root workspace configuration are required.
 
 ```bash
-cd packages/prompt-compiler
-npm ci
-npm run check
+bun install --frozen-lockfile
+bun run --cwd packages/prompt-compiler check
 ```
 
 Compile production JavaScript and create a runtime bundle:
 
 ```bash
-npm run build
-node dist/src/cli.js \
+bun run --cwd packages/prompt-compiler build
+bun packages/prompt-compiler/dist/src/cli.js \
   --source-root ../.. \
   --runtime-dir /app/runtime-brain
 ```

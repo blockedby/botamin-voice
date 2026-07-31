@@ -1,0 +1,140 @@
+name: ${COMPOSE_PROJECT_NAME:-botamin-voice}
+
+services:
+  app:
+    image: ${APP_IMAGE:-botamin-voice:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:5173}
+      AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
+      BRAIN_PROVIDER: ${BRAIN_PROVIDER:-codex-subscription}
+      CODEX_CWD: /app/runtime/brain
+      CODEX_EFFORT: ${CODEX_EFFORT:-low}
+      CODEX_HOME: /codex-home
+      CODEX_MAX_CONCURRENT_TURNS: ${CODEX_MAX_CONCURRENT_TURNS:-3}
+      CODEX_MODEL: ${CODEX_MODEL:-gpt-5.6-luna}
+      CODEX_TOOL_MODE: ${CODEX_TOOL_MODE:-dynamic}
+      DATABASE_URL: file:/data/app.db
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      MAX_ACTIVE_CONVERSATIONS: ${MAX_ACTIVE_CONVERSATIONS:-3}
+      MAX_CONCURRENT_BRAIN_TURNS: ${MAX_CONCURRENT_BRAIN_TURNS:-3}
+      MAX_PENDING_BRAIN_TURNS: ${MAX_PENDING_BRAIN_TURNS:-6}
+      NOTIFIER: ${NOTIFIER:-console}
+      OPENROUTER_APP_TITLE: ${OPENROUTER_APP_TITLE:-Botamin Voice Demo}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_HTTP_REFERER: ${OPENROUTER_HTTP_REFERER:-http://localhost:5173}
+      OPENROUTER_TTS_MODEL: ${OPENROUTER_TTS_MODEL:-x-ai/grok-voice-tts-1.0}
+      OPENROUTER_TTS_RESPONSE_FORMAT: ${OPENROUTER_TTS_RESPONSE_FORMAT:-mp3}
+      OPENROUTER_TTS_SPEED: ${OPENROUTER_TTS_SPEED:-}
+      OPENROUTER_TTS_VOICE: ${OPENROUTER_TTS_VOICE:-eve}
+      PORT: "3000"
+      POST_BOOKING_QUALIFICATION_ENABLED: ${POST_BOOKING_QUALIFICATION_ENABLED:-true}
+      SESSION_MAX_MINUTES: ${SESSION_MAX_MINUTES:-20}
+      STORE_RAW_AUDIO: ${STORE_RAW_AUDIO:-false}
+      TRANSCRIPT_RETENTION_DAYS: ${TRANSCRIPT_RETENTION_DAYS:-30}
+      TTS_CIRCUIT_BREAKER_COOLDOWN_MS: ${TTS_CIRCUIT_BREAKER_COOLDOWN_MS:-60000}
+      TTS_CIRCUIT_BREAKER_FAILURES: ${TTS_CIRCUIT_BREAKER_FAILURES:-3}
+      TTS_CONNECT_TIMEOUT_MS: ${TTS_CONNECT_TIMEOUT_MS:-8000}
+      TTS_FIRST_SEGMENT_TARGET_CHARS: ${TTS_FIRST_SEGMENT_TARGET_CHARS:-100}
+      TTS_IDLE_FLUSH_MS: ${TTS_IDLE_FLUSH_MS:-350}
+      TTS_MAX_CHARS_PER_SEGMENT: ${TTS_MAX_CHARS_PER_SEGMENT:-240}
+      TTS_MAX_CHARS_PER_SESSION: ${TTS_MAX_CHARS_PER_SESSION:-8000}
+      TTS_MAX_CHARS_PER_TURN: ${TTS_MAX_CHARS_PER_TURN:-1800}
+      TTS_MAX_CONCURRENCY: ${TTS_MAX_CONCURRENCY:-2}
+      TTS_MAX_RETRIES: ${TTS_MAX_RETRIES:-1}
+      TTS_MAX_SEGMENT_CHARS: ${TTS_MAX_SEGMENT_CHARS:-240}
+      TTS_PREFETCH_SEGMENTS: ${TTS_PREFETCH_SEGMENTS:-1}
+      TTS_PROVIDER: ${TTS_PROVIDER:-openrouter}
+      TTS_RETRY_BASE_MS: ${TTS_RETRY_BASE_MS:-400}
+      TTS_SOFT_SEGMENT_CHARS: ${TTS_SOFT_SEGMENT_CHARS:-160}
+      TTS_TEXT_ONLY_FALLBACK: ${TTS_TEXT_ONLY_FALLBACK:-true}
+      TTS_TOTAL_TIMEOUT_MS: ${TTS_TOTAL_TIMEOUT_MS:-20000}
+      TURN_TIMEOUT_MS: ${TURN_TIMEOUT_MS:-45000}
+      XAI_STT_LANGUAGE: ${XAI_STT_LANGUAGE:-ru}
+      XAI_STT_SMART_TURN: ${XAI_STT_SMART_TURN:-0.7}
+      XAI_STT_SMART_TURN_TIMEOUT_MS: ${XAI_STT_SMART_TURN_TIMEOUT_MS:-3000}
+    secrets:
+      - openrouter_api_key
+      - webhook_signing_secret
+      - webhook_url
+      - xai_api_key
+    volumes:
+      - app-data:/data
+      - codex-home:/codex-home
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=1777
+      - /app/runtime:rw,noexec,nosuid,nodev,size=2m,uid=1000,gid=1000,mode=0755
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - const r=await fetch('http://127.0.0.1:3000/health/live');if(!r.ok)process.exit(1)
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    stop_grace_period: 30s
+    pids_limit: 256
+
+  caddy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - ${HTTP_PORT:-5173}:80
+      - ${HTTPS_PORT:-8443}:443
+      - ${HTTPS_PORT:-8443}:443/udp
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=16m
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/health/caddy"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    stop_grace_period: 10s
+
+secrets:
+  openrouter_api_key:
+    environment: OPENROUTER_API_KEY
+  webhook_signing_secret:
+    environment: WEBHOOK_SIGNING_SECRET
+  webhook_url:
+    environment: WEBHOOK_URL
+  xai_api_key:
+    environment: XAI_API_KEY
+
+volumes:
+  app-data:
+  caddy-config:
+  caddy-data:
+  codex-home:
+    name: ${CODEX_HOME_VOLUME:-botamin-codex-home}

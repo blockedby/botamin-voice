@@ -1,0 +1,39 @@
+# Version-control and agent state
+.git
+.worktrees
+.pipi
+
+# Credentials and local runtime data
+.env
+.env.*
+!.env.example
+**/auth.json
+**/*token*
+**/*secret*
+data
+.runtime
+*.db
+*.db-shm
+*.db-wal
+
+# Dependencies, outputs and evidence
+node_modules
+**/node_modules
+**/dist
+coverage
+*.log
+artifacts
+backups
+
+# Specification and local-only tooling are not runtime inputs
+docs
+corrections
+diagrams
+charts
+tasks
+starter
+FULL_SPEC.md
+technical-spec.html
+CHECKSUMS.sha256
+MANIFEST.txt
+VALIDATION.md

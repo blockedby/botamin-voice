@@ -14,6 +14,7 @@ if (import.meta.main) {
 			port: runtime.config.port,
 			fetch: (request, bunServer) =>
 				app.fetch(request, {
+					server: bunServer,
 					remoteAddress: bunServer.requestIP(request)?.address,
 				}),
 			websocket: {

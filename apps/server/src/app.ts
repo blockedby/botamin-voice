@@ -20,7 +20,11 @@ import type { RuntimeConfig } from "./runtime/config";
 import type { ServerRuntime } from "./runtime/runtime";
 
 interface ServerAppEnv {
-	Bindings: { remoteAddress?: string };
+	Bindings: {
+		/** Bun server wrapper required by Hono's WebSocket upgrade helper. */
+		server?: unknown;
+		remoteAddress?: string;
+	};
 }
 
 export const BUN_REQUEST_BODY_HARD_LIMIT_BYTES = 65_536 as const;

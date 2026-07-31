@@ -62,7 +62,15 @@ test("Bun localhost upgrades the exact conversation WebSocket route", async () =
 		dispose: async () => undefined,
 	};
 	const app = createServerApp(runtime);
-	const server = Bun.serve({ port: 0, fetch: app.fetch, websocket });
+	const server = Bun.serve({
+		port: 0,
+		fetch: (request, bunServer) =>
+			app.fetch(request, {
+				server: bunServer,
+				remoteAddress: bunServer.requestIP(request)?.address,
+			}),
+		websocket,
+	});
 	try {
 		const event = await new Promise<unknown>((resolve, reject) => {
 			const ws = new WebSocket(

@@ -174,6 +174,26 @@ function qualificationConfirmation(
 	return QUALIFICATION_SKIPPED_CONFIRMATION;
 }
 
+/** Conservative server-owned evidence for spoken post-booking consent. */
+function hasExplicitQualificationConsent(userText: string): boolean {
+	const normalized = userText
+		.toLocaleLowerCase("ru-RU")
+		.replace(/[^\p{L}\p{N}\s]/gu, " ")
+		.replace(/\s+/gu, " ")
+		.trim();
+	if (!normalized || normalized.length > 120) return false;
+	if (
+		/\b(?:нет|не\s+надо|не\s+хочу|не\s+нужно|не\s+задавайте)\b/u.test(
+			normalized,
+		)
+	) {
+		return false;
+	}
+	return /^(?:да|конечно|можно|хорошо|ладно|задавайте|спрашивайте)(?:\s|$)/u.test(
+		normalized,
+	);
+}
+
 /**
  * Deterministic owner of atomic STT intake, one Luna turn, booking policy, and
  * complete OpenRouter MP3 phrase requests. Provider retries remain pure.
@@ -464,6 +484,7 @@ export class ConversationOrchestrator {
 		const chunker = new StreamingSentenceChunker(this.#chunkerOptions);
 		const heldActionSpeech: string[] = [];
 		let suppressModelSpeech = false;
+		let toolSettledThisTurn = false;
 		let brainFailure: Extract<BrainDelta, { type: "error" }> | undefined;
 		try {
 			this.#threadId ??= await this.#brain.createThread(this.conversationId);
@@ -536,13 +557,22 @@ export class ConversationOrchestrator {
 					brainFailure = delta;
 					break;
 				}
-				if (delta.type === "turn.completed") continue;
+				if (delta.type === "turn.completed") {
+					const stageEvent = this.#applyBrainStageProposal(
+						input.generationId,
+						toolSettledThisTurn ? undefined : delta.nextStage,
+						input.userText,
+					);
+					if (stageEvent) yield stageEvent;
+					continue;
+				}
 				if (delta.type === "tool.request") {
 					const outcome = await this.#performTool(
 						input.generationId,
 						input.turnId,
 						delta.tool,
 					);
+					toolSettledThisTurn = true;
 					for (const event of outcome.events) yield event;
 					chunker.clear();
 					heldActionSpeech.length = 0;
@@ -685,6 +715,55 @@ export class ConversationOrchestrator {
 		}
 
 		yield* this.#finishGeneration(input.generationId, visible, audioProduced);
+	}
+
+	#applyBrainStageProposal(
+		generationId: string,
+		nextStage: ConversationState["stage"] | undefined,
+		userText: string,
+	): Extract<OrchestratorEvent, { type: "state.changed" }> | null {
+		const from = this.#state.stage;
+		if (!nextStage || nextStage === from) return null;
+		const edge = `${from}->${nextStage}`;
+		let event: ConversationEvent | null = null;
+		switch (edge) {
+			case "GREETING->DISCOVERY":
+				event = { type: "discovery_requested" };
+				break;
+			case "GREETING->BOOKING_OFFER":
+			case "DISCOVERY->BOOKING_OFFER":
+			case "VALUE->BOOKING_OFFER":
+			case "OBJECTION->BOOKING_OFFER":
+				event = { type: "booking_offered" };
+				break;
+			case "DISCOVERY->VALUE":
+				event = { type: "value_ready" };
+				break;
+			case "VALUE->OBJECTION":
+				event = { type: "objection_raised" };
+				break;
+			case "OBJECTION->VALUE":
+				event = { type: "objection_resolved" };
+				break;
+			case "BOOKING_OFFER->COLLECT_BOOKING":
+				event = { type: "booking_accepted" };
+				break;
+			case "BOOKED->POST_BOOKING_QUALIFICATION":
+				if (hasExplicitQualificationConsent(userText)) {
+					event = { type: "qualification_consent_granted" };
+				}
+				break;
+		}
+		if (!event) return null;
+		const result = this.apply(event);
+		if (!result.ok || this.#state.stage !== nextStage) return null;
+		return {
+			type: "state.changed",
+			generationId,
+			from,
+			to: nextStage,
+			reason: "brain_stage_proposal_validated",
+		};
 	}
 
 	#acceptBrainDelta(

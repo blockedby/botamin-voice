@@ -717,6 +717,7 @@ export class CodexAppServerBrain implements BrainPort {
 		active: ActiveTurn,
 		completed: TurnCompletedParams,
 	): void {
+		let proposedNextStage: BrainTurnInput["stage"] | undefined;
 		if (completed.turn.status !== "completed") this.failDynamicTurn(active);
 		if (completed.turn.status === "failed") {
 			active.queue.push(
@@ -742,6 +743,9 @@ export class CodexAppServerBrain implements BrainPort {
 					),
 				);
 			} else {
+				// nextStage remains an untrusted proposal. ConversationOrchestrator
+				// applies only a server-known guarded transition edge.
+				proposedNextStage = envelope.nextStage;
 				// BrainPort has no backend-result channel. Never emit model speech from
 				// an action envelope because it could claim success before execution.
 				if (envelope.action.type === "none" && envelope.speech)
@@ -794,6 +798,9 @@ export class CodexAppServerBrain implements BrainPort {
 			type: "turn.completed",
 			turnId: active.input.turnId,
 			generationId: active.input.generationId,
+			...(proposedNextStage === undefined
+				? {}
+				: { nextStage: proposedNextStage }),
 		});
 		active.terminal = true;
 		active.queue.end();

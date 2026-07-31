@@ -70,6 +70,8 @@ export const BrainDeltaSchema = z.discriminatedUnion("type", [
 			type: z.literal("turn.completed"),
 			turnId: EntityIdSchema,
 			generationId: EntityIdSchema,
+			/** Untrusted brain proposal; the orchestrator must validate a state edge. */
+			nextStage: ConversationStageSchema.optional(),
 		})
 		.strict(),
 	z

@@ -346,6 +346,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 				type: "turn.completed",
 				turnId: EXTERNAL_TURN_ID,
 				generationId: GENERATION_ID,
+				nextStage: "DISCOVERY",
 			},
 		]);
 		expect(processes).toHaveLength(1);
@@ -870,6 +871,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 				type: "turn.completed",
 				turnId: EXTERNAL_TURN_ID,
 				generationId: GENERATION_ID,
+				nextStage: "DISCOVERY",
 			},
 		]);
 	});

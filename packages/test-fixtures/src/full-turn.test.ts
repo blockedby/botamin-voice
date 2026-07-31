@@ -1,12 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
+	AtomicServerAudioSegmentFrameSchema,
+	BINARY_AUDIO_FRAME_KIND,
 	BookingToolExecutionSchema,
 	type BrainDelta,
 	type BrainTurnInput,
 	type CreateBookingInput,
+	decodeBinaryAudioFrame,
 	EntityIdSchema,
+	encodeBinaryAudioFrame,
+	MpegAudioBytesSchema,
 	type SttSessionInput,
-	type TtsInput,
+	type TtsSynthesisRequest,
 } from "@botamin/contracts";
 import {
 	FakeBookingService,
@@ -15,6 +21,10 @@ import {
 	FakeStt,
 	FakeTts,
 } from "./fakes";
+import {
+	createDeterministicMp3Fixture,
+	createMalformedMp3Fixture,
+} from "./mp3";
 
 const conversationId = "01J00000000000000000000000";
 const turnId = "01J00000000000000000000003";
@@ -115,17 +125,18 @@ describe("fake full turn", () => {
 			if (delta.type === "speech.delta") speech.push(delta.text);
 		}
 
-		const ttsInput: TtsInput = {
+		const ttsInput: TtsSynthesisRequest = {
 			conversationId,
+			turnId,
 			generationId,
+			segmentId: "01J00000000000000000000005",
 			text: speech.join(""),
-			language: "ru",
-			outputEncoding: "pcm16le",
-			outputSampleRate: 24_000,
+			signal: controller.signal,
 		};
-		for await (const event of tts.synthesize(ttsInput, controller.signal)) {
-			timeline.push(`tts.${event.type}`);
-		}
+		const segment = await tts.synthesize(ttsInput);
+		timeline.push("tts.audio.segment");
+		expect(segment.contentType).toBe("audio/mpeg");
+		expect(segment.final).toBe(true);
 
 		const committedBooking =
 			await bookings.findByConversationId(conversationId);
@@ -189,7 +200,7 @@ describe("fake full turn", () => {
 			"booking.updated",
 		]);
 		expect(timeline.indexOf("booking.created")).toBeLessThan(
-			timeline.indexOf("tts.audio.chunk"),
+			timeline.indexOf("tts.audio.segment"),
 		);
 		expect(timeline.indexOf("booking.created")).toBeLessThan(
 			timeline.indexOf("booking.updated"),
@@ -245,69 +256,143 @@ describe("fake full turn", () => {
 		expect(repeatedFirst.bookingId).toBe(first.bookingId);
 	});
 
-	test("emits configurable sample-aligned PCM16LE fixture audio", async () => {
-		const fixture = new Uint8Array([0x34, 0x12, 0xcc, 0xed]);
-		const tts = new FakeTts({ pcm16le: fixture });
-		fixture.fill(0);
-		const input: TtsInput = {
-			conversationId,
-			generationId,
-			text: "Этот текст не кодируется как аудио",
-			language: "ru",
-			outputEncoding: "pcm16le",
-			outputSampleRate: 24_000,
-		};
-		const events = [];
-		for await (const event of tts.synthesize(
-			input,
-			new AbortController().signal,
-		)) {
-			events.push(event);
-		}
-		const chunk = events[0];
-		if (chunk?.type !== "audio.chunk") {
-			throw new Error("Expected an audio fixture chunk");
-		}
+	test("returns the known-valid deterministic MP3 as one atomic segment", async () => {
+		const fixture = createDeterministicMp3Fixture();
+		const malformed = createMalformedMp3Fixture();
+		expect(fixture.byteLength).toBe(789);
+		expect(fixture.slice(0, 4)).toEqual(
+			new Uint8Array([0x49, 0x44, 0x33, 0x04]),
+		);
+		expect(malformed).not.toEqual(fixture);
+		expect(MpegAudioBytesSchema.safeParse(fixture).success).toBe(true);
+		expect(MpegAudioBytesSchema.safeParse(malformed).success).toBe(false);
 
-		expect(chunk.audio).toEqual(new Uint8Array([0x34, 0x12, 0xcc, 0xed]));
-		expect(chunk.audio.byteLength % 2).toBe(0);
-		expect(events.at(-1)?.type).toBe("audio.done");
-		expect(() => new FakeTts({ pcm16le: new Uint8Array([0x00]) })).toThrow(
-			"whole samples",
+		const customFixture = fixture.slice();
+		const expectedBytes = customFixture.slice();
+		const tts = new FakeTts({
+			mp3: customFixture,
+			providerGenerationId: "provider-generation:opaque",
+		});
+		customFixture.fill(0);
+		const input: TtsSynthesisRequest = {
+			conversationId,
+			turnId,
+			generationId,
+			segmentId: "01J00000000000000000000005",
+			text: "Этот текст не кодируется как аудио",
+			signal: new AbortController().signal,
+		};
+		const segment = await tts.synthesize(input);
+		expect(segment).toMatchObject({
+			generationId,
+			segmentId: input.segmentId,
+			providerGenerationId: "provider-generation:opaque",
+			contentType: "audio/mpeg",
+			final: true,
+		});
+		expect(segment.bytes).toEqual(expectedBytes);
+		expect(tts.inputs).toEqual([input]);
+		expect(() => new FakeTts({ mp3: malformed })).toThrow(
+			"structurally valid MP3",
 		);
 	});
 
-	test("stops TTS after explicit cancellation or signal abort", async () => {
-		const input: TtsInput = {
-			conversationId,
+	test("preserves every MP3 byte across server encode and browser decode", () => {
+		const mp3 = createDeterministicMp3Fixture();
+		const metadata = {
 			generationId,
-			text: "Отмена",
-			language: "ru",
-			outputEncoding: "pcm16le",
-			outputSampleRate: 24_000,
+			segmentId: "01J00000000000000000000005",
+			sequence: 42,
+			contentType: "audio/mpeg" as const,
+			byteLength: mp3.byteLength,
+			final: true as const,
 		};
-		const cancelledTts = new FakeTts();
-		const cancelledStream = cancelledTts
-			.synthesize(input, new AbortController().signal)
-			[Symbol.asyncIterator]();
-		expect((await cancelledStream.next()).value?.type).toBe("audio.chunk");
-		await cancelledTts.cancel(generationId);
-		expect((await cancelledStream.next()).done).toBe(true);
+		const rawFrame = encodeBinaryAudioFrame({
+			kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+			sequence: metadata.sequence,
+			payload: mp3,
+		});
 
-		const controller = new AbortController();
-		const abortedTts = new FakeTts();
-		const abortedStream = abortedTts
-			.synthesize(input, controller.signal)
-			[Symbol.asyncIterator]();
-		expect((await abortedStream.next()).value?.type).toBe("audio.chunk");
-		controller.abort();
-		expect((await abortedStream.next()).done).toBe(true);
+		expect(
+			AtomicServerAudioSegmentFrameSchema.safeParse({ metadata, rawFrame })
+				.success,
+		).toBe(true);
+		const decoded = decodeBinaryAudioFrame(rawFrame);
+		expect(decoded.kind).toBe(BINARY_AUDIO_FRAME_KIND.serverMp3Segment);
+		expect(decoded.sequence).toBe(metadata.sequence);
+		expect(decoded.payload.byteLength).toBe(metadata.byteLength);
+		expect(decoded.payload).toEqual(mp3);
+	});
 
-		const preCancelledTts = new FakeTts();
-		await preCancelledTts.cancel(generationId);
-		const preCancelledStream = preCancelledTts
-			.synthesize(input, new AbortController().signal)
-			[Symbol.asyncIterator]();
-		expect((await preCancelledStream.next()).done).toBe(true);
+	test("ffprobe accepts the deterministic MP3 fixture when available", () => {
+		const result = spawnSync(
+			"ffprobe",
+			[
+				"-v",
+				"error",
+				"-show_entries",
+				"stream=codec_name,codec_type,sample_rate,channels",
+				"-of",
+				"json",
+				"-i",
+				"pipe:0",
+			],
+			{ input: createDeterministicMp3Fixture(), encoding: "utf8" },
+		);
+		if (
+			(result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
+		) {
+			console.warn("ffprobe unavailable; skipping external MP3 decode check");
+			return;
+		}
+
+		expect(result.error).toBeUndefined();
+		expect(result.status).toBe(0);
+		const probe = JSON.parse(result.stdout) as {
+			streams?: Array<Record<string, unknown>>;
+		};
+		expect(probe.streams?.[0]).toMatchObject({
+			codec_name: "mp3",
+			codec_type: "audio",
+			sample_rate: "24000",
+			channels: 1,
+		});
+	});
+
+	test("enforces abort and server-owned current-generation hooks", async () => {
+		const createRequest = (signal: AbortSignal): TtsSynthesisRequest => ({
+			conversationId,
+			turnId,
+			generationId,
+			segmentId: "01J00000000000000000000005",
+			text: "Отмена",
+			signal,
+		});
+
+		const preAborted = new AbortController();
+		preAborted.abort();
+		await expect(
+			new FakeTts().synthesize(createRequest(preAborted.signal)),
+		).rejects.toHaveProperty("name", "AbortError");
+
+		const abortedDuringSynthesis = new AbortController();
+		const delayedTts = new FakeTts({
+			beforeResolve: () => abortedDuringSynthesis.abort(),
+		});
+		await expect(
+			delayedTts.synthesize(createRequest(abortedDuringSynthesis.signal)),
+		).rejects.toHaveProperty("name", "AbortError");
+
+		const staleTts = new FakeTts();
+		staleTts.markGenerationObsolete(generationId);
+		await expect(
+			staleTts.synthesize(createRequest(new AbortController().signal)),
+		).rejects.toHaveProperty("name", "AbortError");
+
+		const guardedTts = new FakeTts({ isGenerationCurrent: () => false });
+		await expect(
+			guardedTts.synthesize(createRequest(new AbortController().signal)),
+		).rejects.toHaveProperty("name", "AbortError");
+		expect(await new FakeTts({ health: "degraded" }).health()).toBe("degraded");
 	});
 });

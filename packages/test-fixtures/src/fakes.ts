@@ -11,22 +11,22 @@ import {
 	type BrainTurnInput,
 	CreateBookingInputSchema,
 	type CreateBookingResult,
+	MpegAudioBytesSchema,
 	type Notifier,
 	type ProviderHealth,
 	type SttEvent,
 	type SttPort,
 	type SttSession,
 	type SttSessionInput,
-	type TtsEvent,
-	type TtsInput,
+	type TtsAudioSegment,
+	type TtsHealth,
 	type TtsPort,
+	type TtsSynthesisRequest,
 } from "@botamin/contracts";
+import { createDeterministicMp3Fixture } from "./mp3";
 
 const HEALTHY: ProviderHealth = { status: "healthy" };
 const DEFAULT_AT = "2026-07-30T20:22:00.000Z";
-const DEFAULT_PCM16LE_FIXTURE = new Uint8Array([
-	0x00, 0x00, 0xe8, 0x03, 0x18, 0xfc, 0xff, 0x7f,
-]);
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 function createIncrementingEntityIdFactory(): () => string {
@@ -133,48 +133,67 @@ export class FakeStt implements SttPort {
 }
 
 export interface FakeTtsOptions {
-	pcm16le?: Uint8Array;
+	mp3?: Uint8Array;
+	providerGenerationId?: string;
+	health?: TtsHealth;
+	/** Allows tests to pause or mutate cancellation state before resolution. */
+	beforeResolve?: (request: TtsSynthesisRequest) => void | Promise<void>;
+	/** Server-owned generation guard; no provider semantics are assumed. */
+	isGenerationCurrent?: (request: TtsSynthesisRequest) => boolean;
 }
 
 export class FakeTts implements TtsPort {
-	readonly cancelled = new Set<string>();
-	readonly inputs: TtsInput[] = [];
-	#pcm16le: Uint8Array;
+	readonly inputs: TtsSynthesisRequest[] = [];
+	readonly obsoleteGenerations = new Set<string>();
+	#mp3: Uint8Array;
+	#options: Omit<FakeTtsOptions, "mp3">;
 
 	constructor(options: FakeTtsOptions = {}) {
-		const pcm16le = options.pcm16le ?? DEFAULT_PCM16LE_FIXTURE;
-		if (pcm16le.byteLength === 0 || pcm16le.byteLength % 2 !== 0) {
-			throw new TypeError(
-				"Fake TTS PCM16LE fixture must contain whole samples",
-			);
+		const mp3 = options.mp3 ?? createDeterministicMp3Fixture();
+		const result = MpegAudioBytesSchema.safeParse(mp3);
+		if (!result.success) {
+			throw new TypeError("Fake TTS fixture must be structurally valid MP3");
 		}
-		this.#pcm16le = pcm16le.slice();
+		this.#mp3 = result.data.slice();
+		this.#options = options;
 	}
 
-	async *synthesize(
-		input: TtsInput,
-		signal: AbortSignal,
-	): AsyncIterable<TtsEvent> {
-		this.inputs.push(input);
-		if (signal.aborted || this.cancelled.has(input.generationId)) return;
+	markGenerationObsolete(generationId: string): void {
+		this.obsoleteGenerations.add(generationId);
+	}
 
-		yield {
-			type: "audio.chunk",
-			generationId: input.generationId,
-			audioSeq: 0,
-			audio: this.#pcm16le.slice(),
+	async synthesize(request: TtsSynthesisRequest): Promise<TtsAudioSegment> {
+		this.inputs.push(request);
+		this.#assertCurrent(request);
+		await this.#options.beforeResolve?.(request);
+		this.#assertCurrent(request);
+
+		return {
+			generationId: request.generationId,
+			segmentId: request.segmentId,
+			...(this.#options.providerGenerationId === undefined
+				? {}
+				: { providerGenerationId: this.#options.providerGenerationId }),
+			contentType: "audio/mpeg",
+			bytes: this.#mp3.slice(),
+			final: true,
 		};
-
-		if (signal.aborted || this.cancelled.has(input.generationId)) return;
-		yield { type: "audio.done", generationId: input.generationId };
 	}
 
-	async cancel(generationId: string): Promise<void> {
-		this.cancelled.add(generationId);
+	async health(): Promise<TtsHealth> {
+		return this.#options.health ?? "ready";
 	}
 
-	async health(): Promise<ProviderHealth> {
-		return HEALTHY;
+	#assertCurrent(request: TtsSynthesisRequest): void {
+		if (
+			request.signal.aborted ||
+			this.obsoleteGenerations.has(request.generationId) ||
+			this.#options.isGenerationCurrent?.(request) === false
+		) {
+			const error = new Error("TTS synthesis aborted or generation obsolete");
+			error.name = "AbortError";
+			throw error;
+		}
 	}
 }
 

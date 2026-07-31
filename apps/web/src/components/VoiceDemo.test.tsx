@@ -28,13 +28,13 @@ function renderVoice(
 			muted={false}
 			onConsentChange={noop}
 			onStart={noop}
+			onCommit={noop}
 			onRetryPermission={noop}
 			onToggleMute={noop}
 			onStop={noop}
 			onInterrupt={noop}
 			onReconnect={noop}
 			onRestart={noop}
-			onQualificationChoice={noop}
 			{...overrides}
 		/>,
 	);
@@ -70,7 +70,7 @@ describe("VoiceDemo state semantics", () => {
 		[{ kind: "audio-error" }, "Продолжаем текстом"],
 		[{ kind: "disconnected" }, "Связь прервана"],
 		[{ kind: "reconnecting", attempt: 3 }, "Попытка 3"],
-		[{ kind: "error" }, "Разговор не удалось продолжить"],
+		[{ kind: "error" }, "Сервис разговора временно недоступен"],
 	];
 
 	for (const [state, expectedLabel] of cases) {
@@ -129,7 +129,8 @@ describe("VoiceDemo controls and transcript", () => {
 		);
 	});
 
-	test("speaking exposes mute, stop and interrupt controls", () => {
+	test("listening can commit while speaking exposes mute, stop and interrupt controls", () => {
+		expect(renderVoice({ kind: "listening" })).toContain("Завершить реплику");
 		const html = renderVoice({ kind: "speaking" });
 		expect(html).toContain("Выключить микрофон");
 		expect(html).toContain("Перебить агента");
@@ -208,9 +209,9 @@ describe("VoiceDemo controls and transcript", () => {
 		const html = renderVoice({ kind: "booked" });
 		expect(html).toContain("Лид и следующий шаг записаны");
 		expect(html).toContain("Это не календарная встреча");
-		expect(html).toContain("3–5 необязательных вопросов");
-		expect(html).toContain("Да, продолжить");
-		expect(html).toContain("Нет, завершить");
+		expect(html).toContain("дополнительные вопросы");
+		expect(html).toContain("необязательными");
+		expect(html).toContain("Завершить разговор");
 	});
 
 	test("uses exactly one booking live region while keeping visual status and transcript", () => {

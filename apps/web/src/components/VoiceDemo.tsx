@@ -1,20 +1,22 @@
 import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 import { useRef } from "react";
 
+type ActiveBookingMarker = { bookingOutcome?: "committed" };
+
 export type VoiceUiState =
 	| { kind: "idle" }
-	| { kind: "connecting" }
-	| { kind: "permission-denied" }
-	| { kind: "listening" }
-	| { kind: "processing" }
-	| { kind: "thinking" }
-	| { kind: "speaking" }
+	| ({ kind: "connecting" } & ActiveBookingMarker)
+	| ({ kind: "permission-denied" } & ActiveBookingMarker)
+	| ({ kind: "listening" } & ActiveBookingMarker)
+	| ({ kind: "processing" } & ActiveBookingMarker)
+	| ({ kind: "thinking" } & ActiveBookingMarker)
+	| ({ kind: "speaking" } & ActiveBookingMarker)
 	| { kind: "booked" }
 	| {
 			kind: "qualification";
 			bookingOutcome: "committed";
-			questionNumber: number;
-			questionCount: number;
+			questionNumber?: number;
+			questionCount?: number;
 	  }
 	| {
 			kind: "complete";
@@ -25,10 +27,10 @@ export type VoiceUiState =
 			bookingOutcome: "committed";
 			qualificationStatus?: "complete" | "partial" | "skipped";
 	  }
-	| { kind: "audio-error" }
-	| { kind: "disconnected" }
-	| { kind: "reconnecting"; attempt?: number }
-	| { kind: "error" };
+	| ({ kind: "audio-error" } & ActiveBookingMarker)
+	| ({ kind: "disconnected" } & ActiveBookingMarker)
+	| ({ kind: "reconnecting"; attempt?: number } & ActiveBookingMarker)
+	| ({ kind: "error" } & ActiveBookingMarker);
 
 export interface FinalTranscriptEntry {
 	id: string;
@@ -45,13 +47,13 @@ export interface VoiceConsent {
 export interface VoiceDemoActions {
 	onConsentChange: (consent: VoiceConsent) => void;
 	onStart: () => void;
+	onCommit: () => void;
 	onRetryPermission: () => void;
 	onToggleMute: () => void;
 	onStop: () => void;
 	onInterrupt: () => void;
 	onReconnect: () => void;
 	onRestart: () => void;
-	onQualificationChoice: (accepted: boolean) => void;
 }
 
 export interface VoiceDemoProps extends VoiceDemoActions {
@@ -131,7 +133,10 @@ export function getVoiceStatePresentation(
 		case "qualification":
 			return {
 				label: "Уточняем контекст",
-				detail: `Дополнительный вопрос ${state.questionNumber} из ${state.questionCount}. Можно остановиться в любой момент.`,
+				detail:
+					state.questionNumber && state.questionCount
+						? `Дополнительный вопрос ${state.questionNumber} из ${state.questionCount}. Можно остановиться в любой момент.`
+						: "Дополнительные вопросы необязательны. Можно остановиться в любой момент.",
 				tone: "active",
 			};
 		case "complete":
@@ -168,8 +173,8 @@ export function getVoiceStatePresentation(
 			};
 		case "error":
 			return {
-				label: "Разговор не удалось продолжить",
-				detail: "Попробуйте начать заново.",
+				label: "Сервис разговора временно недоступен",
+				detail: "Проверьте связь и попробуйте ещё раз.",
 				tone: "danger",
 			};
 	}
@@ -221,8 +226,7 @@ export function handOffVoiceControlFocus(
 export function hasCommittedBooking(state: VoiceUiState): boolean {
 	return (
 		state.kind === "booked" ||
-		(state.kind === "qualification" && state.bookingOutcome === "committed") ||
-		(state.kind === "complete" && state.bookingOutcome === "committed")
+		("bookingOutcome" in state && state.bookingOutcome === "committed")
 	);
 }
 
@@ -394,23 +398,13 @@ function StateActions(props: VoiceDemoProps) {
 	}
 	if (state.kind === "booked") {
 		return (
-			<fieldset className="qualification-choice">
-				<legend id="qualification-offer">
-					Лид уже записан. Можно задать ещё 3–5 необязательных вопросов, чтобы
-					команда лучше подготовила следующий шаг?
-				</legend>
-				<div>
-					<ControlButton
-						className="is-emphasized"
-						onClick={() => props.onQualificationChoice(true)}
-					>
-						Да, продолжить
-					</ControlButton>
-					<ControlButton onClick={() => props.onQualificationChoice(false)}>
-						Нет, завершить
-					</ControlButton>
-				</div>
-			</fieldset>
+			<div className="qualification-choice">
+				<p id="qualification-offer">
+					Лид уже записан. Если агент предложит дополнительные вопросы, они
+					останутся необязательными.
+				</p>
+				<ControlButton onClick={props.onStop}>Завершить разговор</ControlButton>
+			</div>
 		);
 	}
 	if (state.kind === "reconnecting") {
@@ -428,7 +422,7 @@ function StateActions(props: VoiceDemoProps) {
 	if (state.kind === "error" || state.kind === "complete") {
 		return (
 			<ControlButton className="is-emphasized" onClick={props.onRestart}>
-				Начать новый разговор
+				{state.kind === "error" ? "Повторить попытку" : "Начать новый разговор"}
 			</ControlButton>
 		);
 	}
@@ -469,10 +463,6 @@ export function VoiceDemo(props: VoiceDemoProps) {
 		onRestart: () => {
 			handOffSessionFocus();
 			props.onRestart();
-		},
-		onQualificationChoice: (accepted) => {
-			handOffSessionFocus();
-			props.onQualificationChoice(accepted);
 		},
 	};
 
@@ -546,6 +536,15 @@ export function VoiceDemo(props: VoiceDemoProps) {
 				{showSessionControls ? (
 					<fieldset className="session-controls">
 						<legend className="visually-hidden">Управление разговором</legend>
+						{props.state.kind === "listening" ||
+						props.state.kind === "qualification" ? (
+							<ControlButton className="is-emphasized" onClick={props.onCommit}>
+								<span className="control-icon" aria-hidden="true">
+									✓
+								</span>
+								Завершить реплику
+							</ControlButton>
+						) : null}
 						<ControlButton
 							buttonRef={muteButtonRef}
 							aria-label="Отключение микрофона"

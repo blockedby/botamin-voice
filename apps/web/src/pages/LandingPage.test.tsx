@@ -14,13 +14,13 @@ const idleVoice: VoiceDemoProps = {
 	muted: false,
 	onConsentChange: noop,
 	onStart: noop,
+	onCommit: noop,
 	onRetryPermission: noop,
 	onToggleMute: noop,
 	onStop: noop,
 	onInterrupt: noop,
 	onReconnect: noop,
 	onRestart: noop,
-	onQualificationChoice: noop,
 };
 
 describe("Botamin landing narrative", () => {

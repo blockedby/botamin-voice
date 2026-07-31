@@ -1,10 +1,10 @@
 # Botamin Voice Sales Agent — техническая спецификация
 
-> **Correction 003 (authoritative, read first):** [`corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md`](corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md)
+> **Correction 004 (authoritative, read first):** [`corrections/CORRECTION-004_OPENROUTER_VOICE_ONLY.md`](corrections/CORRECTION-004_OPENROUTER_VOICE_ONLY.md)
 >
 > Then read [`CURRENT_DECISIONS.md`](CURRENT_DECISIONS.md) and [`AGENT_START_HERE.md`](AGENT_START_HERE.md).
 
-**Версия:** 0.4-demo
+**Версия:** 0.5-demo
 
 **Дата:** 31 июля 2026
 
@@ -12,7 +12,7 @@
 
 ## Одним абзацем
 
-Нужно сделать full-stack сайт Botamin с браузерным голосовым AI-продавцом. Пользователь говорит в микрофон, xAI Streaming STT превращает речь в текст, Codex app-server с моделью `gpt-5.6-luna` формирует решение и реплику, а OpenRouter TTS озвучивает короткие полные MP3-фразы через серверный TypeScript/Bun adapter. Агент продаёт конкретный продукт Botamin, обрабатывает вопросы и возражения, **сначала** создаёт внутреннюю бронь через backend-tool, а **затем опционально** дополняет эту же бронь квалификацией. Реальный календарь или CRM не подключаются. Промпты и knowledge base хранятся в Markdown и компилируются в изолированный runtime `AGENTS.md`. Всё поднимается одним `docker compose` на одной дешёвой VPS.
+Нужно сделать full-stack сайт Botamin с браузерным голосовым AI-продавцом. Browser отправляет PCM16 chunks на backend; gateway/utterance assembler ограничивает mono PCM16 по времени/байтам, создаёт ровно один валидный WAV и после `audio.commit` передаёт его атомарным `audio/wav` запросом в `SttPort`. OpenRouter adapter валидирует и ограничивает уже готовый WAV, base64-кодирует его и отправляет как `input_audio` в chat completion. Только `transcript.final` идёт в Codex app-server с `gpt-5.6-luna`; ответ озвучивается через OpenRouter TTS короткими полными MP3-сегментами. Phrase-level STT добавляет явно принятую end-of-turn latency. Агент **сначала** создаёт внутреннюю бронь, а **затем опционально** дополняет её квалификацией. Реальный календарь или CRM не подключаются. Промпты и knowledge base остаются Markdown; всё поднимается одним `docker compose` на одной VPS.
 
 ## Локальная настройка доступов
 
@@ -20,9 +20,8 @@
 cp .env.example .env
 ```
 
-1. **xAI STT:** создайте аккаунт и API key по [официальному quickstart](https://docs.x.ai/developers/quickstart), при необходимости пополните баланс, затем запишите ключ в `.env` как `XAI_API_KEY=...`. Этот ключ используется только для STT.
-2. **OpenRouter TTS:** добавьте backend-only `OPENROUTER_API_KEY`. TTS является платным использованием; бесплатный tier не предполагается. Для local attribution оставьте `OPENROUTER_HTTP_REFERER=http://localhost:5173`.
-3. **Codex subscription:** выполните вход через ChatGPT, без OpenAI API key:
+1. **OpenRouter voice:** добавьте backend-only `OPENROUTER_API_KEY`. Один ключ авторизует STT и TTS; STT выполняется атомарно после `audio.commit` и публикует только `transcript.final`. Для local attribution оставьте `OPENROUTER_HTTP_REFERER=http://localhost:5173`.
+2. **Codex subscription:** выполните вход через ChatGPT, без OpenAI API key:
 
    ```bash
    export CODEX_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/botamin-voice/codex-home"
@@ -38,12 +37,12 @@ cp .env.example .env
 1. `booking.created` происходит до постквалификации.
 2. После создания брони отказ, обрыв связи или ошибка квалификации не отменяют бронь.
 3. Повторный `create_booking` возвращает ту же бронь, а не создаёт дубль.
-4. Ключи xAI/OpenRouter и Codex credentials никогда не попадают в браузер.
+4. Ключ OpenRouter и Codex credentials никогда не попадают в браузер.
 5. В production не хранится сырое аудио, если это отдельно не включено.
 6. Агент не утверждает, что встреча добавлена в календарь: в MVP календарной интеграции нет.
 7. Онлайн-редактор сценариев и промптов отсутствует.
-8. Основной LLM-мозг — Codex subscription + GPT-5.6 Luna; xAI используется только для STT, а OpenRouter — для серверного TTS.
-9. Voice ID и модель OpenRouter, а также платное TTS-использование, задаются конфигурацией; бесплатный allowance не предполагается.
+8. Основной LLM-мозг — Codex subscription + GPT-5.6 Luna; OpenRouter — единственный backend STT и TTS gateway.
+9. STT-модель, TTS-модель и voice ID задаются конфигурацией. Voice usage считается платным; бесплатный allowance не предполагается.
 10. Универсальный AI SDK не является частью критического realtime-path: brain и voice скрыты за собственными ports; P0 Codex transport — direct app-server JSON-RPC.
 
 ## С чего начинать агентам

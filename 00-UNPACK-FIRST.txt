@@ -1,18 +1,18 @@
 BOTAMIN VOICE AGENT — UNPACK FIRST
 ==================================
 
-This ZIP is the version 0.4-demo technical specification and AI-agent handoff
-bundle. Read corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md
+This ZIP is the version 0.5-demo technical specification and AI-agent handoff
+bundle. Read corrections/CORRECTION-004_OPENROUTER_VOICE_ONLY.md
 first. It is not yet the implementation repository.
 
 Linux / macOS:
   mkdir -p botamin-agent-work
-  unzip botamin-voice-agent-agent-handoff-v0.4-demo.zip -d botamin-agent-work
+  unzip botamin-voice-agent-agent-handoff-v0.5-demo.zip -d botamin-agent-work
   cd botamin-agent-work/botamin-voice-agent-spec
 
 Windows PowerShell:
   New-Item -ItemType Directory -Force botamin-agent-work | Out-Null
-  Expand-Archive .\botamin-voice-agent-agent-handoff-v0.4-demo.zip -DestinationPath .\botamin-agent-work -Force
+  Expand-Archive .\botamin-voice-agent-agent-handoff-v0.5-demo.zip -DestinationPath .\botamin-agent-work -Force
   Set-Location .\botamin-agent-work\botamin-voice-agent-spec
 
 Then open AGENT_START_HERE.md.

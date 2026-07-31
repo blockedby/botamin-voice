@@ -1,63 +1,47 @@
-# Validation report — Correction 003 migration
+# Validation report — Correction 004
 
 **Date:** 31 July 2026
 
-**Spec version:** `0.4-demo`
+**Spec version:** `0.5-demo`
+**Result:** documentation, backlog, generated artifacts, and atomic STT contract integration passed
 
-**Result:** documentation/backlog/config migration passed
+This report covers the OpenRouter-only voice migration and its shared atomic STT prerequisite. It does not claim provider adapters, browser acceptance, deployment, runtime degradation drills, or paid external smokes.
 
-This report covers the migration only. It does not claim an OpenRouter adapter implementation, fake-provider implementation suite, browser playback result, deployment, or real paid smoke.
+## Active contract
 
-## Reproducible build
+- OpenRouter is the only STT/TTS gateway and uses one backend-only `OPENROUTER_API_KEY`.
+- Browser PCM16 chunks end with one accepted `audio.commit`.
+- The gateway creates one bounded mono PCM16 16 kHz WAV.
+- Atomic `SttPort` receives that `audio/wav` and returns one current `transcript.final`; no provider session or partial event exists.
+- `OpenRouterSttAdapter` validates and base64-encodes the existing WAV without wrapping it again.
+- TTS returns complete provider-neutral `audio/mpeg` phrase segments using the canonical nine-byte binary framing contract.
 
-```bash
-bash scripts/build-spec.sh
-```
+## Reproducible artifacts
 
-`scripts/run-pandoc.sh` pins Pandoc `3.10.1`, using an exact local binary when available and otherwise `pandoc/core:3.10.1`. The build regenerates both maintained charts, `FULL_SPEC.md`, and `technical-spec.html`. DOT sources were rendered with pinned temporary `@viz-js/viz@3.17.0`; all seven SVGs parse successfully.
+`scripts/run-pandoc.sh` pins Pandoc `3.10.1`; diagram rendering uses `@viz-js/viz@3.17.0`; chart generation is deterministic. Two complete builds produced no second-build diff across seven SVGs, three PNGs, `FULL_SPEC.md`, and `technical-spec.html`.
 
-## Specification validator
-
-```text
-VALIDATION NOTES
-- Correction 003 precedence, 0.4-demo and OpenRouter TTS invariants verified
-- 15 tasks; dependency graph is acyclic
-- 8 agent packets
-- 7 SVG diagrams
-- 3 PNG charts
-- HTML embeds 3 raster images and 7 SVGs
-- 55 Markdown files
-
-ALL VALIDATIONS PASSED
-```
-
-The validator also enforces:
-
-- Correction 003 is the first link in both onboarding files;
-- `.env.example` and the architecture env matrix are identical;
-- required OpenRouter defaults, paid-use/text-only policy, and complete `audio/mpeg` contracts are present;
-- retired active TTS endpoint/variable/package instructions are rejected;
-- T12 ownership/title and spec version are correct;
-- generated Markdown/HTML contain `0.4-demo` and no stale direct TTS transport text.
-
-## Static repository checks
+## Verification
 
 ```text
-bun install --frozen-lockfile: passed
+scripts/validate-spec.py: ALL VALIDATIONS PASSED
+CHECKSUMS.sha256: 164 files OK
+YAML DAG: 15 tasks, 5 gates, acyclic
+SVG/PNG validation: 7 SVG and 3 PNG passed
+OpenRouter-only env/tasks/agent packets: passed
+Correction 003 superseded/excluded: passed
+retired provider and retired STT source scan: zero active matches
 bun run typecheck: passed (5 workspaces)
-bun test: passed (26 tests, 0 failed)
-YAML parse/dependency check: passed (15 tasks, acyclic)
-PNG verification: passed (3)
-SVG XML parse: passed (7)
+bun test: passed (81 source tests, 0 failed)
+bun run lint:format: passed
+bun run build: passed
 git diff --check: passed
-sha256sum -c CHECKSUMS.sha256: passed
 ```
 
-The existing 26 tests are scaffold/contracts/prompt/fake-turn tests; they are not the Correction 003 fake OpenRouter matrix.
+The validator was also probed with disposable retired partial-event and provider-session constructs and rejected all of them as intended.
 
-## Scope-limited or blocked evidence
+## Scope boundaries
 
-- `docker compose config`: not applicable; this repository currently has no `docker-compose.yml`, and this assignment does not implement deployment.
-- OpenRouter fake-provider and browser playback suites: not implemented or run in this docs-only migration.
-- Real target-VPS Russian OpenRouter smoke: not run; it requires later provider implementation, runtime credentials, paid usage, and a target VPS.
-- Text-only runtime fallback: specified and backlogged, not exercised in this migration.
+- OpenRouter STT/TTS adapters and fake HTTP provider suites: not implemented by this documentation migration.
+- Paid Russian OpenRouter STT smoke: not run.
+- Paid Russian OpenRouter TTS smoke: not run.
+- `docker compose config`: not applicable to this branch; T15 is integrated separately.

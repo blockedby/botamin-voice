@@ -19,14 +19,14 @@ digraph G {
     codex [shape=component, label="codex app-server\nGPT-5.6 Luna\nsubscription auth"];
   }
 
-  xstt [shape=ellipse, label="xAI Streaming STT\nWSS · PCM16 · ru"];
-  ortts [shape=ellipse, label="OpenRouter TTS\nHTTPS · native Bun fetch\ncomplete MP3 phrase"];
+  orstt [shape=ellipse, label="OpenRouter STT\nHTTPS chat/completions\nbase64 bounded WAV · final only"];
+  ortts [shape=ellipse, label="OpenRouter TTS\nHTTPS audio/speech\ncomplete MP3 phrase"];
   receiver [shape=folder, label="Console / push receiver"];
 
   user -> browser [label="голос / управление"];
   browser -> caddy [dir=both, label="HTTPS + WSS\ninput PCM · output MP3 segments"];
   caddy -> api [dir=both];
-  api -> xstt [dir=both, label="audio ↔ transcript"];
+  api -> orstt [dir=both, label="atomic WAV request\nfinal transcript"];
   api -> orch [dir=both, label="events / deltas"];
   orch -> brain [dir=both, label="turn / speech delta\ntool request"];
   brain -> codex [dir=both, label="JSONL stdio"];

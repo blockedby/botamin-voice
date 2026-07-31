@@ -2,7 +2,7 @@
 
 ## Mission
 
-Keep `TtsPort` provider-neutral and freeze complete `audio/mpeg` phrase-segment WebSocket contracts. No provider SDK types may enter shared packages.
+Freeze provider-neutral voice contracts: `SttPort` is one atomic bounded final-transcription request/result, while `TtsPort` returns complete `audio/mpeg` phrase segments. No provider SDK or HTTP types may enter shared packages.
 
 Создать repository skeleton и заморозить shared contracts, чтобы остальные агенты работали параллельно через fakes.
 
@@ -25,6 +25,8 @@ Branch: `agent/platform-contracts`.
 - Strict TypeScript and shared Zod schemas.
 - Discriminated unions for all WS events.
 - Ports: Brain, STT, TTS, Notifier, Booking repository/service.
+- Provider-neutral `SttPort`: request contains conversation/turn identity, one gateway-produced bounded and validated `audio/wav` payload, language and `AbortSignal`; result contains one final transcript. Its operations are atomic `transcribe` and `health` only.
+- Browser WS remains independently chunked PCM16 with explicit `audio.commit`; the gateway/utterance assembler owns PCM16-to-WAV encoding, and raw PCM/backend transport types do not leak into `SttPort`.
 - Provider-neutral `TtsPort`: request includes conversation/turn/generation/segment IDs, text and `AbortSignal`; response is one `final: true` complete `audio/mpeg` segment with `Uint8Array` bytes.
 - Provider-neutral WS `audio.segment` metadata with generationId, segmentId, sequence, content type and complete binary payload.
 - Fake adapters and one fake full-turn test.

@@ -1,6 +1,6 @@
 version: 1
 project: botamin-voice-agent
-spec_version: 0.4-demo
+spec_version: 0.5-demo
 date: '2026-07-31'
 invariants:
 - booking.created precedes every qualification question and update
@@ -9,7 +9,8 @@ invariants:
 - provider credentials never reach the browser
 - the assistant never claims a real calendar event was created
 - prompts live in Markdown and no online editor is built
-- xAI provides streaming STT; Codex subscription with gpt-5.6-luna provides the brain; OpenRouter provides server-side TTS through a TypeScript/Bun adapter
+- OpenRouter is the only STT and TTS gateway; phrase-level STT returns one final transcript and Codex subscription with gpt-5.6-luna
+  provides the brain
 critical_path:
 - T00
 - T13
@@ -66,14 +67,14 @@ tasks:
   outputs:
   - Bun workspace with React and server skeletons
   - Zod schemas for REST, WS, tools and domain events
-  - BrainPort, SttPort, TtsPort and notifier interfaces
+  - BrainPort, atomic final-transcription SttPort carrying one gateway-produced validated audio/wav payload, TtsPort and notifier interfaces
   - fake adapters and baseline tests
   acceptance:
   - bun install succeeds
   - bun run typecheck succeeds
   - bun test succeeds
   - browser and server compile against the same contracts
-  - no provider package is required by packages/contracts
+  - no provider HTTP or SDK type is required by packages/contracts
 - id: T01
   wave: 0
   priority: P0
@@ -107,35 +108,53 @@ tasks:
   - apps/web/src/state/voice*
   outputs:
   - AudioWorklet capture and 16 kHz mono PCM16 output
-  - 100 ms binary WS frames
+  - 100 ms binary WS frames with bounded browser buffering and a gateway-facing chunk/commit contract
+  - explicit end-of-turn audio.commit that closes one bounded utterance for phrase-level STT
+  - UI listening/processing semantics followed only by transcript.final
   - provider-neutral playback queue for complete audio/mpeg phrase segments
   - generation cancellation, queue clearing, stale-segment rejection and reconnect
   acceptance:
   - deterministic audio fixture produces expected frame sizes
-  - old generation audio is dropped after interruption
-  - no xAI, OpenRouter or Codex secret exists in the bundle
+  - utterance duration and byte limits stop unbounded microphone buffering before audio.commit
+  - audio.commit creates exactly one final-transcription request and duplicate commit is suppressed
+  - UI renders exactly one current transcript.final for each accepted utterance
   - complete MP3 phrase segments decode and play in sequence in Chromium and WebKit
-  - browser never calls OpenRouter directly and contains no OpenRouter key
   - old-generation audio stops and queued segments are dropped after interruption
+  - no OpenRouter or Codex secret exists in the bundle
+  - browser never calls OpenRouter directly
 - id: T11
   wave: 1
   priority: P0
   owner: A2
-  title: xAI streaming STT adapter
+  title: OpenRouter phrase-level STT adapter in TypeScript/Bun
   depends_on:
   - T00
   owned_paths:
-  - apps/server/src/providers/xai/stt*
+  - apps/server/src/providers/openrouter/stt/**
+  - scripts/openrouter-stt*
   outputs:
-  - authenticated server-side STT WebSocket
-  - raw PCM relay and Smart Turn event mapping
-  - backpressure, timeout and retry policy
-  - external contract smoke test
+  - provider-neutral OpenRouterSttAdapter behind atomic final-transcription SttPort
+  - native Bun fetch to /api/v1/chat/completions with base64 WAV input_audio
+  - configurable audio-input-capable model and Russian transcription instruction
+  - validation and request bounds for gateway-produced already-WAV audio/wav bytes, with raw PCM and malformed WAV rejection
+  - unchanged-byte base64 encoding with no PCM-to-WAV conversion in the adapter
+  - connect and total timeouts, at most one bounded retry, abort and stale-turn suppression
+  - one final transcript result
+  - typed 400, 401, 402, 404, 413, 429 and 5xx errors without key, audio or PII logs
+  - protocol-faithful fake endpoint and paid external Russian smoke command
   acceptance:
-  - Russian audio fixture returns a final transcript
-  - partial and speech_final events map to shared contracts
-  - client never receives the xAI key
-  - close/error paths release buffers and sockets
+  - native fetch posts base64 of the unchanged gateway-produced WAV input_audio request to /api/v1/chat/completions after audio.commit
+  - OPENROUTER_STT_MODEL selects a currently audio-input-capable model without shared-contract changes
+  - adapter rejects raw PCM, malformed or incompatible WAV, content-type mismatch and over-limit atomic requests before fetch
+  - adapter contains no PCM-to-WAV encoder
+  - request byte/duration, connect-timeout and total-timeout limits are enforced before or during the request
+  - only one final transcript result is emitted
+  - abort or obsolete turn emits no transcript and releases bounded buffers
+  - 400, 401, 402, 404, 413, 429 and retryable 5xx cases map to bounded typed failures
+  - retry repeats only pure transcription and never invokes Luna, business tools or notifier side effects
+  - fake endpoint covers success, malformed response, timeout, abort, stale turn and retry behavior without credentials
+  - API key, WAV/base64 audio and transcript PII are absent from ordinary logs and browser artifacts
+  - opt-in paid external smoke transcribes a Russian fixture; it is excluded from default CI
 - id: T12
   wave: 1
   priority: P0
@@ -162,7 +181,7 @@ tasks:
   - 400, 401, 402, 404, 429 and retryable 5xx cases map to bounded typed failures
   - no retry path repeats Luna, create_booking, append_booking_qualification or notifier side effects
   - application remains usable in text-only mode when TTS is unavailable
-  - implementation adds no Python runtime, Edge sidecar or direct xAI TTS dependency
+  - implementation has no second voice-provider credential or gateway
 - id: T13
   wave: 1
   priority: P0
@@ -235,16 +254,16 @@ tasks:
   - app and Caddy services only for the P0 application path
   - data and CODEX_HOME volumes
   - healthchecks, migrations and auth bootstrap
-  - OpenRouter TTS environment wiring and deploy smoke command
+  - one OPENROUTER_API_KEY runtime secret plus exact OpenRouter STT and TTS environment wiring
+  - opt-in deploy smoke commands for phrase-level STT and TTS
   acceptance:
   - clean VPS deploy starts with docker compose up -d
   - HTTPS and WSS work
   - device-auth result persists across app restarts
-  - secrets are absent from image history and compose output
-  - no Python or Edge TTS service exists in docker-compose.yml
-  - OPENROUTER_API_KEY is injected at runtime and absent from image history and compose output
-  - external OpenRouter TTS smoke test runs from the target VPS
-  - text-only mode can be enabled without changing the image
+  - no separate voice-provider or Python service exists in docker-compose.yml
+  - one OPENROUTER_API_KEY authorizes backend STT and TTS and is absent from image history, compose output and browser bundles
+  - phrase-level STT and TTS external smokes are opt-in and run from the target VPS
+  - text-only output mode can be enabled without changing the image
   - rollback and backup commands are documented
 - id: T20
   wave: 2
@@ -266,6 +285,7 @@ tasks:
   - deterministic conversation and booking transition policies
   - compact brain context
   - tool authorization and result handling
+  - atomic final-transcript intake with stale-turn suppression
   - PII-safe speech sanitizer and bounded phrase chunker for OpenRouter MP3 requests
   - generation coordination, TTS budget guard and degraded-mode policy
   - failure and degraded behavior
@@ -279,6 +299,9 @@ tasks:
   - every P0 TTS segment is complete and no longer than the configured hard limit
   - TTS retry/failure cannot repeat the brain turn or business tools
   - visible text and committed booking side effects survive TTS failure
+  - only a committed final STT result can start a brain turn
+  - aborted, retried or stale STT results cannot invoke the brain or business tools
+  - STT retry/failure cannot duplicate a brain turn or business side effects
 - id: T21
   wave: 2
   priority: P0
@@ -318,21 +341,24 @@ tasks:
   - tests/fixtures
   - packages/test-fixtures
   outputs:
+  - gateway PCM16-to-WAV encoder tests, separate from provider adapter request tests
+  - protocol-faithful fake OpenRouter /api/v1/chat/completions audio-input endpoint
+  - adapter validation of already-WAV requests, unchanged-byte base64 payloads and raw PCM/malformed WAV rejection
+  - final-transcript success and malformed-response fixtures
   - protocol-faithful fake OpenRouter /api/v1/audio/speech endpoint
-  - valid and invalid MP3 fixtures
-  - JSON error fixtures for 400, 401, 402, 404, 429, 502, 503 and abort
-  - timeout, Retry-After, empty-body, wrong-content-type and late-generation tests
-  - provider contract test commands
-  - state and idempotency regression suite
-  - secret scan
+  - PCM, valid and invalid WAV/MP3 fixtures
+  - JSON error fixtures for 400, 401, 402, 404, 413, 429 and retryable 5xx for both voice paths
+  - timeout, Retry-After, abort, empty-body, wrong-content-type and stale-turn/generation tests
+  - provider contract test commands, state/idempotency regression suite and secret scan
   acceptance:
   - default test suite needs no external OpenRouter credentials
-  - external tests are clearly tagged
-  - contract failure messages identify the changed provider event
-  - critical invariants run in CI
-  - fake endpoint proves non-2xx JSON is never forwarded as audio
-  - retry count and circuit transitions are deterministic
-  - secret scan rejects OPENROUTER_API_KEY in client bundles, snapshots and logs
+  - gateway encoder proves one accepted bounded PCM16 utterance yields one validated WAV
+  - fake chat-completions endpoint proves one already-WAV input_audio request yields only one final transcript and the adapter does not convert PCM
+  - fake speech endpoint proves non-2xx JSON is never forwarded as audio
+  - STT retry never invokes brain/tools and TTS retry never repeats brain/tools/notifier side effects
+  - retry counts, timeout/abort handling and stale suppression are deterministic
+  - secret scan rejects OPENROUTER_API_KEY, base64 audio and transcript PII in client bundles, snapshots and logs
+  - external paid smokes are clearly tagged and excluded from default CI
 - id: T30
   wave: 3
   priority: P0
@@ -348,22 +374,21 @@ tasks:
   - integration-only configuration
   outputs:
   - Playwright voice journey with synthetic audio
-  - real provider staging smoke
+  - real-provider staging smoke hooks kept opt-in
   - booking and qualification DB assertions
   - reconnect and barge-in coverage
   - compose smoke test
-  - real xAI STT, Codex/Luna and target-VPS OpenRouter TTS smoke evidence
-  - end-to-end text-only degradation test
+  - real OpenRouter phrase-level STT, Codex/Luna and target-VPS OpenRouter TTS smoke evidence
+  - end-to-end text-only output degradation test
   acceptance:
-  - browser-to-provider-to-browser path works
+  - browser PCM16 chunks to one gateway-produced validated WAV to atomic SttPort request to OpenRouter final transcript to Luna to OpenRouter MP3 to browser path works
   - exactly one booking is created in happy path and retries
   - disconnect after booking preserves the lead
-  - text fallback works when TTS is disabled
-  - evidence includes latency timestamps
-  - browser-to-STT-to-Luna-to-OpenRouter-to-browser path works
+  - text output remains usable when TTS is disabled or unavailable
+  - OpenRouter STT failure never fabricates a transcript or invokes Luna/tools
   - booking and qualification still succeed when OpenRouter TTS is unavailable
-  - a target-VPS Russian MP3 smoke test passes with the release configuration
-  - evidence includes speech-final, first LLM delta, TTS request, TTS completion and playback timestamps
+  - opt-in target-VPS Russian STT and MP3 smokes pass with release configuration before release
+  - evidence includes audio.commit, STT request/final result, first LLM delta, TTS request/completion and playback timestamps
 - id: T31
   wave: 4
   priority: P0
@@ -404,17 +429,17 @@ tasks:
   - PII redaction tests
   - backup/restore and auth failure drills
   - outbox retry
-  - OpenRouter TTS latency, failure, character-usage and circuit-breaker metrics
-  - budget, concurrency and response-size guards
+  - OpenRouter STT duration/bytes/latency/failure/retry/stale-turn metrics
+  - OpenRouter TTS latency/failure/character-usage/circuit-breaker metrics
+  - utterance, request, budget, concurrency and response-size guards
   acceptance:
-  - speech-final to playback p50 and p95 are reported
-  - no unbounded queue or audio buffer exists
+  - audio.commit-to-final-transcript and final-transcript-to-playback p50/p95 are reported separately
+  - no unbounded utterance, synthesis or playback queue exists
   - restore test succeeds
   - Codex auth loss makes readiness fail safely
   - notifier outage does not lose booking events
-  - no unbounded synthesis or playback queue exists
-  - spoken text and API key are absent from ordinary logs
-  - 401/402/404 open a safe degraded mode without affecting booking persistence
+  - API key, audio/base64, transcript PII and spoken text are absent from ordinary logs
+  - 401/402/404 enter safe voice degraded modes without affecting booking persistence
 - id: T40
   wave: 5
   priority: P0
@@ -437,4 +462,6 @@ tasks:
   - all P0 checklist items are checked
   - docs match actual environment variables and commands
   - no unresolved critical issue remains
-  - active docs, tasks, environment variables, diagrams and Compose contain no stale Edge TTS implementation instructions
+  - active docs, tasks, environment variables, agent packets, diagrams, charts and sources contain no stale non-OpenRouter
+    voice provider, credential, path or streaming-STT instruction
+  - Correction 003 is superseded and excluded from active onboarding and generated specifications

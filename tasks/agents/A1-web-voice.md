@@ -22,7 +22,9 @@ Owned: `apps/web/src/audio`, transport, voice state, UI components/pages/styles.
 ## Deliverables
 
 - AudioWorklet capture and resampling to 16 kHz mono PCM16.
-- Binary frame batching around 100 ms.
+- Binary PCM16 frame batching around 100 ms with bounded local buffering.
+- Explicit end-of-turn `audio.commit`; duplicate commit suppression and UI states `listening → processing → final transcript`.
+- UI exposes listening/processing state and `transcript.final` only; microphone chunks are browser-to-gateway transport.
 - Complete `audio/mpeg` phrase-segment decoding/playback using Web Audio or `HTMLAudio`, ordered by sequence.
 - Immediate local barge-in cancellation and generation filtering.
 - Reconnect/resume token behavior.
@@ -32,7 +34,7 @@ Owned: `apps/web/src/audio`, transport, voice state, UI components/pages/styles.
 
 ## Tests
 
-Use deterministic PCM microphone fixtures, valid/invalid MP3 fixtures, fake WS server, Chromium and WebKit. Prove at least three complete segments play in order; local barge-in stops playback, clears queued segments and rejects late generations; text remains visible on audio failure. Prove the browser never calls OpenRouter and no provider secret appears in build output.
+Use deterministic PCM microphone fixtures, utterance duration/byte-boundary and `audio.commit` cases, valid/invalid MP3 fixtures, fake WS server, Chromium and WebKit. Prove at least three complete segments play in order; local barge-in stops playback, clears queued segments and rejects late generations; text remains visible on audio failure. Prove the browser never calls OpenRouter and no provider secret appears in build output.
 
 ## Completion report
 

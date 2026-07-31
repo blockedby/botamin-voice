@@ -9,7 +9,7 @@ python3 "$ROOT/scripts/build-charts.py"
 cat > "$OUT" <<'HEADER'
 ---
 title: "Botamin Voice Sales Agent — техническая спецификация"
-subtitle: "React + Bun + xAI STT + OpenRouter TTS + Codex subscription / GPT-5.6 Luna"
+subtitle: "React + Bun + OpenRouter STT + OpenRouter TTS + Codex subscription / GPT-5.6 Luna"
 author: "Architecture & delivery handoff"
 date: "31 июля 2026"
 lang: ru-RU
@@ -17,19 +17,19 @@ lang: ru-RU
 
 # Botamin Voice Sales Agent — техническая спецификация
 
-**Версия:** 0.4-demo
+**Версия:** 0.5-demo
 
 **Статус:** основа для передачи агентам-разработчикам
 
 **Deployment target:** одна trusted VPS, один Docker Compose
 
-**Runtime split:** xAI Streaming STT → Codex app-server / `gpt-5.6-luna` → OpenRouter TTS (native Bun fetch, complete MP3 phrase segments)
+**Runtime split:** browser PCM16 chunks → gateway/utterance assembler emits one validated WAV → atomic `audio/wav` SttPort request → OpenRouter audio-input chat completion final transcript → Codex app-server / `gpt-5.6-luna` → OpenRouter TTS complete MP3 segment
 
 > Ключевой инвариант: внутренняя бронь создаётся до любой опциональной квалификации. После `booking.created` отказ, обрыв или ошибка квалификации не отменяют и не удаляют лид.
 
 ## Карта пакета
 
-Эта сводная версия объединяет scope, PRD, исследование Botamin, архитектуру, conversation design, API/data contracts, deployment/security, ADR, тестирование, сравнение AI-библиотек и parallel delivery plan. Machine-readable backlog и отдельные задания агентам находятся в `tasks/`. TTS decisions follow `corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md`; correction files are intentionally not assembled into this generated document.
+Эта сводная версия объединяет scope, PRD, исследование Botamin, архитектуру, conversation design, API/data contracts, deployment/security, ADR, тестирование, сравнение AI-библиотек и parallel delivery plan. Machine-readable backlog и отдельные задания агентам находятся в `tasks/`. All STT/TTS decisions follow `corrections/CORRECTION-004_OPENROUTER_VOICE_ONLY.md`; correction history is intentionally not assembled into this generated document.
 
 <div class="page-break"></div>
 

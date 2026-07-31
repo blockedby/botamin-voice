@@ -160,7 +160,7 @@ const HEADING_LEVELS: Partial<Record<string, readonly number[]>> = {
 
 const SECRET_PATTERNS = [
 	/["']?(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|client[_ -]?secret|webhook[_ -]?secret)["']?\s*[:=]/iu,
-	/\b(?:sk|xai)-[a-z0-9_-]{12,}\b/iu,
+	/\bsk-[a-z0-9_-]{12,}\b/iu,
 	/\bBearer\s+[a-z0-9._-]{12,}/iu,
 	/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/u,
 	/(?:password|passwd|secret)\s*[:=]\s*\S+/iu,

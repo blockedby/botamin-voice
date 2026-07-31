@@ -27,15 +27,17 @@ Owned: orchestrator, prompt compiler, prompts, knowledge and eval content. Share
 - booking result handling before qualification;
 - PII-safe speech sanitizer that removes phone/email/Telegram, tool envelopes, hidden IDs, Markdown/code/raw URLs;
 - bounded phrase chunker with first/soft/hard targets and complete-segment semantics;
-- generation IDs, OpenRouter AbortSignal coordination and stale-result semantics;
-- TTS character budget and text-only policy that preserves visible text and committed effects;
+- accept exactly one committed final STT result per turn; suppress aborted/retried/stale results before Luna or tools;
+- orchestrator accepts only the atomic final `SttPort` result for the current turn;
+- turn/generation IDs, OpenRouter `AbortSignal` coordination and stale-result semantics for both voice paths;
+- STT failure never fabricates text or invokes brain/tools; TTS budget/failure preserves visible text and committed effects;
 - prompt bundle with checksum;
 - allowed/prohibited claims and case sources;
 - at least 24 eval scenarios with automated critical assertions.
 
 ## Behavior constraints
 
-Short spoken Russian, one question at a time, no human impersonation, no fabricated price/guarantee, clear refusal handling. Qualification is optional and cannot precede booking. TTS retry/failure cannot repeat Luna or tools; no automatic cross-model speech fallback exists in P0.
+Short spoken Russian, one question at a time, no human impersonation, no fabricated price/guarantee, clear refusal handling. Qualification is optional and cannot precede booking. STT retry/failure cannot start duplicate Luna/tool work; TTS retry/failure cannot repeat Luna or tools. No automatic cross-provider voice fallback exists in P0.
 
 ## Completion report
 

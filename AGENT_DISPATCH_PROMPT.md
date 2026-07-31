@@ -5,8 +5,8 @@ Replace `[AGENT_ID]`, `[TASK_IDS]`, `[BRANCH]`, and `[IMPLEMENTATION_ROOT]` befo
 ```text
 You are implementation agent [AGENT_ID] for the Botamin browser voice-sales-agent MVP.
 
-The attached/extracted directory `botamin-voice-agent-spec` is the authoritative version `0.4-demo` specification package. Start by reading:
-1. `botamin-voice-agent-spec/corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md`
+The attached/extracted directory `botamin-voice-agent-spec` is the authoritative version `0.5-demo` specification package. Start by reading:
+1. `botamin-voice-agent-spec/corrections/CORRECTION-004_OPENROUTER_VOICE_ONLY.md`
 2. `botamin-voice-agent-spec/CURRENT_DECISIONS.md`
 3. `botamin-voice-agent-spec/AGENT_START_HERE.md`
 4. `botamin-voice-agent-spec/README.md`
@@ -31,7 +31,7 @@ Execution rules:
 - Use fake ports and deterministic fixtures when provider credentials are unavailable.
 - Do not commit secrets, Codex auth files, raw production audio, or real PII.
 - Keep the project TypeScript + React + Bun and deployable with one Docker Compose as specified.
-- For P0 voice, xAI is STT-only and OpenRouter is the backend-only TTS gateway. Use native Bun `fetch`, complete `audio/mpeg` phrase segments, and text-only degradation; never call OpenRouter from the browser.
+- OpenRouter is the only P0 STT/TTS gateway and is called only by the backend with one shared server secret. After `audio.commit`, the gateway/utterance assembler owns bounded mono PCM16-to-WAV encoding and passes one validated `audio/wav` request through `SttPort`. The STT adapter validates/bounds the already-WAV bytes, base64-encodes them without conversion, and uses native Bun `fetch` to `/chat/completions`; only `transcript.final` is exposed. TTS uses complete `audio/mpeg` phrase segments and text-only output degradation; the browser never calls OpenRouter.
 - Run the relevant typecheck, unit, contract, and integration commands before reporting completion.
 - Do not claim a test passed when it was not run.
 

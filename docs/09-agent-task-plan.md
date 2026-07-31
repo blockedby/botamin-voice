@@ -18,7 +18,7 @@
 |---|---|
 | A0 Platform/Contracts | `packages/contracts`, root configs, repo skeleton |
 | A1 Web Voice | `apps/web/src/audio`, voice state/components |
-| A2 Voice providers | `apps/server/src/providers/xai/stt*`, `apps/server/src/providers/openrouter/tts/**`, `scripts/openrouter-tts*` |
+| A2 Voice providers | `apps/server/src/providers/openrouter/stt/**`, `scripts/openrouter-stt*`, `apps/server/src/providers/openrouter/tts/**`, `scripts/openrouter-tts*` |
 | A3 Codex/Luna | `apps/server/src/providers/codex`, generated schemas |
 | A4 Domain/Data | `apps/server/src/domain`, `db`, `notifiers`, `drizzle` |
 | A5 Conversation | `orchestrator`, `prompt-compiler`, `prompts`, `knowledge` |
@@ -37,7 +37,7 @@ Definition of Done:
 
 - `bun install`, `bun run typecheck`, `bun test` работают;
 - contracts не импортируют server/browser-specific code;
-- `BrainPort`, `SttPort`, `TtsPort`, booking schemas и WS event union существуют;
+- `BrainPort`, atomic final-transcription `SttPort`, complete-segment `TtsPort`, booking schemas и WS event union существуют;
 - fake adapters позволяют собрать skeleton E2E;
 - formatting/lint/test scripts зафиксированы.
 
@@ -63,23 +63,26 @@ DoD:
 **Зависимости:** T00.
 
 - AudioWorklet capture/resample;
-- 100 ms PCM16 frames;
+- 100 ms PCM16 frames with bounded browser buffering and the gateway-facing chunk/commit contract;
+- explicit `audio.commit`, duplicate suppression and listening/processing/`transcript.final` UI;
 - provider-neutral ordered playback queue for complete `audio/mpeg` phrase segments;
 - local stop, queue clear, generation cancellation and stale-segment filtering;
 - WS client/reconnect;
 - transcript/state UI на fake server.
 
-### T11 — xAI Streaming STT adapter
+### T11 — OpenRouter phrase-level STT adapter in TypeScript/Bun
 
 **Владелец:** A2  
 **Зависимости:** T00.
 
-- WSS lifecycle;
-- raw PCM relay;
-- Smart Turn mapping;
-- timeout/error/backpressure;
-- fake/contract tests;
-- redacted telemetry.
+- native Bun `fetch` to `/api/v1/chat/completions` with configurable audio-input-capable model;
+- consume one atomic, already-encoded `audio/wav` request produced by the gateway/utterance assembler after `audio.commit`;
+- validate WAV format and request duration/byte bounds, reject raw PCM, then base64-encode unchanged WAV bytes as `input_audio`; the adapter does not implement PCM-to-WAV encoding;
+- atomic `SttPort` returns one final transcript;
+- connect/total-timeout bounds, at most one retry, abort and stale-turn suppression;
+- typed `400/401/402/404/413/429/5xx` without key/audio/PII logs;
+- protocol-faithful fake endpoint and opt-in paid Russian smoke;
+- retry repeats only transcription and never invokes brain/tools/notifier.
 
 ### T12 — OpenRouter TTS adapter in TypeScript/Bun
 
@@ -135,7 +138,7 @@ DoD:
 - pinned Codex install;
 - app/Caddy Compose only for the P0 application path;
 - data and `CODEX_HOME` volumes;
-- runtime OpenRouter secret/env wiring and target-VPS smoke command;
+- exactly one runtime OpenRouter secret/env matrix for both STT/TTS and two opt-in target-VPS smoke commands;
 - healthcheck;
 - migration and device-auth runbook;
 - prompt compile step into isolated runtime directory;
@@ -152,8 +155,9 @@ DoD:
 - compact prompt context;
 - tool policy;
 - booking-before-qualification invariant;
+- one accepted final STT result starts at most one brain turn; aborted/retried/stale transcription never invokes brain/tools;
 - PII-safe bounded phrase chunker/sanitizer for complete OpenRouter MP3 requests;
-- interruption generation IDs and stale-segment rejection;
+- turn/generation IDs and stale STT/TTS result rejection;
 - TTS budgets, circuit policy and text-only degraded behavior;
 - audio failure cannot repeat brain turn or business tools and cannot erase visible text or committed effects.
 
@@ -175,9 +179,10 @@ DoD:
 **Владелец:** A7  
 **Зависимости:** outputs T10–T15.
 
-- protocol-faithful fake OpenRouter `/api/v1/audio/speech` endpoint;
-- valid/invalid MP3 and JSON error fixtures for `400/401/402/404/429/502/503`;
-- timeout, `Retry-After`, abort, empty-body, wrong-content-type and stale-generation tests;
+- separate gateway PCM16-to-WAV encoder tests and OpenRouter adapter already-WAV request tests;
+- protocol-faithful fake OpenRouter `/api/v1/chat/completions` audio-input and `/api/v1/audio/speech` endpoints;
+- raw PCM, valid/invalid WAV/MP3 and JSON error fixtures for `400/401/402/404/413/429` and retryable `5xx`;
+- timeout, bounded `Retry-After`, abort, malformed/empty body, wrong content type and stale-turn/generation tests;
 - state/booking invariants and deterministic retry/circuit assertions;
 - secret scan for OpenRouter key in browser bundles, snapshots and logs.
 
@@ -188,13 +193,13 @@ DoD:
 **Владелец:** A7 как integrator; component owners исправляют свои зоны.  
 **Зависимости:** T20, T21, T22, T15.
 
-- full browser → xAI STT → Luna → OpenRouter TTS → browser path;
+- full browser PCM16 → one gateway-produced validated WAV on `audio.commit` → atomic `SttPort` request → OpenRouter final transcript → Luna → OpenRouter complete MP3 → browser path;
 - booking create/update;
 - barge-in;
 - reconnect;
 - provider failure cases;
 - Docker deployment smoke;
-- target-VPS OpenRouter Russian MP3 smoke evidence and end-to-end text-only degradation.
+- opt-in target-VPS OpenRouter Russian STT/MP3 smoke evidence and end-to-end text-only output degradation.
 
 ### T31 — Conversation evals/content tuning
 
@@ -212,8 +217,8 @@ DoD:
 **Владелец:** A6 + A7  
 **Зависимости:** T30.
 
-- OpenRouter latency/failure/character/circuit metrics;
-- TTS budget, concurrency, queue and response-size guards;
+- OpenRouter STT commit-to-final duration/bytes/latency/failure/retry/stale metrics and TTS latency/failure/character/circuit metrics;
+- STT utterance/request and TTS budget/concurrency/queue/response-size guards;
 - logs/redaction;
 - backup/restore;
 - outbox retry;
@@ -229,7 +234,7 @@ DoD:
 
 - all gates green;
 - compose clean deploy;
-- docs/tasks/env/diagrams/Compose contain no stale active TTS implementation instructions and match code;
+- active docs/tasks/env/agent packets/diagrams/charts/sources contain no stale second voice provider, credential/path or provider-streaming STT instruction and match code;
 - known limitations;
 - redacted demo payloads;
 - rollback instructions;
@@ -256,7 +261,7 @@ T20 merge после прохождения invariant suite. Не ждать р�
 
 ### Gate G3 — External smoke
 
-Реальные xAI/Codex tests проходят на VPS/staging с tagged test command.
+Реальные OpenRouter/Codex tests проходят на VPS/staging с tagged test command.
 
 ### Gate G4 — RC
 
@@ -278,7 +283,7 @@ Acceptance checklist полностью приложен, critical known issue �
 ```text
 agent/platform-contracts
 agent/web-voice
-agent/xai-voice
+agent/openrouter-voice
 agent/codex-luna
 agent/booking-domain
 agent/conversation

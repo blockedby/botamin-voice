@@ -8,16 +8,15 @@
 - Публичная Telegram-лента кейсов: https://t.me/s/GPT_for_sales
 - Исходная Notion-ссылка, недоступная на момент работы: https://uprosti.notion.site/conversation-designer
 
-## xAI STT — официальная документация
+## OpenRouter voice — официальная документация
 
-- Voice overview: https://docs.x.ai/developers/model-capabilities/audio/voice
-- Speech to Text: https://docs.x.ai/developers/model-capabilities/audio/speech-to-text
-- Voice REST/WebSocket reference: https://docs.x.ai/developers/rest-api-reference/inference/voice
-- Pricing: https://docs.x.ai/developers/pricing
+- Multimodal audio input/output guide: https://openrouter.ai/docs/guides/overview/multimodal/audio
+- Audio-input model endpoint evidence for `openai/gpt-audio-mini`: https://openrouter.ai/api/v1/models/openai/gpt-audio-mini/endpoints
+- Audio-input model discovery: https://openrouter.ai/api/v1/models?input_modalities=audio
 
-xAI используется только для Streaming STT. Текущие account rate и runtime behavior записываются в release evidence; числовая стоимость не фиксируется в этой спецификации.
+Проверенные факты для STT: audio input идёт через `/api/v1/chat/completions` как base64 `input_audio`; format указывается в request и зависит от модели; каталог можно фильтровать по audio input. Endpoint evidence на дату доступа содержит `audio` в `input_modalities` для configurable default `openai/gpt-audio-mini`. В активных evidence нет документированного dedicated realtime STT WebSocket, поэтому P0 использует atomic phrase-level WAV request и final transcript only.
 
-## OpenRouter TTS — официальная документация
+### TTS
 
 - TTS guide: https://openrouter.ai/docs/guides/overview/multimodal/tts
 - Create speech API: https://openrouter.ai/docs/api/api-reference/tts/create-speech
@@ -48,7 +47,6 @@ OpenRouter TTS is paid usage; no free tier is assumed. Default release candidate
 - Official Codex TypeScript SDK: https://developers.openai.com/codex/codex-sdk
 - Official Codex TypeScript SDK source/README: https://github.com/openai/codex/tree/main/sdk/typescript
 - Vercel AI SDK overview: https://ai-sdk.dev/
-- Vercel AI SDK xAI provider: https://ai-sdk.dev/providers/ai-sdk-providers/xai
 - Vercel AI SDK community Codex app-server provider: https://ai-sdk.dev/providers/community-providers/codex-app-server
 
 Вывод: официальный TS SDK удобен для `run`/`runStreamed`, но документированный surface уже, чем app-server protocol; community Codex bridge не принимается как критическая dependency. Для P0 выбран direct app-server adapter, скрытый за `BrainPort`.

@@ -10,8 +10,8 @@ digraph G {
   g0 [shape=diamond, label="G0\ncontracts"];
 
   subgraph cluster_w1 { label="Волна 1"; color="#c4c7cc"; style="rounded,dashed";
-    t10 [label="T10\nweb voice"];
-    t11 [label="T11\nxAI STT"];
+    t10 [label="T10\nweb PCM + commit"];
+    t11 [label="T11\nOpenRouter STT\nWAV · final only"];
     t12 [label="T12\nOpenRouter TTS\nBun fetch"];
     t13 [label="T13\nCodex/Luna"];
     t14 [label="T14\nbooking + DB"];

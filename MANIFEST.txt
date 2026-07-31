@@ -173,6 +173,8 @@ packages/test-fixtures/src/fakes.ts
 packages/test-fixtures/src/full-turn.test.ts
 packages/test-fixtures/src/index.ts
 packages/test-fixtures/src/mp3.ts
+packages/test-fixtures/src/openrouter.test.ts
+packages/test-fixtures/src/openrouter.ts
 packages/test-fixtures/src/wav.ts
 packages/test-fixtures/tsconfig.build.json
 packages/test-fixtures/tsconfig.json
@@ -228,5 +230,13 @@ tasks/agents/A6-ops.md
 tasks/agents/A7-qa-integration.md
 tasks/tasks.yaml
 technical-spec.html
+tests/contracts/T30_REPLACE_reference_gateway_assembler.test.ts
+tests/contracts/external-smoke-gating.test.ts
+tests/contracts/openrouter-cross-component.test.ts
+tests/contracts/openrouter-provider-harness.test.ts
+tests/contracts/typecheck-negative-control.ts
+tests/contracts/voice-data-leakage.test.ts
+tests/fixtures/reference-gateway-utterance-assembler.ts
+tests/tsconfig.json
 tsconfig.base.json
 tsconfig.json

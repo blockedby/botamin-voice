@@ -119,6 +119,32 @@ function jsonResponse(body: unknown, status = 200): Response {
 	});
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function decodeCanonicalBase64(value: unknown): Uint8Array | null {
+	if (
+		typeof value !== "string" ||
+		value.length === 0 ||
+		value.length % 4 !== 0 ||
+		!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+			value,
+		)
+	) {
+		return null;
+	}
+	try {
+		const decoded = atob(value);
+		const bytes = Uint8Array.from(decoded, (character) =>
+			character.charCodeAt(0),
+		);
+		return encodeBase64(bytes) === value ? bytes : null;
+	} catch {
+		return null;
+	}
+}
+
 function completeChatResult(
 	transcript: string,
 	model: string,
@@ -173,6 +199,14 @@ export function createOpenRouterFixture(
 		);
 	}
 
+	function protocolResponse(status: 400 | 404): Response {
+		statusCounts.set(
+			String(status),
+			(statusCounts.get(String(status)) ?? 0) + 1,
+		);
+		return jsonResponse({ error: "fixture protocol violation" }, status);
+	}
+
 	async function handle(request: Request): Promise<Response> {
 		total += 1;
 		const path = new URL(request.url).pathname;
@@ -184,19 +218,29 @@ export function createOpenRouterFixture(
 					: null;
 		if (endpoint === null || request.method !== "POST") {
 			violation("UNSUPPORTED_ROUTE");
-			return jsonResponse({ error: "fixture protocol violation" }, 404);
+			return protocolResponse(404);
 		}
 		if (endpoint === "chat") chat += 1;
 		else tts += 1;
+
+		const headerViolationStart = violations.length;
+		const authorization = request.headers.get("Authorization");
 		if (
-			options.expectedApiKey !== undefined &&
-			request.headers.get("Authorization") !==
-				`Bearer ${options.expectedApiKey}`
+			!authorization?.startsWith("Bearer ") ||
+			authorization.length === "Bearer ".length ||
+			(options.expectedApiKey !== undefined &&
+				authorization !== `Bearer ${options.expectedApiKey}`)
 		) {
 			violation("AUTHORIZATION");
 		}
-		if (!request.headers.get("Content-Type")?.includes("application/json")) {
-			violation("CONTENT_TYPE");
+		const contentType = request.headers
+			.get("Content-Type")
+			?.split(";", 1)[0]
+			?.trim()
+			.toLowerCase();
+		if (contentType !== "application/json") violation("CONTENT_TYPE");
+		if (violations.length !== headerViolationStart) {
+			return protocolResponse(400);
 		}
 
 		let body: unknown;
@@ -204,10 +248,15 @@ export function createOpenRouterFixture(
 			body = await request.json();
 		} catch {
 			violation("INVALID_JSON");
-			return jsonResponse({ error: "fixture protocol violation" }, 400);
+			return protocolResponse(400);
 		}
-		if (endpoint === "chat") validateChat(body, expectedWavBase64);
+		const bodyViolationStart = violations.length;
+		if (endpoint === "chat") validateChat(body);
 		else validateTts(body);
+		if (violations.length !== bodyViolationStart) {
+			return protocolResponse(400);
+		}
+
 		options.onRequest?.({
 			endpoint,
 			endpointRequest: endpoint === "chat" ? chat : tts,
@@ -310,82 +359,122 @@ export function createOpenRouterFixture(
 		});
 	}
 
-	function validateChat(body: unknown, expectedBase64: string): void {
-		if (!body || typeof body !== "object") {
+	function validateChat(body: unknown): void {
+		if (!isRecord(body)) {
 			violation("CHAT_BODY");
 			return;
 		}
-		const value = body as { model?: unknown; messages?: unknown };
 		if (
-			typeof value.model !== "string" ||
+			typeof body.model !== "string" ||
+			body.model.length === 0 ||
 			(options.expectedSttModel !== undefined &&
-				value.model !== options.expectedSttModel)
+				body.model !== options.expectedSttModel)
 		) {
 			violation("CHAT_MODEL");
 		}
-		const messages = Array.isArray(value.messages) ? value.messages : [];
-		const message = messages[0] as
-			| { role?: unknown; content?: unknown }
-			| undefined;
-		if (messages.length !== 1 || message?.role !== "user") {
+		const messages = Array.isArray(body.messages) ? body.messages : [];
+		const message = messages[0];
+		if (
+			messages.length !== 1 ||
+			!isRecord(message) ||
+			message.role !== "user"
+		) {
 			violation("CHAT_USER_MESSAGE");
 		}
-		const parts = Array.isArray(message?.content) ? message.content : [];
-		const text = parts[0] as { type?: unknown; text?: unknown } | undefined;
-		const audioPart = parts[1] as
-			| {
-					type?: unknown;
-					input_audio?: { data?: unknown; format?: unknown };
-			  }
-			| undefined;
+		const parts =
+			isRecord(message) && Array.isArray(message.content)
+				? message.content
+				: [];
+		const text = parts[0];
+		const audioPart = parts[1];
 		if (
 			parts.length !== 2 ||
-			text?.type !== "text" ||
+			!isRecord(text) ||
+			text.type !== "text" ||
 			typeof text.text !== "string" ||
 			text.text.length === 0 ||
-			audioPart?.type !== "input_audio"
+			!isRecord(audioPart) ||
+			audioPart.type !== "input_audio" ||
+			!isRecord(audioPart.input_audio)
 		) {
 			violation("CHAT_CONTENT");
 		}
 		if (
 			options.expectedSttInstruction !== undefined &&
-			text?.text !== options.expectedSttInstruction
+			(!isRecord(text) || text.text !== options.expectedSttInstruction)
 		) {
 			violation("CHAT_INSTRUCTION");
 		}
-		const audio = audioPart?.input_audio;
-		if (audio?.format !== "wav") violation("CHAT_AUDIO_FORMAT");
-		if (audio?.data !== expectedBase64) violation("CHAT_AUDIO_BYTES");
+		const audio =
+			isRecord(audioPart) && isRecord(audioPart.input_audio)
+				? audioPart.input_audio
+				: null;
+		if (audio === null) return;
+		if (audio.format !== "wav") violation("CHAT_AUDIO_FORMAT");
+		const decoded = decodeCanonicalBase64(audio.data);
+		if (decoded === null) {
+			violation("CHAT_AUDIO_BASE64");
+			return;
+		}
+		try {
+			parseMonoPcm16Wav(decoded);
+		} catch {
+			violation("CHAT_AUDIO_WAV");
+			return;
+		}
+		if (encodeBase64(decoded) !== expectedWavBase64) {
+			violation("CHAT_AUDIO_BYTES");
+		}
 	}
 
 	function validateTts(body: unknown): void {
-		if (!body || typeof body !== "object") {
+		if (!isRecord(body)) {
 			violation("TTS_BODY");
 			return;
 		}
-		const value = body as Record<string, unknown>;
 		const expected = options.expectedTts;
+		const allowedKeys = new Set([
+			"model",
+			"voice",
+			"input",
+			"response_format",
+			"speed",
+		]);
+		if (Object.keys(body).some((key) => !allowedKeys.has(key))) {
+			violation("TTS_SCHEMA");
+		}
 		if (
-			typeof value.model !== "string" ||
-			(expected?.model !== undefined && value.model !== expected.model)
+			typeof body.model !== "string" ||
+			body.model.length === 0 ||
+			(expected?.model !== undefined && body.model !== expected.model)
 		)
 			violation("TTS_MODEL");
 		if (
-			typeof value.voice !== "string" ||
-			(expected?.voice !== undefined && value.voice !== expected.voice)
+			typeof body.voice !== "string" ||
+			body.voice.length === 0 ||
+			(expected?.voice !== undefined && body.voice !== expected.voice)
 		)
 			violation("TTS_VOICE");
 		if (
-			typeof value.input !== "string" ||
-			value.input.length === 0 ||
-			(expected?.input !== undefined && value.input !== expected.input)
+			typeof body.input !== "string" ||
+			body.input.trim().length === 0 ||
+			(expected?.input !== undefined && body.input !== expected.input)
 		) {
 			violation("TTS_INPUT");
 		}
-		if (value.response_format !== (expected?.responseFormat ?? "mp3"))
+		if (body.response_format !== (expected?.responseFormat ?? "mp3")) {
 			violation("TTS_FORMAT");
-		if (expected?.speed !== undefined && value.speed !== expected.speed)
+		}
+		if (
+			("speed" in body &&
+				(typeof body.speed !== "number" ||
+					!Number.isFinite(body.speed) ||
+					body.speed < 0.25 ||
+					body.speed > 4)) ||
+			(expected?.speed !== undefined && body.speed !== expected.speed)
+		) {
 			violation("TTS_SPEED");
+		}
 	}
 
 	const fixture: OpenRouterFixture = {

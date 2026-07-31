@@ -14,6 +14,56 @@ import {
 import type { OpenRouterFixtureServer } from "./openrouter";
 
 const servers: OpenRouterFixtureServer[] = [];
+const fixtureKey = "qa-only-fixture-key";
+
+function chatBody(
+	overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+	return {
+		model: "stt-model",
+		messages: [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "Transcribe this audio." },
+					{
+						type: "input_audio",
+						input_audio: {
+							data: Buffer.from(createDeterministicWavFixture()).toString(
+								"base64",
+							),
+							format: "wav",
+						},
+					},
+				],
+			},
+		],
+		...overrides,
+	};
+}
+
+function ttsBody(
+	overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+	return {
+		model: "tts-model",
+		voice: "eve",
+		input: "hello",
+		response_format: "mp3",
+		...overrides,
+	};
+}
+
+function jsonInit(body: unknown, authorization = fixtureKey): RequestInit {
+	return {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${authorization}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify(body),
+	};
+}
 
 afterEach(() => {
 	for (const server of servers.splice(0)) server.stop(true);
@@ -44,7 +94,10 @@ describe("fake OpenRouter fixture", () => {
 		const wav = createDeterministicWavFixture();
 		const chat = await fixture.fetch("http://fixture/api/v1/chat/completions", {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: {
+				Authorization: `Bearer ${fixtureKey}`,
+				"Content-Type": "application/json",
+			},
 			body: JSON.stringify({
 				model: "stt-model",
 				messages: [
@@ -74,7 +127,10 @@ describe("fake OpenRouter fixture", () => {
 
 		const tts = await fixture.fetch("http://fixture/api/v1/audio/speech", {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: {
+				Authorization: `Bearer ${fixtureKey}`,
+				"Content-Type": "application/json",
+			},
 			body: JSON.stringify({
 				model: "tts-model",
 				voice: "eve",
@@ -94,55 +150,258 @@ describe("fake OpenRouter fixture", () => {
 		});
 	});
 
-	test("records only safe protocol violation codes and supports queued HTTP behavior", async () => {
-		const fixture = createOpenRouterFixture({
-			behaviors: [
-				{
-					status: 429,
-					retryAfter: "1",
-					jsonBody: { secret: "must not be exposed" },
+	test("fails closed before scripted behavior for every malformed protocol class", async () => {
+		const alternateWav = createDeterministicWavFixture();
+		alternateWav[44] = (alternateWav[44] ?? 0) ^ 1;
+		const invalidCases: ReadonlyArray<{
+			name: string;
+			endpoint: "chat" | "tts";
+			url?: string;
+			init: RequestInit;
+			status?: 400 | 404;
+			violations: readonly string[];
+		}> = [
+			{
+				name: "path",
+				endpoint: "chat",
+				url: "http://fixture/api/v1/not-a-provider-route",
+				init: jsonInit(chatBody()),
+				status: 404,
+				violations: ["UNSUPPORTED_ROUTE"],
+			},
+			{
+				name: "authorization",
+				endpoint: "chat",
+				init: jsonInit(chatBody(), "wrong-key"),
+				violations: ["AUTHORIZATION"],
+			},
+			{
+				name: "content type",
+				endpoint: "chat",
+				init: {
+					...jsonInit(chatBody()),
+					headers: {
+						Authorization: `Bearer ${fixtureKey}`,
+						"Content-Type": "text/plain",
+					},
 				},
-				{ status: 500, malformedBody: true, wrongContentType: true },
-			],
-		});
-		const body = JSON.stringify({
-			model: "stt-model",
-			messages: [
-				{
-					role: "user",
-					content: [
-						{ type: "text", text: "Transcribe this audio." },
-						{
-							type: "input_audio",
-							input_audio: { data: "wrong", format: "mp3" },
-						},
-					],
+				violations: ["CONTENT_TYPE"],
+			},
+			{
+				name: "JSON",
+				endpoint: "chat",
+				init: { ...jsonInit(chatBody()), body: "{malformed" },
+				violations: ["INVALID_JSON"],
+			},
+			{
+				name: "STT model",
+				endpoint: "chat",
+				init: jsonInit(chatBody({ model: "wrong-model" })),
+				violations: ["CHAT_MODEL"],
+			},
+			{
+				name: "input_audio format",
+				endpoint: "chat",
+				init: jsonInit(
+					chatBody({
+						messages: [
+							{
+								role: "user",
+								content: [
+									{ type: "text", text: "Transcribe this audio." },
+									{
+										type: "input_audio",
+										input_audio: {
+											data: Buffer.from(
+												createDeterministicWavFixture(),
+											).toString("base64"),
+											format: "mp3",
+										},
+									},
+								],
+							},
+						],
+					}),
+				),
+				violations: ["CHAT_AUDIO_FORMAT"],
+			},
+			{
+				name: "input_audio base64",
+				endpoint: "chat",
+				init: jsonInit(
+					chatBody({
+						messages: [
+							{
+								role: "user",
+								content: [
+									{ type: "text", text: "Transcribe this audio." },
+									{
+										type: "input_audio",
+										input_audio: { data: "%%%not-base64%%%", format: "wav" },
+									},
+								],
+							},
+						],
+					}),
+				),
+				violations: ["CHAT_AUDIO_BASE64"],
+			},
+			{
+				name: "input_audio WAV",
+				endpoint: "chat",
+				init: jsonInit(
+					chatBody({
+						messages: [
+							{
+								role: "user",
+								content: [
+									{ type: "text", text: "Transcribe this audio." },
+									{
+										type: "input_audio",
+										input_audio: {
+											data: Buffer.from("not a WAV").toString("base64"),
+											format: "wav",
+										},
+									},
+								],
+							},
+						],
+					}),
+				),
+				violations: ["CHAT_AUDIO_WAV"],
+			},
+			{
+				name: "unexpected valid WAV bytes",
+				endpoint: "chat",
+				init: jsonInit(
+					chatBody({
+						messages: [
+							{
+								role: "user",
+								content: [
+									{ type: "text", text: "Transcribe this audio." },
+									{
+										type: "input_audio",
+										input_audio: {
+											data: Buffer.from(alternateWav).toString("base64"),
+											format: "wav",
+										},
+									},
+								],
+							},
+						],
+					}),
+				),
+				violations: ["CHAT_AUDIO_BYTES"],
+			},
+			{
+				name: "TTS authorization",
+				endpoint: "tts",
+				init: jsonInit(ttsBody(), "wrong-key"),
+				violations: ["AUTHORIZATION"],
+			},
+			{
+				name: "TTS content type",
+				endpoint: "tts",
+				init: {
+					...jsonInit(ttsBody()),
+					headers: {
+						Authorization: `Bearer ${fixtureKey}`,
+						"Content-Type": "text/plain",
+					},
 				},
-			],
-		});
-		const init = {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body,
-		};
-		const first = await fixture.fetch(
-			"http://fixture/api/v1/chat/completions",
-			init,
-		);
-		const second = await fixture.fetch(
-			"http://fixture/api/v1/chat/completions",
-			init,
-		);
-		expect(first.status).toBe(429);
-		expect(first.headers.get("Retry-After")).toBe("1");
-		expect(second.status).toBe(500);
-		expect(fixture.protocolViolations).toEqual([
-			"CHAT_AUDIO_FORMAT",
-			"CHAT_AUDIO_BYTES",
-			"CHAT_AUDIO_FORMAT",
-			"CHAT_AUDIO_BYTES",
-		]);
-		expect(JSON.stringify(fixture)).not.toContain("must not be exposed");
+				violations: ["CONTENT_TYPE"],
+			},
+			{
+				name: "TTS body schema",
+				endpoint: "tts",
+				init: jsonInit([]),
+				violations: ["TTS_BODY"],
+			},
+			{
+				name: "TTS model",
+				endpoint: "tts",
+				init: jsonInit(ttsBody({ model: "wrong-model" })),
+				violations: ["TTS_MODEL"],
+			},
+			{
+				name: "TTS voice",
+				endpoint: "tts",
+				init: jsonInit(ttsBody({ voice: "wrong-voice" })),
+				violations: ["TTS_VOICE"],
+			},
+			{
+				name: "TTS input",
+				endpoint: "tts",
+				init: jsonInit(ttsBody({ input: " " })),
+				violations: ["TTS_INPUT"],
+			},
+			{
+				name: "TTS response format",
+				endpoint: "tts",
+				init: jsonInit(ttsBody({ response_format: "wav" })),
+				violations: ["TTS_FORMAT"],
+			},
+			{
+				name: "TTS speed schema",
+				endpoint: "tts",
+				init: jsonInit(ttsBody({ speed: "fast" })),
+				violations: ["TTS_SPEED"],
+			},
+			{
+				name: "TTS unexpected property schema",
+				endpoint: "tts",
+				init: jsonInit(ttsBody({ secret_extension: true })),
+				violations: ["TTS_SCHEMA"],
+			},
+		];
+
+		for (const invalidCase of invalidCases) {
+			const fixture = createOpenRouterFixture({
+				expectedApiKey: fixtureKey,
+				expectedSttModel: "stt-model",
+				expectedTts: { model: "tts-model", voice: "eve" },
+				behaviors: [
+					{
+						status: 429,
+						retryAfter: "1",
+						jsonBody: { error: { message: "scripted result sentinel" } },
+					},
+				],
+			});
+			const invalid = await fixture.fetch(
+				invalidCase.url ??
+					`http://fixture${
+						invalidCase.endpoint === "chat"
+							? "/api/v1/chat/completions"
+							: "/api/v1/audio/speech"
+					}`,
+				invalidCase.init,
+			);
+			expect(invalid.status, invalidCase.name).toBe(invalidCase.status ?? 400);
+			expect(invalid.status, invalidCase.name).not.toBe(200);
+			expect(invalid.status, invalidCase.name).not.toBe(429);
+			expect(fixture.protocolViolations, invalidCase.name).toEqual(
+				invalidCase.violations,
+			);
+
+			const valid = await fixture.fetch(
+				`http://fixture${
+					invalidCase.endpoint === "chat"
+						? "/api/v1/chat/completions"
+						: "/api/v1/audio/speech"
+				}`,
+				jsonInit(invalidCase.endpoint === "chat" ? chatBody() : ttsBody()),
+			);
+			expect(valid.status, invalidCase.name).toBe(429);
+			expect(valid.headers.get("Retry-After"), invalidCase.name).toBe("1");
+			expect(fixture.protocolViolations, invalidCase.name).toEqual(
+				invalidCase.violations,
+			);
+			expect(JSON.stringify(fixture), invalidCase.name).not.toContain(
+				"scripted result sentinel",
+			);
+		}
 	});
 
 	test("serves the same handler on a Bun loopback server", async () => {
@@ -153,7 +412,10 @@ describe("fake OpenRouter fixture", () => {
 			`http://127.0.0.1:${server.port}/api/v1/audio/speech`,
 			{
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers: {
+					Authorization: `Bearer ${fixtureKey}`,
+					"Content-Type": "application/json",
+				},
 				body: JSON.stringify({
 					model: "x",
 					voice: "eve",

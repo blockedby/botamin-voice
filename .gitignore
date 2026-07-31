@@ -9,6 +9,7 @@ dist/
 coverage/
 
 # Local runtime state
+.worktrees/
 .runtime/
 data/
 *.db

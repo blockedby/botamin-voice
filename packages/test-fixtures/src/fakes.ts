@@ -24,9 +24,24 @@ import {
 
 const HEALTHY: ProviderHealth = { status: "healthy" };
 const DEFAULT_AT = "2026-07-30T20:22:00.000Z";
-const DEFAULT_BOOKING_ID = "01J00000000000000000000011";
-const DEFAULT_CREATED_EVENT_ID = "01J00000000000000000000012";
-const DEFAULT_UPDATED_EVENT_ID = "01J00000000000000000000013";
+const DEFAULT_PCM16LE_FIXTURE = new Uint8Array([
+	0x00, 0x00, 0xe8, 0x03, 0x18, 0xfc, 0xff, 0x7f,
+]);
+const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+function createIncrementingEntityIdFactory(): () => string {
+	let counter = 0;
+	return () => {
+		counter += 1;
+		let value = counter;
+		let suffix = "";
+		do {
+			suffix = ULID_ALPHABET[value % ULID_ALPHABET.length] + suffix;
+			value = Math.floor(value / ULID_ALPHABET.length);
+		} while (value > 0);
+		return `01J${suffix.padStart(23, "0")}`;
+	};
+}
 
 export class FakeBrain implements BrainPort {
 	readonly interrupted: Array<{ threadId: string; turnId: string }> = [];
@@ -117,9 +132,24 @@ export class FakeStt implements SttPort {
 	}
 }
 
+export interface FakeTtsOptions {
+	pcm16le?: Uint8Array;
+}
+
 export class FakeTts implements TtsPort {
 	readonly cancelled = new Set<string>();
 	readonly inputs: TtsInput[] = [];
+	#pcm16le: Uint8Array;
+
+	constructor(options: FakeTtsOptions = {}) {
+		const pcm16le = options.pcm16le ?? DEFAULT_PCM16LE_FIXTURE;
+		if (pcm16le.byteLength === 0 || pcm16le.byteLength % 2 !== 0) {
+			throw new TypeError(
+				"Fake TTS PCM16LE fixture must contain whole samples",
+			);
+		}
+		this.#pcm16le = pcm16le.slice();
+	}
 
 	async *synthesize(
 		input: TtsInput,
@@ -132,7 +162,7 @@ export class FakeTts implements TtsPort {
 			type: "audio.chunk",
 			generationId: input.generationId,
 			audioSeq: 0,
-			audio: new TextEncoder().encode(input.text),
+			audio: this.#pcm16le.slice(),
 		};
 
 		if (signal.aborted || this.cancelled.has(input.generationId)) return;
@@ -190,14 +220,13 @@ export class FakeBookingService implements BookingService {
 	};
 
 	constructor(options: FakeBookingOptions = {}) {
+		const nextEntityId = createIncrementingEntityIdFactory();
 		this.#options = {
 			notifier: options.notifier,
 			now: options.now ?? (() => DEFAULT_AT),
-			bookingId: options.bookingId ?? (() => DEFAULT_BOOKING_ID),
-			createdEventId:
-				options.createdEventId ?? (() => DEFAULT_CREATED_EVENT_ID),
-			updatedEventId:
-				options.updatedEventId ?? (() => DEFAULT_UPDATED_EVENT_ID),
+			bookingId: options.bookingId ?? nextEntityId,
+			createdEventId: options.createdEventId ?? nextEntityId,
+			updatedEventId: options.updatedEventId ?? nextEntityId,
 		};
 	}
 

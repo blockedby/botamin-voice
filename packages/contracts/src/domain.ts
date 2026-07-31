@@ -74,10 +74,7 @@ export const QualificationPatchSchema = z
 		timeline: z.string().trim().min(1).max(200).optional(),
 		notes: z.string().trim().min(1).max(1500).optional(),
 	})
-	.strict()
-	.refine((patch) => Object.keys(patch).length > 0, {
-		message: "Qualification patch must update at least one field",
-	});
+	.strict();
 
 export const KnownFactsSchema = z
 	.object({

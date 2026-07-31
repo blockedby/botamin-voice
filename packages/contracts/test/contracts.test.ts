@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	AppendQualificationInputSchema,
 	BookingDomainEventSchema,
+	BookingSnapshotSchema,
 	BookingToolExecutionSchema,
 	ClientWsEventSchema,
 	CreateBookingInputSchema,
@@ -14,7 +15,18 @@ import {
 const conversationId = "01J00000000000000000000000";
 const bookingId = "01J00000000000000000000001";
 const eventId = "01J00000000000000000000002";
+const foreignConversationId = "01J00000000000000000000009";
 const at = "2026-07-30T20:22:00.000Z";
+const bookingSnapshot = {
+	id: bookingId,
+	conversationId,
+	status: "booked",
+	name: "Александр",
+	contacts: [{ channel: "telegram", value: "@alex" }],
+	qualificationStatus: "none",
+	createdAt: at,
+	updatedAt: at,
+};
 
 describe("shared contracts", () => {
 	test("accepts only opaque ULID or UUIDv7 entity identifiers", () => {
@@ -57,15 +69,90 @@ describe("shared contracts", () => {
 		).toBe(false);
 	});
 
-	test("rejects empty qualification patches", () => {
-		expect(QualificationPatchSchema.safeParse({}).success).toBe(false);
+	test("allows an empty reusable patch only for skipped qualification input", () => {
+		expect(QualificationPatchSchema.safeParse({}).success).toBe(true);
+		for (const completion of ["partial", "complete"] as const) {
+			expect(
+				AppendQualificationInputSchema.safeParse({
+					bookingId,
+					idempotencyKey: `qualification-${completion}`,
+					patch: {},
+					completion,
+				}).success,
+			).toBe(false);
+		}
 		expect(
 			AppendQualificationInputSchema.safeParse({
 				bookingId,
-				idempotencyKey: "qualification-0001",
+				idempotencyKey: "qualification-skipped",
+				patch: {},
+				completion: "skipped",
+			}).success,
+		).toBe(true);
+		expect(
+			AppendQualificationInputSchema.safeParse({
+				bookingId,
+				idempotencyKey: "qualification-partial",
 				patch: { role: "Head of Sales" },
 			}).success,
 		).toBe(true);
+	});
+
+	test("keeps empty qualification snapshots and skipped events valid", () => {
+		expect(
+			BookingSnapshotSchema.safeParse({
+				...bookingSnapshot,
+				qualification: {},
+				qualificationStatus: "skipped",
+			}).success,
+		).toBe(true);
+		expect(
+			BookingDomainEventSchema.safeParse({
+				v: 1,
+				type: "booking.updated",
+				eventId,
+				occurredAt: at,
+				data: {
+					bookingId,
+					conversationId,
+					qualificationStatus: "skipped",
+					qualification: {},
+				},
+			}).success,
+		).toBe(true);
+	});
+
+	test("allows create replay policy only for a booking in the session", () => {
+		const command = {
+			type: "create_booking",
+			stage: "COLLECT_BOOKING",
+			sessionConversationId: conversationId,
+			currentBooking: bookingSnapshot,
+			input: {
+				conversationId,
+				idempotencyKey: "turn-booking-replay",
+				name: "Александр",
+				contacts: [{ channel: "telegram", value: "@alex" }],
+				consentConfirmed: true,
+			},
+		};
+
+		expect(
+			BookingToolExecutionSchema.safeParse({
+				...command,
+				currentBooking: null,
+			}).success,
+		).toBe(true);
+		expect(BookingToolExecutionSchema.safeParse(command).success).toBe(true);
+		expect(
+			BookingToolExecutionSchema.safeParse({
+				...command,
+				currentBooking: {
+					...bookingSnapshot,
+					conversationId: foreignConversationId,
+				},
+			}).success,
+		).toBe(false);
 	});
 
 	test("requires a committed session booking before qualification", () => {

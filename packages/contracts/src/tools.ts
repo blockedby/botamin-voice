@@ -38,7 +38,19 @@ export const AppendQualificationInputSchema = z
 		patch: QualificationPatchSchema,
 		completion: z.enum(["partial", "complete", "skipped"]).default("partial"),
 	})
-	.strict();
+	.strict()
+	.superRefine((input, context) => {
+		if (
+			input.completion !== "skipped" &&
+			Object.keys(input.patch).length === 0
+		) {
+			context.addIssue({
+				code: "custom",
+				message: "Qualification patch must update at least one field",
+				path: ["patch"],
+			});
+		}
+	});
 
 export const AppendQualificationResultSchema = z
 	.object({
@@ -107,7 +119,7 @@ export const BookingToolExecutionSchema = z
 				type: z.literal("create_booking"),
 				stage: z.literal("COLLECT_BOOKING"),
 				sessionConversationId: EntityIdSchema,
-				currentBooking: z.null(),
+				currentBooking: BookingSnapshotSchema.nullable(),
 				input: CreateBookingInputSchema,
 			})
 			.strict(),
@@ -122,15 +134,24 @@ export const BookingToolExecutionSchema = z
 			.strict(),
 	])
 	.superRefine((command, context) => {
-		if (
-			command.type === "create_booking" &&
-			command.input.conversationId !== command.sessionConversationId
-		) {
-			context.addIssue({
-				code: "custom",
-				message: "Booking conversation does not match the server session",
-				path: ["input", "conversationId"],
-			});
+		if (command.type === "create_booking") {
+			if (command.input.conversationId !== command.sessionConversationId) {
+				context.addIssue({
+					code: "custom",
+					message: "Booking conversation does not match the server session",
+					path: ["input", "conversationId"],
+				});
+			}
+			if (
+				command.currentBooking !== null &&
+				command.currentBooking.conversationId !== command.sessionConversationId
+			) {
+				context.addIssue({
+					code: "custom",
+					message: "Current booking does not belong to the server session",
+					path: ["currentBooking", "conversationId"],
+				});
+			}
 		}
 		if (
 			command.type === "append_booking_qualification" &&

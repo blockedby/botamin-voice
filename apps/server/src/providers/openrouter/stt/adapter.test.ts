@@ -211,6 +211,41 @@ describe("OpenRouterSttAdapter protocol", () => {
 		).toEqual(Buffer.from(wav));
 	});
 
+	test("accepts the exact official OpenAPI ChatResult shape without native_finish_reason", async () => {
+		// https://openrouter.ai/openapi.json — components.schemas.ChatResult.example
+		const officialOpenApiChatResult = {
+			choices: [
+				{
+					finish_reason: "stop",
+					index: 0,
+					message: {
+						content: "The capital of France is Paris.",
+						role: "assistant",
+					},
+				},
+			],
+			created: 1_677_652_288,
+			id: "chatcmpl-123",
+			model: "openai/gpt-4",
+			object: "chat.completion",
+			system_fingerprint: "fp_44709d6fcb",
+			usage: {
+				completion_tokens: 15,
+				prompt_tokens: 10,
+				total_tokens: 25,
+			},
+		};
+		const adapter = new OpenRouterSttAdapter({
+			config: config({ maxRetries: 0 }),
+			fetch: queuedFetch([jsonResponse(officialOpenApiChatResult)]),
+		});
+
+		await expect(adapter.transcribe(request())).resolves.toMatchObject({
+			text: "The capital of France is Paris.",
+			final: true,
+		});
+	});
+
 	test("uses the configured model without changing the port contract", async () => {
 		const calls: Array<{ url: string; init: RequestInit }> = [];
 		const adapter = new OpenRouterSttAdapter({
@@ -456,8 +491,8 @@ describe("OpenRouterSttAdapter validation and failures", () => {
 		const missingResultId = transcriptResult();
 		delete missingResultId.id;
 
-		const missingNativeFinish = transcriptResult();
-		delete firstChoice(missingNativeFinish).native_finish_reason;
+		const malformedNativeFinish = transcriptResult();
+		firstChoice(malformedNativeFinish).native_finish_reason = 42;
 
 		const nullContent = transcriptResult();
 		const nullContentChoice = firstChoice(nullContent);
@@ -468,7 +503,7 @@ describe("OpenRouterSttAdapter validation and failures", () => {
 			wrongIndex,
 			wrongObject,
 			missingResultId,
-			missingNativeFinish,
+			malformedNativeFinish,
 			nullContent,
 		]) {
 			const adapter = new OpenRouterSttAdapter({

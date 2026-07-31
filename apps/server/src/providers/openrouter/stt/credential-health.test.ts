@@ -87,57 +87,81 @@ function mp3Response(): Response {
 }
 
 describe("shared OpenRouter credential health", () => {
-	test("STT 401/402 degrades both voice paths and a valid TTS response recovers both", async () => {
+	test("STT 401/402 force-open its local circuit and degrade shared TTS health", async () => {
 		for (const status of [401, 402] as const) {
 			const sharedConfig = config();
+			let sttFetches = 0;
 			const stt = new OpenRouterSttAdapter({
 				config: sharedConfig,
-				fetch: async () => new Response("provider error", { status }),
+				now: () => 0,
+				fetch: async () => {
+					sttFetches += 1;
+					return new Response("provider error", { status });
+				},
 			});
 			const tts = new OpenRouterTtsAdapter({
 				config: sharedConfig,
+				now: () => 0,
 				fetch: async () => mp3Response(),
 			});
 
 			await expect(stt.transcribe(sttRequest())).rejects.toMatchObject({
 				status,
 			});
+			expect(sttFetches).toBe(1);
 			expect(await stt.health()).toBe("degraded");
 			expect(await tts.health()).toBe("degraded");
+
+			await expect(stt.transcribe(sttRequest())).rejects.toMatchObject({
+				code: "STT_CIRCUIT_OPEN",
+			});
+			expect(sttFetches).toBe(1);
 
 			await expect(tts.synthesize(ttsRequest())).resolves.toMatchObject({
 				final: true,
 			});
-			expect(await stt.health()).toBe("ready");
 			expect(await tts.health()).toBe("ready");
+			expect(await stt.health()).toBe("degraded");
 		}
 	});
 
-	test("TTS 401/402 degrades both voice paths and a valid STT response recovers both", async () => {
+	test("TTS 401/402 force-open its local circuit and degrade shared STT health", async () => {
 		for (const status of [401, 402] as const) {
 			const credentialHealth = new OpenRouterCredentialHealth();
+			let ttsFetches = 0;
 			const stt = new OpenRouterSttAdapter({
 				config: config(),
 				credentialHealth,
+				now: () => 0,
 				fetch: async () => transcriptResponse(),
 			});
 			const tts = new OpenRouterTtsAdapter({
 				config: config(),
 				credentialHealth,
-				fetch: async () => new Response("provider error", { status }),
+				now: () => 0,
+				fetch: async () => {
+					ttsFetches += 1;
+					return new Response("provider error", { status });
+				},
 			});
 
 			await expect(tts.synthesize(ttsRequest())).rejects.toMatchObject({
 				status,
 			});
+			expect(ttsFetches).toBe(1);
 			expect(await stt.health()).toBe("degraded");
 			expect(await tts.health()).toBe("degraded");
+
+			await expect(tts.synthesize(ttsRequest())).rejects.toMatchObject({
+				code: "TTS_CIRCUIT_OPEN",
+			});
+			expect(ttsFetches).toBe(1);
 
 			await expect(stt.transcribe(sttRequest())).resolves.toMatchObject({
 				final: true,
 			});
 			expect(await stt.health()).toBe("ready");
-			expect(await tts.health()).toBe("ready");
+			expect(await tts.health()).toBe("degraded");
 		}
 	});
 

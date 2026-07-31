@@ -9,14 +9,14 @@ import {
 } from "@botamin/contracts";
 import { type CircuitState, OpenRouterCircuitBreaker } from "../stt/circuit";
 import {
-	type OpenRouterCredentialHealth,
-	resolveOpenRouterCredentialHealth,
-} from "../stt/credential-health";
-import {
 	createOpenRouterHeaders,
 	loadOpenRouterVoiceConfig,
 	type OpenRouterVoiceConfig,
 } from "../stt/config";
+import {
+	type OpenRouterCredentialHealth,
+	resolveOpenRouterCredentialHealth,
+} from "../stt/credential-health";
 import {
 	boundedRetryAfterMs,
 	createAbortError,
@@ -200,7 +200,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				}
 				this.#circuit.recordFailure({
 					retryable: error.retryable,
-					forceOpen: error.status === 404,
+					forceOpen: [401, 402, 404].includes(error.status ?? -1),
 				});
 			}
 			throw error;

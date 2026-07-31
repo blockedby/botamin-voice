@@ -8,14 +8,14 @@ import {
 } from "@botamin/contracts";
 import { type CircuitState, OpenRouterCircuitBreaker } from "./circuit";
 import {
-	type OpenRouterCredentialHealth,
-	resolveOpenRouterCredentialHealth,
-} from "./credential-health";
-import {
 	createOpenRouterHeaders,
 	loadOpenRouterVoiceConfig,
 	type OpenRouterVoiceConfig,
 } from "./config";
+import {
+	type OpenRouterCredentialHealth,
+	resolveOpenRouterCredentialHealth,
+} from "./credential-health";
 import { OpenRouterSttError } from "./errors";
 import {
 	boundedRetryAfterMs,
@@ -167,7 +167,7 @@ export class OpenRouterSttAdapter implements SttPort {
 				}
 				this.#circuit.recordFailure({
 					retryable: error.retryable,
-					forceOpen: error.status === 404,
+					forceOpen: [401, 402, 404].includes(error.status ?? -1),
 				});
 			}
 			throw error;
@@ -474,9 +474,9 @@ function decodeTranscriptResponse(
 			throw new OpenRouterSttError("STT_PROVIDER_REJECTED", false);
 		}
 		if (
-			!hasOwn(choice, "native_finish_reason") ||
-			(choice.native_finish_reason !== null &&
-				typeof choice.native_finish_reason !== "string")
+			hasOwn(choice, "native_finish_reason") &&
+			choice.native_finish_reason !== null &&
+			typeof choice.native_finish_reason !== "string"
 		) {
 			throw new Error("native finish reason");
 		}

@@ -4,10 +4,12 @@
 
 ![Deployment](../diagrams/05-deployment.svg)
 
-Один `docker-compose.yml`, два сервиса допустимы и рекомендуются:
+Один `docker-compose.yml`, ровно два application-path сервиса рекомендуются:
 
-1. `app` — Bun server, React static, Codex app-server child process, SQLite access.
+1. `app` — Bun server, React static, Codex app-server child process, SQLite access и native HTTPS `fetch` к OpenRouter.
 2. `caddy` — TLS termination и WebSocket reverse proxy.
+
+Отдельного TTS runtime/container нет. OpenRouter вызывается напрямую из `app` по HTTPS.
 
 Persistent volumes:
 
@@ -57,7 +59,7 @@ Multi-stage:
 5. compile prompt bundle в isolated `/app/runtime-brain/AGENTS.md`;
 6. runtime image содержит только production assets, migrations, source Markdown prompts и compiled safe runtime bundle.
 
-Не использовать floating `latest` для Codex в production. Версия CLI фиксируется, потому что app-server schemas version-specific.
+Не использовать floating `latest` для Codex в production. Версия CLI фиксируется, потому что app-server schemas version-specific. `OPENROUTER_API_KEY` inject-ится только runtime secret/env и отсутствует в build args, layers, image history и rendered Compose evidence.
 
 ## 4. Codex subscription auth на VPS
 
@@ -140,7 +142,8 @@ Deployment script делает:
 - raw audio не сохраняется;
 - PII redaction в общих логах;
 - contact values доступны только booking payload и защищённому storage;
-- `.env`, xAI key, webhook secret, Codex auth не попадают в logs;
+- `.env`, xAI/OpenRouter keys, webhook secret, Codex auth не попадают в logs;
+- browser bundle и events не содержат OpenRouter key или direct provider URL;
 - DB volume и backup с ограниченными permissions;
 - privacy/consent copy перед микрофоном;
 - deletion runbook по `conversationId`/`bookingId`;
@@ -173,9 +176,9 @@ PII не включается в generic logs.
 - audio input bytes/duration;
 - STT speech-final latency;
 - brain queue time, first delta, completion;
-- TTS first audio and generated chars;
-- speech-final → first playback;
-- interrupted generation count;
+- OpenRouter TTS request/completion latency, status, bounded bytes and character usage;
+- speech-final → playback первой complete MP3 phrase;
+- interrupted/stale segment count, circuit state, budget rejection и text-only degradation;
 - booking create/update success/error;
 - notifier outbox lag;
 - provider error/rate-limit counts;
@@ -192,11 +195,12 @@ PII не включается в generic logs.
 | DB | no | read+write |
 | prompts | no | checksum/parse |
 | Codex process | no | handshake/model/auth |
-| xAI | no | key/config; optional lightweight check |
-| capacity | no | queue below threshold |
+| xAI STT | no | key/config; optional lightweight check |
+| OpenRouter TTS | no | key/model/voice/format schema, queue/circuit state; no network call on every check |
+| capacity | no | brain/TTS queues below threshold |
 | notifier | no | outbox worker running; external outage не блокирует booking |
 
-Notifier failure не должен делать app unready, если outbox сохраняет событие.
+Notifier failure не должен делать app unready, если outbox сохраняет событие. TTS config failure may allow startup only when `TTS_TEXT_ONLY_FALLBACK=true`; readiness must expose degraded state rather than pretending OpenRouter is ready. Healthchecks never spend OpenRouter usage.
 
 ## 9. Backup and restore
 
@@ -223,6 +227,10 @@ Notifier failure не должен делать app unready, если outbox с�
 MAX_ACTIVE_CONVERSATIONS
 MAX_CONCURRENT_BRAIN_TURNS
 MAX_PENDING_BRAIN_TURNS
+TTS_MAX_CONCURRENCY
+TTS_PREFETCH_SEGMENTS
+TTS_MAX_CHARS_PER_TURN
+TTS_MAX_CHARS_PER_SESSION
 SESSION_MAX_MINUTES
 TURN_TIMEOUT_MS
 ```
@@ -236,7 +244,10 @@ TURN_TIMEOUT_MS
 | Codex auth expired | readiness 503, admin alert; существующая booking не теряется |
 | Luna quota/rate limit | очередь с коротким timeout; затем graceful user message |
 | xAI STT down | остановить voice input, не придумывать transcript |
-| xAI TTS down | показать text response; tool effects не повторять |
+| OpenRouter `401`/`404` | config failure: open TTS circuit, signal readiness/degraded policy, keep text/booking |
+| OpenRouter `402` | credits exhausted: no retry, open TTS circuit, text-only |
+| OpenRouter `429`/retryable `5xx` | at most one bounded synthesis-only retry, then text-only/circuit policy |
+| TTS timeout, budget or invalid audio | drop audio segment, keep visible text and tool effects; never repeat Luna/tools |
 | DB locked/error | не подтверждать booking до commit |
 | notifier down | outbox retry; booking считается созданной |
 | client disconnect before booking | conversation `disconnected` |
@@ -264,6 +275,16 @@ docker compose run --rm app codex login --device-auth
 docker compose run --rm app codex login status
 docker compose up -d app
 ```
+
+### OpenRouter deploy smoke
+
+After runtime secrets are installed on the target VPS:
+
+```bash
+docker compose run --rm app bun run scripts/openrouter-tts-smoke.ts
+```
+
+This external paid smoke is deploy/manual-only, writes MP3 outside the repository or to an ignored artifact path, requires `2xx`, `audio/mpeg` and non-empty bytes, and prints only status, latency, byte count and safe generation/artifact IDs. It exits non-zero for missing key, `401`, `402`, `404`, wrong content type or empty audio. It is not part of default CI and is not claimed by this documentation migration.
 
 ### Inspect last booking events
 

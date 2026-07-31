@@ -4,7 +4,8 @@
 
 Для P0 не вводится единый универсальный AI SDK в критический realtime-путь.
 
-- **xAI STT/TTS:** тонкие typed WebSocket adapters по официальному streaming protocol.
+- **xAI STT:** тонкий typed WebSocket adapter по официальному streaming protocol.
+- **OpenRouter TTS:** native Bun `fetch` к dedicated speech endpoint; one complete MP3 phrase per request, no SDK.
 - **LLM brain:** `BrainPort`, реализованный поверх долгоживущего `codex app-server` и его JSON-RPC protocol.
 - **Model:** `gpt-5.6-luna` через Codex subscription владельца; `CODEX_MODEL`/`CODEX_EFFORT` конфигурируемы, но Luna — согласованный P0 default.
 - **Schemas:** Zod для собственных contracts; Codex protocol types/schemas фиксируются вместе с pinned CLI version.
@@ -53,7 +54,7 @@ export interface BrainPort {
 | Dynamic tools + protocol fallback | ++ | −/ограниченно | +/experimental | +, но поверх ещё одного слоя |
 | `instructionSources` verification | ++ | − | зависит от adapter | − |
 | Bun compatibility | ++ через stdio/JSON | требует spike; официально заявлен Node 18+ | обычно совместим, но adapter нужно проверять | требует проверки каждого слоя |
-| xAI binary voice WSS | custom adapter всё равно нужен | custom adapter всё равно нужен | custom adapter всё равно нужен | custom adapter всё равно нужен |
+| Voice transport | custom xAI STT WSS + OpenRouter TTS fetch всё равно нужны | те же custom adapters | те же custom adapters | те же custom adapters |
 | Protocol observability | ++ | + | +/− | − |
 | Объём собственного кода | средний | низкий | низкий/средний | высокий суммарно |
 | Риск abstraction drift | низкий при pinning | средний | высокий для community bridge | высокий |
@@ -108,7 +109,7 @@ export interface BrainPort {
 Почему не выбран как spine:
 
 - Codex app-server integration является community provider, а не официальным OpenAI provider;
-- binary microphone/TTS transport, playback cancellation и generation IDs всё равно остаются custom;
+- binary microphone transport, phrase-level MP3 playback, cancellation и generation IDs всё равно остаются custom;
 - дополнительный normalized event layer может скрыть provider-specific cancellation/status детали;
 - задача не требует типичного React chat hook или model switching в каждом turn.
 
@@ -162,7 +163,8 @@ export interface BrainPort {
 - production не зависит от floating versions;
 - Codex CLI version и generated schemas меняются одним отдельным PR;
 - `@openai/codex-sdk` не импортируется из domain/orchestrator packages;
-- xAI-specific types не импортируются из shared contracts;
+- xAI/OpenRouter-specific types не импортируются из shared contracts;
+- OpenRouter TTS transport does not add an SDK; native Bun `fetch` is the P0 decision;
 - provider adapter обязан маппить ошибки в собственный стабильный `BrainError`/`VoiceError` union.
 
 ## 7. Влияние Codex subscription на продукт
@@ -189,8 +191,8 @@ ConversationOrchestrator
         └── P0: Codex app-server JSON-RPC + gpt-5.6-luna + subscription auth
 
 VoiceOrchestrator
-        ├── XaiSttPort: native streaming WSS
-        └── XaiTtsPort: native streaming WSS
+        ├── SttPort: xAI native streaming WSS
+        └── TtsPort: OpenRouter native Bun fetch → complete audio/mpeg phrase segment
 ```
 
 Это минимизирует latency и magic, сохраняет barge-in, делает booking/qualification проверяемыми и оставляет путь к замене провайдера. Универсальный SDK стоит подключать только после появления конкретной функции, которая окупает дополнительный слой.

@@ -20,11 +20,11 @@ digraph G {
   }
 
   xstt [shape=ellipse, label="xAI Streaming STT\nWSS · PCM16 · ru"];
-  xtts [shape=ellipse, label="xAI Streaming TTS\nWSS · PCM · ru"];
+  ortts [shape=ellipse, label="OpenRouter TTS\nHTTPS · native Bun fetch\ncomplete MP3 phrase"];
   receiver [shape=folder, label="Console / push receiver"];
 
   user -> browser [label="голос / управление"];
-  browser -> caddy [dir=both, label="HTTPS + WSS\nJSON + binary PCM"];
+  browser -> caddy [dir=both, label="HTTPS + WSS\ninput PCM · output MP3 segments"];
   caddy -> api [dir=both];
   api -> xstt [dir=both, label="audio ↔ transcript"];
   api -> orch [dir=both, label="events / deltas"];
@@ -34,6 +34,6 @@ digraph G {
   booking -> db [dir=both, label="transaction"];
   booking -> notify [label="outbox event"];
   notify -> receiver [label="structured payload"];
-  orch -> xtts [dir=both, label="text ↔ audio chunks"];
-  xtts -> api [style=invis];
+  orch -> ortts [dir=both, label="sanitized phrase ↔ complete audio/mpeg"];
+  ortts -> api [style=invis];
 }

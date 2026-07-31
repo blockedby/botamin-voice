@@ -65,15 +65,23 @@ Table-driven cases:
 - Russian transcript fixture;
 - no API key in client bundle.
 
-### xAI TTS
+### OpenRouter TTS
 
-- `text.delta`/`text.done` flow;
-- base64 audio decode;
-- PCM sample rate metadata;
-- multi-utterance reuse;
-- cancel/drop behavior;
-- Russian voice smoke test; compare initial candidates `iris` and `eve` for intelligibility, latency and sales tone;
-- text fallback on failure.
+Default deterministic suite uses a protocol-faithful fake `POST /api/v1/audio/speech` and no external credentials:
+
+- successful `audio/mpeg` response and valid MP3 fixture;
+- chunked network body buffered into one complete segment;
+- wrong content type, zero-byte/empty body and invalid MP3 fixture;
+- bounded JSON/text error body never forwarded as audio;
+- `400`, `401`, `402`, `404`, `429` with/without `Retry-After`, `502`, `503`;
+- one-retry maximum, timeout and user abort;
+- stale `generationId` rejected after late completion;
+- circuit open/half-open/closed transitions deterministic;
+- per-segment, per-turn, per-session, concurrency and response-size guards;
+- no spoken text, PII or key in logs/snapshots/client bundles;
+- text-only fallback preserves visible text and booking effects.
+
+External paid tests are tagged `external` and excluded from default CI. Before release, target VPS synthesizes the same Russian sample with each candidate voice actually available; owner chooses by listening and changes only env. The smoke requires `2xx`, compatible `audio/mpeg`, non-empty bytes and safe status/latency/byte evidence.
 
 ### Codex app-server
 
@@ -94,12 +102,12 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 ## 4. Integration tests
 
-- fake STT final transcript → fake brain deltas → fake TTS chunks → WS client;
+- fake STT final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
 - real SQLite transaction + fake notifier;
 - booking tool call inside brain turn;
 - booking event appears before qualification prompt/audio;
 - reconnect with same conversation;
-- barge-in while TTS chunks are in flight;
+- barge-in while OpenRouter requests/complete segments are in flight;
 - brain process restart;
 - outbox retry;
 - graceful shutdown/drain.
@@ -113,11 +121,13 @@ Playwright with synthetic audio fixture:
 3. mock/allow mic;
 4. stream fixture PCM;
 5. observe transcript;
-6. receive assistant text/audio events;
+6. receive assistant text and ordered complete MP3 segment events;
 7. complete booking;
 8. see booked UI;
 9. continue/skip qualification;
 10. verify backend DB/event payload.
+
+Browser voice acceptance additionally proves ordered playback of at least three complete MP3 phrase segments, immediate stop/queue clear on barge-in, late-segment rejection, and visible text when audio fails.
 
 Browsers:
 
@@ -226,7 +236,8 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ## 9. Security tests
 
-- scan built JS for `XAI_API_KEY`, auth tokens and webhook secret;
+- scan built JS for `XAI_API_KEY`, `OPENROUTER_API_KEY`, auth tokens and webhook secret;
+- prove browser never requests `openrouter.ai` directly;
 - origin/CORS rejection;
 - oversized JSON/audio frame;
 - path traversal on dev endpoint;
@@ -250,10 +261,12 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 ### Voice
 
 - [ ] Russian STT works on real microphone.
-- [ ] TTS is understandable in chosen voice.
+- [ ] Chosen OpenRouter voice is understandable in the target-VPS Russian smoke.
+- [ ] Complete `audio/mpeg` phrase segments decode in sequence in Chromium and WebKit.
 - [ ] Partial transcript is visible.
-- [ ] Barge-in stops old playback.
-- [ ] TTS failure preserves text UX.
+- [ ] Barge-in stops old playback, clears queue and drops late segments.
+- [ ] `401`/`402`/`404`, budget and circuit failures preserve text UX and booking.
+- [ ] No TTS retry repeats Luna, notifier or business tools.
 
 ### Booking
 
@@ -280,6 +293,9 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 - [ ] SQLite survives restart.
 - [ ] Backup can be restored.
 - [ ] No provider keys in frontend bundle/logs.
+- [ ] Compose has only app and Caddy in the P0 path, and no TTS sidecar.
+- [ ] Runtime OpenRouter secret wiring and target-VPS smoke command are documented.
+- [ ] Text-only mode is enabled through env without rebuilding the image.
 
 ## 11. Release evidence bundle
 
@@ -290,6 +306,8 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 - health output;
 - schema migration status;
 - Codex model/auth preflight result без token;
+- target-VPS OpenRouter Russian MP3 smoke status, latency, byte count, provider generation ID if present and selected model/voice/format;
+- evidence timestamps for speech-final, first Luna delta, TTS request/completion and playback;
 - 24+ eval summary;
 - latency report;
 - duplicate/idempotency test report;

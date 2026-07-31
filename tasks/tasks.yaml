@@ -1,7 +1,7 @@
 version: 1
 project: botamin-voice-agent
-spec_version: '0.2'
-date: '2026-07-30'
+spec_version: 0.4-demo
+date: '2026-07-31'
 invariants:
 - booking.created precedes every qualification question and update
 - qualification failure or disconnect never cancels an existing booking
@@ -9,7 +9,7 @@ invariants:
 - provider credentials never reach the browser
 - the assistant never claims a real calendar event was created
 - prompts live in Markdown and no online editor is built
-- xAI provides STT and TTS; Codex subscription with gpt-5.6-luna provides the brain
+- xAI provides streaming STT; Codex subscription with gpt-5.6-luna provides the brain; OpenRouter provides server-side TTS through a TypeScript/Bun adapter
 critical_path:
 - T00
 - T13
@@ -108,13 +108,15 @@ tasks:
   outputs:
   - AudioWorklet capture and 16 kHz mono PCM16 output
   - 100 ms binary WS frames
-  - 24 kHz PCM playback queue
-  - generation cancellation and reconnect
+  - provider-neutral playback queue for complete audio/mpeg phrase segments
+  - generation cancellation, queue clearing, stale-segment rejection and reconnect
   acceptance:
   - deterministic audio fixture produces expected frame sizes
   - old generation audio is dropped after interruption
-  - no xAI or Codex secret exists in the bundle
-  - fake server demo works in Chromium and WebKit
+  - no xAI, OpenRouter or Codex secret exists in the bundle
+  - complete MP3 phrase segments decode and play in sequence in Chromium and WebKit
+  - browser never calls OpenRouter directly and contains no OpenRouter key
+  - old-generation audio stops and queued segments are dropped after interruption
 - id: T11
   wave: 1
   priority: P0
@@ -138,21 +140,29 @@ tasks:
   wave: 1
   priority: P0
   owner: A2
-  title: xAI streaming TTS adapter
+  title: OpenRouter TTS adapter in TypeScript/Bun
   depends_on:
   - T00
   owned_paths:
-  - apps/server/src/providers/xai/tts*
+  - apps/server/src/providers/openrouter/tts/**
+  - scripts/openrouter-tts*
   outputs:
-  - text.delta/text.done streaming client
-  - base64 audio decode and PCM chunk events
-  - multi-utterance reuse and cancellation
-  - character/cost telemetry
+  - provider-neutral OpenRouterTtsAdapter behind TtsPort using native Bun fetch
+  - configurable model, voice and response format
+  - phrase-level complete MP3 segment synthesis
+  - AbortSignal cancellation and stale-generation rejection
+  - bounded retry, timeout, circuit breaker and text-only fallback
+  - Russian smoke command and provider error mapping
+  - character usage and latency telemetry without spoken-text logging
   acceptance:
-  - Russian smoke comparison covers iris and eve before choosing the configured voice
-  - first audio chunk is emitted before full utterance completion
-  - cancelled utterance emits no later playable chunks
-  - text-only fallback is available on failure
+  - x-ai/grok-voice-tts-1.0 with configured voice produces a valid Russian MP3 in the external smoke test
+  - OPENROUTER_API_KEY never reaches the browser or ordinary logs
+  - the first short phrase can play before the complete Luna answer is generated
+  - an aborted or obsolete generation emits no later playable segment
+  - 400, 401, 402, 404, 429 and retryable 5xx cases map to bounded typed failures
+  - no retry path repeats Luna, create_booking, append_booking_qualification or notifier side effects
+  - application remains usable in text-only mode when TTS is unavailable
+  - implementation adds no Python runtime, Edge sidecar or direct xAI TTS dependency
 - id: T13
   wave: 1
   priority: P0
@@ -221,15 +231,20 @@ tasks:
   - scripts/deploy*
   - .env.example
   outputs:
-  - multi-stage image with pinned Codex CLI
-  - app and Caddy services
+  - multi-stage Bun image with pinned Codex CLI
+  - app and Caddy services only for the P0 application path
   - data and CODEX_HOME volumes
-  - healthchecks, migrations and bootstrap commands
+  - healthchecks, migrations and auth bootstrap
+  - OpenRouter TTS environment wiring and deploy smoke command
   acceptance:
   - clean VPS deploy starts with docker compose up -d
   - HTTPS and WSS work
   - device-auth result persists across app restarts
   - secrets are absent from image history and compose output
+  - no Python or Edge TTS service exists in docker-compose.yml
+  - OPENROUTER_API_KEY is injected at runtime and absent from image history and compose output
+  - external OpenRouter TTS smoke test runs from the target VPS
+  - text-only mode can be enabled without changing the image
   - rollback and backup commands are documented
 - id: T20
   wave: 2
@@ -251,8 +266,8 @@ tasks:
   - deterministic conversation and booking transition policies
   - compact brain context
   - tool authorization and result handling
-  - speech sanitizer and sentence chunker
-  - interruption/generation coordination
+  - PII-safe speech sanitizer and bounded phrase chunker for OpenRouter MP3 requests
+  - generation coordination, TTS budget guard and degraded-mode policy
   - failure and degraded behavior
   acceptance:
   - all state table tests pass
@@ -260,6 +275,10 @@ tasks:
   - booking event is committed before qualification prompt
   - late deltas from interrupted generation are ignored
   - clear refusal ends without repeated selling
+  - phone, email, Telegram handles, tool payloads and hidden IDs never enter TTS input
+  - every P0 TTS segment is complete and no longer than the configured hard limit
+  - TTS retry/failure cannot repeat the brain turn or business tools
+  - visible text and committed booking side effects survive TTS failure
 - id: T21
   wave: 2
   priority: P0
@@ -299,16 +318,21 @@ tasks:
   - tests/fixtures
   - packages/test-fixtures
   outputs:
-  - fake provider server/processes
-  - PCM and transcript fixtures
+  - protocol-faithful fake OpenRouter /api/v1/audio/speech endpoint
+  - valid and invalid MP3 fixtures
+  - JSON error fixtures for 400, 401, 402, 404, 429, 502, 503 and abort
+  - timeout, Retry-After, empty-body, wrong-content-type and late-generation tests
   - provider contract test commands
   - state and idempotency regression suite
   - secret scan
   acceptance:
-  - default tests need no external credentials
+  - default test suite needs no external OpenRouter credentials
   - external tests are clearly tagged
   - contract failure messages identify the changed provider event
   - critical invariants run in CI
+  - fake endpoint proves non-2xx JSON is never forwarded as audio
+  - retry count and circuit transitions are deterministic
+  - secret scan rejects OPENROUTER_API_KEY in client bundles, snapshots and logs
 - id: T30
   wave: 3
   priority: P0
@@ -328,12 +352,18 @@ tasks:
   - booking and qualification DB assertions
   - reconnect and barge-in coverage
   - compose smoke test
+  - real xAI STT, Codex/Luna and target-VPS OpenRouter TTS smoke evidence
+  - end-to-end text-only degradation test
   acceptance:
   - browser-to-provider-to-browser path works
   - exactly one booking is created in happy path and retries
   - disconnect after booking preserves the lead
   - text fallback works when TTS is disabled
   - evidence includes latency timestamps
+  - browser-to-STT-to-Luna-to-OpenRouter-to-browser path works
+  - booking and qualification still succeed when OpenRouter TTS is unavailable
+  - a target-VPS Russian MP3 smoke test passes with the release configuration
+  - evidence includes speech-final, first LLM delta, TTS request, TTS completion and playback timestamps
 - id: T31
   wave: 4
   priority: P0
@@ -374,12 +404,17 @@ tasks:
   - PII redaction tests
   - backup/restore and auth failure drills
   - outbox retry
+  - OpenRouter TTS latency, failure, character-usage and circuit-breaker metrics
+  - budget, concurrency and response-size guards
   acceptance:
   - speech-final to playback p50 and p95 are reported
   - no unbounded queue or audio buffer exists
   - restore test succeeds
   - Codex auth loss makes readiness fail safely
   - notifier outage does not lose booking events
+  - no unbounded synthesis or playback queue exists
+  - spoken text and API key are absent from ordinary logs
+  - 401/402/404 open a safe degraded mode without affecting booking persistence
 - id: T40
   wave: 5
   priority: P0
@@ -402,3 +437,4 @@ tasks:
   - all P0 checklist items are checked
   - docs match actual environment variables and commands
   - no unresolved critical issue remains
+  - active docs, tasks, environment variables, diagrams and Compose contain no stale Edge TTS implementation instructions

@@ -1,6 +1,6 @@
 # 07. Trade-offs и Architecture Decision Records
 
-## ADR-001. Разделить xAI voice и Codex/Luna brain
+## ADR-001. Разделить speech providers и Codex/Luna brain
 
 **Статус:** accepted.
 
@@ -8,7 +8,7 @@
 
 - xAI Streaming STT: речь → текст;
 - Codex app-server + `gpt-5.6-luna` по умолчанию: диалог, policy, tools; model/effort остаются конфигурацией;
-- xAI Streaming TTS: текст → речь.
+- OpenRouter TTS: текст → complete MP3 phrase segments через server-side Bun adapter.
 
 ### Почему
 
@@ -117,22 +117,17 @@ Prompt-only state считается недостаточным. LLM может 
 
 Плюсы: меньше потерянных лидов и ясная транзакционная граница. Минусы: booking может быть менее подробно квалифицирована. Этот минус ожидаем и допустим.
 
-## ADR-011. PCM streaming вместо MP3 в low-latency path
+## ADR-011. PCM speech output path
 
-**Статус:** proposed/validate in spike.
+**Статус:** rejected for P0 / superseded by ADR-015.
 
-PCM проще очередить и немедленно останавливать через Web Audio, но требует больше bandwidth. Для коротких browser sessions на VPS это приемлемо. Если Safari/сеть создают проблемы, adapter допускает MP3 fallback.
+Raw PCM applies only to browser microphone input. P0 speech output uses complete `audio/mpeg` phrase segments; arbitrary network response chunks are not treated as playable files.
 
-## ADR-012. Голос и предполагаемый бесплатный TTS — конфигурация, не архитектурная гарантия
+## ADR-012. TTS profile and paid usage are configuration facts
 
-**Статус:** accepted.
+**Статус:** superseded by ADR-015.
 
-Владелец ожидает использовать доступный ему бесплатный allowance/кредиты xAI TTS. Архитектура это допускает, но не считает нулевую цену гарантией: публичный прайс провайдера может отличаться от условий конкретного аккаунта.
-
-- стартовый smoke-test сравнивает `iris` — голос с заявленным sales-support tone — и `eve` как универсальный fallback;
-- итоговый `voice_id` задаётся через `XAI_TTS_VOICE` и меняется без правок prompts/state machine;
-- TTS adapter считает символы и пишет usage telemetry;
-- cost guardrail и text-only fallback защищают от неожиданного биллинга или исчерпания allowance.
+No free usage allowance is assumed. Model, lowercase voice ID, format and optional speed remain environment configuration. Character telemetry, hard budgets, circuit breaker and text-only degradation protect the demo from uncontrolled paid usage.
 
 ## ADR-013. Codex subscription/Luna — MVP optimization, не production entitlement
 
@@ -148,27 +143,26 @@ Guardrails:
 - `BrainPort` допускает отдельный API-key adapter;
 - exhaustion subscription quota переводит сервис в controlled degraded mode, не повреждая booking data.
 
-## Иллюстративная стоимость voice provider
+## ADR-015 — OpenRouter is the P0 TTS gateway
 
-![xAI variable cost](../charts/02-xai-variable-cost.png)
+**Status:** accepted.
 
-Допущение одного разговора:
+Use a TypeScript/Bun adapter with native `fetch` against `POST https://openrouter.ai/api/v1/audio/speech`. Default profile: `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`. Do not use Edge Community TTS, Python sidecars or direct xAI TTS in P0. Keep `TtsPort` provider-neutral and retain text-only degradation.
 
-- 5 минут общей длительности;
-- 2.5 минуты пользовательской речи;
-- 3 500 TTS-символов;
-- xAI Streaming STT: `$0.20/hour`;
-- xAI TTS: `$15/1M chars`.
+Consequences and guardrails:
 
-Расчёт:
+- OpenRouter and its upstream are external paid dependencies; no free tier is assumed.
+- One request produces one buffered, validated, complete `audio/mpeg` phrase segment.
+- Only server-side native Bun `fetch` is used; no provider SDK is required for P0.
+- Model/voice availability and price are runtime facts recorded in release evidence, not permanent documentation constants.
+- `401`, `402`, `404`, bounded `429`/retryable `5xx`, circuit breaker, character budgets and text-only behavior follow the contracts in docs 03/05/06.
+- Retry repeats only pure synthesis and never repeats Luna or business side effects.
 
-```text
-STT = 2.5 / 60 × 0.20 = $0.0083
-TTS = 3500 / 1,000,000 × 15 = $0.0525
-Итого ≈ $0.0608 на разговор
-```
+## Metered voice cost inputs
 
-Это planning example, а не счёт: не включены VPS, bandwidth, Codex subscription/credits и реальные пропорции речи.
+![xAI STT + OpenRouter TTS metered usage](../charts/02-xai-stt-openrouter-tts-cost.png)
+
+The chart deliberately contains no numeric currency estimate. Variable usage depends on measured xAI STT audio duration and OpenRouter TTS input characters multiplied by the current account/model rates at deployment. The release owner records current pricing evidence and measured volumes; VPS, bandwidth and Codex subscription/credits are accounted separately.
 
 ## Capacity envelope Codex subscription
 
@@ -200,7 +194,7 @@ TTS = 3500 / 1,000,000 × 15 = $0.0525
 | R-08 | marketing hallucination | medium | medium/high | allowed claims, evals, source attribution |
 | R-09 | PII leak in logs | medium | high | redaction and log tests |
 | R-10 | cheap VPS resource pressure | medium | medium | guardrails, metrics, bounded buffers |
-| R-11 | xAI price/voice changes | medium | medium | config adapter, cost telemetry |
+| R-11 | OpenRouter model/voice/price or upstream availability changes | medium | medium/high | env profile, external smoke, character telemetry, budget/circuit, text-only |
 | R-12 | user thinks calendar event exists | medium | medium | explicit copy and payload semantics |
 
 ## Revisit triggers
@@ -210,6 +204,7 @@ TTS = 3500 / 1,000,000 × 15 = $0.0525
 - одновременно нужно больше одной VPS/реплики;
 - Luna subscription становится bottleneck;
 - median conversations требуют >12 brain turns;
+- OpenRouter model/voice availability or paid rate changes materially;
 - p95 latency стабильно >3 s;
 - dynamic tools ломаются после upgrade;
 - появляется реальная CRM/calendar integration;

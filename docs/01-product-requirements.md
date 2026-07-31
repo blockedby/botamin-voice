@@ -35,7 +35,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 |---|---|---|
 | US-001 | Как посетитель, я запускаю разговор одной кнопкой | запрашивается mic permission, UI показывает состояние |
 | US-002 | Я говорю естественно по-русски | interim transcript отображается, финал не режет фразу посередине |
-| US-003 | Агент отвечает голосом и текстом | первый звук приходит потоково, ответ не содержит markdown-мусора |
+| US-003 | Агент отвечает голосом и текстом | первая полная MP3-фраза может проиграться до завершения ответа Luna; ответ не содержит markdown-мусора |
 | US-004 | Агент понимает, зачем я пришёл | задаёт не более одного вопроса за раз, фиксирует роль/задачу |
 | US-005 | Агент объясняет Botamin на релевантном примере | использует только утверждённые knowledge claims |
 | US-006 | Я могу возразить или перебить | проигрывание останавливается, новый turn обрабатывается |
@@ -54,9 +54,13 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-VOICE-002:** браузер передаёт mono PCM16, 16 kHz, чанками около 100 ms.
 - **FR-VOICE-003:** backend держит xAI credentials только server-side.
 - **FR-VOICE-004:** partial transcript доступен UI; в Luna отправляется только финальная пользовательская реплика.
-- **FR-VOICE-005:** при barge-in клиент немедленно очищает очередь playback, backend отменяет текущий TTS и по возможности `turn/interrupt`.
+- **FR-VOICE-005:** при barge-in клиент немедленно останавливает playback и очищает очередь, backend abort-ит OpenRouter fetches текущего `generationId` и по возможности вызывает `turn/interrupt`.
 - **FR-VOICE-006:** reconnect не должен создавать вторую бронь.
-- **FR-VOICE-007:** stop завершает внешние WebSocket-соединения и фиксирует событие.
+- **FR-VOICE-007:** stop завершает внешние соединения и фиксирует событие.
+- **FR-VOICE-008:** OpenRouter вызывается только backend-ом; browser получает provider-neutral полные `audio/mpeg` phrase segments в sequence order.
+- **FR-VOICE-009:** TTS failure сохраняет видимый текст и все уже committed business side effects; synthesis retry не повторяет brain turn или tools.
+- **FR-VOICE-010:** перед TTS удаляются PII, tool envelopes, hidden IDs, Markdown, code fences и raw URLs; hard limit сегмента — configurable, default 240 chars.
+- **FR-VOICE-011:** per-segment, per-turn и per-session character budgets, concurrency и response-size guards переводят audio path в text-only mode без изменения видимого ответа.
 
 ### 4.2 Brain and orchestration
 
@@ -122,7 +126,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 | ID | Требование | Цель MVP |
 |---|---|---|
-| NFR-LAT-001 | speech-final → первый слышимый звук | p50 ≤ 1.6 s, p95 ≤ 3.0 s |
+| NFR-LAT-001 | speech-final → playback первой полной MP3-фразы | p50 ≤ 1.6 s, p95 ≤ 3.0 s; подтвердить измерением release profile |
 | NFR-REL-001 | успешность `create_booking` при валидных данных | ≥ 99.5% внутри приложения |
 | NFR-IDEM-001 | дубли брони при retry/reconnect | 0 в тестовой матрице |
 | NFR-SEC-001 | TLS | обязательно в production |
@@ -163,7 +167,8 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - qualification completeness;
 - drop-off stage distribution;
 - p50/p95 time-to-first-audio;
-- provider error rate;
+- provider error rate, OpenRouter circuit state и доля text-only degradation;
+- OpenRouter TTS character usage без spoken-text logging;
 - duplicate booking rate;
 - доля диалогов с manual review flag.
 

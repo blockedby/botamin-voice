@@ -8,7 +8,7 @@
 - Все события содержат `conversationId`, а booking events также `bookingId`.
 - Версия контракта передаётся как `v: 1`.
 - Ошибки providers не пробрасываются клиенту напрямую.
-- Binary WebSocket frames используются только для PCM audio.
+- Binary WebSocket frames несут client PCM16 input или один полный server MP3 phrase payload; arbitrary provider network chunks никогда не публикуются как playable audio.
 - Tool handlers не доступны как публичные HTTP endpoints.
 
 ## 2. REST endpoints
@@ -42,7 +42,8 @@ Response `201`:
     "inputSampleRate": 16000,
     "inputEncoding": "pcm16le",
     "chunkMs": 100,
-    "outputSampleRate": 24000
+    "outputContentType": "audio/mpeg",
+    "outputMode": "complete-phrase-segments"
   }
 }
 ```
@@ -64,7 +65,8 @@ Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`.
 - DB write/read;
 - Codex app-server handshake;
 - наличие auth и модели Luna в `model/list`;
-- конфигурацию xAI key;
+- конфигурацию xAI key для STT;
+- при `TTS_PROVIDER=openrouter`: наличие `OPENROUTER_API_KEY`, schema-valid model/voice/`mp3`, доступность queue/circuit state и разрешённый text-only startup policy;
 - prompt bundle checksum;
 - возможность принять новую conversation по concurrency guard.
 
@@ -133,7 +135,7 @@ Server:
 | `transcript.final` | turnId/text |
 | `assistant.text.delta` | generationId/text |
 | `assistant.text.done` | generationId/fullText |
-| `assistant.audio.chunk` | **binary frame preceded by metadata event or multiplex header** |
+| `audio.segment` | generationId, segmentId, sequence, `contentType=audio/mpeg`, byteLength, `final=true`; immediately followed by one complete binary MP3 payload |
 | `assistant.audio.done` | generationId |
 | `assistant.interrupted` | generationId |
 | `booking.created` | safe booking summary |
@@ -144,24 +146,69 @@ Server:
 
 ### Binary framing
 
-Рекомендуемый простой формат одного WSS:
+Client microphone frames remain PCM16LE. Server audio is an atomic phrase-level MP3 payload associated with the preceding `audio.segment` metadata event:
 
 ```text
-byte 0      message kind: 0x01 = client PCM, 0x02 = server PCM
-bytes 1–8   uint64 generation/stream sequence
-bytes 9…    raw PCM16LE payload
+client binary: kind=0x01, stream sequence, raw PCM16LE
+server metadata JSON: audio.segment(generationId, segmentId, sequence, audio/mpeg, byteLength, final=true)
+server binary: kind=0x02, segment sequence, one complete MP3 file payload
 ```
 
-Альтернатива — два WebSocket канала; для MVP один multiplexed socket проще в эксплуатации.
+The implementation may use a referenced binary payload instead of adjacency if it preserves the same identity, ordering and size contract. It must never expose partial `response.body` chunks as independent MP3 files.
 
 ### Ordering
 
 - `seq` монотонно растёт для JSON events в одной conversation.
-- audio chunks имеют `generationId` и `audioSeq`.
-- client игнорирует chunks с generationId, который уже interrupted.
+- audio segments имеют `generationId`, unique `segmentId` и monotonic `sequence`.
+- client decodes/plays complete segments in order and ignores segments from an interrupted or obsolete generation.
+- одновременно допустимы максимум один playing и один prefetched segment.
 - booking events записываются в DB до отправки клиенту.
 
-## 4. Tool contracts
+## 4. Provider-neutral TTS contracts
+
+```ts
+export type TtsSynthesisRequest = {
+  conversationId: string;
+  turnId: string;
+  generationId: string;
+  segmentId: string;
+  text: string;
+  signal: AbortSignal;
+};
+
+export type TtsAudioSegment = {
+  generationId: string;
+  segmentId: string;
+  providerGenerationId?: string;
+  contentType: "audio/mpeg";
+  bytes: Uint8Array;
+  final: true;
+};
+
+export interface TtsPort {
+  synthesize(request: TtsSynthesisRequest): Promise<TtsAudioSegment>;
+  health(): Promise<"ready" | "degraded" | "unavailable">;
+}
+```
+
+The adapter validates `2xx`, compatible `audio/mpeg`, non-empty bounded bytes and current `generationId` before returning. OpenRouter types and response objects do not cross `TtsPort`.
+
+### OpenRouter failure mapping
+
+| HTTP | Mapping | Retry/degradation |
+|---:|---|---|
+| 400 | invalid request/profile | no retry |
+| 401 | key/config error | no retry; open circuit, readiness/config signal |
+| 402 | insufficient credits | no retry; open circuit, text-only |
+| 403 | policy restriction | no retry by default |
+| 404 | model unavailable/config error | no retry; open circuit |
+| 413 | chunker/request defect | no retry |
+| 429 | rate limited | at most one retry; honor bounded `Retry-After` |
+| 500/502/503/524/529 | gateway/upstream | at most one bounded retry |
+
+Non-2xx body is parsed as bounded JSON/text and never forwarded as audio. No retry occurs after abort or after a segment was accepted for playback. Retry repeats only synthesis, not Luna, `create_booking`, `append_booking_qualification` or notifier.
+
+## 5. Tool contracts
 
 ### `create_booking`
 
@@ -232,7 +279,7 @@ type AppendQualificationResult = {
 };
 ```
 
-## 5. Domain policy до tool execution
+## 6. Domain policy до tool execution
 
 ```ts
 switch (tool.name) {
@@ -249,7 +296,7 @@ switch (tool.name) {
 
 LLM-provided `conversationId`, `bookingId` и consent сверяются с server-side session; нельзя доверять им как единственному источнику.
 
-## 6. SQLite model
+## 7. SQLite model
 
 ### `conversations`
 
@@ -328,7 +375,7 @@ Append-only audit:
 - next attempt;
 - last error.
 
-## 7. Транзакция booking create
+## 8. Транзакция booking create
 
 ```text
 BEGIN IMMEDIATE
@@ -350,7 +397,7 @@ COMMIT
 3. assistant получает safe tool result;
 4. только потом orchestrator разрешает qualification stage.
 
-## 8. Notification payloads
+## 9. Notification payloads
 
 ### Created
 
@@ -396,7 +443,7 @@ COMMIT
 
 Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` и содержит event ID для deduplication.
 
-## 9. Safe error taxonomy
+## 10. Safe error taxonomy
 
 | Code | Retry | User-facing behavior |
 |---|---|---|
@@ -413,7 +460,7 @@ Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` �
 | `DB_UNAVAILABLE` | no create | не подтверждать booking |
 | `NOTIFIER_FAILED` | async retry | booking всё равно создан |
 
-## 10. Retention
+## 11. Retention
 
 - raw audio: не хранить;
 - transcript: configurable retention, default 30 дней для MVP;

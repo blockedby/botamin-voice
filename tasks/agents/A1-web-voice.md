@@ -2,6 +2,8 @@
 
 ## Mission
 
+Implement complete MP3 phrase-segment decoding/playback, ordered queueing, local stop, and stale-generation filtering. The browser must never call OpenRouter.
+
 Реализовать browser audio capture/playback и затем Botamin-specific voice funnel UI, работая сначала против fake server.
 
 ## Read first
@@ -21,7 +23,7 @@ Owned: `apps/web/src/audio`, transport, voice state, UI components/pages/styles.
 
 - AudioWorklet capture and resampling to 16 kHz mono PCM16.
 - Binary frame batching around 100 ms.
-- PCM 24 kHz playback queue using Web Audio.
+- Complete `audio/mpeg` phrase-segment decoding/playback using Web Audio or `HTMLAudio`, ordered by sequence.
 - Immediate local barge-in cancellation and generation filtering.
 - Reconnect/resume token behavior.
 - UI states: idle, connecting, listening, thinking, speaking, booked, qualification, complete, error.
@@ -30,7 +32,7 @@ Owned: `apps/web/src/audio`, transport, voice state, UI components/pages/styles.
 
 ## Tests
 
-Use deterministic PCM fixtures, fake WS server, Chromium and WebKit. Prove no stale audio plays after interruption and no provider secret appears in build output.
+Use deterministic PCM microphone fixtures, valid/invalid MP3 fixtures, fake WS server, Chromium and WebKit. Prove at least three complete segments play in order; local barge-in stops playback, clears queued segments and rejects late generations; text remains visible on audio failure. Prove the browser never calls OpenRouter and no provider secret appears in build output.
 
 ## Completion report
 

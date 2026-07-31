@@ -2,6 +2,8 @@
 
 ## Mission
 
+Chunk Luna output into short complete phrases, sanitize PII and tool envelopes before TTS, preserve visible text and side effects on audio failure, and never trigger cross-model TTS fallback in P0.
+
 Build deterministic conversation control around Luna, then tune the Botamin sales behavior without weakening domain invariants.
 
 ## Read first
@@ -23,15 +25,17 @@ Owned: orchestrator, prompt compiler, prompts, knowledge and eval content. Share
 - compact context builder;
 - allowed-action policy;
 - booking result handling before qualification;
-- speech sanitizer and sentence chunker;
-- generation IDs and interruption semantics;
+- PII-safe speech sanitizer that removes phone/email/Telegram, tool envelopes, hidden IDs, Markdown/code/raw URLs;
+- bounded phrase chunker with first/soft/hard targets and complete-segment semantics;
+- generation IDs, OpenRouter AbortSignal coordination and stale-result semantics;
+- TTS character budget and text-only policy that preserves visible text and committed effects;
 - prompt bundle with checksum;
 - allowed/prohibited claims and case sources;
 - at least 24 eval scenarios with automated critical assertions.
 
 ## Behavior constraints
 
-Short spoken Russian, one question at a time, no human impersonation, no fabricated price/guarantee, clear refusal handling. Qualification is optional and cannot precede booking.
+Short spoken Russian, one question at a time, no human impersonation, no fabricated price/guarantee, clear refusal handling. Qualification is optional and cannot precede booking. TTS retry/failure cannot repeat Luna or tools; no automatic cross-model speech fallback exists in P0.
 
 ## Completion report
 

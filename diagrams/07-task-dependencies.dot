@@ -12,7 +12,7 @@ digraph G {
   subgraph cluster_w1 { label="Волна 1"; color="#c4c7cc"; style="rounded,dashed";
     t10 [label="T10\nweb voice"];
     t11 [label="T11\nxAI STT"];
-    t12 [label="T12\nxAI TTS"];
+    t12 [label="T12\nOpenRouter TTS\nBun fetch"];
     t13 [label="T13\nCodex/Luna"];
     t14 [label="T14\nbooking + DB"];
     t15 [label="T15\nDocker/ops"];
@@ -38,10 +38,11 @@ digraph G {
   t00 -> g0;
   t01 -> t20;
   g0 -> {t10 t11 t12 t13 t14 t15};
-  {t10 t11 t12 t13 t14 t15} -> g1;
-  g1 -> {t20 t21 t22};
+  {t10 t11 t12 t13 t14 t15} -> t22;
+  {t10 t11 t12 t13 t14 t15 t22} -> g1;
+  g1 -> {t20 t21};
   t01 -> t21;
-  {t20 t21 t22 t15} -> g2;
+  {t20 t21} -> g2;
   g2 -> t30;
   t30 -> {t31 t32};
   {t31 t32} -> g3;

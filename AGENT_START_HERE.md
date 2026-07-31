@@ -1,6 +1,8 @@
 # Agent start here
 
-This directory is the authoritative **technical specification and delivery handoff** for the Botamin browser voice-sales-agent MVP. It contains requirements, architecture, task ownership, acceptance criteria, prompts, knowledge, diagrams, and validation scripts. It does **not** contain the finished application.
+**Read the authoritative migration first:** [`corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md`](corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md).
+
+This directory is the authoritative **technical specification and delivery handoff** for the Botamin browser voice-sales-agent MVP, version `0.4-demo`. It contains requirements, architecture, task ownership, acceptance criteria, prompts, knowledge, diagrams, and validation scripts. It does **not** contain the finished application.
 
 ## 1. Unpack the package
 
@@ -8,7 +10,7 @@ This directory is the authoritative **technical specification and delivery hando
 
 ```bash
 mkdir -p botamin-agent-work
-unzip botamin-voice-agent-agent-handoff-v0.2.zip -d botamin-agent-work
+unzip botamin-voice-agent-agent-handoff-v0.4-demo.zip -d botamin-agent-work
 cd botamin-agent-work/botamin-voice-agent-spec
 ```
 
@@ -16,7 +18,7 @@ To avoid overwriting an earlier extraction:
 
 ```bash
 rm -rf botamin-agent-work/botamin-voice-agent-spec
-unzip botamin-voice-agent-agent-handoff-v0.2.zip -d botamin-agent-work
+unzip botamin-voice-agent-agent-handoff-v0.4-demo.zip -d botamin-agent-work
 ```
 
 ### Windows PowerShell
@@ -24,7 +26,7 @@ unzip botamin-voice-agent-agent-handoff-v0.2.zip -d botamin-agent-work
 ```powershell
 New-Item -ItemType Directory -Force botamin-agent-work | Out-Null
 Expand-Archive `
-  .\botamin-voice-agent-agent-handoff-v0.2.zip `
+  .\botamin-voice-agent-agent-handoff-v0.4-demo.zip `
   -DestinationPath .\botamin-agent-work `
   -Force
 Set-Location .\botamin-agent-work\botamin-voice-agent-spec
@@ -37,7 +39,7 @@ Extract into a clean workspace and keep this specification read-only or committe
 ```bash
 WORKSPACE="$PWD/botamin-implementation"
 mkdir -p "$WORKSPACE/spec"
-unzip -q botamin-voice-agent-agent-handoff-v0.2.zip -d "$WORKSPACE/spec"
+unzip -q botamin-voice-agent-agent-handoff-v0.4-demo.zip -d "$WORKSPACE/spec"
 cd "$WORKSPACE/spec/botamin-voice-agent-spec"
 ```
 
@@ -48,7 +50,7 @@ The implementation repository may be created next to the package, or the A0 agen
 The ZIP itself can be checked before extraction:
 
 ```bash
-unzip -t botamin-voice-agent-agent-handoff-v0.2.zip
+unzip -t botamin-voice-agent-agent-handoff-v0.4-demo.zip
 ```
 
 After extraction, verify content checksums:
@@ -85,14 +87,16 @@ The validator checks local links, task dependencies, diagrams, the assembled HTM
 
 Every agent must read these files, in order:
 
-1. [`README.md`](README.md)
-2. [`docs/00-scope-and-assumptions.md`](docs/00-scope-and-assumptions.md)
-3. [`docs/03-system-architecture.md`](docs/03-system-architecture.md)
-4. [`docs/05-api-events-data.md`](docs/05-api-events-data.md)
-5. [`docs/08-testing-and-acceptance.md`](docs/08-testing-and-acceptance.md)
-6. [`docs/09-agent-task-plan.md`](docs/09-agent-task-plan.md)
-7. [`tasks/tasks.yaml`](tasks/tasks.yaml)
-8. The agent-specific packet in [`tasks/agents/`](tasks/agents/)
+1. [`corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md`](corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md)
+2. [`CURRENT_DECISIONS.md`](CURRENT_DECISIONS.md)
+3. [`README.md`](README.md)
+4. [`docs/00-scope-and-assumptions.md`](docs/00-scope-and-assumptions.md)
+5. [`docs/03-system-architecture.md`](docs/03-system-architecture.md)
+6. [`docs/05-api-events-data.md`](docs/05-api-events-data.md)
+7. [`docs/08-testing-and-acceptance.md`](docs/08-testing-and-acceptance.md)
+8. [`docs/09-agent-task-plan.md`](docs/09-agent-task-plan.md)
+9. [`tasks/tasks.yaml`](tasks/tasks.yaml)
+10. The agent-specific packet in [`tasks/agents/`](tasks/agents/)
 
 Use [`FULL_SPEC.md`](FULL_SPEC.md) or [`technical-spec.html`](technical-spec.html) when a single consolidated reference is preferable.
 
@@ -103,10 +107,10 @@ An implementation is invalid if it violates any of these rules:
 1. The internal booking is committed **before** optional post-booking qualification begins.
 2. A qualification refusal, error, timeout, or disconnect never cancels an existing booking.
 3. Repeated `create_booking` calls for the same conversation return the existing booking rather than creating a duplicate.
-4. xAI and Codex credentials never reach browser code, browser logs, or client-visible events.
+4. xAI, OpenRouter, and Codex credentials never reach browser code, browser logs, or client-visible events.
 5. The assistant never claims that a real calendar event or CRM record was created in this MVP.
 6. Prompts and product knowledge remain Markdown files in the repository; no online editor is built.
-7. xAI provides streaming STT/TTS; Codex subscription with GPT-5.6 Luna is the primary brain profile described by the specification.
+7. xAI provides streaming STT; Codex subscription with GPT-5.6 Luna is the primary brain, and OpenRouter provides server-side TTS through a TypeScript/Bun adapter.
 8. Provider-specific code remains behind the defined ports so the provider can be replaced without rewriting domain logic.
 
 ## 5. Dispatch order
@@ -121,7 +125,7 @@ A0 owns the repository skeleton and shared contracts. A5 can work on knowledge a
 ### Wave 1: start after Gate G0, in parallel
 
 - **A1 Web Voice** — [`tasks/agents/A1-web-voice.md`](tasks/agents/A1-web-voice.md)
-- **A2 xAI Voice** — [`tasks/agents/A2-xai-voice.md`](tasks/agents/A2-xai-voice.md)
+- **A2 Voice Providers (xAI STT + OpenRouter TTS)** — [`tasks/agents/A2-xai-voice.md`](tasks/agents/A2-xai-voice.md)
 - **A3 Codex/Luna** — [`tasks/agents/A3-codex-luna.md`](tasks/agents/A3-codex-luna.md)
 - **A4 Domain/Data** — [`tasks/agents/A4-domain-data.md`](tasks/agents/A4-domain-data.md)
 - **A6 Operations** — [`tasks/agents/A6-ops.md`](tasks/agents/A6-ops.md)
@@ -202,10 +206,11 @@ Use [`AGENT_DISPATCH_PROMPT.md`](AGENT_DISPATCH_PROMPT.md). Replace the brackete
 
 Use this precedence order when documents appear to conflict:
 
-1. Non-negotiable invariants in `README.md` and this file.
-2. `tasks/tasks.yaml` acceptance criteria and ownership.
-3. `docs/05-api-events-data.md` contracts.
-4. Agent-specific task packet.
-5. Other explanatory documents.
+1. `corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md` for all TTS decisions.
+2. `CURRENT_DECISIONS.md` and non-negotiable invariants in `README.md` and this file.
+3. `tasks/tasks.yaml` acceptance criteria and ownership.
+4. `docs/05-api-events-data.md` contracts.
+5. Agent-specific task packet.
+6. Other explanatory documents.
 
 Do not silently choose between contradictory requirements. Preserve the safer invariant, implement behind a configurable port when possible, and record the discrepancy for the integrator.

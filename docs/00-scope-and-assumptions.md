@@ -24,7 +24,7 @@ MVP должен выглядеть как небольшой реальный �
 - браузерный доступ к микрофону;
 - потоковый STT на русском;
 - текстовое рассуждение и ответ через GPT-5.6 Luna в Codex;
-- потоковый TTS;
+- phrase-level TTS через полные MP3-сегменты, запускаемый до завершения полного ответа;
 - interruption/barge-in на базовом уровне;
 - управляемая state machine разговора;
 - product knowledge из Botamin-сайта и Telegram-кейсов;
@@ -58,15 +58,15 @@ MVP должен выглядеть как небольшой реальный �
 | Язык | русский; структура допускает локализацию |
 | Канал | браузерный voice widget |
 | Мозг | Codex app-server, `gpt-5.6-luna` |
-| Voice | xAI Streaming STT + Streaming TTS |
-| Голос | `XAI_TTS_VOICE`; сначала сравнить `iris` (sales-support tone) и `eve`, затем оставить лучший русский smoke-test |
+| Voice | xAI Streaming STT + OpenRouter TTS через backend-only TypeScript/Bun adapter |
+| TTS profile | `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`, все значения конфигурируемы; usage платный, бесплатный tier не предполагается |
 | Backend | Bun + TypeScript, Hono как лёгкий HTTP/WS слой |
 | Frontend | React + TypeScript + Vite |
 | Storage | SQLite в WAL-режиме, Drizzle migrations |
 | Notifications | console обязательно; webhook — адаптер |
 | Calendar | отсутствует |
 | Prompts | Markdown в Git |
-| Deployment | один Compose project на одной VPS |
+| Deployment | один Compose project на одной VPS; только app + Caddy в P0 application path |
 | Raw audio retention | выключено |
 | Qualification | включаемая опция, только после booking |
 
@@ -86,7 +86,7 @@ MVP должен выглядеть как небольшой реальный �
 - **Booking** — внутренняя запись о согласованном следующем шаге, не календарное событие.
 - **Qualification** — необязательные сведения, добавляемые к уже существующей брони.
 - **BrainPort** — внутренний интерфейс текстового LLM-мозга.
-- **VoicePort** — внутренние интерфейсы STT/TTS.
+- **VoicePort** — provider-neutral внутренние `SttPort` и `TtsPort`; один TTS request возвращает один полный `audio/mpeg` phrase segment.
 - **Barge-in** — пользователь начинает говорить во время ответа агента.
 - **Tool** — строго валидируемая backend-операция с доменным эффектом.
 - **Luna** — модель `gpt-5.6-luna`, доступная через Codex.

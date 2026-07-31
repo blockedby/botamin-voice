@@ -18,7 +18,7 @@ import type {
 	FinalTranscriptEntry,
 	VoiceConsent,
 	VoiceUiState,
-} from "../components/VoiceDemo";
+} from "../components/voiceTypes";
 import {
 	initialVoiceState,
 	VoiceSessionController,
@@ -733,7 +733,12 @@ export class BrowserVoiceSession {
 	}
 
 	private projectControllerState(state: VoiceState): void {
-		if (this.snapshot.state.kind === "complete") return;
+		if (
+			this.snapshot.state.kind === "complete" ||
+			this.terminalFailurePending
+		) {
+			return;
+		}
 		switch (state.status) {
 			case "connecting":
 				this.setState(this.activeState("connecting"));
@@ -789,7 +794,7 @@ export class BrowserVoiceSession {
 	private async finishTerminalFailure(epoch: number): Promise<void> {
 		await this.captureCleanup;
 		if (!this.isCurrent(epoch) || !this.terminalFailurePending) return;
-		await this.releaseResources("client_error", false);
+		await this.releaseResources("client_error", true);
 	}
 
 	private async releaseMediaOnly(): Promise<void> {

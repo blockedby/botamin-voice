@@ -84,6 +84,7 @@ apps/server/src/providers/openrouter/tts/adapter.ts
 apps/server/src/providers/openrouter/tts/errors.ts
 apps/server/src/providers/openrouter/tts/index.ts
 apps/server/src/providers/openrouter/tts/mp3.ts
+apps/server/src/runtime/browser-runtime.integration.test.ts
 apps/server/src/runtime/config.test.ts
 apps/server/src/runtime/config.ts
 apps/server/src/runtime/runtime.integration.test.ts
@@ -102,6 +103,7 @@ apps/web/src/components/VoiceDemo.test.tsx
 apps/web/src/components/VoiceDemo.tsx
 apps/web/src/components/devVoiceDemoFixture.test.ts
 apps/web/src/components/devVoiceDemoFixture.ts
+apps/web/src/components/voiceTypes.ts
 apps/web/src/integration/browserVoiceSession.test.ts
 apps/web/src/integration/browserVoiceSession.ts
 apps/web/src/main.tsx

@@ -65,6 +65,7 @@ export interface GatewaySessionOptions {
 	maxPendingMessages?: number;
 	clientHelloTimeoutMs?: number;
 	stopDrainMs?: number;
+	onTerminalError?: () => void;
 	acquireTurn(input: {
 		priority: "booked" | "standard";
 		signal: AbortSignal;
@@ -103,6 +104,7 @@ export class GatewaySession {
 	readonly #maxPendingMessages: number;
 	readonly #clientHelloTimeoutMs: number;
 	readonly #stopDrainMs: number;
+	readonly #onTerminalError: () => void;
 	readonly #acquireTurn: GatewaySessionOptions["acquireTurn"];
 	readonly #idFactory: () => string;
 	readonly #now: () => Date;
@@ -156,6 +158,7 @@ export class GatewaySession {
 		this.#maxPendingMessages = options.maxPendingMessages ?? 64;
 		this.#clientHelloTimeoutMs = options.clientHelloTimeoutMs ?? 2_000;
 		this.#stopDrainMs = options.stopDrainMs ?? 5_000;
+		this.#onTerminalError = options.onTerminalError ?? (() => undefined);
 		this.#acquireTurn = options.acquireTurn;
 		this.#idFactory = options.idFactory ?? (() => Bun.randomUUIDv7());
 		this.#now = options.now ?? (() => new Date());
@@ -582,6 +585,7 @@ export class GatewaySession {
 					to: event.to,
 					reason: event.reason,
 				});
+				if (event.to === "ERROR") this.#onTerminalError();
 				break;
 			}
 			case "booking.committed": {

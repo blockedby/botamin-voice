@@ -14,6 +14,8 @@ export interface CreateSessionContext {
 		priority: BrainTurnPriority;
 		signal: AbortSignal;
 	}): Promise<BrainTurnAdmission>;
+	/** Schedules bounded cleanup if a client loses the terminal fallback. */
+	onTerminalError(): void;
 }
 
 export interface SessionRegistryOptions {
@@ -24,6 +26,7 @@ export interface SessionRegistryOptions {
 	brainQueueTimeoutMs?: number;
 	sessionMaxMs: number;
 	abandonedSessionMs?: number;
+	terminalErrorCleanupMs?: number;
 	createSession(context: CreateSessionContext): GatewaySession;
 	now?: () => Date;
 	idFactory?: () => string;
@@ -40,11 +43,16 @@ interface SessionRecord {
 export class SessionRegistry {
 	readonly #sessions = new Map<string, SessionRecord>();
 	readonly #stops = new Map<string, Promise<void>>();
+	readonly #terminalErrorTimers = new Map<
+		string,
+		ReturnType<typeof setTimeout>
+	>();
 	readonly #activeBySource = new Map<string, number>();
 	readonly #maxActive: number;
 	readonly #maxActivePerSource: number;
 	readonly #sessionMaxMs: number;
 	readonly #abandonedSessionMs: number;
+	readonly #terminalErrorCleanupMs: number;
 	readonly #createSession: SessionRegistryOptions["createSession"];
 	readonly #now: () => Date;
 	readonly #idFactory: () => string;
@@ -58,6 +66,7 @@ export class SessionRegistry {
 			options.maxActiveConversationsPerSource ?? options.maxActiveConversations;
 		this.#sessionMaxMs = options.sessionMaxMs;
 		this.#abandonedSessionMs = options.abandonedSessionMs ?? 10_000;
+		this.#terminalErrorCleanupMs = options.terminalErrorCleanupMs ?? 5_000;
 		this.#createSession = options.createSession;
 		this.#now = options.now ?? (() => new Date());
 		this.#idFactory = options.idFactory ?? (() => Bun.randomUUIDv7());
@@ -93,6 +102,7 @@ export class SessionRegistry {
 			expiresAt,
 			request,
 			acquireTurn: (input) => this.#turnQueue.acquire(input),
+			onTerminalError: () => this.#scheduleTerminalErrorCleanup(conversationId),
 		});
 		this.#sessions.set(conversationId, {
 			session,
@@ -150,6 +160,8 @@ export class SessionRegistry {
 		if (this.#disposed) return;
 		this.#disposed = true;
 		clearInterval(this.#timer);
+		for (const timer of this.#terminalErrorTimers.values()) clearTimeout(timer);
+		this.#terminalErrorTimers.clear();
 		this.#turnQueue.close();
 		for (const [id, record] of [...this.#sessions]) {
 			this.#remove(id);
@@ -182,10 +194,29 @@ export class SessionRegistry {
 		const record = this.#sessions.get(conversationId);
 		if (!record) return null;
 		this.#sessions.delete(conversationId);
+		const terminalTimer = this.#terminalErrorTimers.get(conversationId);
+		if (terminalTimer) clearTimeout(terminalTimer);
+		this.#terminalErrorTimers.delete(conversationId);
 		const next = (this.#activeBySource.get(record.sourceKey) ?? 1) - 1;
 		if (next <= 0) this.#activeBySource.delete(record.sourceKey);
 		else this.#activeBySource.set(record.sourceKey, next);
 		return record;
+	}
+
+	#scheduleTerminalErrorCleanup(conversationId: string): void {
+		if (
+			this.#disposed ||
+			!this.#sessions.has(conversationId) ||
+			this.#terminalErrorTimers.has(conversationId)
+		) {
+			return;
+		}
+		const timer = setTimeout(() => {
+			this.#terminalErrorTimers.delete(conversationId);
+			void this.stop(conversationId, "disconnected");
+		}, this.#terminalErrorCleanupMs);
+		timer.unref?.();
+		this.#terminalErrorTimers.set(conversationId, timer);
 	}
 
 	#trackStop(

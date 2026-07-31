@@ -1,7 +1,7 @@
 # Runtime review closure
 
-**Base:** `347864e`
-**Scope:** REV-001 through REV-011
+**Base:** `a3b6a97`
+**Scope:** REV-001 through REV-012
 **Provider policy:** deterministic fakes and local runtime checks only; no paid/external provider request and no push.
 
 ## Finding closure
@@ -19,16 +19,18 @@
 | REV-009 | Runtime/provider/gateway reject WAV limits that cannot hold the 44-byte header plus one canonical 100 ms PCM frame. Covered by config/WAV tests and container startup rejection. |
 | REV-010 | `MAX_PENDING_BRAIN_TURNS` drives a cancellable timeout queue; committed WAV remains resident while queued; booked and standard lanes are FIFO with booked priority; overflow is safe. Covered by exact max-1/max-6, priority, timeout, cancellation, retained-WAV, and overflow tests. |
 | REV-011 | Bun transport cap is above the 8192-byte application contract; an actual Bun server returns the structured Hono `413` for a 9 KB body. Covered by `apps/server/src/app.test.ts`. |
+| REV-012 | Terminal brain `ERROR` retains the safe completed fallback, then sends WebSocket `session.stop` before outbound fencing/socket close and issues the idempotent REST stop fallback. A five-second server grace reclaims a noncompliant client's terminal session and provider state. Covered by transport/browser/registry tests and the credential-free actual Bun browser-to-runtime `maxActive=1` test. |
 
 ## Final evidence
 
-- `bun test`: **345 pass, 0 fail** across 38 files.
+- REV-012 targeted suite: **45 pass, 0 fail** across browser transport/integration and server registry/session/runtime integration files.
+- `bun test`: **347 pass, 0 fail** across 39 files.
 - `bun run typecheck`: all workspaces passed.
 - `bun run lint` and `bun run format:check`: passed.
 - `bun run build`: contracts, server, prompt compiler, web, and fixtures passed.
 - `bun test apps/server/src/app.ws.test.ts`: localhost Bun WebSocket fake-dependency smoke passed.
 - `docker compose config --quiet`, shell syntax checks, final image build, image-content assertion, container liveness/static/migration/graceful-shutdown smoke, and relational startup rejection: passed.
-- `python3 scripts/validate-spec.py` and `sha256sum -c CHECKSUMS.sha256`: passed after generated spec/release artifact regeneration.
+- `bash scripts/build-spec.sh`, `python3 scripts/validate-spec.py`, and `sha256sum -c CHECKSUMS.sha256`: passed after generated spec/release artifact regeneration.
 - Tracked/untracked source secret-pattern scan and image config/history credential assertion: passed.
 
 Real OpenRouter/Codex paid-provider smoke was intentionally not run because this closure forbids external providers. Protocol/provider behavior is covered by deterministic fake-process and adapter tests.

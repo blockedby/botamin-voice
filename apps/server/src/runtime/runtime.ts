@@ -220,7 +220,13 @@ export async function createProductionRuntime(
 		sessionMaxMs: config.sessionMaxMs,
 		abandonedSessionMs: config.admission.abandonedSessionMs,
 		now,
-		createSession: ({ conversationId, expiresAt, request, acquireTurn }) => {
+		createSession: ({
+			conversationId,
+			expiresAt,
+			request,
+			acquireTurn,
+			onTerminalError,
+		}) => {
 			const initialState = {
 				...createInitialConversationState({
 					qualificationEnabled:
@@ -277,6 +283,7 @@ export async function createProductionRuntime(
 				maxHistoryBytes: config.limits.historyBytes,
 				clientHelloTimeoutMs: config.admission.clientHelloTimeoutMs,
 				stopDrainMs: config.sessionStopDrainMs,
+				onTerminalError,
 				acquireTurn,
 				now,
 			});

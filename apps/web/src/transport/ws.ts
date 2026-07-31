@@ -79,6 +79,7 @@ export class VoiceTransport {
 	private connectionEpoch = 0;
 	private stopped = false;
 	private reconnectDisabled = false;
+	private terminalFallbackOnly = false;
 	private outboundDisabled = false;
 	private sessionReady = false;
 	private utteranceHasAudio = false;
@@ -207,12 +208,11 @@ export class VoiceTransport {
 		this.muted = muted;
 	}
 
-	/** Keep the current socket readable for a terminal fallback, but never reconnect/send. */
+	/** Keep the socket readable for terminal fallback text; only session.stop may send. */
 	disableReconnect(): void {
 		if (this.stopped) return;
 		this.reconnectDisabled = true;
-		this.outboundDisabled = true;
-		this.sessionReady = false;
+		this.terminalFallbackOnly = true;
 		this.cancelReconnect();
 	}
 
@@ -223,8 +223,14 @@ export class VoiceTransport {
 			| "client_error" = "user_requested",
 	): void {
 		if (this.stopped) return;
-		if (this.canSend()) this.sendClientEvent("session.stop", { reason });
+		// Preserve ordering: notify over the live socket before fencing outbound
+		// traffic and closing it. The caller also uses the idempotent REST stop.
+		if (this.sessionReady && this.canSendSocket()) {
+			this.sendClientEvent("session.stop", { reason });
+		}
 		this.stopped = true;
+		this.outboundDisabled = true;
+		this.terminalFallbackOnly = false;
 		this.sessionReady = false;
 		this.pendingSegment = null;
 		this.incompleteAudioSequences.clear();
@@ -241,7 +247,9 @@ export class VoiceTransport {
 	}
 
 	get isReady(): boolean {
-		return this.sessionReady && this.canSendSocket();
+		return (
+			!this.terminalFallbackOnly && this.sessionReady && this.canSendSocket()
+		);
 	}
 
 	private receive(data: unknown): void {
@@ -361,7 +369,13 @@ export class VoiceTransport {
 		type: ClientWsEvent["type"],
 		payload: Record<string, unknown>,
 	): boolean {
-		if (this.outboundDisabled || !this.canSendSocket()) return false;
+		if (
+			this.outboundDisabled ||
+			(this.terminalFallbackOnly && type !== "session.stop") ||
+			!this.canSendSocket()
+		) {
+			return false;
+		}
 		const candidate = {
 			v: CONTRACT_VERSION,
 			conversationId: this.options.conversationId,
@@ -384,7 +398,12 @@ export class VoiceTransport {
 	}
 
 	private canSend(): boolean {
-		return !this.outboundDisabled && this.sessionReady && this.canSendSocket();
+		return (
+			!this.outboundDisabled &&
+			!this.terminalFallbackOnly &&
+			this.sessionReady &&
+			this.canSendSocket()
+		);
 	}
 
 	private canSendSocket(): boolean {

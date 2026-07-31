@@ -12,6 +12,7 @@ const request: CreateConversationRequest = {
 
 function stubSession(options: {
 	expiresAt: Date;
+	established?: boolean;
 	stop?: () => Promise<void>;
 }): GatewaySession {
 	let stopped = false;
@@ -20,7 +21,7 @@ function stubSession(options: {
 			return stopped;
 		},
 		get established() {
-			return false;
+			return options.established ?? false;
 		},
 		isExpired(at = new Date()) {
 			return at.getTime() >= options.expiresAt.getTime();
@@ -54,6 +55,45 @@ describe("session registry lifecycle and source bounds", () => {
 		now = new Date(now.getTime() + 101);
 		registry.cleanupExpired();
 		expect(registry.activeCount).toBe(0);
+	});
+
+	test("reclaims terminal ERROR after a bounded fallback-loss grace", async () => {
+		let onTerminalError: () => void = () => undefined;
+		let stopped: () => void = () => undefined;
+		const stopObserved = new Promise<void>((resolve) => {
+			stopped = resolve;
+		});
+		const registry = new SessionRegistry({
+			maxActiveConversations: 1,
+			maxConcurrentBrainTurns: 1,
+			sessionMaxMs: 20 * 60_000,
+			terminalErrorCleanupMs: 10,
+			cleanupIntervalMs: 60_000,
+			createSession: (context) => {
+				onTerminalError = context.onTerminalError;
+				return stubSession({
+					expiresAt: context.expiresAt,
+					established: true,
+					stop: async () => stopped(),
+				});
+			},
+		});
+		expect(registry.create(request)).not.toBeNull();
+		expect(registry.hasCapacity).toBe(false);
+
+		onTerminalError();
+		expect(registry.activeCount).toBe(1);
+		await Promise.race([
+			stopObserved,
+			Bun.sleep(500).then(() => {
+				throw new Error("terminal cleanup did not run");
+			}),
+		]);
+
+		expect(registry.activeCount).toBe(0);
+		expect(registry.hasCapacity).toBe(true);
+		expect(registry.create(request)).not.toBeNull();
+		await registry.dispose();
 	});
 
 	test("deduplicates removed expiry stops and dispose awaits their promise", async () => {

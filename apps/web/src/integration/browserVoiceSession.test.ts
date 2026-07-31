@@ -636,6 +636,13 @@ describe("production browser voice integration", () => {
 		]);
 		expect(value.socket.closed).toBe(true);
 		expect(value.scheduler.jobs).toHaveLength(0);
+		expect(sentJson(value.socket).at(-1)).toMatchObject({
+			type: "session.stop",
+			payload: { reason: "client_error" },
+		});
+		expect(value.requests.at(-1)?.input).toBe(
+			`/api/v1/conversations/${conversationId}/stop`,
+		);
 		value.session.reconnect();
 		expect(value.sockets).toHaveLength(1);
 		value.capture.emit();

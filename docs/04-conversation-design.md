@@ -165,17 +165,16 @@ Prompt compiler:
 
 ## 7. Speech sanitizer
 
-До xAI TTS:
+Перед OpenRouter TTS:
 
-- убрать markdown headings, bullets, code fences;
-- не озвучивать URLs;
+- убрать Markdown headings, bullets, code fences, raw URLs и tool envelopes;
+- исключить hidden IDs, system messages и structured payloads;
+- redact phone, email и Telegram handle до отправки provider-у;
 - заменить технические аббревиатуры на произносимый вариант при необходимости;
-- удалить tool/debug фрагменты;
-- ограничить одну TTS-фразу разумной длиной;
-- не отправлять незакрытые JSON/markdown fragments;
+- не отправлять незакрытые JSON/Markdown fragments или punctuation-only segments;
 - сохранить пунктуацию, важную для интонации.
 
-Sentence chunker выпускает фразу по `.`, `?`, `!`, `;` или безопасному length threshold, но не режет email, телефон и сокращения.
+Bounded phrase chunker выпускает первую фразу примерно при 60–120 chars, normal segments при 120–180 chars и никогда не превышает configured hard limit 240 chars. Он не режет число, abbreviation, email или company name посередине. Один segment соответствует одному полному MP3 response; cross-model fallback в P0 отсутствует.
 
 ## 8. Tools
 
@@ -234,7 +233,7 @@ Backend возвращает safe result:
 
 ### TTS failure
 
-Показать текст ответа и кнопку retry audio; не повторять tool effect.
+Показать текст ответа и кнопку retry audio; не повторять Luna turn, notifier или tool effect. Budget/circuit failure также переводит только audio path в text-only mode.
 
 ## 11. Минимальный пример happy path
 

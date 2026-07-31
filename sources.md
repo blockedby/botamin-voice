@@ -1,6 +1,6 @@
 # Источники
 
-Дата доступа: 30 июля 2026.
+Дата доступа: 31 июля 2026.
 
 ## Botamin
 
@@ -8,15 +8,27 @@
 - Публичная Telegram-лента кейсов: https://t.me/s/GPT_for_sales
 - Исходная Notion-ссылка, недоступная на момент работы: https://uprosti.notion.site/conversation-designer
 
-## xAI — официальная документация
+## xAI STT — официальная документация
 
 - Voice overview: https://docs.x.ai/developers/model-capabilities/audio/voice
 - Speech to Text: https://docs.x.ai/developers/model-capabilities/audio/speech-to-text
-- Text to Speech: https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
 - Voice REST/WebSocket reference: https://docs.x.ai/developers/rest-api-reference/inference/voice
 - Pricing: https://docs.x.ai/developers/pricing
 
-Использованные текущие параметры: Streaming STT `$0.20/hour`, TTS `$15/1M characters`; STT WSS `/v1/stt`, TTS WSS `/v1/tts`; Russian language support; PCM streaming. В списке голосов `iris` описан как подходящий для Sales Support, `eve` — универсальный fallback. Возможный бесплатный allowance конкретного аккаунта не считается публичной гарантией цены.
+xAI используется только для Streaming STT. Текущие account rate и runtime behavior записываются в release evidence; числовая стоимость не фиксируется в этой спецификации.
+
+## OpenRouter TTS — официальная документация
+
+- TTS guide: https://openrouter.ai/docs/guides/overview/multimodal/tts
+- Create speech API: https://openrouter.ai/docs/api/api-reference/tts/create-speech
+- Speech-output model discovery: https://openrouter.ai/api/v1/models?output_modalities=speech
+- Filtered models page: https://openrouter.ai/models?input_modalities=text&output_modalities=speech
+- P0 model page: https://openrouter.ai/x-ai/grok-voice-tts-1.0
+- Authentication: https://openrouter.ai/docs/api_reference/authentication
+- Errors and debugging: https://openrouter.ai/docs/api_reference/errors-and-debugging
+- App attribution: https://openrouter.ai/docs/app-attribution
+
+OpenRouter TTS is paid usage; no free tier is assumed. Default release candidate profile is `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`, but availability, voices and prices are runtime facts verified before release. P0 transport is backend-only native Bun `fetch` to `/api/v1/audio/speech`.
 
 ## OpenAI Codex — официальная документация
 

@@ -1,23 +1,26 @@
 ---
 title: "Botamin Voice Sales Agent — техническая спецификация"
-subtitle: "React + Bun + xAI Voice + Codex subscription / GPT-5.6 Luna"
+subtitle: "React + Bun + xAI STT + OpenRouter TTS + Codex subscription / GPT-5.6 Luna"
 author: "Architecture & delivery handoff"
-date: "30 июля 2026"
+date: "31 июля 2026"
 lang: ru-RU
 ---
 
 # Botamin Voice Sales Agent — техническая спецификация
 
-**Версия:** 0.2  
-**Статус:** основа для передачи агентам-разработчикам  
-**Deployment target:** одна trusted VPS, один Docker Compose  
-**Runtime split:** xAI Streaming STT/TTS + Codex app-server / `gpt-5.6-luna`
+**Версия:** 0.4-demo
+
+**Статус:** основа для передачи агентам-разработчикам
+
+**Deployment target:** одна trusted VPS, один Docker Compose
+
+**Runtime split:** xAI Streaming STT → Codex app-server / `gpt-5.6-luna` → OpenRouter TTS (native Bun fetch, complete MP3 phrase segments)
 
 > Ключевой инвариант: внутренняя бронь создаётся до любой опциональной квалификации. После `booking.created` отказ, обрыв или ошибка квалификации не отменяют и не удаляют лид.
 
 ## Карта пакета
 
-Эта сводная версия объединяет scope, PRD, исследование Botamin, архитектуру, conversation design, API/data contracts, deployment/security, ADR, тестирование, сравнение AI-библиотек и parallel delivery plan. Machine-readable backlog и отдельные задания агентам находятся в `tasks/`.
+Эта сводная версия объединяет scope, PRD, исследование Botamin, архитектуру, conversation design, API/data contracts, deployment/security, ADR, тестирование, сравнение AI-библиотек и parallel delivery plan. Machine-readable backlog и отдельные задания агентам находятся в `tasks/`. TTS decisions follow `corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md`; correction files are intentionally not assembled into this generated document.
 
 <div class="page-break"></div>
 
@@ -51,7 +54,7 @@ MVP должен выглядеть как небольшой реальный �
 - браузерный доступ к микрофону;
 - потоковый STT на русском;
 - текстовое рассуждение и ответ через GPT-5.6 Luna в Codex;
-- потоковый TTS;
+- phrase-level TTS через полные MP3-сегменты, запускаемый до завершения полного ответа;
 - interruption/barge-in на базовом уровне;
 - управляемая state machine разговора;
 - product knowledge из Botamin-сайта и Telegram-кейсов;
@@ -85,15 +88,15 @@ MVP должен выглядеть как небольшой реальный �
 | Язык | русский; структура допускает локализацию |
 | Канал | браузерный voice widget |
 | Мозг | Codex app-server, `gpt-5.6-luna` |
-| Voice | xAI Streaming STT + Streaming TTS |
-| Голос | `XAI_TTS_VOICE`; сначала сравнить `iris` (sales-support tone) и `eve`, затем оставить лучший русский smoke-test |
+| Voice | xAI Streaming STT + OpenRouter TTS через backend-only TypeScript/Bun adapter |
+| TTS profile | `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`, все значения конфигурируемы; usage платный, бесплатный tier не предполагается |
 | Backend | Bun + TypeScript, Hono как лёгкий HTTP/WS слой |
 | Frontend | React + TypeScript + Vite |
 | Storage | SQLite в WAL-режиме, Drizzle migrations |
 | Notifications | console обязательно; webhook — адаптер |
 | Calendar | отсутствует |
 | Prompts | Markdown в Git |
-| Deployment | один Compose project на одной VPS |
+| Deployment | один Compose project на одной VPS; только app + Caddy в P0 application path |
 | Raw audio retention | выключено |
 | Qualification | включаемая опция, только после booking |
 
@@ -113,7 +116,7 @@ MVP должен выглядеть как небольшой реальный �
 - **Booking** — внутренняя запись о согласованном следующем шаге, не календарное событие.
 - **Qualification** — необязательные сведения, добавляемые к уже существующей брони.
 - **BrainPort** — внутренний интерфейс текстового LLM-мозга.
-- **VoicePort** — внутренние интерфейсы STT/TTS.
+- **VoicePort** — provider-neutral внутренние `SttPort` и `TtsPort`; один TTS request возвращает один полный `audio/mpeg` phrase segment.
 - **Barge-in** — пользователь начинает говорить во время ответа агента.
 - **Tool** — строго валидируемая backend-операция с доменным эффектом.
 - **Luna** — модель `gpt-5.6-luna`, доступная через Codex.
@@ -158,7 +161,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 |---|---|---|
 | US-001 | Как посетитель, я запускаю разговор одной кнопкой | запрашивается mic permission, UI показывает состояние |
 | US-002 | Я говорю естественно по-русски | interim transcript отображается, финал не режет фразу посередине |
-| US-003 | Агент отвечает голосом и текстом | первый звук приходит потоково, ответ не содержит markdown-мусора |
+| US-003 | Агент отвечает голосом и текстом | первая полная MP3-фраза может проиграться до завершения ответа Luna; ответ не содержит markdown-мусора |
 | US-004 | Агент понимает, зачем я пришёл | задаёт не более одного вопроса за раз, фиксирует роль/задачу |
 | US-005 | Агент объясняет Botamin на релевантном примере | использует только утверждённые knowledge claims |
 | US-006 | Я могу возразить или перебить | проигрывание останавливается, новый turn обрабатывается |
@@ -177,9 +180,13 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-VOICE-002:** браузер передаёт mono PCM16, 16 kHz, чанками около 100 ms.
 - **FR-VOICE-003:** backend держит xAI credentials только server-side.
 - **FR-VOICE-004:** partial transcript доступен UI; в Luna отправляется только финальная пользовательская реплика.
-- **FR-VOICE-005:** при barge-in клиент немедленно очищает очередь playback, backend отменяет текущий TTS и по возможности `turn/interrupt`.
+- **FR-VOICE-005:** при barge-in клиент немедленно останавливает playback и очищает очередь, backend abort-ит OpenRouter fetches текущего `generationId` и по возможности вызывает `turn/interrupt`.
 - **FR-VOICE-006:** reconnect не должен создавать вторую бронь.
-- **FR-VOICE-007:** stop завершает внешние WebSocket-соединения и фиксирует событие.
+- **FR-VOICE-007:** stop завершает внешние соединения и фиксирует событие.
+- **FR-VOICE-008:** OpenRouter вызывается только backend-ом; browser получает provider-neutral полные `audio/mpeg` phrase segments в sequence order.
+- **FR-VOICE-009:** TTS failure сохраняет видимый текст и все уже committed business side effects; synthesis retry не повторяет brain turn или tools.
+- **FR-VOICE-010:** перед TTS удаляются PII, tool envelopes, hidden IDs, Markdown, code fences и raw URLs; hard limit сегмента — configurable, default 240 chars.
+- **FR-VOICE-011:** per-segment, per-turn и per-session character budgets, concurrency и response-size guards переводят audio path в text-only mode без изменения видимого ответа.
 
 ### 4.2 Brain and orchestration
 
@@ -245,7 +252,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 | ID | Требование | Цель MVP |
 |---|---|---|
-| NFR-LAT-001 | speech-final → первый слышимый звук | p50 ≤ 1.6 s, p95 ≤ 3.0 s |
+| NFR-LAT-001 | speech-final → playback первой полной MP3-фразы | p50 ≤ 1.6 s, p95 ≤ 3.0 s; подтвердить измерением release profile |
 | NFR-REL-001 | успешность `create_booking` при валидных данных | ≥ 99.5% внутри приложения |
 | NFR-IDEM-001 | дубли брони при retry/reconnect | 0 в тестовой матрице |
 | NFR-SEC-001 | TLS | обязательно в production |
@@ -286,7 +293,8 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - qualification completeness;
 - drop-off stage distribution;
 - p50/p95 time-to-first-audio;
-- provider error rate;
+- provider error rate, OpenRouter circuit state и доля text-only degradation;
+- OpenRouter TTS character usage без spoken-text logging;
 - duplicate booking rate;
 - доля диалогов с manual review flag.
 
@@ -455,10 +463,12 @@ Sticky/inline widget с transcript, статусом и одной главно�
 
 Архитектура намеренно разделяет голос и интеллект:
 
-- **xAI STT** — потоковая транскрибация;
+- **xAI Streaming STT** — потоковая транскрибация;
 - **Codex app-server + GPT-5.6 Luna** — текстовый reasoning, dialogue policy и tool decisions;
-- **xAI TTS** — потоковая озвучка;
-- **Bun backend** — единственный владелец state, tools, credentials и persistence.
+- **OpenRouter TTS** — backend-only paid synthesis через native Bun `fetch`;
+- **Bun backend** — единственный владелец state, tools, credentials, TTS budgets и persistence.
+
+Действующий pipeline: **xAI STT → Codex/Luna → speech sanitizer + phrase chunker → OpenRouter TTS → complete `audio/mpeg` phrase segments**. OpenRouter key никогда не передаётся browser-у.
 
 Это отличается от end-to-end speech-to-speech: добавляется один orchestration layer, зато используется уже оплаченная Codex subscription и мозг можно заменить без переделки audio UI.
 
@@ -472,12 +482,13 @@ Sticky/inline widget с transcript, статусом и одной главно�
 - AudioWorklet capture;
 - resample browser audio до mono PCM16 16 kHz;
 - отправка бинарных чанков около 100 ms;
-- playback queue для PCM TTS;
-- barge-in: stop local playback сразу;
+- ordered playback queue для полных MP3 phrase segments;
+- decode через Web Audio или `HTMLAudio`;
+- barge-in: немедленно stop local playback и clear queue;
 - rendering transcript/state/errors;
 - reconnect с тем же `conversationId`, если сессия ещё жива.
 
-Клиент не знает xAI/OpenAI ключи и не вызывает providers напрямую.
+Клиент не знает xAI, OpenRouter или Codex credentials и не вызывает providers напрямую.
 
 ### Bun API / WebSocket gateway
 
@@ -532,14 +543,20 @@ P0 transport — direct typed JSON-RPC к app-server. Универсальный
 - отправляет raw binary frames;
 - эмитит partial, chunk-final и speech-final.
 
-### XaiTtsAdapter
+### OpenRouterTtsAdapter
 
-- server-side WSS к `wss://api.x.ai/v1/tts`;
-- `language=ru`, configurable voice; initial candidates: `iris`, then `eve` fallback;
-- `codec=pcm`, `sample_rate=24000`, streaming latency optimization;
-- получает `text.delta`, возвращает base64 `audio.delta`;
-- держит persistent connection на conversation или небольшой pool;
-- умеет cancel/drop текущего utterance.
+- server-side native Bun `fetch` к `POST https://openrouter.ai/api/v1/audio/speech`;
+- default profile: `x-ai/grok-voice-tts-1.0`, voice `eve`, `response_format=mp3`;
+- model, voice, speed и format задаются env; `speed` не отправляется, если empty;
+- `Authorization` и optional attribution headers остаются server-side; `X-OpenRouter-Cache: false` обязателен для user-specific speech;
+- один HTTP request синтезирует одну короткую фразу; весь response буферизуется, проверяется как непустой bounded `audio/mpeg`, затем эмитится одним atomic segment;
+- raw network chunks не считаются самостоятельно playable MP3;
+- `AbortSignal` отменяет fetch, а generation filtering отбрасывает late result;
+- `429` и retryable `5xx` получают не более одного bounded retry; `400/401/402/403/404/413` не ретраятся по умолчанию;
+- `401`, `402` и `404` открывают safe degraded mode; text answer, booking и qualification продолжают работать;
+- circuit breaker открывается после трёх consecutive retryable failures и half-opens после cooldown;
+- per-segment/turn/session character budgets, concurrency и maximum response bytes ограничены;
+- telemetry содержит model/voice/format/chars/status/latency/bytes и safe IDs, но не spoken text, PII, key или audio.
 
 ### BookingService
 
@@ -572,10 +589,11 @@ P0 adapter — structured console JSON. P1 — signed HTTP webhook с retry/outb
 3. На `speech_final=true` transcript становится user turn.
 4. Orchestrator добавляет stage, known slots, booking status и краткий dialogue context.
 5. Codex thread получает `turn/start`.
-6. Text deltas проходят sanitizer и sentence chunker.
-7. Законченная короткая фраза немедленно отправляется в xAI TTS.
-8. PCM chunks идут в browser playback queue.
-9. Tool call исполняется транзакционно и результат возвращается brain.
+6. Text deltas проходят PII-safe sanitizer и bounded phrase chunker.
+7. Законченная короткая фраза отправляется в OpenRouter; один request соответствует одному segment.
+8. После проверки один полный `audio/mpeg` segment идёт в browser ordered playback queue.
+9. Tool call исполняется транзакционно и результат возвращается brain независимо от audio path.
+10. TTS retry повторяет только pure synthesis request и никогда не повторяет Luna turn, notifier или business tools.
 
 ## 4. Latency design
 
@@ -584,18 +602,18 @@ P0 adapter — structured console JSON. P1 — signed HTTP webhook с retry/outb
 - end-of-turn decision: 300–700 ms;
 - application overhead: < 50 ms p50;
 - Luna first delta: target ≤ 900 ms;
-- sentence buffer: 100–250 ms;
-- TTS first audio: target ≤ 300 ms;
-- total target: p50 ≤ 1.6 s, p95 ≤ 3.0 s.
+- first phrase buffer: default target 100 chars, idle flush 350 ms;
+- OpenRouter request + complete MP3 response: измеряется отдельно для release profile, без provider latency guarantee;
+- total target: p50 ≤ 1.6 s, p95 ≤ 3.0 s, подтверждается target-VPS evidence.
 
 ### Приёмы снижения задержки
 
 - не отправлять interim transcript в отдельный LLM turn;
 - Luna effort `low`/минимально доступный после model capability check;
 - короткий state context вместо полного event log;
-- stream TTS по завершённым фразам, а не ждать полного ответа;
-- заранее синтезировать статическое первое приветствие опционально;
-- переиспользовать xAI TTS WSS;
+- запускать phrase-level synthesis до завершения полного Luna ответа;
+- первая фраза 60–120 chars, normal soft target 120–180, hard limit 240;
+- держать не более одного playing и одного prefetched segment;
 - исключить RAG/network tools из критического пути;
 - не делать второй classifier call на каждый turn.
 
@@ -663,7 +681,36 @@ type BrainEnvelope = {
 
 В этом режиме TTS обычно стартует после получения валидного envelope, поэтому задержка выше. Feature flag позволяет не блокировать релиз, если dynamic tools изменятся.
 
-## 7. State machine
+## 7. Provider-neutral TtsPort
+
+```ts
+export type TtsSynthesisRequest = {
+  conversationId: string;
+  turnId: string;
+  generationId: string;
+  segmentId: string;
+  text: string;
+  signal: AbortSignal;
+};
+
+export type TtsAudioSegment = {
+  generationId: string;
+  segmentId: string;
+  providerGenerationId?: string;
+  contentType: "audio/mpeg";
+  bytes: Uint8Array;
+  final: true;
+};
+
+export interface TtsPort {
+  synthesize(request: TtsSynthesisRequest): Promise<TtsAudioSegment>;
+  health(): Promise<"ready" | "degraded" | "unavailable">;
+}
+```
+
+Shared packages не импортируют provider SDK types. Cancellation выполняется request `AbortSignal` плюс `generationId`; provider adapter не меняет public contract.
+
+## 8. State machine
 
 ![Conversation state](diagrams/03-conversation-state.svg)
 
@@ -675,21 +722,21 @@ transition(currentState, domainEvent) => nextState | TransitionError
 
 LLM не может напрямую записать произвольный next state. Он предлагает intent/action, orchestrator применяет допустимый transition.
 
-## 8. Barge-in
+## 9. Barge-in
 
 При детекции начала пользовательской речи во время `speaking`:
 
 1. client немедленно очищает audio queue;
 2. client посылает `playback.interrupted`;
 3. backend помечает текущий response generation как superseded;
-4. закрывает/сбрасывает текущий TTS utterance;
+4. abort-ит in-flight OpenRouter requests этой generation;
 5. вызывает `turn/interrupt`, если Codex turn ещё активен;
 6. STT продолжает принимать речь;
-7. поздние deltas старого generation игнорируются по `generationId`.
+7. поздние text и complete MP3 segments старой generation игнорируются по `generationId`.
 
-Ключевой контракт: **устаревший audio chunk никогда не проигрывается после нового user turn**.
+Ключевой контракт: **устаревший complete audio segment никогда не проигрывается после нового user turn**. OpenRouter-specific cancellation contract не предполагается; cancellation локальна.
 
-## 9. Предлагаемый repository layout
+## 10. Предлагаемый repository layout
 
 ```text
 /
@@ -702,7 +749,8 @@ LLM не может напрямую записать произвольный n
       src/http/
       src/ws/
       src/orchestrator/
-      src/providers/xai/
+      src/providers/xai/stt/
+      src/providers/openrouter/tts/
       src/providers/codex/
       src/domain/booking/
       src/notifiers/
@@ -733,28 +781,54 @@ LLM не может напрямую записать произвольный n
   package.json
 ```
 
-## 10. Основные env variables
+## 11. Основные env variables
+
+`.env.example` is the exact active matrix; local defaults are reproduced here without secrets:
 
 ```dotenv
-APP_ORIGIN=https://example.com
-DATABASE_URL=file:/data/app.db
+APP_ORIGIN=http://localhost:5173
+DATABASE_URL=file:./data/app.db
 LOG_LEVEL=info
 
 BRAIN_PROVIDER=codex-subscription
 CODEX_MODEL=gpt-5.6-luna
 CODEX_EFFORT=low
-CODEX_HOME=/codex-home
+CODEX_HOME=/home/your-user/.local/share/botamin-voice/codex-home
 CODEX_TOOL_MODE=dynamic
-CODEX_CWD=/app/runtime-brain
+CODEX_CWD=.runtime/brain
 CODEX_MAX_CONCURRENT_TURNS=3
 
-XAI_API_KEY=...
+XAI_API_KEY=
 XAI_STT_LANGUAGE=ru
 XAI_STT_SMART_TURN=0.7
 XAI_STT_SMART_TURN_TIMEOUT_MS=3000
-XAI_TTS_LANGUAGE=ru
-XAI_TTS_VOICE=iris
-XAI_TTS_SAMPLE_RATE=24000
+
+TTS_PROVIDER=openrouter
+OPENROUTER_API_KEY=
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_TTS_MODEL=x-ai/grok-voice-tts-1.0
+OPENROUTER_TTS_VOICE=eve
+OPENROUTER_TTS_RESPONSE_FORMAT=mp3
+OPENROUTER_TTS_SPEED=
+OPENROUTER_HTTP_REFERER=http://localhost:5173
+OPENROUTER_APP_TITLE=Botamin Voice Demo
+
+TTS_FIRST_SEGMENT_TARGET_CHARS=100
+TTS_SOFT_SEGMENT_CHARS=160
+TTS_MAX_SEGMENT_CHARS=240
+TTS_IDLE_FLUSH_MS=350
+TTS_PREFETCH_SEGMENTS=1
+TTS_MAX_CONCURRENCY=2
+TTS_CONNECT_TIMEOUT_MS=8000
+TTS_TOTAL_TIMEOUT_MS=20000
+TTS_MAX_RETRIES=1
+TTS_RETRY_BASE_MS=400
+TTS_CIRCUIT_BREAKER_FAILURES=3
+TTS_CIRCUIT_BREAKER_COOLDOWN_MS=60000
+TTS_TEXT_ONLY_FALLBACK=true
+TTS_MAX_CHARS_PER_SEGMENT=240
+TTS_MAX_CHARS_PER_TURN=1800
+TTS_MAX_CHARS_PER_SESSION=8000
 
 POST_BOOKING_QUALIFICATION_ENABLED=true
 NOTIFIER=console
@@ -936,17 +1010,16 @@ Prompt compiler:
 
 ## 7. Speech sanitizer
 
-До xAI TTS:
+Перед OpenRouter TTS:
 
-- убрать markdown headings, bullets, code fences;
-- не озвучивать URLs;
+- убрать Markdown headings, bullets, code fences, raw URLs и tool envelopes;
+- исключить hidden IDs, system messages и structured payloads;
+- redact phone, email и Telegram handle до отправки provider-у;
 - заменить технические аббревиатуры на произносимый вариант при необходимости;
-- удалить tool/debug фрагменты;
-- ограничить одну TTS-фразу разумной длиной;
-- не отправлять незакрытые JSON/markdown fragments;
+- не отправлять незакрытые JSON/Markdown fragments или punctuation-only segments;
 - сохранить пунктуацию, важную для интонации.
 
-Sentence chunker выпускает фразу по `.`, `?`, `!`, `;` или безопасному length threshold, но не режет email, телефон и сокращения.
+Bounded phrase chunker выпускает первую фразу примерно при 60–120 chars, normal segments при 120–180 chars и никогда не превышает configured hard limit 240 chars. Он не режет число, abbreviation, email или company name посередине. Один segment соответствует одному полному MP3 response; cross-model fallback в P0 отсутствует.
 
 ## 8. Tools
 
@@ -1005,7 +1078,7 @@ Backend возвращает safe result:
 
 ### TTS failure
 
-Показать текст ответа и кнопку retry audio; не повторять tool effect.
+Показать текст ответа и кнопку retry audio; не повторять Luna turn, notifier или tool effect. Budget/circuit failure также переводит только audio path в text-only mode.
 
 ## 11. Минимальный пример happy path
 
@@ -1047,7 +1120,7 @@ Backend возвращает safe result:
 - Все события содержат `conversationId`, а booking events также `bookingId`.
 - Версия контракта передаётся как `v: 1`.
 - Ошибки providers не пробрасываются клиенту напрямую.
-- Binary WebSocket frames используются только для PCM audio.
+- Binary WebSocket frames несут client PCM16 input или один полный server MP3 phrase payload; arbitrary provider network chunks никогда не публикуются как playable audio.
 - Tool handlers не доступны как публичные HTTP endpoints.
 
 ## 2. REST endpoints
@@ -1081,7 +1154,8 @@ Response `201`:
     "inputSampleRate": 16000,
     "inputEncoding": "pcm16le",
     "chunkMs": 100,
-    "outputSampleRate": 24000
+    "outputContentType": "audio/mpeg",
+    "outputMode": "complete-phrase-segments"
   }
 }
 ```
@@ -1103,7 +1177,8 @@ Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`.
 - DB write/read;
 - Codex app-server handshake;
 - наличие auth и модели Luna в `model/list`;
-- конфигурацию xAI key;
+- конфигурацию xAI key для STT;
+- при `TTS_PROVIDER=openrouter`: наличие `OPENROUTER_API_KEY`, schema-valid model/voice/`mp3`, доступность queue/circuit state и разрешённый text-only startup policy;
 - prompt bundle checksum;
 - возможность принять новую conversation по concurrency guard.
 
@@ -1172,7 +1247,7 @@ Server:
 | `transcript.final` | turnId/text |
 | `assistant.text.delta` | generationId/text |
 | `assistant.text.done` | generationId/fullText |
-| `assistant.audio.chunk` | **binary frame preceded by metadata event or multiplex header** |
+| `audio.segment` | generationId, segmentId, sequence, `contentType=audio/mpeg`, byteLength, `final=true`; immediately followed by one complete binary MP3 payload |
 | `assistant.audio.done` | generationId |
 | `assistant.interrupted` | generationId |
 | `booking.created` | safe booking summary |
@@ -1183,24 +1258,69 @@ Server:
 
 ### Binary framing
 
-Рекомендуемый простой формат одного WSS:
+Client microphone frames remain PCM16LE. Server audio is an atomic phrase-level MP3 payload associated with the preceding `audio.segment` metadata event:
 
 ```text
-byte 0      message kind: 0x01 = client PCM, 0x02 = server PCM
-bytes 1–8   uint64 generation/stream sequence
-bytes 9…    raw PCM16LE payload
+client binary: kind=0x01, stream sequence, raw PCM16LE
+server metadata JSON: audio.segment(generationId, segmentId, sequence, audio/mpeg, byteLength, final=true)
+server binary: kind=0x02, segment sequence, one complete MP3 file payload
 ```
 
-Альтернатива — два WebSocket канала; для MVP один multiplexed socket проще в эксплуатации.
+The implementation may use a referenced binary payload instead of adjacency if it preserves the same identity, ordering and size contract. It must never expose partial `response.body` chunks as independent MP3 files.
 
 ### Ordering
 
 - `seq` монотонно растёт для JSON events в одной conversation.
-- audio chunks имеют `generationId` и `audioSeq`.
-- client игнорирует chunks с generationId, который уже interrupted.
+- audio segments имеют `generationId`, unique `segmentId` и monotonic `sequence`.
+- client decodes/plays complete segments in order and ignores segments from an interrupted or obsolete generation.
+- одновременно допустимы максимум один playing и один prefetched segment.
 - booking events записываются в DB до отправки клиенту.
 
-## 4. Tool contracts
+## 4. Provider-neutral TTS contracts
+
+```ts
+export type TtsSynthesisRequest = {
+  conversationId: string;
+  turnId: string;
+  generationId: string;
+  segmentId: string;
+  text: string;
+  signal: AbortSignal;
+};
+
+export type TtsAudioSegment = {
+  generationId: string;
+  segmentId: string;
+  providerGenerationId?: string;
+  contentType: "audio/mpeg";
+  bytes: Uint8Array;
+  final: true;
+};
+
+export interface TtsPort {
+  synthesize(request: TtsSynthesisRequest): Promise<TtsAudioSegment>;
+  health(): Promise<"ready" | "degraded" | "unavailable">;
+}
+```
+
+The adapter validates `2xx`, compatible `audio/mpeg`, non-empty bounded bytes and current `generationId` before returning. OpenRouter types and response objects do not cross `TtsPort`.
+
+### OpenRouter failure mapping
+
+| HTTP | Mapping | Retry/degradation |
+|---:|---|---|
+| 400 | invalid request/profile | no retry |
+| 401 | key/config error | no retry; open circuit, readiness/config signal |
+| 402 | insufficient credits | no retry; open circuit, text-only |
+| 403 | policy restriction | no retry by default |
+| 404 | model unavailable/config error | no retry; open circuit |
+| 413 | chunker/request defect | no retry |
+| 429 | rate limited | at most one retry; honor bounded `Retry-After` |
+| 500/502/503/524/529 | gateway/upstream | at most one bounded retry |
+
+Non-2xx body is parsed as bounded JSON/text and never forwarded as audio. No retry occurs after abort or after a segment was accepted for playback. Retry repeats only synthesis, not Luna, `create_booking`, `append_booking_qualification` or notifier.
+
+## 5. Tool contracts
 
 ### `create_booking`
 
@@ -1271,7 +1391,7 @@ type AppendQualificationResult = {
 };
 ```
 
-## 5. Domain policy до tool execution
+## 6. Domain policy до tool execution
 
 ```ts
 switch (tool.name) {
@@ -1288,7 +1408,7 @@ switch (tool.name) {
 
 LLM-provided `conversationId`, `bookingId` и consent сверяются с server-side session; нельзя доверять им как единственному источнику.
 
-## 6. SQLite model
+## 7. SQLite model
 
 ### `conversations`
 
@@ -1367,7 +1487,7 @@ Append-only audit:
 - next attempt;
 - last error.
 
-## 7. Транзакция booking create
+## 8. Транзакция booking create
 
 ```text
 BEGIN IMMEDIATE
@@ -1389,7 +1509,7 @@ COMMIT
 3. assistant получает safe tool result;
 4. только потом orchestrator разрешает qualification stage.
 
-## 8. Notification payloads
+## 9. Notification payloads
 
 ### Created
 
@@ -1435,7 +1555,7 @@ COMMIT
 
 Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` и содержит event ID для deduplication.
 
-## 9. Safe error taxonomy
+## 10. Safe error taxonomy
 
 | Code | Retry | User-facing behavior |
 |---|---|---|
@@ -1452,7 +1572,7 @@ Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` �
 | `DB_UNAVAILABLE` | no create | не подтверждать booking |
 | `NOTIFIER_FAILED` | async retry | booking всё равно создан |
 
-## 10. Retention
+## 11. Retention
 
 - raw audio: не хранить;
 - transcript: configurable retention, default 30 дней для MVP;
@@ -1470,10 +1590,12 @@ Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` �
 
 ![Deployment](diagrams/05-deployment.svg)
 
-Один `docker-compose.yml`, два сервиса допустимы и рекомендуются:
+Один `docker-compose.yml`, ровно два application-path сервиса рекомендуются:
 
-1. `app` — Bun server, React static, Codex app-server child process, SQLite access.
+1. `app` — Bun server, React static, Codex app-server child process, SQLite access и native HTTPS `fetch` к OpenRouter.
 2. `caddy` — TLS termination и WebSocket reverse proxy.
+
+Отдельного TTS runtime/container нет. OpenRouter вызывается напрямую из `app` по HTTPS.
 
 Persistent volumes:
 
@@ -1523,7 +1645,7 @@ Multi-stage:
 5. compile prompt bundle в isolated `/app/runtime-brain/AGENTS.md`;
 6. runtime image содержит только production assets, migrations, source Markdown prompts и compiled safe runtime bundle.
 
-Не использовать floating `latest` для Codex в production. Версия CLI фиксируется, потому что app-server schemas version-specific.
+Не использовать floating `latest` для Codex в production. Версия CLI фиксируется, потому что app-server schemas version-specific. `OPENROUTER_API_KEY` inject-ится только runtime secret/env и отсутствует в build args, layers, image history и rendered Compose evidence.
 
 ## 4. Codex subscription auth на VPS
 
@@ -1606,7 +1728,8 @@ Deployment script делает:
 - raw audio не сохраняется;
 - PII redaction в общих логах;
 - contact values доступны только booking payload и защищённому storage;
-- `.env`, xAI key, webhook secret, Codex auth не попадают в logs;
+- `.env`, xAI/OpenRouter keys, webhook secret, Codex auth не попадают в logs;
+- browser bundle и events не содержат OpenRouter key или direct provider URL;
 - DB volume и backup с ограниченными permissions;
 - privacy/consent copy перед микрофоном;
 - deletion runbook по `conversationId`/`bookingId`;
@@ -1639,9 +1762,9 @@ PII не включается в generic logs.
 - audio input bytes/duration;
 - STT speech-final latency;
 - brain queue time, first delta, completion;
-- TTS first audio and generated chars;
-- speech-final → first playback;
-- interrupted generation count;
+- OpenRouter TTS request/completion latency, status, bounded bytes and character usage;
+- speech-final → playback первой complete MP3 phrase;
+- interrupted/stale segment count, circuit state, budget rejection и text-only degradation;
 - booking create/update success/error;
 - notifier outbox lag;
 - provider error/rate-limit counts;
@@ -1658,11 +1781,12 @@ PII не включается в generic logs.
 | DB | no | read+write |
 | prompts | no | checksum/parse |
 | Codex process | no | handshake/model/auth |
-| xAI | no | key/config; optional lightweight check |
-| capacity | no | queue below threshold |
+| xAI STT | no | key/config; optional lightweight check |
+| OpenRouter TTS | no | key/model/voice/format schema, queue/circuit state; no network call on every check |
+| capacity | no | brain/TTS queues below threshold |
 | notifier | no | outbox worker running; external outage не блокирует booking |
 
-Notifier failure не должен делать app unready, если outbox сохраняет событие.
+Notifier failure не должен делать app unready, если outbox сохраняет событие. TTS config failure may allow startup only when `TTS_TEXT_ONLY_FALLBACK=true`; readiness must expose degraded state rather than pretending OpenRouter is ready. Healthchecks never spend OpenRouter usage.
 
 ## 9. Backup and restore
 
@@ -1689,6 +1813,10 @@ Notifier failure не должен делать app unready, если outbox с�
 MAX_ACTIVE_CONVERSATIONS
 MAX_CONCURRENT_BRAIN_TURNS
 MAX_PENDING_BRAIN_TURNS
+TTS_MAX_CONCURRENCY
+TTS_PREFETCH_SEGMENTS
+TTS_MAX_CHARS_PER_TURN
+TTS_MAX_CHARS_PER_SESSION
 SESSION_MAX_MINUTES
 TURN_TIMEOUT_MS
 ```
@@ -1702,7 +1830,10 @@ TURN_TIMEOUT_MS
 | Codex auth expired | readiness 503, admin alert; существующая booking не теряется |
 | Luna quota/rate limit | очередь с коротким timeout; затем graceful user message |
 | xAI STT down | остановить voice input, не придумывать transcript |
-| xAI TTS down | показать text response; tool effects не повторять |
+| OpenRouter `401`/`404` | config failure: open TTS circuit, signal readiness/degraded policy, keep text/booking |
+| OpenRouter `402` | credits exhausted: no retry, open TTS circuit, text-only |
+| OpenRouter `429`/retryable `5xx` | at most one bounded synthesis-only retry, then text-only/circuit policy |
+| TTS timeout, budget or invalid audio | drop audio segment, keep visible text and tool effects; never repeat Luna/tools |
 | DB locked/error | не подтверждать booking до commit |
 | notifier down | outbox retry; booking считается созданной |
 | client disconnect before booking | conversation `disconnected` |
@@ -1731,6 +1862,16 @@ docker compose run --rm app codex login status
 docker compose up -d app
 ```
 
+### OpenRouter deploy smoke
+
+After runtime secrets are installed on the target VPS:
+
+```bash
+docker compose run --rm app bun run scripts/openrouter-tts-smoke.ts
+```
+
+This external paid smoke is deploy/manual-only, writes MP3 outside the repository or to an ignored artifact path, requires `2xx`, `audio/mpeg` and non-empty bytes, and prints only status, latency, byte count and safe generation/artifact IDs. It exits non-zero for missing key, `401`, `402`, `404`, wrong content type or empty audio. It is not part of default CI and is not claimed by this documentation migration.
+
 ### Inspect last booking events
 
 ```bash
@@ -1752,7 +1893,7 @@ docker compose logs app --since 30m | grep 'booking\.'
 
 # 07. Trade-offs и Architecture Decision Records
 
-## ADR-001. Разделить xAI voice и Codex/Luna brain
+## ADR-001. Разделить speech providers и Codex/Luna brain
 
 **Статус:** accepted.
 
@@ -1760,7 +1901,7 @@ docker compose logs app --since 30m | grep 'booking\.'
 
 - xAI Streaming STT: речь → текст;
 - Codex app-server + `gpt-5.6-luna` по умолчанию: диалог, policy, tools; model/effort остаются конфигурацией;
-- xAI Streaming TTS: текст → речь.
+- OpenRouter TTS: текст → complete MP3 phrase segments через server-side Bun adapter.
 
 ### Почему
 
@@ -1869,22 +2010,17 @@ Prompt-only state считается недостаточным. LLM может 
 
 Плюсы: меньше потерянных лидов и ясная транзакционная граница. Минусы: booking может быть менее подробно квалифицирована. Этот минус ожидаем и допустим.
 
-## ADR-011. PCM streaming вместо MP3 в low-latency path
+## ADR-011. PCM speech output path
 
-**Статус:** proposed/validate in spike.
+**Статус:** rejected for P0 / superseded by ADR-015.
 
-PCM проще очередить и немедленно останавливать через Web Audio, но требует больше bandwidth. Для коротких browser sessions на VPS это приемлемо. Если Safari/сеть создают проблемы, adapter допускает MP3 fallback.
+Raw PCM applies only to browser microphone input. P0 speech output uses complete `audio/mpeg` phrase segments; arbitrary network response chunks are not treated as playable files.
 
-## ADR-012. Голос и предполагаемый бесплатный TTS — конфигурация, не архитектурная гарантия
+## ADR-012. TTS profile and paid usage are configuration facts
 
-**Статус:** accepted.
+**Статус:** superseded by ADR-015.
 
-Владелец ожидает использовать доступный ему бесплатный allowance/кредиты xAI TTS. Архитектура это допускает, но не считает нулевую цену гарантией: публичный прайс провайдера может отличаться от условий конкретного аккаунта.
-
-- стартовый smoke-test сравнивает `iris` — голос с заявленным sales-support tone — и `eve` как универсальный fallback;
-- итоговый `voice_id` задаётся через `XAI_TTS_VOICE` и меняется без правок prompts/state machine;
-- TTS adapter считает символы и пишет usage telemetry;
-- cost guardrail и text-only fallback защищают от неожиданного биллинга или исчерпания allowance.
+No free usage allowance is assumed. Model, lowercase voice ID, format and optional speed remain environment configuration. Character telemetry, hard budgets, circuit breaker and text-only degradation protect the demo from uncontrolled paid usage.
 
 ## ADR-013. Codex subscription/Luna — MVP optimization, не production entitlement
 
@@ -1900,27 +2036,26 @@ Guardrails:
 - `BrainPort` допускает отдельный API-key adapter;
 - exhaustion subscription quota переводит сервис в controlled degraded mode, не повреждая booking data.
 
-## Иллюстративная стоимость voice provider
+## ADR-015 — OpenRouter is the P0 TTS gateway
 
-![xAI variable cost](charts/02-xai-variable-cost.png)
+**Status:** accepted.
 
-Допущение одного разговора:
+Use a TypeScript/Bun adapter with native `fetch` against `POST https://openrouter.ai/api/v1/audio/speech`. Default profile: `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`. Do not use Edge Community TTS, Python sidecars or direct xAI TTS in P0. Keep `TtsPort` provider-neutral and retain text-only degradation.
 
-- 5 минут общей длительности;
-- 2.5 минуты пользовательской речи;
-- 3 500 TTS-символов;
-- xAI Streaming STT: `$0.20/hour`;
-- xAI TTS: `$15/1M chars`.
+Consequences and guardrails:
 
-Расчёт:
+- OpenRouter and its upstream are external paid dependencies; no free tier is assumed.
+- One request produces one buffered, validated, complete `audio/mpeg` phrase segment.
+- Only server-side native Bun `fetch` is used; no provider SDK is required for P0.
+- Model/voice availability and price are runtime facts recorded in release evidence, not permanent documentation constants.
+- `401`, `402`, `404`, bounded `429`/retryable `5xx`, circuit breaker, character budgets and text-only behavior follow the contracts in docs 03/05/06.
+- Retry repeats only pure synthesis and never repeats Luna or business side effects.
 
-```text
-STT = 2.5 / 60 × 0.20 = $0.0083
-TTS = 3500 / 1,000,000 × 15 = $0.0525
-Итого ≈ $0.0608 на разговор
-```
+## Metered voice cost inputs
 
-Это planning example, а не счёт: не включены VPS, bandwidth, Codex subscription/credits и реальные пропорции речи.
+![xAI STT + OpenRouter TTS metered usage](charts/02-xai-stt-openrouter-tts-cost.png)
+
+The chart deliberately contains no numeric currency estimate. Variable usage depends on measured xAI STT audio duration and OpenRouter TTS input characters multiplied by the current account/model rates at deployment. The release owner records current pricing evidence and measured volumes; VPS, bandwidth and Codex subscription/credits are accounted separately.
 
 ## Capacity envelope Codex subscription
 
@@ -1952,7 +2087,7 @@ TTS = 3500 / 1,000,000 × 15 = $0.0525
 | R-08 | marketing hallucination | medium | medium/high | allowed claims, evals, source attribution |
 | R-09 | PII leak in logs | medium | high | redaction and log tests |
 | R-10 | cheap VPS resource pressure | medium | medium | guardrails, metrics, bounded buffers |
-| R-11 | xAI price/voice changes | medium | medium | config adapter, cost telemetry |
+| R-11 | OpenRouter model/voice/price or upstream availability changes | medium | medium/high | env profile, external smoke, character telemetry, budget/circuit, text-only |
 | R-12 | user thinks calendar event exists | medium | medium | explicit copy and payload semantics |
 
 ## Revisit triggers
@@ -1962,6 +2097,7 @@ TTS = 3500 / 1,000,000 × 15 = $0.0525
 - одновременно нужно больше одной VPS/реплики;
 - Luna subscription становится bottleneck;
 - median conversations требуют >12 brain turns;
+- OpenRouter model/voice availability or paid rate changes materially;
 - p95 latency стабильно >3 s;
 - dynamic tools ломаются после upgrade;
 - появляется реальная CRM/calendar integration;
@@ -2037,15 +2173,23 @@ Table-driven cases:
 - Russian transcript fixture;
 - no API key in client bundle.
 
-### xAI TTS
+### OpenRouter TTS
 
-- `text.delta`/`text.done` flow;
-- base64 audio decode;
-- PCM sample rate metadata;
-- multi-utterance reuse;
-- cancel/drop behavior;
-- Russian voice smoke test; compare initial candidates `iris` and `eve` for intelligibility, latency and sales tone;
-- text fallback on failure.
+Default deterministic suite uses a protocol-faithful fake `POST /api/v1/audio/speech` and no external credentials:
+
+- successful `audio/mpeg` response and valid MP3 fixture;
+- chunked network body buffered into one complete segment;
+- wrong content type, zero-byte/empty body and invalid MP3 fixture;
+- bounded JSON/text error body never forwarded as audio;
+- `400`, `401`, `402`, `404`, `429` with/without `Retry-After`, `502`, `503`;
+- one-retry maximum, timeout and user abort;
+- stale `generationId` rejected after late completion;
+- circuit open/half-open/closed transitions deterministic;
+- per-segment, per-turn, per-session, concurrency and response-size guards;
+- no spoken text, PII or key in logs/snapshots/client bundles;
+- text-only fallback preserves visible text and booking effects.
+
+External paid tests are tagged `external` and excluded from default CI. Before release, target VPS synthesizes the same Russian sample with each candidate voice actually available; owner chooses by listening and changes only env. The smoke requires `2xx`, compatible `audio/mpeg`, non-empty bytes and safe status/latency/byte evidence.
 
 ### Codex app-server
 
@@ -2066,12 +2210,12 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 ## 4. Integration tests
 
-- fake STT final transcript → fake brain deltas → fake TTS chunks → WS client;
+- fake STT final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
 - real SQLite transaction + fake notifier;
 - booking tool call inside brain turn;
 - booking event appears before qualification prompt/audio;
 - reconnect with same conversation;
-- barge-in while TTS chunks are in flight;
+- barge-in while OpenRouter requests/complete segments are in flight;
 - brain process restart;
 - outbox retry;
 - graceful shutdown/drain.
@@ -2085,11 +2229,13 @@ Playwright with synthetic audio fixture:
 3. mock/allow mic;
 4. stream fixture PCM;
 5. observe transcript;
-6. receive assistant text/audio events;
+6. receive assistant text and ordered complete MP3 segment events;
 7. complete booking;
 8. see booked UI;
 9. continue/skip qualification;
 10. verify backend DB/event payload.
+
+Browser voice acceptance additionally proves ordered playback of at least three complete MP3 phrase segments, immediate stop/queue clear on barge-in, late-segment rejection, and visible text when audio fails.
 
 Browsers:
 
@@ -2198,7 +2344,8 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ## 9. Security tests
 
-- scan built JS for `XAI_API_KEY`, auth tokens and webhook secret;
+- scan built JS for `XAI_API_KEY`, `OPENROUTER_API_KEY`, auth tokens and webhook secret;
+- prove browser never requests `openrouter.ai` directly;
 - origin/CORS rejection;
 - oversized JSON/audio frame;
 - path traversal on dev endpoint;
@@ -2222,10 +2369,12 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 ### Voice
 
 - [ ] Russian STT works on real microphone.
-- [ ] TTS is understandable in chosen voice.
+- [ ] Chosen OpenRouter voice is understandable in the target-VPS Russian smoke.
+- [ ] Complete `audio/mpeg` phrase segments decode in sequence in Chromium and WebKit.
 - [ ] Partial transcript is visible.
-- [ ] Barge-in stops old playback.
-- [ ] TTS failure preserves text UX.
+- [ ] Barge-in stops old playback, clears queue and drops late segments.
+- [ ] `401`/`402`/`404`, budget and circuit failures preserve text UX and booking.
+- [ ] No TTS retry repeats Luna, notifier or business tools.
 
 ### Booking
 
@@ -2252,6 +2401,9 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 - [ ] SQLite survives restart.
 - [ ] Backup can be restored.
 - [ ] No provider keys in frontend bundle/logs.
+- [ ] Compose has only app and Caddy in the P0 path, and no TTS sidecar.
+- [ ] Runtime OpenRouter secret wiring and target-VPS smoke command are documented.
+- [ ] Text-only mode is enabled through env without rebuilding the image.
 
 ## 11. Release evidence bundle
 
@@ -2262,6 +2414,8 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 - health output;
 - schema migration status;
 - Codex model/auth preflight result без token;
+- target-VPS OpenRouter Russian MP3 smoke status, latency, byte count, provider generation ID if present and selected model/voice/format;
+- evidence timestamps for speech-final, first Luna delta, TTS request/completion and playback;
 - 24+ eval summary;
 - latency report;
 - duplicate/idempotency test report;
@@ -2291,7 +2445,7 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 |---|---|
 | A0 Platform/Contracts | `packages/contracts`, root configs, repo skeleton |
 | A1 Web Voice | `apps/web/src/audio`, voice state/components |
-| A2 xAI Voice | `apps/server/src/providers/xai` |
+| A2 Voice providers | `apps/server/src/providers/xai/stt*`, `apps/server/src/providers/openrouter/tts/**`, `scripts/openrouter-tts*` |
 | A3 Codex/Luna | `apps/server/src/providers/codex`, generated schemas |
 | A4 Domain/Data | `apps/server/src/domain`, `db`, `notifiers`, `drizzle` |
 | A5 Conversation | `orchestrator`, `prompt-compiler`, `prompts`, `knowledge` |
@@ -2337,8 +2491,8 @@ DoD:
 
 - AudioWorklet capture/resample;
 - 100 ms PCM16 frames;
-- PCM playback queue;
-- generation cancellation;
+- provider-neutral ordered playback queue for complete `audio/mpeg` phrase segments;
+- local stop, queue clear, generation cancellation and stale-segment filtering;
 - WS client/reconnect;
 - transcript/state UI на fake server.
 
@@ -2354,18 +2508,19 @@ DoD:
 - fake/contract tests;
 - redacted telemetry.
 
-### T12 — xAI Streaming TTS adapter
+### T12 — OpenRouter TTS adapter in TypeScript/Bun
 
 **Владелец:** A2, отдельный PR/branch после или параллельно T11 при втором агенте  
 **Зависимости:** T00.
 
-- persistent/multi-utterance WSS;
-- text delta → audio chunks;
-- PCM decode metadata;
-- cancellation;
-- Russian voice smoke comparison for `iris` and `eve`;
-- selected voice remains env-configurable;
-- cost character counter.
+- provider-neutral `OpenRouterTtsAdapter` behind `TtsPort` using native Bun `fetch`;
+- configurable model, voice, response format and optional speed;
+- one complete validated MP3 phrase segment per HTTP request;
+- AbortSignal cancellation and stale-generation rejection;
+- bounded retry, timeout, circuit breaker, character budgets and text-only fallback;
+- error mapping for `400/401/402/404/429` and retryable `5xx`;
+- Russian external smoke command; character/latency telemetry without spoken-text logging;
+- no provider SDK, second runtime or sidecar.
 
 ### T13 — Codex app-server/Luna brain adapter
 
@@ -2405,8 +2560,9 @@ DoD:
 
 - multi-stage Dockerfile;
 - pinned Codex install;
-- app/caddy compose;
-- volumes;
+- app/Caddy Compose only for the P0 application path;
+- data and `CODEX_HOME` volumes;
+- runtime OpenRouter secret/env wiring and target-VPS smoke command;
 - healthcheck;
 - migration and device-auth runbook;
 - prompt compile step into isolated runtime directory;
@@ -2423,9 +2579,10 @@ DoD:
 - compact prompt context;
 - tool policy;
 - booking-before-qualification invariant;
-- sentence chunker/sanitizer;
-- interruption generation IDs;
-- timeout/retry/degraded behavior.
+- PII-safe bounded phrase chunker/sanitizer for complete OpenRouter MP3 requests;
+- interruption generation IDs and stale-segment rejection;
+- TTS budgets, circuit policy and text-only degraded behavior;
+- audio failure cannot repeat brain turn or business tools and cannot erase visible text or committed effects.
 
 ### T21 — Product landing + integrated voice states
 
@@ -2445,11 +2602,11 @@ DoD:
 **Владелец:** A7  
 **Зависимости:** outputs T10–T15.
 
-- provider contract test harness;
-- state/booking invariants;
-- protocol fixtures;
-- secret scan;
-- fake server/browser audio fixtures.
+- protocol-faithful fake OpenRouter `/api/v1/audio/speech` endpoint;
+- valid/invalid MP3 and JSON error fixtures for `400/401/402/404/429/502/503`;
+- timeout, `Retry-After`, abort, empty-body, wrong-content-type and stale-generation tests;
+- state/booking invariants and deterministic retry/circuit assertions;
+- secret scan for OpenRouter key in browser bundles, snapshots and logs.
 
 ## 6. Волна 3 — integration
 
@@ -2458,12 +2615,13 @@ DoD:
 **Владелец:** A7 как integrator; component owners исправляют свои зоны.  
 **Зависимости:** T20, T21, T22, T15.
 
-- full browser → STT → Luna → TTS path;
+- full browser → xAI STT → Luna → OpenRouter TTS → browser path;
 - booking create/update;
 - barge-in;
 - reconnect;
 - provider failure cases;
-- Docker deployment smoke.
+- Docker deployment smoke;
+- target-VPS OpenRouter Russian MP3 smoke evidence and end-to-end text-only degradation.
 
 ### T31 — Conversation evals/content tuning
 
@@ -2481,8 +2639,8 @@ DoD:
 **Владелец:** A6 + A7  
 **Зависимости:** T30.
 
-- latency metrics;
-- concurrency guard;
+- OpenRouter latency/failure/character/circuit metrics;
+- TTS budget, concurrency, queue and response-size guards;
 - logs/redaction;
 - backup/restore;
 - outbox retry;
@@ -2498,7 +2656,7 @@ DoD:
 
 - all gates green;
 - compose clean deploy;
-- docs match code;
+- docs/tasks/env/diagrams/Compose contain no stale active TTS implementation instructions and match code;
 - known limitations;
 - redacted demo payloads;
 - rollback instructions;
@@ -2585,7 +2743,8 @@ T01, T10 и T15 не должны задерживать первые adapter sp
 
 Для P0 не вводится единый универсальный AI SDK в критический realtime-путь.
 
-- **xAI STT/TTS:** тонкие typed WebSocket adapters по официальному streaming protocol.
+- **xAI STT:** тонкий typed WebSocket adapter по официальному streaming protocol.
+- **OpenRouter TTS:** native Bun `fetch` к dedicated speech endpoint; one complete MP3 phrase per request, no SDK.
 - **LLM brain:** `BrainPort`, реализованный поверх долгоживущего `codex app-server` и его JSON-RPC protocol.
 - **Model:** `gpt-5.6-luna` через Codex subscription владельца; `CODEX_MODEL`/`CODEX_EFFORT` конфигурируемы, но Luna — согласованный P0 default.
 - **Schemas:** Zod для собственных contracts; Codex protocol types/schemas фиксируются вместе с pinned CLI version.
@@ -2634,7 +2793,7 @@ export interface BrainPort {
 | Dynamic tools + protocol fallback | ++ | −/ограниченно | +/experimental | +, но поверх ещё одного слоя |
 | `instructionSources` verification | ++ | − | зависит от adapter | − |
 | Bun compatibility | ++ через stdio/JSON | требует spike; официально заявлен Node 18+ | обычно совместим, но adapter нужно проверять | требует проверки каждого слоя |
-| xAI binary voice WSS | custom adapter всё равно нужен | custom adapter всё равно нужен | custom adapter всё равно нужен | custom adapter всё равно нужен |
+| Voice transport | custom xAI STT WSS + OpenRouter TTS fetch всё равно нужны | те же custom adapters | те же custom adapters | те же custom adapters |
 | Protocol observability | ++ | + | +/− | − |
 | Объём собственного кода | средний | низкий | низкий/средний | высокий суммарно |
 | Риск abstraction drift | низкий при pinning | средний | высокий для community bridge | высокий |
@@ -2689,7 +2848,7 @@ export interface BrainPort {
 Почему не выбран как spine:
 
 - Codex app-server integration является community provider, а не официальным OpenAI provider;
-- binary microphone/TTS transport, playback cancellation и generation IDs всё равно остаются custom;
+- binary microphone transport, phrase-level MP3 playback, cancellation и generation IDs всё равно остаются custom;
 - дополнительный normalized event layer может скрыть provider-specific cancellation/status детали;
 - задача не требует типичного React chat hook или model switching в каждом turn.
 
@@ -2743,7 +2902,8 @@ export interface BrainPort {
 - production не зависит от floating versions;
 - Codex CLI version и generated schemas меняются одним отдельным PR;
 - `@openai/codex-sdk` не импортируется из domain/orchestrator packages;
-- xAI-specific types не импортируются из shared contracts;
+- xAI/OpenRouter-specific types не импортируются из shared contracts;
+- OpenRouter TTS transport does not add an SDK; native Bun `fetch` is the P0 decision;
 - provider adapter обязан маппить ошибки в собственный стабильный `BrainError`/`VoiceError` union.
 
 ## 7. Влияние Codex subscription на продукт
@@ -2770,8 +2930,8 @@ ConversationOrchestrator
         └── P0: Codex app-server JSON-RPC + gpt-5.6-luna + subscription auth
 
 VoiceOrchestrator
-        ├── XaiSttPort: native streaming WSS
-        └── XaiTtsPort: native streaming WSS
+        ├── SttPort: xAI native streaming WSS
+        └── TtsPort: OpenRouter native Bun fetch → complete audio/mpeg phrase segment
 ```
 
 Это минимизирует latency и magic, сохраняет barge-in, делает booking/qualification проверяемыми и оставляет путь к замене провайдера. Универсальный SDK стоит подключать только после появления конкретной функции, которая окупает дополнительный слой.
@@ -2781,7 +2941,7 @@ VoiceOrchestrator
 
 # Источники
 
-Дата доступа: 30 июля 2026.
+Дата доступа: 31 июля 2026.
 
 ## Botamin
 
@@ -2789,15 +2949,27 @@ VoiceOrchestrator
 - Публичная Telegram-лента кейсов: https://t.me/s/GPT_for_sales
 - Исходная Notion-ссылка, недоступная на момент работы: https://uprosti.notion.site/conversation-designer
 
-## xAI — официальная документация
+## xAI STT — официальная документация
 
 - Voice overview: https://docs.x.ai/developers/model-capabilities/audio/voice
 - Speech to Text: https://docs.x.ai/developers/model-capabilities/audio/speech-to-text
-- Text to Speech: https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
 - Voice REST/WebSocket reference: https://docs.x.ai/developers/rest-api-reference/inference/voice
 - Pricing: https://docs.x.ai/developers/pricing
 
-Использованные текущие параметры: Streaming STT `$0.20/hour`, TTS `$15/1M characters`; STT WSS `/v1/stt`, TTS WSS `/v1/tts`; Russian language support; PCM streaming. В списке голосов `iris` описан как подходящий для Sales Support, `eve` — универсальный fallback. Возможный бесплатный allowance конкретного аккаунта не считается публичной гарантией цены.
+xAI используется только для Streaming STT. Текущие account rate и runtime behavior записываются в release evidence; числовая стоимость не фиксируется в этой спецификации.
+
+## OpenRouter TTS — официальная документация
+
+- TTS guide: https://openrouter.ai/docs/guides/overview/multimodal/tts
+- Create speech API: https://openrouter.ai/docs/api/api-reference/tts/create-speech
+- Speech-output model discovery: https://openrouter.ai/api/v1/models?output_modalities=speech
+- Filtered models page: https://openrouter.ai/models?input_modalities=text&output_modalities=speech
+- P0 model page: https://openrouter.ai/x-ai/grok-voice-tts-1.0
+- Authentication: https://openrouter.ai/docs/api_reference/authentication
+- Errors and debugging: https://openrouter.ai/docs/api_reference/errors-and-debugging
+- App attribution: https://openrouter.ai/docs/app-attribution
+
+OpenRouter TTS is paid usage; no free tier is assumed. Default release candidate profile is `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`, but availability, voices and prices are runtime facts verified before release. P0 transport is backend-only native Bun `fetch` to `/api/v1/audio/speech`.
 
 ## OpenAI Codex — официальная документация
 

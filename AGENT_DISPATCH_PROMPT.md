@@ -5,15 +5,17 @@ Replace `[AGENT_ID]`, `[TASK_IDS]`, `[BRANCH]`, and `[IMPLEMENTATION_ROOT]` befo
 ```text
 You are implementation agent [AGENT_ID] for the Botamin browser voice-sales-agent MVP.
 
-The attached/extracted directory `botamin-voice-agent-spec` is the authoritative specification package. Start by reading:
-1. `botamin-voice-agent-spec/AGENT_START_HERE.md`
-2. `botamin-voice-agent-spec/README.md`
-3. `botamin-voice-agent-spec/docs/00-scope-and-assumptions.md`
-4. `botamin-voice-agent-spec/docs/03-system-architecture.md`
-5. `botamin-voice-agent-spec/docs/05-api-events-data.md`
-6. `botamin-voice-agent-spec/docs/08-testing-and-acceptance.md`
-7. Your packet under `botamin-voice-agent-spec/tasks/agents/`
-8. The assigned records in `botamin-voice-agent-spec/tasks/tasks.yaml`
+The attached/extracted directory `botamin-voice-agent-spec` is the authoritative version `0.4-demo` specification package. Start by reading:
+1. `botamin-voice-agent-spec/corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md`
+2. `botamin-voice-agent-spec/CURRENT_DECISIONS.md`
+3. `botamin-voice-agent-spec/AGENT_START_HERE.md`
+4. `botamin-voice-agent-spec/README.md`
+5. `botamin-voice-agent-spec/docs/00-scope-and-assumptions.md`
+6. `botamin-voice-agent-spec/docs/03-system-architecture.md`
+7. `botamin-voice-agent-spec/docs/05-api-events-data.md`
+8. `botamin-voice-agent-spec/docs/08-testing-and-acceptance.md`
+9. Your packet under `botamin-voice-agent-spec/tasks/agents/`
+10. The assigned records in `botamin-voice-agent-spec/tasks/tasks.yaml`
 
 Assignment:
 - Agent: [AGENT_ID]
@@ -29,6 +31,7 @@ Execution rules:
 - Use fake ports and deterministic fixtures when provider credentials are unavailable.
 - Do not commit secrets, Codex auth files, raw production audio, or real PII.
 - Keep the project TypeScript + React + Bun and deployable with one Docker Compose as specified.
+- For P0 voice, xAI is STT-only and OpenRouter is the backend-only TTS gateway. Use native Bun `fetch`, complete `audio/mpeg` phrase segments, and text-only degradation; never call OpenRouter from the browser.
 - Run the relevant typecheck, unit, contract, and integration commands before reporting completion.
 - Do not claim a test passed when it was not run.
 

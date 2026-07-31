@@ -18,7 +18,7 @@
 |---|---|
 | A0 Platform/Contracts | `packages/contracts`, root configs, repo skeleton |
 | A1 Web Voice | `apps/web/src/audio`, voice state/components |
-| A2 xAI Voice | `apps/server/src/providers/xai` |
+| A2 Voice providers | `apps/server/src/providers/xai/stt*`, `apps/server/src/providers/openrouter/tts/**`, `scripts/openrouter-tts*` |
 | A3 Codex/Luna | `apps/server/src/providers/codex`, generated schemas |
 | A4 Domain/Data | `apps/server/src/domain`, `db`, `notifiers`, `drizzle` |
 | A5 Conversation | `orchestrator`, `prompt-compiler`, `prompts`, `knowledge` |
@@ -64,8 +64,8 @@ DoD:
 
 - AudioWorklet capture/resample;
 - 100 ms PCM16 frames;
-- PCM playback queue;
-- generation cancellation;
+- provider-neutral ordered playback queue for complete `audio/mpeg` phrase segments;
+- local stop, queue clear, generation cancellation and stale-segment filtering;
 - WS client/reconnect;
 - transcript/state UI на fake server.
 
@@ -81,18 +81,19 @@ DoD:
 - fake/contract tests;
 - redacted telemetry.
 
-### T12 — xAI Streaming TTS adapter
+### T12 — OpenRouter TTS adapter in TypeScript/Bun
 
 **Владелец:** A2, отдельный PR/branch после или параллельно T11 при втором агенте  
 **Зависимости:** T00.
 
-- persistent/multi-utterance WSS;
-- text delta → audio chunks;
-- PCM decode metadata;
-- cancellation;
-- Russian voice smoke comparison for `iris` and `eve`;
-- selected voice remains env-configurable;
-- cost character counter.
+- provider-neutral `OpenRouterTtsAdapter` behind `TtsPort` using native Bun `fetch`;
+- configurable model, voice, response format and optional speed;
+- one complete validated MP3 phrase segment per HTTP request;
+- AbortSignal cancellation and stale-generation rejection;
+- bounded retry, timeout, circuit breaker, character budgets and text-only fallback;
+- error mapping for `400/401/402/404/429` and retryable `5xx`;
+- Russian external smoke command; character/latency telemetry without spoken-text logging;
+- no provider SDK, second runtime or sidecar.
 
 ### T13 — Codex app-server/Luna brain adapter
 
@@ -132,8 +133,9 @@ DoD:
 
 - multi-stage Dockerfile;
 - pinned Codex install;
-- app/caddy compose;
-- volumes;
+- app/Caddy Compose only for the P0 application path;
+- data and `CODEX_HOME` volumes;
+- runtime OpenRouter secret/env wiring and target-VPS smoke command;
 - healthcheck;
 - migration and device-auth runbook;
 - prompt compile step into isolated runtime directory;
@@ -150,9 +152,10 @@ DoD:
 - compact prompt context;
 - tool policy;
 - booking-before-qualification invariant;
-- sentence chunker/sanitizer;
-- interruption generation IDs;
-- timeout/retry/degraded behavior.
+- PII-safe bounded phrase chunker/sanitizer for complete OpenRouter MP3 requests;
+- interruption generation IDs and stale-segment rejection;
+- TTS budgets, circuit policy and text-only degraded behavior;
+- audio failure cannot repeat brain turn or business tools and cannot erase visible text or committed effects.
 
 ### T21 — Product landing + integrated voice states
 
@@ -172,11 +175,11 @@ DoD:
 **Владелец:** A7  
 **Зависимости:** outputs T10–T15.
 
-- provider contract test harness;
-- state/booking invariants;
-- protocol fixtures;
-- secret scan;
-- fake server/browser audio fixtures.
+- protocol-faithful fake OpenRouter `/api/v1/audio/speech` endpoint;
+- valid/invalid MP3 and JSON error fixtures for `400/401/402/404/429/502/503`;
+- timeout, `Retry-After`, abort, empty-body, wrong-content-type and stale-generation tests;
+- state/booking invariants and deterministic retry/circuit assertions;
+- secret scan for OpenRouter key in browser bundles, snapshots and logs.
 
 ## 6. Волна 3 — integration
 
@@ -185,12 +188,13 @@ DoD:
 **Владелец:** A7 как integrator; component owners исправляют свои зоны.  
 **Зависимости:** T20, T21, T22, T15.
 
-- full browser → STT → Luna → TTS path;
+- full browser → xAI STT → Luna → OpenRouter TTS → browser path;
 - booking create/update;
 - barge-in;
 - reconnect;
 - provider failure cases;
-- Docker deployment smoke.
+- Docker deployment smoke;
+- target-VPS OpenRouter Russian MP3 smoke evidence and end-to-end text-only degradation.
 
 ### T31 — Conversation evals/content tuning
 
@@ -208,8 +212,8 @@ DoD:
 **Владелец:** A6 + A7  
 **Зависимости:** T30.
 
-- latency metrics;
-- concurrency guard;
+- OpenRouter latency/failure/character/circuit metrics;
+- TTS budget, concurrency, queue and response-size guards;
 - logs/redaction;
 - backup/restore;
 - outbox retry;
@@ -225,7 +229,7 @@ DoD:
 
 - all gates green;
 - compose clean deploy;
-- docs match code;
+- docs/tasks/env/diagrams/Compose contain no stale active TTS implementation instructions and match code;
 - known limitations;
 - redacted demo payloads;
 - rollback instructions;

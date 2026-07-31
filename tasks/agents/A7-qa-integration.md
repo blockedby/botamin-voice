@@ -2,6 +2,8 @@
 
 ## Mission
 
+Provide a fake OpenRouter HTTP TTS server, `audio/mpeg` fixtures, error/timeout/abort/Retry-After/stale-generation tests, and tag the real external smoke test out of default CI.
+
 Own the proof that independently implemented components satisfy the product invariants as one deployed system.
 
 ## Read first
@@ -19,11 +21,15 @@ Owned: test harness, fixtures, Playwright, security tests, eval runner and relea
 
 ## Deliverables
 
-- fake STT/TTS/brain/notifier components;
-- PCM fixtures;
+- fake STT/OpenRouter-TTS/brain/notifier components;
+- protocol-faithful fake `POST /api/v1/audio/speech`;
+- PCM microphone plus valid/invalid MP3 fixtures;
+- JSON errors for `400/401/402/404/429/502/503`, timeout, `Retry-After`, abort, empty body and wrong content type;
 - unit/contract/integration command matrix;
 - Playwright full journey;
-- reconnect, barge-in and provider failure tests;
+- reconnect, barge-in, late-generation, deterministic retry/circuit and provider failure tests;
+- assertion that non-2xx JSON never becomes audio and no unbounded queue exists;
+- real paid smoke tagged `external` and excluded from default CI;
 - idempotency/concurrency tests;
 - 24+ conversation eval execution;
 - latency p50/p95 report;
@@ -32,7 +38,7 @@ Owned: test harness, fixtures, Playwright, security tests, eval runner and relea
 
 ## Release blockers
 
-Any duplicate booking, qualification before booking, invented commercial promise, leaked secret, false calendar claim, unbounded buffer or inability to restore DB is critical.
+Any duplicate booking, qualification before booking, invented commercial promise, leaked secret, browser OpenRouter call, non-audio body treated as audio, stale-generation playback, repeated business side effect, unbounded buffer or inability to restore DB is critical.
 
 ## Completion report
 

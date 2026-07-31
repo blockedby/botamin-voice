@@ -1,15 +1,18 @@
 # Botamin Voice Sales Agent — техническая спецификация
 
-> **AI agents:** unpack the archive and begin with [`AGENT_START_HERE.md`](AGENT_START_HERE.md).
+> **Correction 003 (authoritative, read first):** [`corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md`](corrections/CORRECTION-003_OPENROUTER_TTS_TYPESCRIPT_NATIVE.md)
+>
+> Then read [`CURRENT_DECISIONS.md`](CURRENT_DECISIONS.md) and [`AGENT_START_HERE.md`](AGENT_START_HERE.md).
 
+**Версия:** 0.4-demo
 
-**Версия:** 0.2  
-**Дата:** 30 июля 2026  
+**Дата:** 31 июля 2026
+
 **Статус:** согласованная основа для передачи агентам-разработчикам
 
 ## Одним абзацем
 
-Нужно сделать full-stack сайт Botamin с браузерным голосовым AI-продавцом. Пользователь говорит в микрофон, xAI Streaming STT превращает речь в текст, Codex app-server с моделью `gpt-5.6-luna` формирует решение и реплику, xAI Streaming TTS озвучивает ответ. Агент продаёт конкретный продукт Botamin, обрабатывает вопросы и возражения, **сначала** создаёт внутреннюю бронь через backend-tool, а **затем опционально** дополняет эту же бронь квалификацией. Реальный календарь или CRM не подключаются. Промпты и knowledge base хранятся в Markdown и компилируются в изолированный runtime `AGENTS.md`. Всё поднимается одним `docker compose` на одной дешёвой VPS.
+Нужно сделать full-stack сайт Botamin с браузерным голосовым AI-продавцом. Пользователь говорит в микрофон, xAI Streaming STT превращает речь в текст, Codex app-server с моделью `gpt-5.6-luna` формирует решение и реплику, а OpenRouter TTS озвучивает короткие полные MP3-фразы через серверный TypeScript/Bun adapter. Агент продаёт конкретный продукт Botamin, обрабатывает вопросы и возражения, **сначала** создаёт внутреннюю бронь через backend-tool, а **затем опционально** дополняет эту же бронь квалификацией. Реальный календарь или CRM не подключаются. Промпты и knowledge base хранятся в Markdown и компилируются в изолированный runtime `AGENTS.md`. Всё поднимается одним `docker compose` на одной дешёвой VPS.
 
 ## Локальная настройка доступов
 
@@ -17,8 +20,9 @@
 cp .env.example .env
 ```
 
-1. **xAI:** создайте аккаунт и API key по [официальному quickstart](https://docs.x.ai/developers/quickstart), при необходимости пополните баланс, затем запишите ключ в `.env` как `XAI_API_KEY=...`.
-2. **Codex subscription:** выполните вход через ChatGPT, без OpenAI API key:
+1. **xAI STT:** создайте аккаунт и API key по [официальному quickstart](https://docs.x.ai/developers/quickstart), при необходимости пополните баланс, затем запишите ключ в `.env` как `XAI_API_KEY=...`. Этот ключ используется только для STT.
+2. **OpenRouter TTS:** добавьте backend-only `OPENROUTER_API_KEY`. TTS является платным использованием; бесплатный tier не предполагается. Для local attribution оставьте `OPENROUTER_HTTP_REFERER=http://localhost:5173`.
+3. **Codex subscription:** выполните вход через ChatGPT, без OpenAI API key:
 
    ```bash
    export CODEX_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/botamin-voice/codex-home"
@@ -34,22 +38,23 @@ cp .env.example .env
 1. `booking.created` происходит до постквалификации.
 2. После создания брони отказ, обрыв связи или ошибка квалификации не отменяют бронь.
 3. Повторный `create_booking` возвращает ту же бронь, а не создаёт дубль.
-4. Ключи xAI и Codex credentials никогда не попадают в браузер.
+4. Ключи xAI/OpenRouter и Codex credentials никогда не попадают в браузер.
 5. В production не хранится сырое аудио, если это отдельно не включено.
 6. Агент не утверждает, что встреча добавлена в календарь: в MVP календарной интеграции нет.
 7. Онлайн-редактор сценариев и промптов отсутствует.
-8. Основной LLM-мозг — Codex subscription + GPT-5.6 Luna; xAI используется для STT/TTS.
-9. Voice ID и стоимость TTS не зашиты в логику: `iris`/`eve` сравниваются smoke-test, а предполагаемый бесплатный allowance проверяется на аккаунте.
+8. Основной LLM-мозг — Codex subscription + GPT-5.6 Luna; xAI используется только для STT, а OpenRouter — для серверного TTS.
+9. Voice ID и модель OpenRouter, а также платное TTS-использование, задаются конфигурацией; бесплатный allowance не предполагается.
 10. Универсальный AI SDK не является частью критического realtime-path: brain и voice скрыты за собственными ports; P0 Codex transport — direct app-server JSON-RPC.
 
 ## С чего начинать агентам
 
-1. [`docs/00-scope-and-assumptions.md`](docs/00-scope-and-assumptions.md) — границы.
-2. [`docs/03-system-architecture.md`](docs/03-system-architecture.md) — архитектура и интерфейсы.
-3. [`docs/05-api-events-data.md`](docs/05-api-events-data.md) — контракты.
-4. [`docs/10-ai-library-evaluation.md`](docs/10-ai-library-evaluation.md) — почему выбран direct app-server transport, а не универсальный AI SDK.
-5. [`docs/09-agent-task-plan.md`](docs/09-agent-task-plan.md) и [`tasks/tasks.yaml`](tasks/tasks.yaml) — параллельный план.
-6. [`docs/08-testing-and-acceptance.md`](docs/08-testing-and-acceptance.md) — Definition of Done.
+1. [`CURRENT_DECISIONS.md`](CURRENT_DECISIONS.md) — краткие действующие решения.
+2. [`docs/00-scope-and-assumptions.md`](docs/00-scope-and-assumptions.md) — границы.
+3. [`docs/03-system-architecture.md`](docs/03-system-architecture.md) — архитектура и интерфейсы.
+4. [`docs/05-api-events-data.md`](docs/05-api-events-data.md) — контракты.
+5. [`docs/10-ai-library-evaluation.md`](docs/10-ai-library-evaluation.md) — transport decisions.
+6. [`docs/09-agent-task-plan.md`](docs/09-agent-task-plan.md) и [`tasks/tasks.yaml`](tasks/tasks.yaml) — параллельный план.
+7. [`docs/08-testing-and-acceptance.md`](docs/08-testing-and-acceptance.md) — Definition of Done.
 
 ## Состав пакета
 
@@ -68,7 +73,7 @@ cp .env.example .env
 | `tasks/agents/*.md` | готовые задания отдельным агентам |
 | `starter/prompts/*.md` | стартовые prompt-файлы |
 | `diagrams/*.svg` | схемы архитектуры и state machines |
-| `charts/*.png` | latency, стоимость и параллелизация |
+| `charts/*.png` | latency budget, metered cost inputs без неподтверждённых цен и параллелизация |
 | `FULL_SPEC.md` / `technical-spec.html` | собранная спецификация |
 | `VALIDATION.md` | отчёт о проверке ссылок, task graph, схем и standalone HTML |
 | `scripts/build-spec.sh` / `scripts/validate-spec.py` | воспроизводимая сборка и валидация пакета |

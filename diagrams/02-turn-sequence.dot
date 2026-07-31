@@ -9,7 +9,7 @@ digraph G {
   o [label="Orchestrator"];
   l [label="Codex + Luna"];
   d [shape=cylinder, label="Booking DB"];
-  t [label="xAI TTS"];
+  t [label="OpenRouter TTS\nnative Bun fetch"];
 
   b -> g [label="1 · PCM16 ~100 ms", weight=3];
   g -> s [label="2 · raw binary PCM", weight=3];
@@ -17,9 +17,9 @@ digraph G {
   g -> o [label="4 · final user turn", weight=3];
   o -> l [label="5 · turn/start + compact state", weight=3];
   l -> o [label="6 · agentMessage delta", weight=3];
-  o -> t [label="7 · завершённая короткая фраза", weight=3];
-  t -> g [label="8 · PCM audio.delta", weight=3];
-  g -> b [label="9 · generationId + PCM", weight=3];
+  o -> t [label="7 · sanitized phrase · HTTP POST", weight=3];
+  t -> g [label="8 · complete audio/mpeg segment", weight=3];
+  g -> b [label="9 · generationId + ordered MP3", weight=3];
 
   l -> o [label="tool request", style=dashed, constraint=false];
   o -> d [label="10 · create / patch", style=dashed, constraint=false];
@@ -28,5 +28,5 @@ digraph G {
 
   b -> o [label="barge-in: stop + interrupt", style=dotted, constraint=false];
   o -> l [label="turn/interrupt", style=dotted, constraint=false];
-  o -> t [label="cancel utterance", style=dotted, constraint=false];
+  o -> t [label="AbortSignal + stale-generation drop", style=dotted, constraint=false];
 }

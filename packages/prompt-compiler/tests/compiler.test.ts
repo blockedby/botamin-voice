@@ -25,10 +25,12 @@ import {
 } from "../src/index.js";
 
 const testRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const packageRoot =
-	basename(testRoot) === "dist" ? dirname(testRoot) : testRoot;
+const isDistTest = basename(testRoot) === "dist";
+const packageRoot = isDistTest ? dirname(testRoot) : testRoot;
 const sourceRoot = resolve(packageRoot, "..", "..");
-const cliPath = join(packageRoot, "dist", "src", "cli.js");
+const cliPath = isDistTest
+	? join(packageRoot, "dist", "src", "cli.js")
+	: join(packageRoot, "src", "cli.ts");
 const temporaryPaths: string[] = [];
 
 async function temporaryDirectory(prefix: string): Promise<string> {

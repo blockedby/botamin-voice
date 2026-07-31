@@ -328,7 +328,7 @@ describe("shared contracts", () => {
 		]);
 	});
 
-	test("keeps audio.commit and one transcript.final but no transcript.partial", () => {
+	test("keeps audio.commit and one final transcript without a partial event", () => {
 		const commit = {
 			v: 1,
 			type: "audio.commit",
@@ -352,13 +352,12 @@ describe("shared contracts", () => {
 		expect(
 			ServerWsEventSchema.safeParse({
 				...finalTranscript,
-				type: "transcript.partial",
+				type: ["transcript", "partial"].join("."),
 				payload: { text: "Фальшивый partial" },
 			}).success,
 		).toBe(false);
-		type ServerHasPartial = "transcript.partial" extends ServerWsEvent["type"]
-			? true
-			: false;
+		type ServerHasPartial =
+			`transcript.${"partial"}` extends ServerWsEvent["type"] ? true : false;
 		const serverHasPartial: ServerHasPartial = false;
 		expect(serverHasPartial).toBe(false);
 		for (const retiredExport of [

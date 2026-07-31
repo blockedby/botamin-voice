@@ -93,6 +93,7 @@ packages/codex-schemas/README.md
 packages/codex-schemas/generated/codex_app_server_protocol.schemas.json
 packages/codex-schemas/generated/codex_app_server_protocol.v2.schemas.json
 packages/codex-schemas/protocol-version.json
+packages/contracts/README.md
 packages/contracts/package.json
 packages/contracts/src/common.ts
 packages/contracts/src/domain.ts
@@ -114,6 +115,8 @@ packages/test-fixtures/package.json
 packages/test-fixtures/src/fakes.ts
 packages/test-fixtures/src/full-turn.test.ts
 packages/test-fixtures/src/index.ts
+packages/test-fixtures/src/mp3.ts
+packages/test-fixtures/src/wav.ts
 packages/test-fixtures/tsconfig.build.json
 packages/test-fixtures/tsconfig.json
 prompts/booking.md

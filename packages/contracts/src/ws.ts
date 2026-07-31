@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
 	ContractVersionSchema,
 	EntityIdSchema,
+	NonEmptyUint8ArraySchema,
 	Rfc3339UtcSchema,
 	SafeErrorSchema,
 } from "./common";
@@ -202,20 +203,23 @@ export const AssistantTextDoneEventSchema = z
 	})
 	.strict();
 
-/** Metadata for the immediately following binary server PCM frame. */
-export const AssistantAudioChunkEventSchema = z
+export const AudioSegmentMetadataSchema = z
+	.object({
+		generationId: EntityIdSchema,
+		segmentId: EntityIdSchema,
+		sequence: z.number().int().nonnegative(),
+		contentType: z.literal("audio/mpeg"),
+		byteLength: z.number().int().positive(),
+		final: z.literal(true),
+	})
+	.strict();
+
+/** Metadata for the one complete binary MP3 payload that follows atomically. */
+export const AudioSegmentEventSchema = z
 	.object({
 		...ServerEventBaseShape,
-		type: z.literal("assistant.audio.chunk"),
-		payload: z
-			.object({
-				generationId: EntityIdSchema,
-				audioSeq: z.number().int().nonnegative(),
-				byteLength: z.number().int().positive(),
-				encoding: z.literal("pcm16le"),
-				sampleRate: z.literal(24_000),
-			})
-			.strict(),
+		type: z.literal("audio.segment"),
+		payload: AudioSegmentMetadataSchema,
 	})
 	.strict();
 
@@ -304,7 +308,7 @@ export const ServerWsEventSchema = z.discriminatedUnion("type", [
 	TranscriptFinalEventSchema,
 	AssistantTextDeltaEventSchema,
 	AssistantTextDoneEventSchema,
-	AssistantAudioChunkEventSchema,
+	AudioSegmentEventSchema,
 	AssistantAudioDoneEventSchema,
 	AssistantInterruptedEventSchema,
 	BookingCreatedWsEventSchema,
@@ -319,29 +323,59 @@ export const WsJsonEventSchema = z.union([
 	ServerWsEventSchema,
 ]);
 
+export const BINARY_AUDIO_FRAME_KIND = {
+	clientPcm16: 0x01,
+	serverMp3Segment: 0x02,
+} as const;
+
+/** Existing microphone framing remains mono PCM16LE at 16 kHz. */
+export const ClientBinaryAudioFrameMetadataSchema = z
+	.object({
+		direction: z.literal("client"),
+		streamSeq: z.number().int().nonnegative(),
+		encoding: z.literal("pcm16le"),
+		sampleRate: z.literal(16_000),
+	})
+	.strict();
+
+export const ServerBinaryAudioFrameMetadataSchema = z
+	.object({
+		direction: z.literal("server"),
+		...AudioSegmentMetadataSchema.shape,
+	})
+	.strict();
+
 export const BinaryAudioFrameMetadataSchema = z.discriminatedUnion(
 	"direction",
-	[
-		z
-			.object({
-				direction: z.literal("client"),
-				streamSeq: z.number().int().nonnegative(),
-				encoding: z.literal("pcm16le"),
-				sampleRate: z.literal(16_000),
-			})
-			.strict(),
-		z
-			.object({
-				direction: z.literal("server"),
-				generationId: EntityIdSchema,
-				audioSeq: z.number().int().nonnegative(),
-				encoding: z.literal("pcm16le"),
-				sampleRate: z.literal(24_000),
-			})
-			.strict(),
-	],
+	[ClientBinaryAudioFrameMetadataSchema, ServerBinaryAudioFrameMetadataSchema],
 );
 
+/**
+ * Runtime validation for adjacency: one audio.segment metadata payload is
+ * followed by exactly one complete, non-empty binary payload of the same size.
+ */
+export const AtomicServerAudioSegmentFrameSchema = z
+	.object({
+		metadata: AudioSegmentMetadataSchema,
+		bytes: NonEmptyUint8ArraySchema,
+	})
+	.strict()
+	.superRefine((frame, context) => {
+		if (frame.metadata.byteLength !== frame.bytes.byteLength) {
+			context.addIssue({
+				code: "custom",
+				message:
+					"Binary MP3 payload length does not match audio.segment metadata",
+				path: ["bytes"],
+			});
+		}
+	});
+
+export type AtomicServerAudioSegmentFrame = z.infer<
+	typeof AtomicServerAudioSegmentFrameSchema
+>;
+export type AudioSegmentMetadata = z.infer<typeof AudioSegmentMetadataSchema>;
+export type AudioSegmentWsEvent = z.infer<typeof AudioSegmentEventSchema>;
 export type BinaryAudioFrameMetadata = z.infer<
 	typeof BinaryAudioFrameMetadataSchema
 >;

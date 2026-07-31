@@ -13,7 +13,8 @@ export const AudioClientConfigSchema = z
 		inputSampleRate: z.literal(16_000),
 		inputEncoding: z.literal("pcm16le"),
 		chunkMs: z.literal(100),
-		outputSampleRate: z.literal(24_000),
+		outputContentType: z.literal("audio/mpeg"),
+		outputMode: z.literal("complete-phrase-segments"),
 	})
 	.strict();
 

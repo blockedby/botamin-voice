@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { EntityIdSchema, SafeErrorSchema } from "./common";
+import {
+	EntityIdSchema,
+	NonEmptyUint8ArraySchema,
+	SafeErrorSchema,
+} from "./common";
 import type {
 	BookingDomainEvent,
 	BookingSnapshot,
@@ -24,6 +28,8 @@ export const ProviderHealthSchema = z
 		code: z.string().min(1).max(100).optional(),
 	})
 	.strict();
+
+export const TtsHealthSchema = z.enum(["ready", "degraded", "unavailable"]);
 
 export const BrainToolModeSchema = z.enum(["dynamic", "envelope"]);
 
@@ -109,40 +115,31 @@ export const SttEventSchema = z.discriminatedUnion("type", [
 		.strict(),
 ]);
 
-export const TtsInputSchema = z
+/**
+ * Serializable synthesis data only. AbortSignal deliberately stays outside
+ * Zod: it is a live Web Platform cancellation capability, not JSON data, and
+ * cannot be serialized or reconstructed reliably at a REST/WS boundary.
+ */
+export const TtsSynthesisRequestDataSchema = z
 	.object({
 		conversationId: EntityIdSchema,
+		turnId: EntityIdSchema,
 		generationId: EntityIdSchema,
+		segmentId: EntityIdSchema,
 		text: z.string().min(1).max(20_000),
-		language: z.string().min(2).max(35),
-		outputEncoding: z.literal("pcm16le"),
-		outputSampleRate: z.literal(24_000),
 	})
 	.strict();
 
-export const TtsEventSchema = z.discriminatedUnion("type", [
-	z
-		.object({
-			type: z.literal("audio.chunk"),
-			generationId: EntityIdSchema,
-			audioSeq: z.number().int().nonnegative(),
-			audio: z.instanceof(Uint8Array),
-		})
-		.strict(),
-	z
-		.object({
-			type: z.literal("audio.done"),
-			generationId: EntityIdSchema,
-		})
-		.strict(),
-	z
-		.object({
-			type: z.literal("error"),
-			generationId: EntityIdSchema,
-			error: SafeErrorSchema,
-		})
-		.strict(),
-]);
+export const TtsAudioSegmentSchema = z
+	.object({
+		generationId: EntityIdSchema,
+		segmentId: EntityIdSchema,
+		providerGenerationId: z.string().min(1).max(512).optional(),
+		contentType: z.literal("audio/mpeg"),
+		bytes: NonEmptyUint8ArraySchema,
+		final: z.literal(true),
+	})
+	.strict();
 
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type BrainToolMode = z.infer<typeof BrainToolModeSchema>;
@@ -150,8 +147,15 @@ export type BrainTurnInput = z.infer<typeof BrainTurnInputSchema>;
 export type BrainDelta = z.infer<typeof BrainDeltaSchema>;
 export type SttSessionInput = z.infer<typeof SttSessionInputSchema>;
 export type SttEvent = z.infer<typeof SttEventSchema>;
-export type TtsInput = z.infer<typeof TtsInputSchema>;
-export type TtsEvent = z.infer<typeof TtsEventSchema>;
+export type TtsHealth = z.infer<typeof TtsHealthSchema>;
+export type TtsSynthesisRequestData = z.infer<
+	typeof TtsSynthesisRequestDataSchema
+>;
+/** TypeScript-only request boundary: validated data plus live cancellation. */
+export type TtsSynthesisRequest = TtsSynthesisRequestData & {
+	signal: AbortSignal;
+};
+export type TtsAudioSegment = z.infer<typeof TtsAudioSegmentSchema>;
 
 export interface BrainPort {
 	createThread(conversationId: string): Promise<string>;
@@ -176,9 +180,8 @@ export interface SttPort {
 }
 
 export interface TtsPort {
-	synthesize(input: TtsInput, signal: AbortSignal): AsyncIterable<TtsEvent>;
-	cancel(generationId: string): Promise<void>;
-	health(): Promise<ProviderHealth>;
+	synthesize(request: TtsSynthesisRequest): Promise<TtsAudioSegment>;
+	health(): Promise<TtsHealth>;
 }
 
 export interface Notifier {

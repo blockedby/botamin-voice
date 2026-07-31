@@ -19,6 +19,13 @@ export const ContractVersionSchema = z.literal(CONTRACT_VERSION);
 
 export const LocaleSchema = z.string().min(2).max(35);
 
+/** Runtime-neutral binary payload validation shared by ports and transports. */
+export const NonEmptyUint8ArraySchema = z
+	.instanceof(Uint8Array)
+	.refine((bytes) => bytes.byteLength > 0, {
+		message: "Expected non-empty bytes",
+	});
+
 export const SafeErrorCodeSchema = z.enum([
 	"MIC_PERMISSION_DENIED",
 	"CONSENT_REQUIRED",

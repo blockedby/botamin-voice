@@ -6,9 +6,10 @@ import {
 	type CreateBookingInput,
 	EntityIdSchema,
 	type SttSessionInput,
-	type TtsInput,
+	type TtsSynthesisRequest,
 } from "@botamin/contracts";
 import {
+	createDeterministicMp3Fixture,
 	FakeBookingService,
 	FakeBrain,
 	FakeNotifier,
@@ -115,17 +116,18 @@ describe("fake full turn", () => {
 			if (delta.type === "speech.delta") speech.push(delta.text);
 		}
 
-		const ttsInput: TtsInput = {
+		const ttsInput: TtsSynthesisRequest = {
 			conversationId,
+			turnId,
 			generationId,
+			segmentId: "01J00000000000000000000005",
 			text: speech.join(""),
-			language: "ru",
-			outputEncoding: "pcm16le",
-			outputSampleRate: 24_000,
+			signal: controller.signal,
 		};
-		for await (const event of tts.synthesize(ttsInput, controller.signal)) {
-			timeline.push(`tts.${event.type}`);
-		}
+		const segment = await tts.synthesize(ttsInput);
+		timeline.push("tts.audio.segment");
+		expect(segment.contentType).toBe("audio/mpeg");
+		expect(segment.final).toBe(true);
 
 		const committedBooking =
 			await bookings.findByConversationId(conversationId);
@@ -189,7 +191,7 @@ describe("fake full turn", () => {
 			"booking.updated",
 		]);
 		expect(timeline.indexOf("booking.created")).toBeLessThan(
-			timeline.indexOf("tts.audio.chunk"),
+			timeline.indexOf("tts.audio.segment"),
 		);
 		expect(timeline.indexOf("booking.created")).toBeLessThan(
 			timeline.indexOf("booking.updated"),
@@ -245,69 +247,74 @@ describe("fake full turn", () => {
 		expect(repeatedFirst.bookingId).toBe(first.bookingId);
 	});
 
-	test("emits configurable sample-aligned PCM16LE fixture audio", async () => {
-		const fixture = new Uint8Array([0x34, 0x12, 0xcc, 0xed]);
-		const tts = new FakeTts({ pcm16le: fixture });
-		fixture.fill(0);
-		const input: TtsInput = {
-			conversationId,
-			generationId,
-			text: "Этот текст не кодируется как аудио",
-			language: "ru",
-			outputEncoding: "pcm16le",
-			outputSampleRate: 24_000,
-		};
-		const events = [];
-		for await (const event of tts.synthesize(
-			input,
-			new AbortController().signal,
-		)) {
-			events.push(event);
-		}
-		const chunk = events[0];
-		if (chunk?.type !== "audio.chunk") {
-			throw new Error("Expected an audio fixture chunk");
-		}
-
-		expect(chunk.audio).toEqual(new Uint8Array([0x34, 0x12, 0xcc, 0xed]));
-		expect(chunk.audio.byteLength % 2).toBe(0);
-		expect(events.at(-1)?.type).toBe("audio.done");
-		expect(() => new FakeTts({ pcm16le: new Uint8Array([0x00]) })).toThrow(
-			"whole samples",
+	test("returns deterministic valid-ish MP3 bytes as one atomic segment", async () => {
+		const fixture = createDeterministicMp3Fixture();
+		expect(fixture.byteLength).toBe(417);
+		expect(fixture.slice(0, 4)).toEqual(
+			new Uint8Array([0xff, 0xfb, 0x90, 0x64]),
 		);
+
+		const customFixture = new Uint8Array([0xff, 0xfb, 0x90, 0x64]);
+		const tts = new FakeTts({
+			mp3: customFixture,
+			providerGenerationId: "provider-generation:opaque",
+		});
+		customFixture.fill(0);
+		const input: TtsSynthesisRequest = {
+			conversationId,
+			turnId,
+			generationId,
+			segmentId: "01J00000000000000000000005",
+			text: "Этот текст не кодируется как аудио",
+			signal: new AbortController().signal,
+		};
+		const segment = await tts.synthesize(input);
+		expect(segment).toMatchObject({
+			generationId,
+			segmentId: input.segmentId,
+			providerGenerationId: "provider-generation:opaque",
+			contentType: "audio/mpeg",
+			final: true,
+		});
+		expect(segment.bytes).toEqual(new Uint8Array([0xff, 0xfb, 0x90, 0x64]));
+		expect(tts.inputs).toEqual([input]);
+		expect(() => new FakeTts({ mp3: new Uint8Array() })).toThrow("non-empty");
 	});
 
-	test("stops TTS after explicit cancellation or signal abort", async () => {
-		const input: TtsInput = {
+	test("enforces abort and server-owned current-generation hooks", async () => {
+		const createRequest = (signal: AbortSignal): TtsSynthesisRequest => ({
 			conversationId,
+			turnId,
 			generationId,
+			segmentId: "01J00000000000000000000005",
 			text: "Отмена",
-			language: "ru",
-			outputEncoding: "pcm16le",
-			outputSampleRate: 24_000,
-		};
-		const cancelledTts = new FakeTts();
-		const cancelledStream = cancelledTts
-			.synthesize(input, new AbortController().signal)
-			[Symbol.asyncIterator]();
-		expect((await cancelledStream.next()).value?.type).toBe("audio.chunk");
-		await cancelledTts.cancel(generationId);
-		expect((await cancelledStream.next()).done).toBe(true);
+			signal,
+		});
 
-		const controller = new AbortController();
-		const abortedTts = new FakeTts();
-		const abortedStream = abortedTts
-			.synthesize(input, controller.signal)
-			[Symbol.asyncIterator]();
-		expect((await abortedStream.next()).value?.type).toBe("audio.chunk");
-		controller.abort();
-		expect((await abortedStream.next()).done).toBe(true);
+		const preAborted = new AbortController();
+		preAborted.abort();
+		await expect(
+			new FakeTts().synthesize(createRequest(preAborted.signal)),
+		).rejects.toHaveProperty("name", "AbortError");
 
-		const preCancelledTts = new FakeTts();
-		await preCancelledTts.cancel(generationId);
-		const preCancelledStream = preCancelledTts
-			.synthesize(input, new AbortController().signal)
-			[Symbol.asyncIterator]();
-		expect((await preCancelledStream.next()).done).toBe(true);
+		const abortedDuringSynthesis = new AbortController();
+		const delayedTts = new FakeTts({
+			beforeResolve: () => abortedDuringSynthesis.abort(),
+		});
+		await expect(
+			delayedTts.synthesize(createRequest(abortedDuringSynthesis.signal)),
+		).rejects.toHaveProperty("name", "AbortError");
+
+		const staleTts = new FakeTts();
+		staleTts.markGenerationObsolete(generationId);
+		await expect(
+			staleTts.synthesize(createRequest(new AbortController().signal)),
+		).rejects.toHaveProperty("name", "AbortError");
+
+		const guardedTts = new FakeTts({ isGenerationCurrent: () => false });
+		await expect(
+			guardedTts.synthesize(createRequest(new AbortController().signal)),
+		).rejects.toHaveProperty("name", "AbortError");
+		expect(await new FakeTts({ health: "degraded" }).health()).toBe("degraded");
 	});
 });

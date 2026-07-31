@@ -20,11 +20,13 @@ Owned: test harness, fixtures, Playwright, security tests, eval runner and relea
 
 ## Deliverables
 
-- fake OpenRouter `POST /api/v1/chat/completions` endpoint that validates one base64 WAV `input_audio` and returns one final transcript;
+- separate gateway/utterance-assembler tests proving bounded mono PCM16 plus one accepted `audio.commit` produces exactly one validated WAV;
+- separate `OpenRouterSttAdapter` tests starting from already-WAV fixtures, including rejection of raw PCM/malformed WAV/content-type mismatch and proof that the adapter performs no PCM conversion;
+- fake OpenRouter `POST /api/v1/chat/completions` endpoint that validates one unchanged-byte base64 WAV `input_audio` and returns one final transcript;
 - fake OpenRouter `POST /api/v1/audio/speech` endpoint returning complete `audio/mpeg` fixtures;
-- PCM microphone, valid/invalid WAV and valid/invalid MP3 fixtures;
+- PCM microphone, raw PCM, valid/invalid WAV and valid/invalid MP3 fixtures;
 - error fixtures for `400/401/402/404/413/429` and retryable `5xx`, plus timeout, bounded `Retry-After`, abort, empty/malformed body and stale turn/generation;
-- proof that browser PCM chunks stay bounded, `audio.commit` makes one STT request, and no provider interim transcript is assumed;
+- proof that browser PCM chunks stay bounded, `audio.commit` makes one atomic `audio/wav` STT request, and the client receives only `transcript.final`;
 - proof that STT retry cannot invoke Luna/tools and TTS retry cannot repeat Luna/tools/notifier;
 - unit/contract/integration command matrix, Playwright journey, reconnect/barge-in and deterministic retry tests;
 - real paid Russian STT and TTS smokes tagged `external`, excluded from default CI, and reported as not run unless observed;
@@ -32,7 +34,7 @@ Owned: test harness, fixtures, Playwright, security tests, eval runner and relea
 
 ## Release blockers
 
-Any duplicate booking, qualification before booking, fabricated transcript, invented commercial promise, leaked key/audio/PII, browser OpenRouter call, unbounded utterance, provider-partial dependency, non-audio body treated as audio, stale result playback, repeated side effect, or inability to restore DB is critical.
+Any duplicate booking, qualification before booking, fabricated or non-final STT event, invented commercial promise, leaked key/audio/PII, browser OpenRouter call, unbounded utterance, non-audio body treated as audio, stale result playback, repeated side effect, or inability to restore DB is critical.
 
 ## Completion report
 

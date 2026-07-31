@@ -29,11 +29,11 @@ Shared events and ports are consumed, not redefined.
 
 ## STT contract
 
-Use native Bun `fetch` to `POST https://openrouter.ai/api/v1/chat/completions`. After backend end-of-turn / `audio.commit`, bound the 16 kHz mono PCM16 utterance by duration and bytes, wrap it as WAV, base64-encode it, and send one `input_audio` content part. Default model is configurable as `openai/gpt-audio-mini`, format `wav`, language `ru`.
+Use native Bun `fetch` to `POST https://openrouter.ai/api/v1/chat/completions`. The gateway/utterance assembler—not this adapter—owns duration/byte-bounded 16 kHz mono PCM16 assembly and PCM16-to-WAV encoding after `audio.commit`. `OpenRouterSttAdapter` receives one atomic request whose bytes are already a validated WAV and whose content type is `audio/wav`. It independently validates WAV format and request bounds, rejects raw PCM/malformed WAV/content-type mismatch, base64-encodes the unchanged WAV bytes, and sends one `input_audio` content part. Default model is configurable as `openai/gpt-audio-mini`, format `wav`, language `ru`.
 
-This is phrase-level final transcription, **not provider streaming STT**. Emit one final transcript only. Do not promise provider partials, create a provider session abstraction, or forward browser chunks directly to OpenRouter.
+Emit one final transcript only. Do not create a provider session abstraction or forward browser chunks directly to OpenRouter.
 
-Required behavior: connect/total timeouts; at most one bounded retry; `AbortSignal`; stale-turn suppression; typed `400/401/402/404/413/429/5xx`; response validation; and telemetry without API key, WAV/base64 audio, transcript text, or PII. STT retry repeats only pure transcription and can never invoke Luna, tools, or notifier side effects.
+Required behavior: WAV/request validation without PCM conversion; connect/total timeouts; at most one bounded retry; `AbortSignal`; stale-turn suppression; typed `400/401/402/404/413/429/5xx`; response validation; and telemetry without API key, WAV/base64 audio, transcript text, or PII. STT retry repeats only pure transcription and can never invoke Luna, tools, or notifier side effects.
 
 ## TTS contract
 
@@ -41,7 +41,8 @@ Use native Bun `fetch` to `POST https://openrouter.ai/api/v1/audio/speech`, mode
 
 ## Tests and smoke commands
 
-- Protocol-faithful fake chat-completions endpoint validates base64 WAV `input_audio`, success final transcript, malformed response, limits, timeout, abort, stale turn and retry/error mapping.
+- Adapter tests start from already-WAV fixtures; a protocol-faithful fake chat-completions endpoint verifies unchanged-byte base64 `input_audio`, raw PCM/malformed WAV rejection, success final transcript, request limits, timeout, abort, stale turn and retry/error mapping.
+- Gateway PCM16-to-WAV encoder behavior is tested separately by its owner; A2 must not duplicate that encoder inside the adapter.
 - Protocol-faithful fake speech endpoint validates complete MP3 and typed errors.
 - Default tests need no credentials.
 - Separate paid Russian STT and TTS smoke commands are opt-in and excluded from default CI. Never claim they passed without actually running them.

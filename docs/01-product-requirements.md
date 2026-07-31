@@ -34,7 +34,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 | ID | История | Приёмка |
 |---|---|---|
 | US-001 | Как посетитель, я запускаю разговор одной кнопкой | запрашивается mic permission, UI показывает состояние |
-| US-002 | Я говорю естественно по-русски | UI показывает listening/processing, затем один final transcript; provider interim text не обещается |
+| US-002 | Я говорю естественно по-русски | UI показывает listening/processing, затем ровно один `transcript.final` |
 | US-003 | Агент отвечает голосом и текстом | первая полная MP3-фраза может проиграться до завершения ответа Luna; ответ не содержит markdown-мусора |
 | US-004 | Агент понимает, зачем я пришёл | задаёт не более одного вопроса за раз, фиксирует роль/задачу |
 | US-005 | Агент объясняет Botamin на релевантном примере | использует только утверждённые knowledge claims |
@@ -53,7 +53,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-VOICE-001:** создание сессии должно выдавать уникальный `conversationId`.
 - **FR-VOICE-002:** браузер передаёт mono PCM16, 16 kHz, чанками около 100 ms; browser/backend buffers ограничены duration/bytes.
 - **FR-VOICE-003:** backend держит единственный `OPENROUTER_API_KEY` server-side для STT и TTS.
-- **FR-VOICE-004:** `audio.commit` закрывает utterance; backend создаёт WAV и выполняет один audio-input chat completion. UI получает только один final transcript, а Luna запускается только для валидного неустаревшего результата.
+- **FR-VOICE-004:** `audio.commit` закрывает utterance; gateway/utterance assembler создаёт ровно один validated mono PCM16 WAV и передаёт его atomic `SttPort`. Adapter валидирует/bounds already-WAV bytes, base64-кодирует их без conversion и выполняет один audio-input chat completion. UI получает только один `transcript.final`, а Luna запускается только для валидного неустаревшего результата.
 - **FR-VOICE-005:** при barge-in клиент немедленно останавливает playback и очищает очередь, backend abort-ит OpenRouter fetches текущего `generationId` и по возможности вызывает `turn/interrupt`.
 - **FR-VOICE-006:** reconnect не должен создавать вторую бронь.
 - **FR-VOICE-007:** stop завершает внешние соединения и фиксирует событие.
@@ -61,7 +61,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-VOICE-009:** TTS failure сохраняет видимый текст и все уже committed business side effects; synthesis retry не повторяет brain turn или tools.
 - **FR-VOICE-010:** перед TTS удаляются PII, tool envelopes, hidden IDs, Markdown, code fences и raw URLs; hard limit сегмента — configurable, default 240 chars.
 - **FR-VOICE-011:** STT duration/byte/time/retry guards и TTS per-segment/turn/session/concurrency/response guards ограничивают voice path; retry не запускает Luna/tools повторно.
-- **FR-VOICE-012:** STT не называется provider streaming и не имеет active partial event requirement; chunked PCM16 описывает только browser-to-backend transport.
+- **FR-VOICE-012:** chunked PCM16 описывает только browser-to-gateway transport; provider boundary получает один atomic `audio/wav` request и возвращает один final result.
 
 ### 4.2 Brain and orchestration
 

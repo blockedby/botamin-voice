@@ -28,7 +28,7 @@ Owned: orchestrator, prompt compiler, prompts, knowledge and eval content. Share
 - PII-safe speech sanitizer that removes phone/email/Telegram, tool envelopes, hidden IDs, Markdown/code/raw URLs;
 - bounded phrase chunker with first/soft/hard targets and complete-segment semantics;
 - accept exactly one committed final STT result per turn; suppress aborted/retried/stale results before Luna or tools;
-- no orchestrator dependency on provider partial transcripts or provider sessions;
+- orchestrator accepts only the atomic final `SttPort` result for the current turn;
 - turn/generation IDs, OpenRouter `AbortSignal` coordination and stale-result semantics for both voice paths;
 - STT failure never fabricates text or invokes brain/tools; TTS budget/failure preserves visible text and committed effects;
 - prompt bundle with checksum;

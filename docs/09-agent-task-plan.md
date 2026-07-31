@@ -63,8 +63,8 @@ DoD:
 **Зависимости:** T00.
 
 - AudioWorklet capture/resample;
-- 100 ms PCM16 frames with bounded browser/backend utterance buffering;
-- explicit `audio.commit`, duplicate suppression and listening/processing/final UI without provider partial assumption;
+- 100 ms PCM16 frames with bounded browser buffering and the gateway-facing chunk/commit contract;
+- explicit `audio.commit`, duplicate suppression and listening/processing/`transcript.final` UI;
 - provider-neutral ordered playback queue for complete `audio/mpeg` phrase segments;
 - local stop, queue clear, generation cancellation and stale-segment filtering;
 - WS client/reconnect;
@@ -76,9 +76,10 @@ DoD:
 **Зависимости:** T00.
 
 - native Bun `fetch` to `/api/v1/chat/completions` with configurable audio-input-capable model;
-- bounded PCM16 utterance to valid WAV and base64 `input_audio` after `audio.commit`;
-- atomic `SttPort` final transcript only—no provider streaming session or interim events;
-- duration/byte/connect/total-timeout bounds, at most one retry, abort and stale-turn suppression;
+- consume one atomic, already-encoded `audio/wav` request produced by the gateway/utterance assembler after `audio.commit`;
+- validate WAV format and request duration/byte bounds, reject raw PCM, then base64-encode unchanged WAV bytes as `input_audio`; the adapter does not implement PCM-to-WAV encoding;
+- atomic `SttPort` returns one final transcript;
+- connect/total-timeout bounds, at most one retry, abort and stale-turn suppression;
 - typed `400/401/402/404/413/429/5xx` without key/audio/PII logs;
 - protocol-faithful fake endpoint and opt-in paid Russian smoke;
 - retry repeats only transcription and never invokes brain/tools/notifier.
@@ -178,8 +179,9 @@ DoD:
 **Владелец:** A7  
 **Зависимости:** outputs T10–T15.
 
+- separate gateway PCM16-to-WAV encoder tests and OpenRouter adapter already-WAV request tests;
 - protocol-faithful fake OpenRouter `/api/v1/chat/completions` audio-input and `/api/v1/audio/speech` endpoints;
-- valid/invalid WAV/MP3 and JSON error fixtures for `400/401/402/404/413/429` and retryable `5xx`;
+- raw PCM, valid/invalid WAV/MP3 and JSON error fixtures for `400/401/402/404/413/429` and retryable `5xx`;
 - timeout, bounded `Retry-After`, abort, malformed/empty body, wrong content type and stale-turn/generation tests;
 - state/booking invariants and deterministic retry/circuit assertions;
 - secret scan for OpenRouter key in browser bundles, snapshots and logs.
@@ -191,7 +193,7 @@ DoD:
 **Владелец:** A7 как integrator; component owners исправляют свои зоны.  
 **Зависимости:** T20, T21, T22, T15.
 
-- full browser PCM16 → bounded WAV on `audio.commit` → OpenRouter final transcript → Luna → OpenRouter complete MP3 → browser path;
+- full browser PCM16 → one gateway-produced validated WAV on `audio.commit` → atomic `SttPort` request → OpenRouter final transcript → Luna → OpenRouter complete MP3 → browser path;
 - booking create/update;
 - barge-in;
 - reconnect;

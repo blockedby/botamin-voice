@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from html.parser import HTMLParser
 from pathlib import Path
 import re
 import sys
@@ -18,9 +19,40 @@ link_re = re.compile(r"!?(?:\[[^\]]*\])\(([^)]+)\)")
 def is_ignored(path: Path) -> bool:
     return (
         "node_modules" in path.parts
+        or "dist" in path.parts
+        or "coverage" in path.parts
         or ".git" in path.parts
         or ("corrections" in path.parts and "superseded" in path.parts)
     )
+
+
+class VisibleHtmlParser(HTMLParser):
+    """Collect rendered text while ignoring non-visible resource/style/script bodies."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.hidden_depth = 0
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        if tag.lower() in {"script", "style", "template"}:
+            self.hidden_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in {"script", "style", "template"} and self.hidden_depth:
+            self.hidden_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self.hidden_depth:
+            self.parts.append(data)
+
+
+def visible_html_text(text: str) -> str:
+    parser = VisibleHtmlParser()
+    parser.feed(text)
+    parser.close()
+    return "\n".join(parser.parts)
 
 
 def parse_env(text: str, label: str) -> dict[str, str]:
@@ -198,45 +230,106 @@ if t12.get("owned_paths") != [
 ]:
     errors.append("T12 owned_paths do not match the active TTS contract")
 
-# Active source corpus: no retired voice provider names/keys/paths and no provider partial contract.
+# Active source/contracts/fixtures/docs/generated text: reject retired provider and STT APIs.
+# Historical corrections are excluded only through is_ignored(); generated HTML is parsed as visible text.
 active_extensions = {
     ".css", ".dot", ".html", ".js", ".json", ".md", ".mjs", ".py",
     ".sh", ".ts", ".tsx", ".txt", ".yaml", ".yml",
 }
+generated_html_path = ROOT / "technical-spec.html"
 active_text_paths = sorted(
     path
     for path in ROOT.rglob("*")
     if path.is_file()
     and not is_ignored(path)
     and path.suffix.lower() in active_extensions
-    and path.name not in {"FULL_SPEC.md", "technical-spec.html"}
+    and path != generated_html_path
 )
 retired_provider_re = re.compile(
     r"(?:\b" + "x" + "ai" + r"\b|" + "x_" + "ai" + r"|" + "x " + "ai" + r")",
     re.I,
 )
+retired_partial_event = "transcript" + "." + "partial"
+retired_session_type = "Stt" + "Session"
+retired_audio_push = "send" + "Audio"
+retired_stt_contract_patterns = (
+    ("partial STT event", re.compile(re.escape(retired_partial_event), re.I)),
+    (
+        "session-style STT type",
+        re.compile(r"\b" + re.escape(retired_session_type) + r"(?:Input)?\b"),
+    ),
+    ("streaming STT audio method", re.compile(r"\b" + re.escape(retired_audio_push) + r"\b")),
+)
+connection_name = "con" + "nect"
+connection_call_re = re.compile(r"\b" + connection_name + r"\s*\(")
+stt_connection_call_re = re.compile(r"\bstt\w*\s*\.\s*" + connection_name + r"\s*\(", re.I)
 for path in active_text_paths:
-    for line_number, line in enumerate(path.read_text(errors="ignore").splitlines(), 1):
+    path_text = path.read_text(errors="ignore")
+    has_session_surface = bool(retired_stt_contract_patterns[1][1].search(path_text))
+    for line_number, line in enumerate(path_text.splitlines(), 1):
         if retired_provider_re.search(line):
             errors.append(f"retired voice provider text/path: {path.relative_to(ROOT)}:{line_number}")
+        for label, pattern in retired_stt_contract_patterns:
+            if pattern.search(line):
+                errors.append(
+                    f"retired STT contract ({label}): {path.relative_to(ROOT)}:{line_number}"
+                )
+        if stt_connection_call_re.search(line) or (
+            has_session_surface and connection_call_re.search(line)
+        ):
+            errors.append(
+                f"retired STT contract (session-style connection method): "
+                f"{path.relative_to(ROOT)}:{line_number}"
+            )
 active_corpus = "\n".join(path.read_text(errors="ignore") for path in active_text_paths)
-retired_partial_event = "transcript" + ".partial"
-api_contract = (ROOT / "docs/05-api-events-data.md").read_text(errors="ignore")
-if re.search(r"\|\s*`" + re.escape(retired_partial_event) + r"`", api_contract):
-    errors.append(f"active WS event table contains retired STT event: {retired_partial_event}")
 for term in (
     "OpenRouter is the only",
     "/api/v1/chat/completions",
     "input_audio",
     "openai/gpt-audio-mini",
     "audio.commit",
-    "final transcript",
-    "no provider interim",
+    "transcript.final",
+    "gateway/utterance assembler",
+    "already-WAV",
     "OpenRouterTtsAdapter",
+    'contentType: "audio/wav"',
     'contentType: "audio/mpeg"',
 ):
     if term not in active_corpus:
         errors.append(f"missing Correction 004 active invariant: {term}")
+
+# Ownership must remain explicit: gateway encodes one WAV; adapter only validates/bounds/posts it.
+a2_packet = (ROOT / "tasks/agents/A2-openrouter-voice.md").read_text(errors="ignore")
+testing_spec = (ROOT / "docs/08-testing-and-acceptance.md").read_text(errors="ignore")
+ownership_requirements = {
+    "architecture gateway WAV ownership": (
+        architecture,
+        "gateway/utterance assembler создаёт один validated WAV request",
+    ),
+    "architecture adapter does not encode WAV": (
+        architecture,
+        "adapter не добавляет WAV header и не конвертирует PCM",
+    ),
+    "A2 consumes already-WAV bytes": (
+        a2_packet,
+        "bytes are already a validated WAV",
+    ),
+    "A2 forbids duplicate encoder": (
+        a2_packet,
+        "A2 must not duplicate that encoder inside the adapter",
+    ),
+    "separate gateway encoder tests": (
+        testing_spec,
+        "Gateway/utterance-assembler tests prove",
+    ),
+    "separate adapter request tests": (
+        testing_spec,
+        "OpenRouterSttAdapter` tests use an already-WAV fixture",
+    ),
+}
+for label, (text, required) in ownership_requirements.items():
+    if required not in text:
+        errors.append(f"missing WAV ownership invariant: {label}")
 
 # Assembled spec and standalone HTML.
 full_spec = (ROOT / "FULL_SPEC.md").read_text(errors="replace")
@@ -246,8 +339,6 @@ if "CORRECTION-003" in full_spec or "STATUS: SUPERSEDED" in full_spec:
     errors.append("FULL_SPEC includes superseded Correction 003 content")
 if retired_provider_re.search(full_spec):
     errors.append("FULL_SPEC contains retired voice-provider text/path")
-if re.search(r"\|\s*`" + re.escape(retired_partial_event) + r"`", full_spec):
-    errors.append("FULL_SPEC contains retired STT event-table entry")
 for term in ("/api/v1/chat/completions", "input_audio", "final transcript", "OpenRouter STT", "OpenRouter TTS"):
     if term not in full_spec:
         errors.append(f"FULL_SPEC missing active voice invariant: {term}")
@@ -257,17 +348,26 @@ for number in range(0, 11):
 if "# Источники" not in full_spec:
     errors.append("FULL_SPEC missing sources")
 
-html = (ROOT / "technical-spec.html").read_text(errors="replace")
+html = generated_html_path.read_text(errors="replace")
 if "0.5-demo" not in html or "OpenRouter STT" not in html or "OpenRouter TTS" not in html:
     errors.append("technical-spec.html missing version/OpenRouter voice migration")
 if "CORRECTION-003" in html or "STATUS: SUPERSEDED" in html:
     errors.append("technical-spec.html includes superseded Correction 003 content")
-# Embedded base64 resources can coincidentally contain short text patterns; scan visible markup only.
-html_visible = re.sub(r'data:[^"\']+', "<embedded-resource>", html)
+# Embedded resources and CSS can contain coincidental byte/text patterns; scan rendered text only.
+html_visible = visible_html_text(html)
 if retired_provider_re.search(html_visible):
-    errors.append("technical-spec.html contains retired voice-provider text/path")
-if re.search(r"<code>" + re.escape(retired_partial_event) + r"</code>\s*</td>", html_visible):
-    errors.append("technical-spec.html contains retired STT event-table entry")
+    errors.append("technical-spec.html visible text contains retired voice-provider text/path")
+for label, pattern in retired_stt_contract_patterns:
+    if pattern.search(html_visible):
+        errors.append(f"technical-spec.html visible text contains retired STT contract ({label})")
+html_has_session_surface = bool(retired_stt_contract_patterns[1][1].search(html_visible))
+if stt_connection_call_re.search(html_visible) or (
+    html_has_session_surface and connection_call_re.search(html_visible)
+):
+    errors.append(
+        "technical-spec.html visible text contains retired STT contract "
+        "(session-style connection method)"
+    )
 embedded_rasters = len(re.findall(r"data:image/(?:png|jpe?g|webp)", html))
 embedded_svgs = len(re.findall(r"data:image/svg\+xml", html))
 inline_svgs = len(re.findall(r"<svg\b", html))

@@ -24,7 +24,7 @@ Owned: `apps/web/src/audio`, transport, voice state, UI components/pages/styles.
 - AudioWorklet capture and resampling to 16 kHz mono PCM16.
 - Binary PCM16 frame batching around 100 ms with bounded local buffering.
 - Explicit end-of-turn `audio.commit`; duplicate commit suppression and UI states `listening → processing → final transcript`.
-- No UI contract or copy that assumes provider interim transcripts; microphone chunks are browser transport, not streaming provider STT.
+- UI exposes listening/processing state and `transcript.final` only; microphone chunks are browser-to-gateway transport.
 - Complete `audio/mpeg` phrase-segment decoding/playback using Web Audio or `HTMLAudio`, ordered by sequence.
 - Immediate local barge-in cancellation and generation filtering.
 - Reconnect/resume token behavior.

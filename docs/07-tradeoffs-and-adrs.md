@@ -19,7 +19,7 @@
 
 ### Цена решения
 
-- phrase-level STT ждёт конец реплики, WAV upload и inference, поэтому end-to-end latency выше и provider interim text отсутствует;
+- phrase-level STT ждёт конец реплики, WAV upload и inference до появления final transcript, поэтому end-to-end latency выше;
 - больше HTTP requests и failure modes;
 - нужен sentence chunker и interruption coordination;
 - subscription auth требует операционной дисциплины.
@@ -162,9 +162,9 @@ Consequences and guardrails:
 
 **Status:** accepted; Correction 004 authority.
 
-Use one backend-only `OPENROUTER_API_KEY` for both voice paths. STT is native Bun `fetch` to `/api/v1/chat/completions` with one bounded base64 WAV `input_audio` after `audio.commit`; the configurable default model is `openai/gpt-audio-mini`. Return one final transcript through an atomic provider-neutral `SttPort`.
+Use one backend-only `OPENROUTER_API_KEY` for both voice paths. After `audio.commit`, the gateway/utterance assembler encodes bounded mono PCM16 into one validated WAV and passes it through atomic provider-neutral `SttPort`. The adapter validates/bounds the already-WAV request, base64-encodes unchanged bytes, and uses native Bun `fetch` to `/api/v1/chat/completions`; the configurable default model is `openai/gpt-audio-mini`. Return one final transcript.
 
-Official evidence documents chat-completions audio input, base64, model-dependent formats and audio-input model filtering. It does not currently document a dedicated realtime STT WebSocket. Therefore browser PCM16 may remain chunked to the backend, but active architecture must not call provider STT streaming or promise provider interim transcripts.
+Official evidence documents chat-completions audio input, base64, model-dependent formats and audio-input model filtering. It does not currently document a dedicated realtime STT WebSocket. Therefore browser PCM16 may remain chunked to the backend, while the active provider boundary is one atomic WAV request and one final transcript.
 
 Consequences and guardrails:
 

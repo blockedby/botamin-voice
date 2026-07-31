@@ -110,7 +110,7 @@ An implementation is invalid if it violates any of these rules:
 4. OpenRouter and Codex credentials never reach browser code, browser logs, or client-visible events.
 5. The assistant never claims that a real calendar event or CRM record was created in this MVP.
 6. Prompts and product knowledge remain Markdown files in the repository; no online editor is built.
-7. OpenRouter is the only STT and TTS gateway. STT is one atomic base64-WAV audio-input chat completion after `audio.commit`; only a final transcript is exposed, with no provider interim transcript promise.
+7. OpenRouter is the only STT and TTS gateway. After `audio.commit`, the gateway/utterance assembler creates one validated WAV and passes it through atomic `SttPort`; the adapter validates/bounds and base64-encodes those already-WAV bytes for one audio-input chat completion. Only `transcript.final` is exposed.
 8. Provider-specific code remains behind atomic `SttPort` and `TtsPort` contracts so domain logic does not depend on OpenRouter HTTP types.
 
 ## 5. Dispatch order

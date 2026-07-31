@@ -12,7 +12,7 @@
 
 ## Одним абзацем
 
-Нужно сделать full-stack сайт Botamin с браузерным голосовым AI-продавцом. Browser отправляет PCM16 chunks на backend; backend ограничивает utterance по времени/байтам, оборачивает PCM16 в WAV и после `audio.commit` отправляет base64 `input_audio` в OpenRouter chat completion. Только финальный transcript идёт в Codex app-server с `gpt-5.6-luna`; ответ озвучивается через OpenRouter TTS короткими полными MP3-сегментами. Это phrase-level STT, а не provider streaming: промежуточных provider transcripts нет, и дополнительная end-of-turn latency принята явно. Агент **сначала** создаёт внутреннюю бронь, а **затем опционально** дополняет её квалификацией. Реальный календарь или CRM не подключаются. Промпты и knowledge base остаются Markdown; всё поднимается одним `docker compose` на одной VPS.
+Нужно сделать full-stack сайт Botamin с браузерным голосовым AI-продавцом. Browser отправляет PCM16 chunks на backend; gateway/utterance assembler ограничивает mono PCM16 по времени/байтам, создаёт ровно один валидный WAV и после `audio.commit` передаёт его атомарным `audio/wav` запросом в `SttPort`. OpenRouter adapter валидирует и ограничивает уже готовый WAV, base64-кодирует его и отправляет как `input_audio` в chat completion. Только `transcript.final` идёт в Codex app-server с `gpt-5.6-luna`; ответ озвучивается через OpenRouter TTS короткими полными MP3-сегментами. Phrase-level STT добавляет явно принятую end-of-turn latency. Агент **сначала** создаёт внутреннюю бронь, а **затем опционально** дополняет её квалификацией. Реальный календарь или CRM не подключаются. Промпты и knowledge base остаются Markdown; всё поднимается одним `docker compose` на одной VPS.
 
 ## Локальная настройка доступов
 
@@ -20,7 +20,7 @@
 cp .env.example .env
 ```
 
-1. **OpenRouter voice:** добавьте backend-only `OPENROUTER_API_KEY`. Один ключ авторизует STT и TTS; STT выполняется атомарно после `audio.commit`, без provider interim transcripts. Для local attribution оставьте `OPENROUTER_HTTP_REFERER=http://localhost:5173`.
+1. **OpenRouter voice:** добавьте backend-only `OPENROUTER_API_KEY`. Один ключ авторизует STT и TTS; STT выполняется атомарно после `audio.commit` и публикует только `transcript.final`. Для local attribution оставьте `OPENROUTER_HTTP_REFERER=http://localhost:5173`.
 2. **Codex subscription:** выполните вход через ChatGPT, без OpenAI API key:
 
    ```bash

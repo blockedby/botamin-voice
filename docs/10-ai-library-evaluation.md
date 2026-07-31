@@ -4,7 +4,7 @@
 
 Для P0 не вводится единый универсальный AI SDK в критический realtime-путь.
 
-- **OpenRouter STT:** native Bun `fetch` к `/api/v1/chat/completions`; one bounded base64 WAV `input_audio` request after `audio.commit`, one final transcript, no provider session/partial contract.
+- **OpenRouter STT:** native Bun `fetch` к `/api/v1/chat/completions`; gateway/utterance assembler supplies one bounded, validated `audio/wav` request after `audio.commit`, adapter validates and base64-encodes those unchanged WAV bytes as `input_audio`, and returns one final transcript.
 - **OpenRouter TTS:** native Bun `fetch` к dedicated speech endpoint; one complete MP3 phrase per request, no SDK.
 - **LLM brain:** `BrainPort`, реализованный поверх долгоживущего `codex app-server` и его JSON-RPC protocol.
 - **Model:** `gpt-5.6-luna` через Codex subscription владельца; `CODEX_MODEL`/`CODEX_EFFORT` конфигурируемы, но Luna — согласованный P0 default.
@@ -191,7 +191,7 @@ ConversationOrchestrator
         └── P0: Codex app-server JSON-RPC + gpt-5.6-luna + subscription auth
 
 VoiceOrchestrator
-        ├── SttPort: OpenRouter native Bun fetch → bounded audio/wav request → final transcript
+        ├── SttPort: gateway-produced validated audio/wav → OpenRouter native Bun fetch → final transcript
         └── TtsPort: OpenRouter native Bun fetch → complete audio/mpeg phrase segment
 ```
 

@@ -131,7 +131,7 @@ Server:
 | `session.stop` | reason | корректное завершение |
 | `client.ping` | timestamp | keepalive |
 
-После handshake PCM16 audio идёт binary frames без base64. Gateway ограничивает accumulated duration/bytes; base64 WAV создаётся только server-side после `audio.commit`. Browser chunks не означают streaming transport до provider.
+После handshake PCM16 audio идёт binary frames без base64. Gateway/utterance assembler ограничивает accumulated duration/bytes и после `audio.commit` кодирует ровно один validated mono PCM16 WAV. Этот WAV передаётся atomic `SttPort`; только OpenRouter adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks не означают streaming transport до provider.
 
 ### Server → client events
 
@@ -201,7 +201,7 @@ export interface SttPort {
 }
 ```
 
-No `connect`, `sendAudio`, provider session, partial event or provider HTTP type crosses `SttPort`. The gateway owns chunked PCM16 transport, bounding and WAV wrapping. The adapter posts one base64 `input_audio` to `/api/v1/chat/completions`; only a non-empty validated, current final transcript can reach Luna.
+`SttPort` exposes only atomic `transcribe` and `health` operations with provider-neutral request/result types. The gateway/utterance assembler owns chunked PCM16 transport, duration/byte bounds and creation of exactly one validated WAV. The adapter accepts only already-WAV `audio/wav` bytes, independently validates their format and request bounds, rejects raw PCM, base64-encodes the unchanged WAV, and posts one `input_audio` to `/api/v1/chat/completions`. Only a non-empty validated, current final transcript can reach Luna.
 
 ### Atomic TtsPort
 

@@ -23,7 +23,7 @@ lang: ru-RU
 
 **Deployment target:** одна trusted VPS, один Docker Compose
 
-**Runtime split:** browser PCM16 chunks → backend-bounded utterance/WAV → OpenRouter audio-input chat completion final transcript → Codex app-server / `gpt-5.6-luna` → OpenRouter TTS complete MP3 segment
+**Runtime split:** browser PCM16 chunks → gateway/utterance assembler emits one validated WAV → atomic `audio/wav` SttPort request → OpenRouter audio-input chat completion final transcript → Codex app-server / `gpt-5.6-luna` → OpenRouter TTS complete MP3 segment
 
 > Ключевой инвариант: внутренняя бронь создаётся до любой опциональной квалификации. После `booking.created` отказ, обрыв или ошибка квалификации не отменяют и не удаляют лид.
 

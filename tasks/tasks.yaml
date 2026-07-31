@@ -67,7 +67,7 @@ tasks:
   outputs:
   - Bun workspace with React and server skeletons
   - Zod schemas for REST, WS, tools and domain events
-  - BrainPort, atomic final-transcription SttPort, TtsPort and notifier interfaces
+  - BrainPort, atomic final-transcription SttPort carrying one gateway-produced validated audio/wav payload, TtsPort and notifier interfaces
   - fake adapters and baseline tests
   acceptance:
   - bun install succeeds
@@ -108,16 +108,16 @@ tasks:
   - apps/web/src/state/voice*
   outputs:
   - AudioWorklet capture and 16 kHz mono PCM16 output
-  - 100 ms binary WS frames with bounded browser and backend buffering
+  - 100 ms binary WS frames with bounded browser buffering and a gateway-facing chunk/commit contract
   - explicit end-of-turn audio.commit that closes one bounded utterance for phrase-level STT
-  - UI listening/processing/final-transcript semantics with no provider-partial assumption
+  - UI listening/processing semantics followed only by transcript.final
   - provider-neutral playback queue for complete audio/mpeg phrase segments
   - generation cancellation, queue clearing, stale-segment rejection and reconnect
   acceptance:
   - deterministic audio fixture produces expected frame sizes
   - utterance duration and byte limits stop unbounded microphone buffering before audio.commit
   - audio.commit creates exactly one final-transcription request and duplicate commit is suppressed
-  - UI does not promise or render provider interim transcripts
+  - UI renders exactly one current transcript.final for each accepted utterance
   - complete MP3 phrase segments decode and play in sequence in Chromium and WebKit
   - old-generation audio stops and queued segments are dropped after interruption
   - no OpenRouter or Codex secret exists in the bundle
@@ -136,16 +136,19 @@ tasks:
   - provider-neutral OpenRouterSttAdapter behind atomic final-transcription SttPort
   - native Bun fetch to /api/v1/chat/completions with base64 WAV input_audio
   - configurable audio-input-capable model and Russian transcription instruction
-  - PCM16-to-WAV wrapping with bounded utterance duration and audio bytes
+  - validation and request bounds for gateway-produced already-WAV audio/wav bytes, with raw PCM and malformed WAV rejection
+  - unchanged-byte base64 encoding with no PCM-to-WAV conversion in the adapter
   - connect and total timeouts, at most one bounded retry, abort and stale-turn suppression
-  - final transcript only with no provider streaming or interim transcript contract
+  - one final transcript result
   - typed 400, 401, 402, 404, 413, 429 and 5xx errors without key, audio or PII logs
   - protocol-faithful fake endpoint and paid external Russian smoke command
   acceptance:
-  - native fetch posts one base64 WAV input_audio request to /api/v1/chat/completions after audio.commit
+  - native fetch posts base64 of the unchanged gateway-produced WAV input_audio request to /api/v1/chat/completions after audio.commit
   - OPENROUTER_STT_MODEL selects a currently audio-input-capable model without shared-contract changes
-  - duration, byte, connect-timeout and total-timeout limits are enforced before or during the request
-  - only one final transcript result is emitted; no provider partial or streaming STT claim exists
+  - adapter rejects raw PCM, malformed or incompatible WAV, content-type mismatch and over-limit atomic requests before fetch
+  - adapter contains no PCM-to-WAV encoder
+  - request byte/duration, connect-timeout and total-timeout limits are enforced before or during the request
+  - only one final transcript result is emitted
   - abort or obsolete turn emits no transcript and releases bounded buffers
   - 400, 401, 402, 404, 413, 429 and retryable 5xx cases map to bounded typed failures
   - retry repeats only pure transcription and never invokes Luna, business tools or notifier side effects
@@ -282,7 +285,7 @@ tasks:
   - deterministic conversation and booking transition policies
   - compact brain context
   - tool authorization and result handling
-  - atomic final-transcript intake with stale-turn suppression; no provider-partial dependency
+  - atomic final-transcript intake with stale-turn suppression
   - PII-safe speech sanitizer and bounded phrase chunker for OpenRouter MP3 requests
   - generation coordination, TTS budget guard and degraded-mode policy
   - failure and degraded behavior
@@ -338,16 +341,19 @@ tasks:
   - tests/fixtures
   - packages/test-fixtures
   outputs:
+  - gateway PCM16-to-WAV encoder tests, separate from provider adapter request tests
   - protocol-faithful fake OpenRouter /api/v1/chat/completions audio-input endpoint
-  - base64 WAV request validation plus final-transcript success and malformed-response fixtures
+  - adapter validation of already-WAV requests, unchanged-byte base64 payloads and raw PCM/malformed WAV rejection
+  - final-transcript success and malformed-response fixtures
   - protocol-faithful fake OpenRouter /api/v1/audio/speech endpoint
-  - valid and invalid WAV/MP3 fixtures
+  - PCM, valid and invalid WAV/MP3 fixtures
   - JSON error fixtures for 400, 401, 402, 404, 413, 429 and retryable 5xx for both voice paths
   - timeout, Retry-After, abort, empty-body, wrong-content-type and stale-turn/generation tests
   - provider contract test commands, state/idempotency regression suite and secret scan
   acceptance:
   - default test suite needs no external OpenRouter credentials
-  - fake chat-completions endpoint proves one WAV input_audio request yields only one final transcript
+  - gateway encoder proves one accepted bounded PCM16 utterance yields one validated WAV
+  - fake chat-completions endpoint proves one already-WAV input_audio request yields only one final transcript and the adapter does not convert PCM
   - fake speech endpoint proves non-2xx JSON is never forwarded as audio
   - STT retry never invokes brain/tools and TTS retry never repeats brain/tools/notifier side effects
   - retry counts, timeout/abort handling and stale suppression are deterministic
@@ -375,7 +381,7 @@ tasks:
   - real OpenRouter phrase-level STT, Codex/Luna and target-VPS OpenRouter TTS smoke evidence
   - end-to-end text-only output degradation test
   acceptance:
-  - browser PCM16 chunks to bounded WAV to OpenRouter final transcript to Luna to OpenRouter MP3 to browser path works
+  - browser PCM16 chunks to one gateway-produced validated WAV to atomic SttPort request to OpenRouter final transcript to Luna to OpenRouter MP3 to browser path works
   - exactly one booking is created in happy path and retries
   - disconnect after booking preserves the lead
   - text output remains usable when TTS is disabled or unavailable

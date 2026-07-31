@@ -9,9 +9,10 @@
 - **OpenRouter phrase-level STT** — один audio-input chat completion для bounded WAV после конца реплики;
 - **Codex app-server + GPT-5.6 Luna** — текстовый reasoning, dialogue policy и tool decisions;
 - **OpenRouter TTS** — backend-only paid synthesis через native Bun `fetch`;
-- **Bun backend** — единственный владелец utterance buffers, state, tools, credentials, voice budgets и persistence.
+- **Bun gateway/utterance assembler** — единственный владелец utterance buffers, PCM16 bounds и PCM16-to-WAV encoding;
+- **Bun backend** — владелец state, tools, credentials, voice budgets и persistence.
 
-Действующий pipeline: **browser PCM16 chunks → backend-bounded utterance/WAV → OpenRouter audio-input chat completion final transcript → Codex/Luna → OpenRouter TTS complete MP3 segment**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint.
+Действующий pipeline: **browser PCM16 chunks → gateway/utterance assembler bounds mono PCM16 and emits one validated WAV → atomic `audio/wav` SttPort request → OpenRouter audio-input chat completion final transcript → Codex/Luna → OpenRouter TTS complete MP3 segment**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint.
 
 Это отличается от end-to-end speech-to-speech: добавляется один orchestration layer, зато используется уже оплаченная Codex subscription и мозг можно заменить без переделки audio UI.
 
@@ -26,7 +27,7 @@
 - resample browser audio до mono PCM16 16 kHz;
 - отправка бинарных PCM16 чанков около 100 ms;
 - явный end-of-turn `audio.commit` и bounded local buffer;
-- UI states `listening → processing → final transcript` без provider partial text;
+- UI states `listening → processing → transcript.final`;
 - ordered playback queue для полных MP3 phrase segments;
 - decode через Web Audio или `HTMLAudio`;
 - barge-in: немедленно stop local playback и clear queue;
@@ -42,7 +43,7 @@
 - выдача conversation ID;
 - аутентификация/лимиты публичной сессии;
 - multiplex JSON events и binary audio;
-- bounded utterance assembly до `audio.commit`, duration/byte guards и PCM16-to-WAV wrapping;
+- bounded utterance assembly до `audio.commit`, duration/byte guards и encoding bounded mono PCM16 into exactly one validated WAV;
 - atomic provider request lifecycle, abort и stale-turn suppression;
 - backpressure;
 - orchestration turns;
@@ -84,10 +85,11 @@ P0 transport — direct typed JSON-RPC к app-server. Универсальный
 ### OpenRouterSttAdapter
 
 - server-side native Bun `fetch` к `POST https://openrouter.ai/api/v1/chat/completions`;
-- принимает от gateway одну завершённую 16 kHz mono PCM16 реплику, уже ограниченную `STT_MAX_UTTERANCE_MS` и `STT_MAX_AUDIO_BYTES`;
-- добавляет корректный WAV header, base64-кодирует bytes и отправляет content part `{"type":"input_audio","input_audio":{"data":"<base64>","format":"wav"}}`;
+- принимает через atomic `SttPort` одну уже закодированную и проверенную gateway 16 kHz mono PCM16 WAV реплику с `contentType: "audio/wav"`;
+- повторно валидирует WAV container/format и request duration/byte bounds, отклоняя raw PCM, malformed WAV и mismatched content type;
+- base64-кодирует неизменённые WAV bytes и отправляет content part `{"type":"input_audio","input_audio":{"data":"<base64>","format":"wav"}}`; adapter не добавляет WAV header и не конвертирует PCM;
 - default model `openai/gpt-audio-mini`; model, `wav` format и `ru` language задаются env, а audio-input capability проверяется smoke/discovery evidence;
-- возвращает один atomic final transcript; активного provider session/partial-event контракта нет;
+- возвращает один atomic final transcript;
 - current official evidence documents chat completions audio input, not a dedicated realtime STT WebSocket; поэтому adapter нельзя называть provider-streaming STT;
 - `AbortSignal` и turn identity подавляют aborted/stale result; `400/401/402/404/413` не ретраятся, `429`/retryable `5xx` получают не более одного bounded retry;
 - STT retry повторяет только transcription fetch и никогда не запускает Luna, tools или notifier;
@@ -134,10 +136,10 @@ P0 adapter — structured console JSON. P1 — signed HTTP webhook с retry/outb
 
 ### Порядок
 
-1. Browser отправляет примерно 100 ms PCM16 chunks; backend собирает их в bounded utterance.
-2. End-of-turn / `audio.commit` закрывает реплику. Backend проверяет duration/bytes и оборачивает PCM16 в WAV.
-3. OpenRouter STT adapter отправляет один base64-WAV `input_audio` chat completion.
-4. Только валидный неустаревший final transcript становится user turn; provider interim transcript не существует.
+1. Browser отправляет примерно 100 ms PCM16 chunks; gateway/utterance assembler собирает их в bounded utterance.
+2. End-of-turn / `audio.commit` закрывает реплику. Gateway/utterance assembler проверяет duration/bytes, создаёт и валидирует ровно один mono PCM16 WAV.
+3. Gateway передаёт WAV атомарному `SttPort`; OpenRouter STT adapter повторно валидирует/bounds already-WAV request, base64-кодирует его и отправляет один `input_audio` chat completion.
+4. Только валидный неустаревший final transcript становится user turn и публикуется как `transcript.final`.
 5. Orchestrator добавляет stage, known slots, booking status и краткий dialogue context; Codex thread получает `turn/start` ровно один раз.
 6. Text deltas проходят PII-safe sanitizer и bounded phrase chunker.
 7. Законченная короткая фраза отправляется в OpenRouter TTS; один request соответствует одному segment.
@@ -150,16 +152,16 @@ P0 adapter — structured console JSON. P1 — signed HTTP webhook с retry/outb
 ### Целевой budget
 
 - end-of-turn decision and `audio.commit`: browser/backend measurement point;
-- WAV wrapping + base64/application overhead: measured separately and bounded;
+- gateway WAV encoding/validation и adapter base64/application overhead измеряются отдельно и имеют независимые bounds;
 - OpenRouter phrase-level STT request to final transcript: measured release-profile input, no provider latency guarantee;
 - Luna first delta after final transcript: target ≤ 900 ms;
 - first phrase buffer: default target 100 chars, idle flush 350 ms;
 - OpenRouter request + complete MP3 response: измеряется отдельно для release profile, без provider latency guarantee;
-- total target is re-baselined from measured `audio.commit → final transcript → playback`; phrase-level STT necessarily adds post-commit upload/inference latency and has no provider interim text.
+- total target is re-baselined from measured `audio.commit → final transcript → playback`; phrase-level STT necessarily adds post-commit upload/inference latency.
 
 ### Приёмы снижения задержки
 
-- показывать только client listening/processing state и atomic final transcript; не ждать и не имитировать provider interim text;
+- показывать client listening/processing state и только atomic `transcript.final`;
 - Luna effort `low`/минимально доступный после model capability check;
 - короткий state context вместо полного event log;
 - запускать phrase-level synthesis до завершения полного Luna ответа;
@@ -224,7 +226,7 @@ export interface SttPort {
 }
 ```
 
-`SttPort` не содержит `connect`, provider session, `sendAudio`, partial events или provider SDK types. Chunked PCM16 остаётся отдельным browser-to-backend WS transport; gateway создаёт один WAV request только после `audio.commit`.
+`SttPort` содержит только atomic `transcribe`/`health` operations и provider-neutral request/result types. Chunked PCM16 остаётся отдельным browser-to-backend WS transport; gateway/utterance assembler создаёт один validated WAV request только после `audio.commit`, а adapter принимает только already-WAV bytes.
 
 ## 7. Dynamic tools и fallback
 

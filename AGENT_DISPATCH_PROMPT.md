@@ -31,7 +31,7 @@ Execution rules:
 - Use fake ports and deterministic fixtures when provider credentials are unavailable.
 - Do not commit secrets, Codex auth files, raw production audio, or real PII.
 - Keep the project TypeScript + React + Bun and deployable with one Docker Compose as specified.
-- OpenRouter is the only P0 STT/TTS gateway and is called only by the backend with one shared server secret. STT uses native Bun `fetch` to `/chat/completions` with one bounded base64 WAV `input_audio` after `audio.commit` and returns only a final transcript—never model it as provider streaming or promise provider partials. TTS uses complete `audio/mpeg` phrase segments and text-only output degradation; the browser never calls OpenRouter.
+- OpenRouter is the only P0 STT/TTS gateway and is called only by the backend with one shared server secret. After `audio.commit`, the gateway/utterance assembler owns bounded mono PCM16-to-WAV encoding and passes one validated `audio/wav` request through `SttPort`. The STT adapter validates/bounds the already-WAV bytes, base64-encodes them without conversion, and uses native Bun `fetch` to `/chat/completions`; only `transcript.final` is exposed. TTS uses complete `audio/mpeg` phrase segments and text-only output degradation; the browser never calls OpenRouter.
 - Run the relevant typecheck, unit, contract, and integration commands before reporting completion.
 - Do not claim a test passed when it was not run.
 

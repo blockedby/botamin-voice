@@ -1,77 +1,74 @@
-# Validation report — Correction 004 migration
+# Validation report — Correction 004 review fixes
 
 **Date:** 31 July 2026
 **Spec version:** `0.5-demo`
-**Result:** documentation/backlog/config migration passed
+**Result:** documentation findings fixed; full validator intentionally blocked by the pre-prerequisite package contract
 
-This report covers the Correction 004 migration only. It does not claim an OpenRouter STT/TTS provider implementation, the backlogged fake-provider suites, browser voice acceptance, deployment, text-only runtime exercise, or a paid external smoke.
+This report covers REV-001 and REV-002 documentation changes only. It does not edit implementation contracts or claim an OpenRouter STT/TTS provider implementation, browser voice acceptance, deployment, text-only runtime exercise, or paid external smoke.
 
-## Official evidence verified
+## Corrected documentation contract
 
-- `https://openrouter.ai/docs/guides/overview/multimodal/audio`: audio input uses `/api/v1/chat/completions`, base64 `input_audio`, model-dependent formats and audio-input model filtering. The active evidence does not document a dedicated realtime STT WebSocket.
-- `https://openrouter.ai/api/v1/models/openai/gpt-audio-mini/endpoints`: current endpoint evidence reports `audio` in `input_modalities` for the configurable default `openai/gpt-audio-mini`.
-
-No paid request was sent while verifying these public pages.
+- `transcript.final` is the sole active STT text event and the release checklist requires exactly one current final event per accepted utterance.
+- The gateway/utterance assembler owns bounded 16 kHz mono PCM16 assembly and creates exactly one validated WAV after an accepted `audio.commit`.
+- Atomic `SttPort` input contains the gateway-produced `audio/wav` bytes.
+- `OpenRouterSttAdapter` only validates and bounds the already-WAV request, rejects raw PCM or malformed/incompatible WAV, base64-encodes unchanged bytes, and posts one chat completion.
+- Gateway WAV encoder tests and adapter request tests are separate acceptance surfaces.
 
 ## Reproducible generated artifacts
 
-DOT files were rendered with pinned temporary `@viz-js/viz@3.17.0`. `scripts/run-pandoc.sh` pins Pandoc `3.10.1`, using an exact local binary when available and otherwise `pandoc/core:3.10.1`. `scripts/build-charts.py` deterministically maintains all three charts.
+DOT files are rendered with pinned temporary `@viz-js/viz@3.17.0`. `scripts/run-pandoc.sh` pins Pandoc `3.10.1`, using an exact local binary when available and otherwise `pandoc/core:3.10.1`. `scripts/build-charts.py` deterministically maintains all three charts.
 
-The pinned render plus `bash scripts/build-spec.sh` was run twice. SHA-256 snapshots of these 12 artifacts had no diff:
+The pinned render plus `bash scripts/build-spec.sh` was run twice. SHA-256 snapshots of the 12 generated artifacts had no second-build diff:
 
 - 7 `diagrams/*.svg` files;
 - 3 `charts/*.png` files;
 - `FULL_SPEC.md`;
 - `technical-spec.html`.
 
-## Specification validator and YAML DAG
+Generated visible HTML and `FULL_SPEC.md` contain only the active final-transcript contract. Embedded resources are excluded from visible-text scanning to avoid byte-pattern false positives.
 
-```text
-VALIDATION NOTES
-- Correction 004 precedence, 0.5-demo and OpenRouter-only voice invariants verified
-- Correction 003 is marked superseded and excluded from active/generated instructions
-- 15 tasks; dependency graph is acyclic
-- 8 agent packets
-- 7 SVG diagrams
-- 3 PNG charts
-- HTML embeds 3 raster images and 7 SVGs
-- 57 active Markdown files
+## Specification validator and expected prerequisite blocker
 
-ALL VALIDATIONS PASSED
-```
+`scripts/validate-spec.py` now scans every active text source, contract, fixture, document, `FULL_SPEC.md`, and rendered visible HTML for the retired partial event and session-style STT APIs. Only `corrections/superseded/**` is excluded as historical correction content.
 
-The validator enforces:
+On this documentation branch, the validator is expected to exit nonzero until the separate prerequisite STT-contract migration is merged and this branch is rebased. The remaining findings are confined to these unedited implementation-package files:
 
-- Correction 004 is the first link in both onboarding files;
-- Correction 003 has the exact superseded header and is absent from active/generated instructions;
-- `.env.example` and the architecture dotenv matrix are identical;
-- one shared `OPENROUTER_API_KEY` plus exact STT defaults and retained TTS defaults;
-- exact T11/T12 titles and owned paths;
-- no active retired provider string, key, path, packet, chart, source or `transcript.partial` event;
-- atomic WAV/final-transcript STT and complete-MP3 TTS invariants;
-- local links, task IDs/gates, acyclic YAML DAG, SVG/PNG sanity, standalone embedded HTML and basic secret patterns.
+- `packages/contracts/src/ports.ts`;
+- `packages/contracts/src/ws.ts`;
+- `packages/test-fixtures/src/fakes.ts`;
+- `packages/test-fixtures/src/full-turn.test.ts`.
 
-A separate YAML check reported `spec_version=0.5-demo`, 15 tasks, five gates and an acyclic graph.
+Those files still define/use the old partial event and session-oriented STT surface. The current validator reports 21 line-level findings across those four files and no docs/generated finding. Weakening or exempting active package paths would hide the prerequisite defect, so the validator deliberately reports it. After the prerequisite contract lands, the same checks are structured to pass without a docs-side allowlist.
 
 ## Repository checks
 
 ```text
-bun install --frozen-lockfile: passed
+bun install --frozen-lockfile: passed (Bun 1.3.14; no changes)
+bun run build: passed (5 workspaces)
 bun run typecheck: passed (5 workspaces)
-bun test: passed (65 tests, 0 failed)
-PNG verification: passed (3/3)
-SVG XML parse: passed (7/7)
-git diff --check: passed
-sha256sum -c CHECKSUMS.sha256: passed for every manifest entry
+bun test: passed (76 tests, 0 failed)
 ```
 
-An initial test command was started in parallel with dependency installation and failed on transient module resolution. It was classified as command-ordering/infrastructure evidence; the required sequential post-install rerun above passed all 65 tests. The existing suite does not constitute the backlogged OpenRouter STT/TTS fake-provider acceptance matrix.
+The passing legacy package tests do not satisfy the corrected atomic STT contract; that is the separate prerequisite migration identified by the validator.
 
-## Stale-source and scope checks
+Additional package checks:
 
-The retired-provider grep over the repository, excluding `corrections/superseded/**` and embedded HTML base64, returned no matches after manifest/checksum regeneration. Generated visible HTML is checked separately by the validator because arbitrary embedded base64 can coincidentally contain short character sequences.
+```text
+YAML DAG: passed (spec 0.5-demo, 15 tasks, 5 gates)
+SVG XML / PNG decode: passed (7 SVG, 3 PNG)
+retired-provider stale grep: no active matches outside superseded history
+retired-STT stale grep: matches confined to the four expected prerequisite package sources
+git diff --check: passed
+sha256sum -c CHECKSUMS.sha256: passed after artifact regeneration
+```
 
-- `docker compose config`: not applicable; this repository has no `docker-compose.yml`, and deployment implementation is outside this migration.
-- Paid Russian OpenRouter STT smoke: **not run**; no adapter/credentialed paid request is in scope.
-- Paid Russian OpenRouter TTS smoke: **not run**; no adapter/credentialed paid request is in scope.
-- Text-only runtime fallback: specified/backlogged, not exercised in this migration.
+## Integration sequencing
+
+Do not rebase this branch yet. Preserve the Correction 004 source changes. After the prerequisite STT contracts merge, rebase onto current `main`; resolve only generated manifest/checksum/HTML conflicts by regeneration, then rerun the complete validator and repository checks.
+
+## Scope boundaries
+
+- Implementation contracts: **not edited** in this docs commit.
+- Paid Russian OpenRouter STT smoke: **not run**.
+- Paid Russian OpenRouter TTS smoke: **not run**.
+- `docker compose config`: not applicable because this branch has no `docker-compose.yml`.

@@ -16,7 +16,8 @@ Authoritative pipeline:
 
 ```text
 browser PCM16 chunks
-  → backend-bounded utterance wrapped as WAV
+  → gateway/utterance assembler bounds mono PCM16 and emits one validated WAV
+  → atomic `audio/wav` SttPort request
   → OpenRouter audio-input chat completion final transcript
   → Codex subscription / gpt-5.6-luna
   → OpenRouter TTS complete MP3 segment
@@ -38,7 +39,7 @@ Consequences:
 - implementation must verify current audio-input capability before release;
 - browser microphone transport may remain chunked PCM16, but provider STT is one post-commit HTTP request;
 - never call this provider-streaming STT;
-- never promise provider interim transcripts.
+- expose only the atomic final transcript.
 
 ## 3. Phrase-level STT contract
 
@@ -46,9 +47,9 @@ Browser and backend behavior:
 
 1. Browser captures mono PCM16 at 16 kHz and sends bounded chunks over the application WebSocket.
 2. End-of-turn / `audio.commit` closes one utterance.
-3. Backend rejects or safely closes utterances beyond configured duration/byte bounds.
-4. Backend wraps PCM16 with a valid WAV header, then base64-encodes the bounded WAV.
-5. `OpenRouterSttAdapter` performs one native Bun `fetch` to:
+3. The gateway/utterance assembler rejects or safely closes utterances beyond configured duration/byte bounds.
+4. The gateway/utterance assembler alone converts the bounded mono PCM16 into exactly one validated WAV and passes those bytes through the atomic `SttPort` request with `contentType: "audio/wav"`.
+5. `OpenRouterSttAdapter` validates the already-WAV format and request bounds, base64-encodes those unchanged WAV bytes, and performs one native Bun `fetch` to:
 
 ```http
 POST https://openrouter.ai/api/v1/chat/completions
@@ -76,7 +77,7 @@ Representative request shape:
 }
 ```
 
-The language-specific transcription instruction is built from safe configuration; user transcript content is not interpolated into it. The adapter validates one non-empty final text result. It does not expose a provider session, network stream, chunk-final event or provider partial event.
+The language-specific transcription instruction is built from safe configuration; user transcript content is not interpolated into it. The adapter validates one non-empty final text result. Its provider boundary is one atomic request and one atomic result.
 
 ### Provider-neutral atomic SttPort
 
@@ -103,11 +104,12 @@ export interface SttPort {
 }
 ```
 
-Chunked PCM16 is the application WebSocket transport only. It does not change this atomic provider-neutral port.
+Chunked PCM16 is the application WebSocket transport only. `SttTranscriptionRequest.audio` contains one already-encoded, validated WAV; raw PCM never crosses this provider-neutral port.
 
 ### STT safety and errors
 
-- enforce utterance duration and audio-byte bounds before fetch;
+- gateway/utterance assembler enforces PCM duration/byte bounds and produces exactly one valid mono PCM16 WAV;
+- adapter rejects raw PCM, malformed/non-mono/non-PCM16/non-16-kHz WAV, a mismatched content type, empty bytes or an over-limit atomic WAV request before fetch;
 - enforce connect and total request timeouts;
 - at most one bounded retry for `429` and retryable `5xx`;
 - no retry for `400`, `401`, `402`, `404` or `413`;
@@ -163,7 +165,7 @@ Task IDs, dependencies and gates remain stable.
 
 ### T10
 
-Add bounded microphone buffering, chunked PCM16 application transport, explicit `audio.commit`, duplicate-commit suppression and listening/processing/final UI semantics. Do not assume provider partials.
+Add bounded microphone buffering, chunked PCM16 application transport, explicit `audio.commit`, duplicate-commit suppression and listening/processing/`transcript.final` UI semantics.
 
 ### T11 replacement
 
@@ -175,7 +177,7 @@ owned_paths:
   - scripts/openrouter-stt*
 ```
 
-Outputs/acceptance must cover native fetch chat completions; base64 WAV `input_audio`; configurable audio-capable model; duration/byte/time/retry bounds; final transcript only; abort/stale-turn suppression; typed `400/401/402/404/413/429/5xx`; no key/audio/PII logs; protocol-faithful fake endpoint; and opt-in paid external Russian smoke. Retry must not invoke brain/tools/notifier.
+Outputs/acceptance must cover native fetch chat completions; validation and bounds for the already-WAV atomic `SttPort` request; base64 of those unchanged WAV bytes as `input_audio`; rejection of raw PCM and malformed WAV; configurable audio-capable model; request/time/retry bounds; final transcript only; abort/stale-turn suppression; typed `400/401/402/404/413/429/5xx`; no key/audio/PII logs; protocol-faithful fake endpoint; and opt-in paid external Russian smoke. The adapter must not implement PCM-to-WAV conversion. Retry must not invoke brain/tools/notifier.
 
 ### T12
 
@@ -191,8 +193,8 @@ owned_paths:
 
 - **T15:** exactly one runtime OpenRouter secret, exact STT/TTS env wiring and separate opt-in smoke commands.
 - **T20:** only one current final transcript can start one brain turn; stale/retried results cannot invoke tools.
-- **T22:** fake chat-completions audio-input and fake speech endpoints, WAV/MP3 fixtures, error/timeout/abort/stale tests and secret/audio/PII scan.
-- **T30:** full bounded PCM16 → WAV → final transcript → Luna → complete MP3 path; paid smokes remain release-only.
+- **T22:** separately test the gateway PCM16-to-WAV encoder and the adapter's already-WAV request validation/base64 POST; also cover fake chat-completions audio-input and fake speech endpoints, WAV/MP3 fixtures, error/timeout/abort/stale behavior and secret/audio/PII scans.
+- **T30:** full bounded PCM16 → gateway-produced validated WAV → atomic `SttPort` request → final transcript → Luna → complete MP3 path; paid smokes remain release-only.
 - **T32:** separate commit-to-final and final-to-playback metrics plus utterance/request/queue guards.
 - **T40:** reject stale second-provider voice instructions and verify superseded exclusion.
 
@@ -203,7 +205,7 @@ A0/A1/A2/A5/A6/A7 packets must mirror these responsibilities. A2 mission is Open
 - `/health/ready` validates the shared key and STT/TTS configuration/guard state without spending paid usage on every probe and without claiming a provider session.
 - Browser sends bounded PCM16 binary frames followed by `audio.commit`.
 - Server emits listening/processing state and one `transcript.final` event only.
-- No active `transcript.partial` event exists.
+- `transcript.final` is the sole STT text event in the active contract.
 - TTS emits provider-neutral metadata plus one complete binary MP3 payload per phrase.
 - Abort/stale filtering applies independently to STT `turnId` and TTS `generationId`.
 

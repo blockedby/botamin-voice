@@ -55,15 +55,23 @@ Table-driven cases:
 
 ## 3. Provider contract tests
 
-### OpenRouter STT
+### Gateway WAV encoder and OpenRouter STT
 
-Default deterministic suite uses a protocol-faithful fake `POST /api/v1/chat/completions` endpoint and no external credentials:
+Default deterministic suites use no external credentials and keep ownership tests separate.
 
-- backend bounds 16 kHz mono PCM16 by utterance duration/bytes and writes a valid WAV header;
-- exactly one `audio.commit` creates one native-fetch request with base64 WAV `input_audio` and configured audio-capable model;
-- one valid response maps to one final transcript; no provider session/partial event is assumed;
+Gateway/utterance-assembler tests prove:
+
+- bounded 16 kHz mono PCM16 plus one accepted `audio.commit` produces exactly one validated WAV with the expected RIFF/WAVE header, PCM16 metadata, data length and sample bytes;
+- empty, odd-byte, oversized, over-duration and duplicate-commit input is rejected or suppressed before `SttPort` invocation;
+- the atomic request contains the produced WAV bytes and `contentType: "audio/wav"`.
+
+`OpenRouterSttAdapter` tests use an already-WAV fixture and a protocol-faithful fake `POST /api/v1/chat/completions` endpoint to prove:
+
+- the adapter accepts only bounded, valid 16 kHz mono PCM16 WAV bytes, rejects raw PCM/malformed WAV/content-type mismatch, and performs no PCM-to-WAV conversion;
+- exactly one request contains base64 of the unchanged WAV as `input_audio` with the configured audio-capable model;
+- one valid response maps to one final transcript;
 - malformed/empty transcript response, `400`, `401`, `402`, `404`, `413`, `429` with bounded `Retry-After`, and retryable `5xx` map to typed errors;
-- connect/total timeout, one-retry maximum, user abort, duplicate commit and stale-turn suppression are deterministic;
+- connect/total timeout, one-retry maximum, user abort and stale-turn suppression are deterministic;
 - retry repeats only transcription and never invokes brain, tools or notifier;
 - API key, raw/WAV/base64 audio, transcript PII and provider error bodies are absent from browser/logs/snapshots.
 
@@ -106,7 +114,7 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 ## 4. Integration tests
 
-- bounded PCM16 chunks → `audio.commit` → fake OpenRouter WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
+- bounded PCM16 chunks → `audio.commit` → gateway-produced validated WAV → atomic `SttPort` request → fake OpenRouter already-WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
 - real SQLite transaction + fake notifier;
 - booking tool call inside brain turn;
 - booking event appears before qualification prompt/audio;
@@ -124,7 +132,7 @@ Playwright with synthetic audio fixture:
 2. click CTA;
 3. mock/allow mic;
 4. stream fixture PCM;
-5. observe listening/processing states and then one final transcript, with no provider interim-text expectation;
+5. observe listening/processing states and then exactly one `transcript.final`;
 6. receive assistant text and ordered complete MP3 segment events;
 7. complete booking;
 8. see booked UI;
@@ -264,10 +272,10 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ### Voice
 
-- [ ] Opt-in paid Russian STT smoke returns one final transcript from a bounded WAV; no provider interim transcript is claimed.
+- [ ] Opt-in paid Russian STT smoke returns one final transcript from a bounded, validated WAV.
+- [ ] Voice UI exposes exactly one current `transcript.final` for each accepted utterance.
 - [ ] Chosen OpenRouter voice is understandable in the target-VPS Russian smoke.
 - [ ] Complete `audio/mpeg` phrase segments decode in sequence in Chromium and WebKit.
-- [ ] Partial transcript is visible.
 - [ ] Barge-in stops old playback, clears queue and drops late segments.
 - [ ] `401`/`402`/`404`, budget and circuit failures preserve text UX and booking.
 - [ ] No TTS retry repeats Luna, notifier or business tools.

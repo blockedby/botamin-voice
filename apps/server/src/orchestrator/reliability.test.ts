@@ -37,6 +37,20 @@ describe("atomic STT turn gate", () => {
 		expect(gate.acceptFinal(second.turn, final(turn2))).toBe(true);
 	});
 
+	test("temporary suspension fences stale work and reopen accepts a fresh turn", () => {
+		const gate = new AtomicSttTurnGate();
+		const stale = gate.acceptCommit(turn1);
+		if (!stale.ok) return;
+		gate.suspend();
+		expect(stale.turn.signal.aborted).toBe(true);
+		expect(gate.acceptFinal(stale.turn, final(turn1))).toBe(false);
+		expect(gate.acceptCommit(turn2)).toEqual({ ok: false, reason: "closed" });
+		gate.reopen();
+		const fresh = gate.acceptCommit(turn2);
+		expect(fresh.ok).toBe(true);
+		if (fresh.ok) expect(gate.acceptFinal(fresh.turn, final(turn2))).toBe(true);
+	});
+
 	test("abort and close suppress every late final", () => {
 		const gate = new AtomicSttTurnGate();
 		const accepted = gate.acceptCommit(turn1);

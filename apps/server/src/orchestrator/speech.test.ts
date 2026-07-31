@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
 	chunkSpeech,
-	sanitizeSpeech,
 	SpeechBudgetGuard,
 	SpeechPrefetchCoordinator,
 	StreamingSentenceChunker,
+	sanitizeSpeech,
 } from "./speech";
 
 describe("speech sanitizer", () => {
@@ -31,6 +31,18 @@ generationId=01J00000000000000000000002
 		);
 		expect(spoken).toBe("Готово.");
 		expect(spoken).not.toMatch(/create_booking|Анна|bkg_/u);
+	});
+
+	test("rejects complete nested JSON envelopes regardless of key order", () => {
+		const envelope =
+			'До конверта. {"metadata":{"company":"Секрет ООО. Очень длинное закрытое название компании, которое не должно попасть в синтез речи даже после жёсткой границы сегмента, включая продолжение названия Секрет Холдинг.","contact":"private@example.com","ids":{"bookingId":"01J00000000000000000000001"}},"speech":"Не озвучивать Анну. Совсем не озвучивать.","action":{"payload":{"name":"Анна","phone":"+7 999 123-45-67"},"type":"create_booking"}} После конверта.';
+		const spoken = sanitizeSpeech(envelope);
+		expect(spoken).toBe("До конверта. После конверта.");
+		expect(spoken).not.toMatch(
+			/Секрет|private|01J|Анн|999|create_booking|payload/u,
+		);
+		const streamed = chunkSpeech(envelope).map(sanitizeSpeech).filter(Boolean);
+		expect(streamed).toEqual(["До конверта.", "После конверта."]);
 	});
 
 	test("redacts phone, email, and Telegram before provider speech", () => {
@@ -122,6 +134,9 @@ describe("TTS budgets and prefetch coordination", () => {
 		window.finish("one");
 		expect(window.tryStart("three")).toBe(true);
 		window.abortAll();
+		expect(window.inFlight).toBe(2);
+		window.finish("two");
+		window.finish("three");
 		expect(window.inFlight).toBe(0);
 	});
 });

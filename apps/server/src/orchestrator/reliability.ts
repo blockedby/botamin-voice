@@ -25,10 +25,12 @@ export class AtomicSttTurnGate {
 	#acceptedTurnIds = new Set<string>();
 	#active: MutableSttTurn | null = null;
 	#sequence = 0;
+	#accepting = true;
 	#closed = false;
 
 	acceptCommit(turnId: string): SttTurnAcceptance {
-		if (this.#closed) return { ok: false, reason: "closed" };
+		if (this.#closed || !this.#accepting)
+			return { ok: false, reason: "closed" };
 		if (this.#acceptedTurnIds.has(turnId)) {
 			return { ok: false, reason: "duplicate" };
 		}
@@ -52,6 +54,7 @@ export class AtomicSttTurnGate {
 	acceptFinal(turn: AcceptedSttTurn, result: SttTranscriptionResult): boolean {
 		if (
 			this.#closed ||
+			!this.#accepting ||
 			!this.#active ||
 			this.#active.sequence !== turn.sequence ||
 			this.#active.turnId !== turn.turnId ||
@@ -70,6 +73,7 @@ export class AtomicSttTurnGate {
 	isCurrent(turn: AcceptedSttTurn): boolean {
 		return Boolean(
 			!this.#closed &&
+				this.#accepting &&
 				this.#active &&
 				this.#active.sequence === turn.sequence &&
 				this.#active.turnId === turn.turnId &&
@@ -92,8 +96,21 @@ export class AtomicSttTurnGate {
 		this.#active = null;
 	}
 
+	/** Temporarily rejects intake and invalidates an in-flight STT request. */
+	suspend(): void {
+		if (this.#closed) return;
+		this.#accepting = false;
+		this.abort();
+	}
+
+	/** Reopens intake after a transport reconnect; terminal close is permanent. */
+	reopen(): void {
+		if (!this.#closed) this.#accepting = true;
+	}
+
 	close(): void {
 		this.#closed = true;
+		this.#accepting = false;
 		this.abort();
 	}
 

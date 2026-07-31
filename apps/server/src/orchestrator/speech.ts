@@ -35,6 +35,112 @@ export type SpeechBudgetDecision =
 	| { ok: true; turnChars: number; sessionChars: number }
 	| { ok: false; reason: "segment" | "turn" | "session" };
 
+interface StructuredJsonRegion {
+	start: number;
+	/** Exclusive end; absent while a JSON-looking structure is incomplete. */
+	end?: number;
+}
+
+function findStructuredJson(input: string): StructuredJsonRegion | null {
+	for (let start = 0; start < input.length; start += 1) {
+		const opener = input[start];
+		if (opener !== "{" && opener !== "[") continue;
+		const remainder = input.slice(start + 1).trimStart();
+		const jsonLooking =
+			opener === "{"
+				? remainder === "" ||
+					remainder.startsWith('"') ||
+					remainder.startsWith("}")
+				: remainder === "" ||
+					remainder.startsWith('"') ||
+					remainder.startsWith("{") ||
+					remainder.startsWith("[") ||
+					remainder.startsWith("]") ||
+					/^(?:true|false|null|-?\d)/u.test(remainder);
+		if (!jsonLooking) continue;
+		const stack: string[] = [opener];
+		let quoted = false;
+		let escaped = false;
+		let invalid = false;
+		let end = start + 1;
+		for (; end < input.length && stack.length > 0; end += 1) {
+			const character = input[end] ?? "";
+			if (quoted) {
+				if (escaped) escaped = false;
+				else if (character === "\\") escaped = true;
+				else if (character === '"') quoted = false;
+				continue;
+			}
+			if (character === '"') quoted = true;
+			else if (character === "{" || character === "[") stack.push(character);
+			else if (character === "}" || character === "]") {
+				const expected = character === "}" ? "{" : "[";
+				if (stack.at(-1) !== expected) {
+					invalid = true;
+					break;
+				}
+				stack.pop();
+			}
+		}
+		if (invalid) continue;
+		if (stack.length > 0) return { start };
+		try {
+			JSON.parse(input.slice(start, end));
+			return { start, end };
+		} catch {
+			// Balanced non-JSON braces are ordinary visible text.
+		}
+	}
+	return null;
+}
+
+function stripCompleteJson(input: string): string {
+	let output = "";
+	let cursor = 0;
+	while (cursor < input.length) {
+		const opener = input[cursor];
+		if (opener !== "{" && opener !== "[") {
+			output += opener;
+			cursor += 1;
+			continue;
+		}
+		const stack: string[] = [opener];
+		let quoted = false;
+		let escaped = false;
+		let end = cursor + 1;
+		for (; end < input.length && stack.length > 0; end += 1) {
+			const character = input[end] ?? "";
+			if (quoted) {
+				if (escaped) escaped = false;
+				else if (character === "\\") escaped = true;
+				else if (character === '"') quoted = false;
+				continue;
+			}
+			if (character === '"') quoted = true;
+			else if (character === "{" || character === "[") stack.push(character);
+			else if (character === "}" || character === "]") {
+				const expected = character === "}" ? "{" : "[";
+				if (stack.at(-1) !== expected) break;
+				stack.pop();
+			}
+		}
+		const candidate = input.slice(cursor, end);
+		if (stack.length === 0) {
+			try {
+				JSON.parse(candidate);
+				output += " ";
+				cursor = end;
+				continue;
+			} catch {
+				// Keep non-JSON brackets for the ordinary speech cleanup below.
+			}
+		}
+		output += opener;
+		cursor += 1;
+	}
+	return output;
+}
+
 function stripCodeAndEnvelopes(input: string): string {
 	let text = input.replace(/```[^\n]*\n?[\s\S]*?```/gu, " ");
 	text = text.replace(/```[^\n]*\n?[\s\S]*$/gu, " ");
@@ -44,12 +150,19 @@ function stripCodeAndEnvelopes(input: string): string {
 		" ",
 	);
 	text = text.replace(/<[^>]*(?:tool|function|system|assistant)[^>]*>/giu, " ");
-	// Structured envelopes can follow natural text in one model delta.
+	text = stripCompleteJson(text);
+	// Never speak incomplete JSON fragments released by a streaming chunker.
+	// A quoted property is structural regardless of key order or nesting.
 	text = text.replace(
-		/(?:^|\s)(?:\[|\{)\s*"?(?:tool|action|args|payload|callId|name)\b[\s\S]*$/giu,
+		/(?:^|\s|[,;])(?:\{|\[)?\s*"(?:[^"\\]|\\.)*"\s*:[\s\S]*$/gu,
 		" ",
 	);
-	text = text.replace(/^\s*(?:\[|\{)[\s\S]*(?:\]|\})\s*$/u, " ");
+	text = text.replace(/\{[\s\S]*$/gu, " ");
+	text = text.replace(
+		/\[\s*(?:(?:"|\{|\[)|(?:true|false|null)\b|-?\d)[\s\S]*$/gu,
+		" ",
+	);
+	text = text.replace(/^[\s,;]*[\]}][\s\S]*$/gu, " ");
 	return text;
 }
 
@@ -193,6 +306,28 @@ export class StreamingSentenceChunker {
 		const chunks: string[] = [];
 		while (this.#buffer.trim()) {
 			this.#buffer = this.#buffer.trimStart();
+			const structured = findStructuredJson(this.#buffer);
+			if (structured) {
+				if (structured.start > 0) {
+					const prefix = this.#buffer.slice(0, structured.start).trim();
+					this.#buffer = this.#buffer.slice(structured.start);
+					if (prefix) {
+						chunks.push(prefix);
+						this.#first = false;
+					}
+					continue;
+				}
+				if (structured.end !== undefined) {
+					const envelope = this.#buffer.slice(0, structured.end).trim();
+					this.#buffer = this.#buffer.slice(structured.end);
+					if (envelope) {
+						chunks.push(envelope);
+						this.#first = false;
+					}
+					continue;
+				}
+				if (!flush && !idle) break;
+			}
 			const minimum = this.#first ? this.#firstMinimum : 1;
 			const target = this.#first ? this.#firstTarget : this.#softTarget;
 			const stops = boundaries(this.#buffer);
@@ -281,8 +416,12 @@ export class SpeechPrefetchCoordinator {
 		this.#inFlight.delete(segmentId);
 	}
 
+	/**
+	 * Provider requests are aborted through their generation signals. Keep every
+	 * abort-insensitive request counted until its promise actually settles.
+	 */
 	abortAll(): void {
-		this.#inFlight.clear();
+		return;
 	}
 
 	get inFlight(): number {

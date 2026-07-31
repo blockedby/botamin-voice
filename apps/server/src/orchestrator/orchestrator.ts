@@ -20,12 +20,12 @@ import {
 } from "./policy";
 import { AtomicSttTurnGate } from "./reliability";
 import {
-	sanitizeSpeech,
 	SpeechBudgetGuard,
 	type SpeechBudgetOptions,
 	type SpeechChunkerOptions,
 	SpeechPrefetchCoordinator,
 	StreamingSentenceChunker,
+	sanitizeSpeech,
 } from "./speech";
 import {
 	type ConversationEvent,
@@ -126,6 +126,8 @@ interface ToolOutcome {
 	events: OrchestratorEvent[];
 	serverResponse?: string;
 	suppressModelSpeech: boolean;
+	/** The result settled while this generation still owned the turn. */
+	publishable: boolean;
 }
 
 const BOOKING_CONFIRMATION_WITH_QUESTION =
@@ -136,12 +138,35 @@ const BOOKING_FAILURE =
 	"Не получилось сохранить данные, поэтому я не буду подтверждать бронь. Проверьте контакт и попробуйте ещё раз.";
 const QUALIFICATION_FAILURE =
 	"Основные данные уже сохранены. Дополнительные ответы сейчас не удалось обновить, и на этом можно закончить.";
+const QUALIFICATION_PARTIAL_CONFIRMATION =
+	"Дополнительные ответы сохранены. Можно продолжить или закончить на этом.";
+const QUALIFICATION_COMPLETE_CONFIRMATION =
+	"Дополнительные ответы сохранены. Спасибо, на этом всё.";
+const QUALIFICATION_SKIPPED_CONFIRMATION =
+	"Основные данные сохранены. Дополнительные вопросы пропущены, на этом всё.";
 const BRAIN_FAILURE_BEFORE_BOOKING =
 	"Сейчас не получается продолжить разговор. Данные ещё не были сохранены.";
 const BRAIN_FAILURE_AFTER_BOOKING =
 	"Основные данные уже сохранены. Дополнительные вопросы необязательны, и на этом можно закончить.";
 const STT_FAILURE =
 	"Речь сейчас не распознаётся. Повторите, пожалуйста, реплику ещё раз.";
+const TERMINAL_STAGES = new Set<ConversationState["stage"]>([
+	"COMPLETE",
+	"DECLINED",
+	"ERROR",
+]);
+
+function isTerminalStage(stage: ConversationState["stage"]): boolean {
+	return TERMINAL_STAGES.has(stage);
+}
+
+function qualificationConfirmation(
+	status: "partial" | "complete" | "skipped",
+): string {
+	if (status === "partial") return QUALIFICATION_PARTIAL_CONFIRMATION;
+	if (status === "complete") return QUALIFICATION_COMPLETE_CONFIRMATION;
+	return QUALIFICATION_SKIPPED_CONFIRMATION;
+}
 
 /**
  * Deterministic owner of atomic STT intake, one Luna turn, booking policy, and
@@ -169,10 +194,11 @@ export class ConversationOrchestrator {
 	> = [];
 	readonly #pendingDynamicResponses = new Map<
 		string,
-		{ text: string; suppressModelSpeech: boolean }
+		Array<{ text: string; suppressModelSpeech: boolean }>
 	>();
 	#threadId: string | undefined;
 	#state: ConversationState;
+	#lifecycleInterruption: Promise<void> = Promise.resolve();
 
 	constructor(options: ConversationOrchestratorOptions) {
 		this.conversationId = options.conversationId;
@@ -192,6 +218,8 @@ export class ConversationOrchestrator {
 		this.#chunkerOptions = options.speechChunker ?? {};
 		this.#budgets = new SpeechBudgetGuard(options.speechBudgets);
 		this.#createId = options.createId ?? (() => Bun.randomUUIDv7());
+		if (this.#state.stage === "DISCONNECTED") this.#sttTurns.suspend();
+		else if (isTerminalStage(this.#state.stage)) this.#sttTurns.close();
 	}
 
 	get state(): ConversationState {
@@ -208,7 +236,19 @@ export class ConversationOrchestrator {
 
 	apply(event: ConversationEvent): TransitionResult {
 		const result = transition(this.#state, event);
-		if (result.ok) this.#state = result.state;
+		if (!result.ok) return result;
+		const previousStage = this.#state.stage;
+		this.#state = result.state;
+		if (this.#state.stage === previousStage) return result;
+		if (this.#state.stage === "DISCONNECTED") {
+			this.#sttTurns.suspend();
+			this.#lifecycleInterruption = this.#invalidateActiveWork("disconnect");
+		} else if (previousStage === "DISCONNECTED") {
+			this.#sttTurns.reopen();
+		} else if (isTerminalStage(this.#state.stage)) {
+			this.#sttTurns.close();
+			this.#lifecycleInterruption = this.#invalidateActiveWork("terminal");
+		}
 		return result;
 	}
 
@@ -219,6 +259,7 @@ export class ConversationOrchestrator {
 	): Promise<{ ok: boolean }> => {
 		if (
 			input.conversationId !== this.conversationId ||
+			!this.#canProcessTurns() ||
 			!this.#generations.accept(input.generationId, input.turnId)
 		) {
 			return { ok: false };
@@ -228,16 +269,19 @@ export class ConversationOrchestrator {
 			input.turnId,
 			request,
 		);
-		if (this.#generations.accept(input.generationId, input.turnId)) {
+		if (outcome.publishable) {
 			this.#pendingDynamicEvents.set(input.generationId, [
 				...(this.#pendingDynamicEvents.get(input.generationId) ?? []),
 				...outcome.events,
 			]);
 			if (outcome.serverResponse) {
-				this.#pendingDynamicResponses.set(input.generationId, {
-					text: outcome.serverResponse,
-					suppressModelSpeech: outcome.suppressModelSpeech,
-				});
+				this.#pendingDynamicResponses.set(input.generationId, [
+					...(this.#pendingDynamicResponses.get(input.generationId) ?? []),
+					{
+						text: outcome.serverResponse,
+						suppressModelSpeech: outcome.suppressModelSpeech,
+					},
+				]);
 			}
 		}
 		return { ok: outcome.execution.ok };
@@ -247,6 +291,14 @@ export class ConversationOrchestrator {
 	async *acceptAudioCommit(
 		input: AudioCommitInput,
 	): AsyncGenerator<OrchestratorEvent> {
+		if (!this.#canProcessTurns()) {
+			yield {
+				type: "ignored",
+				generationId: input.generationId,
+				source: "audio.commit",
+			};
+			return;
+		}
 		const accepted = this.#sttTurns.acceptCommit(input.turnId);
 		if (!accepted.ok) {
 			yield {
@@ -258,6 +310,14 @@ export class ConversationOrchestrator {
 		}
 
 		await this.#interruptActiveGeneration();
+		if (!this.#canProcessTurns() || !this.#sttTurns.isCurrent(accepted.turn)) {
+			yield {
+				type: "ignored",
+				generationId: input.generationId,
+				source: "audio.commit",
+			};
+			return;
+		}
 		let final: SttTranscriptionResult;
 		try {
 			final = await this.#stt.transcribe({
@@ -283,6 +343,7 @@ export class ConversationOrchestrator {
 		}
 
 		if (
+			!this.#canProcessTurns() ||
 			final.conversationId !== this.conversationId ||
 			!this.#sttTurns.acceptFinal(accepted.turn, final)
 		) {
@@ -294,54 +355,60 @@ export class ConversationOrchestrator {
 			return;
 		}
 		const userText = final.text.trim();
-		yield { type: "transcript.final", turnId: input.turnId, text: userText };
 		this.#sttTurns.finish(accepted.turn);
-		yield* this.#runBrainTurn({
-			turnId: input.turnId,
-			generationId: input.generationId,
-			userText,
-			knownFacts: input.knownFacts,
-		});
-	}
-
-	async interrupt(generationId: string): Promise<OrchestratorEvent> {
-		const interrupted = this.#generations.interrupt(generationId);
-		if (!interrupted) {
-			return { type: "ignored", generationId, source: "generation" };
-		}
-		this.#prefetch.abortAll();
-		this.#pendingDynamicEvents.delete(generationId);
-		this.#pendingDynamicResponses.delete(generationId);
-		if (this.#threadId) {
-			await this.#brain
-				.interrupt(this.#threadId, interrupted.turnId)
-				.catch(() => undefined);
-		}
-		return { type: "assistant.interrupted", generationId };
-	}
-
-	async disconnect(): Promise<void> {
-		this.#sttTurns.close();
-		await this.#interruptActiveGeneration();
-		if (this.#state.stage !== "DISCONNECTED")
-			this.apply({ type: "disconnect" });
-	}
-
-	async *#runBrainTurn(input: {
-		turnId: string;
-		generationId: string;
-		userText: string;
-		knownFacts: KnownFacts;
-	}): AsyncGenerator<OrchestratorEvent> {
-		let started: ReturnType<GenerationCoordinator["start"]>;
+		let active: ReturnType<GenerationCoordinator["start"]>["active"];
 		try {
-			started = this.#generations.start(input.generationId, input.turnId);
+			// Final acceptance and current-generation ownership are one synchronous
+			// fence. A newer commit can only resume after both have happened.
+			active = this.#generations.start(input.generationId, input.turnId).active;
 		} catch {
 			yield {
 				type: "ignored",
 				generationId: input.generationId,
 				source: "generation",
 			};
+			return;
+		}
+		yield { type: "transcript.final", turnId: input.turnId, text: userText };
+		yield* this.#runBrainTurn(
+			{
+				turnId: input.turnId,
+				generationId: input.generationId,
+				userText,
+				knownFacts: input.knownFacts,
+			},
+			active,
+		);
+	}
+
+	async interrupt(generationId: string): Promise<OrchestratorEvent> {
+		const active = this.#generations.current();
+		if (!active || active.generationId !== generationId) {
+			return { type: "ignored", generationId, source: "generation" };
+		}
+		await this.#invalidateActiveWork("interrupted");
+		return { type: "assistant.interrupted", generationId };
+	}
+
+	async disconnect(): Promise<void> {
+		if (this.#state.stage !== "DISCONNECTED")
+			this.apply({ type: "disconnect" });
+		await this.#lifecycleInterruption;
+	}
+
+	async *#runBrainTurn(
+		input: {
+			turnId: string;
+			generationId: string;
+			userText: string;
+			knownFacts: KnownFacts;
+		},
+		active: { signal: AbortSignal },
+	): AsyncGenerator<OrchestratorEvent> {
+		if (
+			!this.#canProcessTurns() ||
+			!this.#generations.accept(input.generationId, input.turnId)
+		) {
 			return;
 		}
 		this.#budgets.startTurn();
@@ -364,12 +431,24 @@ export class ConversationOrchestrator {
 			audioProduced ||= rendered.audioProduced;
 			this.apply({ type: "booking_confirmation_delivered" });
 			if (!this.#state.qualificationEnabled) this.apply({ type: "complete" });
-			yield* this.#finishGeneration(input.generationId, visible, audioProduced);
+			if (isTerminalStage(this.#state.stage)) {
+				yield* this.#finishTerminalResponse(
+					input.generationId,
+					visible,
+					audioProduced,
+				);
+			} else {
+				yield* this.#finishGeneration(
+					input.generationId,
+					visible,
+					audioProduced,
+				);
+			}
 			return;
 		}
 
 		const chunker = new StreamingSentenceChunker(this.#chunkerOptions);
-		const heldCollectionSpeech: string[] = [];
+		const heldActionSpeech: string[] = [];
 		let suppressModelSpeech = false;
 		let brainFailure: Extract<BrainDelta, { type: "error" }> | undefined;
 		try {
@@ -389,10 +468,7 @@ export class ConversationOrchestrator {
 			});
 
 			// Exactly one BrainPort.runTurn call per accepted final transcript.
-			for await (const delta of this.#brain.runTurn(
-				context,
-				started.active.signal,
-			)) {
+			for await (const delta of this.#brain.runTurn(context, active.signal)) {
 				if (!this.#acceptBrainDelta(input, delta)) {
 					yield {
 						type: "ignored",
@@ -405,12 +481,10 @@ export class ConversationOrchestrator {
 				for (const event of this.#takeDynamicEvents(input.generationId)) {
 					yield event;
 				}
-				const dynamicResponse = this.#pendingDynamicResponses.get(
+				for (const dynamicResponse of this.#takeDynamicResponses(
 					input.generationId,
-				);
-				if (dynamicResponse) {
-					this.#pendingDynamicResponses.delete(input.generationId);
-					const rendered = yield* this.#renderPhrase(
+				)) {
+					const rendered = yield* this.#renderToolResponse(
 						input,
 						dynamicResponse.text,
 					);
@@ -421,6 +495,14 @@ export class ConversationOrchestrator {
 						this.apply({ type: "booking_confirmation_delivered" });
 						if (!this.#state.qualificationEnabled)
 							this.apply({ type: "complete" });
+					}
+					if (isTerminalStage(this.#state.stage)) {
+						yield* this.#finishTerminalResponse(
+							input.generationId,
+							visible,
+							audioProduced,
+						);
+						return;
 					}
 				}
 
@@ -437,10 +519,10 @@ export class ConversationOrchestrator {
 					);
 					for (const event of outcome.events) yield event;
 					chunker.clear();
-					heldCollectionSpeech.length = 0;
+					heldActionSpeech.length = 0;
 					suppressModelSpeech ||= outcome.suppressModelSpeech;
 					if (outcome.serverResponse) {
-						const rendered = yield* this.#renderPhrase(
+						const rendered = yield* this.#renderToolResponse(
 							input,
 							outcome.serverResponse,
 						);
@@ -452,13 +534,21 @@ export class ConversationOrchestrator {
 								this.apply({ type: "complete" });
 							}
 						}
+						if (isTerminalStage(this.#state.stage)) {
+							yield* this.#finishTerminalResponse(
+								input.generationId,
+								visible,
+								audioProduced,
+							);
+							return;
+						}
 					}
 					continue;
 				}
 				if (suppressModelSpeech) continue;
 				const ready = chunker.push(delta.text);
-				if (this.#state.stage === "COLLECT_BOOKING") {
-					heldCollectionSpeech.push(...ready);
+				if (allowedActions(this.#state).length > 0) {
+					heldActionSpeech.push(...ready);
 					continue;
 				}
 				for (const phrase of ready) {
@@ -470,8 +560,32 @@ export class ConversationOrchestrator {
 
 			for (const event of this.#takeDynamicEvents(input.generationId))
 				yield event;
+			for (const dynamicResponse of this.#takeDynamicResponses(
+				input.generationId,
+			)) {
+				const rendered = yield* this.#renderToolResponse(
+					input,
+					dynamicResponse.text,
+				);
+				if (rendered.visibleText) visible.push(rendered.visibleText);
+				audioProduced ||= rendered.audioProduced;
+				suppressModelSpeech ||= dynamicResponse.suppressModelSpeech;
+				if (this.#state.stage === "BOOKED") {
+					this.apply({ type: "booking_confirmation_delivered" });
+					if (!this.#state.qualificationEnabled)
+						this.apply({ type: "complete" });
+				}
+				if (isTerminalStage(this.#state.stage)) {
+					yield* this.#finishTerminalResponse(
+						input.generationId,
+						visible,
+						audioProduced,
+					);
+					return;
+				}
+			}
 			if (!suppressModelSpeech && !brainFailure) {
-				for (const phrase of [...heldCollectionSpeech, ...chunker.flush()]) {
+				for (const phrase of [...heldActionSpeech, ...chunker.flush()]) {
 					const rendered = yield* this.#renderPhrase(input, phrase);
 					if (rendered.visibleText) visible.push(rendered.visibleText);
 					audioProduced ||= rendered.audioProduced;
@@ -512,7 +626,15 @@ export class ConversationOrchestrator {
 			this.apply({ type: "provider_failed" });
 		}
 
-		yield* this.#finishGeneration(input.generationId, visible, audioProduced);
+		if (isTerminalStage(this.#state.stage)) {
+			yield* this.#finishTerminalResponse(
+				input.generationId,
+				visible,
+				audioProduced,
+			);
+		} else {
+			yield* this.#finishGeneration(input.generationId, visible, audioProduced);
+		}
 	}
 
 	#acceptBrainDelta(
@@ -520,6 +642,7 @@ export class ConversationOrchestrator {
 		delta: BrainDelta,
 	): boolean {
 		return (
+			this.#canProcessTurns() &&
 			this.#generations.accept(input.generationId, input.turnId) &&
 			delta.generationId === input.generationId &&
 			delta.turnId === input.turnId
@@ -531,7 +654,10 @@ export class ConversationOrchestrator {
 		turnId: string,
 		request: ToolRequest,
 	): Promise<ToolOutcome> {
-		if (!this.#generations.accept(generationId, turnId)) {
+		if (
+			!this.#canProcessTurns() ||
+			!this.#generations.accept(generationId, turnId)
+		) {
 			return {
 				execution: {
 					ok: false,
@@ -541,6 +667,7 @@ export class ConversationOrchestrator {
 				},
 				events: [],
 				suppressModelSpeech: true,
+				publishable: false,
 			};
 		}
 		const execution = await this.#tools.execute(
@@ -555,6 +682,7 @@ export class ConversationOrchestrator {
 					execution,
 					events: [],
 					suppressModelSpeech: true,
+					publishable: false,
 				};
 			}
 			return {
@@ -573,6 +701,7 @@ export class ConversationOrchestrator {
 						? BOOKING_FAILURE
 						: QUALIFICATION_FAILURE,
 				suppressModelSpeech: true,
+				publishable: true,
 			};
 		}
 
@@ -586,12 +715,14 @@ export class ConversationOrchestrator {
 					booking: execution.value.booking,
 				});
 				if (!committed.ok) {
-					// The durable booking is authoritative even if disconnect/new-turn
-					// state changed while the transaction was running.
+					// The durable booking is authoritative, but stale work must never
+					// reopen a disconnected or terminal conversation.
+					const preserveStage =
+						this.#state.stage === "DISCONNECTED" ||
+						isTerminalStage(this.#state.stage);
 					this.#state = {
 						...this.#state,
-						stage:
-							this.#state.stage === "DISCONNECTED" ? "DISCONNECTED" : "BOOKED",
+						stage: preserveStage ? this.#state.stage : "BOOKED",
 						booking: execution.value.booking,
 						bookingConfirmationDelivered: false,
 						resumeStage:
@@ -627,10 +758,14 @@ export class ConversationOrchestrator {
 				) {
 					const completed = this.apply({ type: "qualification_completed" });
 					if (!completed.ok) {
-						this.#state =
-							this.#state.stage === "DISCONNECTED"
-								? { ...this.#state, resumeStage: "COMPLETE" }
-								: { ...this.#state, stage: "COMPLETE" };
+						if (this.#state.stage === "DISCONNECTED") {
+							this.#state = { ...this.#state, resumeStage: "COMPLETE" };
+						} else if (!isTerminalStage(this.#state.stage)) {
+							this.#state = { ...this.#state, stage: "COMPLETE" };
+							this.#sttTurns.close();
+							this.#lifecycleInterruption =
+								this.#invalidateActiveWork("terminal");
+						}
 					}
 				}
 			}
@@ -648,6 +783,7 @@ export class ConversationOrchestrator {
 				execution,
 				events: [],
 				suppressModelSpeech: true,
+				publishable: false,
 			};
 		}
 		events.push({
@@ -671,17 +807,39 @@ export class ConversationOrchestrator {
 			});
 		}
 		const serverResponse =
-			execution.value.name === "create_booking" && !execution.value.replayedCall
-				? this.#state.qualificationEnabled
-					? BOOKING_CONFIRMATION_WITH_QUESTION
-					: BOOKING_CONFIRMATION_ONLY
-				: undefined;
+			execution.value.name === "create_booking"
+				? execution.value.replayedCall
+					? undefined
+					: this.#state.qualificationEnabled
+						? BOOKING_CONFIRMATION_WITH_QUESTION
+						: BOOKING_CONFIRMATION_ONLY
+				: qualificationConfirmation(execution.value.result.qualificationStatus);
 		return {
 			execution,
 			events,
 			...(serverResponse ? { serverResponse } : {}),
-			suppressModelSpeech: execution.value.name === "create_booking",
+			suppressModelSpeech: true,
+			publishable: true,
 		};
+	}
+
+	async *#renderToolResponse(
+		turn: { turnId: string; generationId: string },
+		visibleText: string,
+	): AsyncGenerator<OrchestratorEvent, RenderResult> {
+		const visible = visibleText.replace(/\s+/gu, " ").trim();
+		if (!visible) return { visibleText: "", audioProduced: false };
+		if (isTerminalStage(this.#state.stage)) {
+			// This is a truthful server-authored result of the durable tool that
+			// entered the terminal state. Terminal policy forbids starting TTS.
+			yield {
+				type: "text.delta",
+				generationId: turn.generationId,
+				text: visible,
+			};
+			return { visibleText: visible, audioProduced: false };
+		}
+		return yield* this.#renderPhrase(turn, visible);
 	}
 
 	async *#renderPhrase(
@@ -776,6 +934,21 @@ export class ConversationOrchestrator {
 		}
 	}
 
+	async *#finishTerminalResponse(
+		generationId: string,
+		visible: string[],
+		audioProduced: boolean,
+	): AsyncGenerator<OrchestratorEvent> {
+		yield {
+			type: "text.done",
+			generationId,
+			text: visible.join(" ").trim(),
+		};
+		if (audioProduced) yield { type: "audio.done", generationId };
+		this.#pendingDynamicEvents.delete(generationId);
+		this.#pendingDynamicResponses.delete(generationId);
+	}
+
 	async *#finishGeneration(
 		generationId: string,
 		visible: string[],
@@ -799,8 +972,38 @@ export class ConversationOrchestrator {
 		return events;
 	}
 
-	async #interruptActiveGeneration(): Promise<void> {
+	#takeDynamicResponses(
+		generationId: string,
+	): Array<{ text: string; suppressModelSpeech: boolean }> {
+		const responses = this.#pendingDynamicResponses.get(generationId) ?? [];
+		this.#pendingDynamicResponses.delete(generationId);
+		return responses;
+	}
+
+	#canProcessTurns(): boolean {
+		return (
+			this.#state.stage !== "DISCONNECTED" &&
+			!isTerminalStage(this.#state.stage)
+		);
+	}
+
+	#invalidateActiveWork(_reason: string): Promise<void> {
 		const active = this.#generations.current();
-		if (active) await this.interrupt(active.generationId);
+		if (!active) return Promise.resolve();
+		const interrupted = this.#generations.interrupt(active.generationId);
+		if (!interrupted) return Promise.resolve();
+		this.#prefetch.abortAll();
+		this.#pendingDynamicEvents.delete(active.generationId);
+		this.#pendingDynamicResponses.delete(active.generationId);
+		const threadId = this.#threadId;
+		if (!threadId) return Promise.resolve();
+		return this.#brain
+			.interrupt(threadId, interrupted.turnId)
+			.catch(() => undefined)
+			.then(() => undefined);
+	}
+
+	async #interruptActiveGeneration(): Promise<void> {
+		await this.#invalidateActiveWork("superseded");
 	}
 }

@@ -17,12 +17,12 @@ import type {
 	TtsSynthesisRequest,
 } from "@botamin/contracts";
 import {
+	createDeterministicMp3Fixture,
 	FakeBookingService,
 	FakeBrain,
 	FakeNotifier,
 	FakeStt,
 	FakeTts,
-	createDeterministicMp3Fixture,
 } from "../../../../packages/test-fixtures/src";
 import {
 	ConversationOrchestrator,
@@ -262,6 +262,62 @@ describe("atomic transcript intake", () => {
 		expect(stale.some((event) => event.type === "degraded")).toBe(false);
 	});
 
+	test("newer commit between accepted final and old iterator resume fences old brain and tools", async () => {
+		class InterleavedBrain implements BrainPort {
+			readonly turns: BrainTurnInput[] = [];
+			async createThread(): Promise<string> {
+				return "interleaving-thread";
+			}
+			async *runTurn(input: BrainTurnInput): AsyncIterable<BrainDelta> {
+				this.turns.push(input);
+				yield {
+					type: "speech.delta",
+					turnId: input.turnId,
+					generationId: input.generationId,
+					text: "Только новый ответ должен быть обработан и показан посетителю.",
+				};
+				yield {
+					type: "turn.completed",
+					turnId: input.turnId,
+					generationId: input.generationId,
+				};
+			}
+			async interrupt(): Promise<void> {}
+			async health(): Promise<ProviderHealth> {
+				return { status: "healthy" };
+			}
+		}
+		const brain = new InterleavedBrain();
+		const bookings = new FakeBookingService();
+		const { orchestrator } = fixture({
+			brain,
+			bookings,
+			initialState: valueState(),
+		});
+		const stale = orchestrator
+			.acceptAudioCommit(commit())
+			[Symbol.asyncIterator]();
+		expect((await stale.next()).value).toMatchObject({
+			type: "transcript.final",
+			turnId: turn1,
+		});
+
+		const fresh = await collect(
+			orchestrator.acceptAudioCommit(commit(turn2, generation2)),
+		);
+		const staleRemainder: OrchestratorEvent[] = [];
+		for (;;) {
+			const item = await stale.next();
+			if (item.done) break;
+			staleRemainder.push(item.value);
+		}
+
+		expect(brain.turns.map((turn) => turn.turnId)).toEqual([turn2]);
+		expect(bookings.domainEvents).toHaveLength(0);
+		expect(staleRemainder).toHaveLength(0);
+		expect(JSON.stringify(fresh)).toContain("Только новый ответ");
+	});
+
 	test("interrupt during thread creation never invokes Luna runTurn", async () => {
 		let release!: () => void;
 		let threadStarted!: () => void;
@@ -332,6 +388,201 @@ describe("atomic transcript intake", () => {
 		expect(brain.turns).toHaveLength(0);
 		expect(bookings.domainEvents).toHaveLength(0);
 		expect(tts.inputs).toHaveLength(0);
+	});
+});
+
+describe("terminal and transport lifecycle fencing", () => {
+	test("terminal ERROR rejects late STT and every later audio commit", async () => {
+		let release!: () => void;
+		let started!: () => void;
+		const sttStarted = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const stt = new FakeStt({
+			text: "Поздний финал",
+			beforeResolve: async () => {
+				started();
+				await gate;
+			},
+		});
+		const brain = new FakeBrain(speechScript("Не запускать"));
+		const tts = new FakeTts();
+		const { orchestrator } = fixture({
+			stt,
+			brain,
+			tts,
+			initialState: valueState(),
+		});
+		const late = collect(orchestrator.acceptAudioCommit(commit()));
+		await sttStarted;
+		expect(orchestrator.apply({ type: "provider_failed" })).toMatchObject({
+			ok: true,
+			state: { stage: "ERROR" },
+		});
+		release();
+		const lateEvents = await late;
+		const laterEvents = await collect(
+			orchestrator.acceptAudioCommit(commit(turn2, generation2)),
+		);
+		expect(brain.turns).toHaveLength(0);
+		expect(tts.inputs).toHaveLength(0);
+		expect(lateEvents).toEqual([]);
+		expect(laterEvents).toEqual([
+			{ type: "ignored", generationId: generation2, source: "audio.commit" },
+		]);
+	});
+
+	test("terminal DECLINED aborts active brain and rejects its late tool", async () => {
+		let release!: () => void;
+		let started!: () => void;
+		const brainStarted = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		class LateToolBrain implements BrainPort {
+			async createThread(): Promise<string> {
+				return "terminal-thread";
+			}
+			async *runTurn(input: BrainTurnInput): AsyncIterable<BrainDelta> {
+				started();
+				await gate;
+				yield {
+					type: "tool.request",
+					turnId: input.turnId,
+					generationId: input.generationId,
+					tool: {
+						name: "create_booking",
+						callId: "late-terminal-tool",
+						args: bookingInput,
+					},
+				};
+			}
+			async interrupt(): Promise<void> {}
+			async health(): Promise<ProviderHealth> {
+				return { status: "healthy" };
+			}
+		}
+		const bookings = new FakeBookingService();
+		const { orchestrator } = fixture({
+			brain: new LateToolBrain(),
+			bookings,
+			initialState: collectionState(),
+		});
+		const iterator = orchestrator
+			.acceptAudioCommit(commit())
+			[Symbol.asyncIterator]();
+		expect((await iterator.next()).value).toMatchObject({
+			type: "transcript.final",
+		});
+		const pending = iterator.next();
+		await brainStarted;
+		expect(orchestrator.apply({ type: "clear_refusal" })).toMatchObject({
+			ok: true,
+			state: { stage: "DECLINED" },
+		});
+		release();
+		await pending;
+		for (;;) {
+			const item = await iterator.next();
+			if (item.done) break;
+			expect(item.value.type).not.toMatch(/booking|tool|audio/u);
+		}
+		expect(bookings.domainEvents).toHaveLength(0);
+	});
+
+	test("all terminal stages reject fresh audio intake", async () => {
+		for (const stage of ["DECLINED", "COMPLETE", "ERROR"] as const) {
+			const state = { ...valueState(), stage };
+			const { orchestrator, brain } = fixture({ initialState: state });
+			expect(await collect(orchestrator.acceptAudioCommit(commit()))).toEqual([
+				{
+					type: "ignored",
+					generationId: generation1,
+					source: "audio.commit",
+				},
+			]);
+			expect((brain as FakeBrain).turns).toHaveLength(0);
+		}
+	});
+
+	test("disconnect fences stale work and reconnect opens one fresh turn with booking intact", async () => {
+		const bookings = new FakeBookingService();
+		await bookings.createBooking(bookingInput);
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		let release!: () => void;
+		let started!: () => void;
+		const sttStarted = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let sttCalls = 0;
+		const stt = new FakeStt({
+			text: "Свежая реплика",
+			beforeResolve: async () => {
+				sttCalls += 1;
+				if (sttCalls === 1) {
+					started();
+					await gate;
+				}
+			},
+		});
+		class ReconnectBrain implements BrainPort {
+			readonly turns: BrainTurnInput[] = [];
+			async createThread(): Promise<string> {
+				return "reconnect-thread";
+			}
+			async *runTurn(input: BrainTurnInput): AsyncIterable<BrainDelta> {
+				this.turns.push(input);
+				yield* speechScript(
+					"После переподключения обрабатывается только свежая ограниченная реплика.",
+					input.turnId,
+					input.generationId,
+				);
+			}
+			async interrupt(): Promise<void> {}
+			async health(): Promise<ProviderHealth> {
+				return { status: "healthy" };
+			}
+		}
+		const brain = new ReconnectBrain();
+		const initialState: ConversationState = {
+			...createInitialConversationState(),
+			stage: "POST_BOOKING_QUALIFICATION",
+			booking,
+			contactConsentConfirmed: true,
+			bookingConfirmationDelivered: true,
+			qualificationConsent: "granted",
+		};
+		const { orchestrator } = fixture({
+			stt,
+			brain,
+			bookings,
+			initialState,
+		});
+		const stale = collect(orchestrator.acceptAudioCommit(commit()));
+		await sttStarted;
+		expect(orchestrator.apply({ type: "disconnect" }).ok).toBe(true);
+		release();
+		expect(await stale).toEqual([]);
+		expect(orchestrator.state.booking?.id).toBe(booking.id);
+		expect(orchestrator.apply({ type: "reconnect" })).toMatchObject({
+			ok: true,
+			state: { stage: "POST_BOOKING_QUALIFICATION" },
+		});
+		const fresh = await collect(
+			orchestrator.acceptAudioCommit(commit(turn2, generation2)),
+		);
+		expect(brain.turns.map((turn) => turn.turnId)).toEqual([turn2]);
+		expect(JSON.stringify(fresh)).toContain("После переподключения");
+		expect(orchestrator.state.booking?.id).toBe(booking.id);
 	});
 });
 
@@ -413,6 +664,112 @@ describe("booking and tool timeline", () => {
 			booking: { qualification: { role: "РОП" } },
 		});
 	});
+
+	for (const scenario of [
+		{
+			status: "partial" as const,
+			patch: { role: "РОП" },
+			expected:
+				"Дополнительные ответы сохранены. Можно продолжить или закончить на этом.",
+			terminal: false,
+		},
+		{
+			status: "complete" as const,
+			patch: { crm: "amoCRM" },
+			expected: "Дополнительные ответы сохранены. Спасибо, на этом всё.",
+			terminal: true,
+		},
+		{
+			status: "skipped" as const,
+			patch: {},
+			expected:
+				"Основные данные сохранены. Дополнительные вопросы пропущены, на этом всё.",
+			terminal: true,
+		},
+	] as const) {
+		test(`qualification ${scenario.status} emits only truthful server-authored visible text`, async () => {
+			const bookings = new FakeBookingService();
+			await bookings.createBooking(bookingInput);
+			const booking = await bookings.findByConversationId(conversationId);
+			if (!booking) throw new Error("booking missing");
+			const state: ConversationState = {
+				...createInitialConversationState(),
+				stage: "POST_BOOKING_QUALIFICATION",
+				booking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered: true,
+				qualificationConsent: "granted",
+			};
+			const falseModelConfirmation =
+				"Модель ложно подтверждает обновление до серверного результата и называет клиента Анна.";
+			const brain = new FakeBrain([
+				{
+					type: "speech.delta",
+					turnId: turn1,
+					generationId: generation1,
+					text: falseModelConfirmation,
+				},
+				{
+					type: "tool.request",
+					turnId: turn1,
+					generationId: generation1,
+					tool: {
+						name: "append_booking_qualification",
+						callId: `qualification-${scenario.status}`,
+						args: {
+							bookingId: booking.id,
+							idempotencyKey: `qualification-${scenario.status}-truthful`,
+							patch: scenario.patch,
+							completion: scenario.status,
+						},
+					},
+				},
+				{
+					type: "speech.delta",
+					turnId: turn1,
+					generationId: generation1,
+					text: "Модель ещё раз ложно подтверждает результат.",
+				},
+				{ type: "turn.completed", turnId: turn1, generationId: generation1 },
+			]);
+			const tts = new FakeTts();
+			const { orchestrator } = fixture({
+				brain,
+				bookings,
+				tts,
+				initialState: state,
+			});
+			const events = await collect(orchestrator.acceptAudioCommit(commit()));
+			const visible = events
+				.filter(
+					(
+						event,
+					): event is Extract<OrchestratorEvent, { type: "text.delta" }> =>
+						event.type === "text.delta",
+				)
+				.map((event) => event.text)
+				.join(" ");
+			const done = events.find((event) => event.type === "text.done");
+			expect(visible).toBe(scenario.expected);
+			expect(visible).not.toContain("Модель");
+			expect(done).toMatchObject({ text: scenario.expected });
+			expect(events).toContainEqual(
+				expect.objectContaining({
+					type: "booking.updated",
+					qualificationStatus: scenario.status,
+				}),
+			);
+			expect(orchestrator.state.booking?.qualificationStatus).toBe(
+				scenario.status,
+			);
+			expect(orchestrator.state.stage === "COMPLETE").toBe(scenario.terminal);
+			if (scenario.terminal) expect(tts.inputs).toHaveLength(0);
+			else
+				expect(tts.inputs.map((input) => input.text)).toEqual([
+					scenario.expected,
+				]);
+		});
+	}
 
 	test("dynamic callback awaits actual execution before safe confirmation", async () => {
 		class DynamicBrain implements BrainPort {
@@ -643,6 +1000,39 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		}
 	});
 
+	test("complete nested JSON envelope stays visible but no nested PII reaches TTS", async () => {
+		const envelope = JSON.stringify({
+			metadata: {
+				company: "Секретная Компания",
+				contacts: ["private@example.com", "+7 999 123-45-67"],
+				identifiers: {
+					bookingId: "01J00000000000000000000001",
+					conversationId,
+				},
+			},
+			speech: "Ложная фраза с именем Анна.",
+			action: {
+				payload: { name: "Анна", company: "Секретная Компания" },
+				type: "create_booking",
+			},
+		});
+		const brain = new FakeBrain(speechScript(envelope));
+		const tts = new FakeTts();
+		const { orchestrator } = fixture({
+			brain,
+			tts,
+			initialState: valueState(),
+		});
+		const events = await collect(orchestrator.acceptAudioCommit(commit()));
+		const done = events.find((event) => event.type === "text.done");
+		expect(done?.type === "text.done" ? done.text : "").toContain(
+			"Секретная Компания",
+		);
+		expect(JSON.stringify(events)).toContain("private@example.com");
+		expect(tts.inputs).toHaveLength(0);
+		expect(events.some((event) => event.type === "audio.segment")).toBe(false);
+	});
+
 	test("TTS retry/outage repeats only synthesis and preserves text and booking", async () => {
 		const failing = new FailingTts();
 		const { orchestrator, brain, bookings } = fixture({ tts: failing });
@@ -798,6 +1188,107 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			remaining.push(item.value);
 		}
 		expect(remaining.some((event) => event.type === "audio.segment")).toBe(
+			false,
+		);
+	});
+
+	test("repeated barge-in keeps abort-insensitive syntheses bounded at two and emits no stale audio", async () => {
+		class AbortInsensitiveTts implements TtsPort {
+			readonly inputs: TtsSynthesisRequest[] = [];
+			readonly releases: Array<() => void> = [];
+			unresolved = 0;
+			maxUnresolved = 0;
+			async synthesize(request: TtsSynthesisRequest): Promise<TtsAudioSegment> {
+				this.inputs.push(request);
+				this.unresolved += 1;
+				this.maxUnresolved = Math.max(this.maxUnresolved, this.unresolved);
+				return new Promise<TtsAudioSegment>((resolve) => {
+					this.releases.push(() => {
+						this.unresolved -= 1;
+						resolve({
+							generationId: request.generationId,
+							segmentId: request.segmentId,
+							contentType: "audio/mpeg",
+							bytes: Uint8Array.from(createDeterministicMp3Fixture()),
+							final: true,
+						});
+					});
+				});
+			}
+			async health(): Promise<TtsHealth> {
+				return "ready";
+			}
+		}
+		class BargeBrain implements BrainPort {
+			async createThread(): Promise<string> {
+				return "barge-thread";
+			}
+			async *runTurn(input: BrainTurnInput): AsyncIterable<BrainDelta> {
+				yield* speechScript(
+					"Эта фраза достаточно длинная для запуска синтеза, который намеренно игнорирует сигнал отмены.",
+					input.turnId,
+					input.generationId,
+				);
+			}
+			async interrupt(): Promise<void> {}
+			async health(): Promise<ProviderHealth> {
+				return { status: "healthy" };
+			}
+		}
+		const tts = new AbortInsensitiveTts();
+		const { orchestrator } = fixture({
+			brain: new BargeBrain(),
+			tts,
+			initialState: valueState(),
+		});
+
+		async function startHangingTurn(turnId: string, generationId: string) {
+			const iterator = orchestrator
+				.acceptAudioCommit(commit(turnId, generationId))
+				[Symbol.asyncIterator]();
+			expect((await iterator.next()).value).toMatchObject({
+				type: "transcript.final",
+			});
+			expect((await iterator.next()).value).toMatchObject({
+				type: "text.delta",
+			});
+			const pending = iterator.next();
+			while (tts.inputs.length < tts.unresolved) await Promise.resolve();
+			return { iterator, pending };
+		}
+
+		const first = await startHangingTurn(turn1, generation1);
+		while (tts.inputs.length < 1) await Promise.resolve();
+		await orchestrator.interrupt(generation1);
+		const second = await startHangingTurn(turn2, generation2);
+		while (tts.inputs.length < 2) await Promise.resolve();
+		await orchestrator.interrupt(generation2);
+		const turn3 = "01J00000000000000000000012";
+		const generation3 = "01J00000000000000000000022";
+		const third = await collect(
+			orchestrator.acceptAudioCommit(commit(turn3, generation3)),
+		);
+		expect(tts.inputs).toHaveLength(2);
+		expect(tts.unresolved).toBe(2);
+		expect(tts.maxUnresolved).toBe(2);
+		expect(third).toContainEqual(
+			expect.objectContaining({ type: "degraded", provider: "tts" }),
+		);
+
+		tts.releases[0]?.();
+		tts.releases[1]?.();
+		const staleEvents: OrchestratorEvent[] = [];
+		for (const hanging of [first, second]) {
+			const pending = await hanging.pending;
+			if (!pending.done) staleEvents.push(pending.value);
+			for (;;) {
+				const item = await hanging.iterator.next();
+				if (item.done) break;
+				staleEvents.push(item.value);
+			}
+		}
+		expect(tts.unresolved).toBe(0);
+		expect(staleEvents.some((event) => event.type === "audio.segment")).toBe(
 			false,
 		);
 	});

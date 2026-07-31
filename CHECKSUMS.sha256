@@ -64,8 +64,8 @@ eb04c2be20c9e8f84ec5839ebb2442ec6be762f8a8b18092842fde41644f9b82  apps/server/sr
 1980b48f55cba109050153fe3dfddfae395b56daa354ab10cd88c96a16fee206  apps/server/src/orchestrator/state.ts
 1fa1b6bc33e2a960783d4665842af56eb2db720b81a5fa063bba2c1b4bcc0493  apps/server/src/providers/codex/ADR-transport-and-security.md
 9fba49df0045968e08204e99f3d41d2f5cdbeee771a9811ca19868ae532a9be6  apps/server/src/providers/codex/async-queue.ts
-fd229330d25cce39994b62125fb6e0a976fd2276967e4528afb8fb384abf8d68  apps/server/src/providers/codex/brain.ts
-6b581852923e70ad83851b07413bd036137d4bf6273b1a5b39d34c76b9052850  apps/server/src/providers/codex/fake-process.test.ts
+641672cd95bacdbe17b73417fe679ee544792cf63902f927c1bfd931f2252d02  apps/server/src/providers/codex/brain.ts
+bc597b26f3665ccb32963e279e8023fa36cb3dc8456e44095141e004d6170bf1  apps/server/src/providers/codex/fake-process.test.ts
 5aecc26edfb77e35f90951b1245212bea4493309111e319b32b5ebe2d6a06e9a  apps/server/src/providers/codex/index.ts
 cf325e409c0ec5a11a750caa5eb7be0decbebb7082415cc445ef8b37a2fe11c6  apps/server/src/providers/codex/jsonl-client.ts
 da30abf22a9eeb7460f90e3a288f265b6af3a79a9a3c1b3dcff7ce3d48f9b937  apps/server/src/providers/codex/protocol.ts

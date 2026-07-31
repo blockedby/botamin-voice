@@ -1,0 +1,24 @@
+:root {
+	color: #172031;
+	background: #f5f7fa;
+	font-family: system-ui, sans-serif;
+	font-synthesis: none;
+}
+
+body {
+	min-width: 20rem;
+	margin: 0;
+}
+
+main {
+	width: min(42rem, calc(100% - 2rem));
+	margin: 10vh auto;
+}
+
+h1 {
+	margin-block-end: 0.5rem;
+}
+
+p {
+	line-height: 1.6;
+}

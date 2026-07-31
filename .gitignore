@@ -1,0 +1,22 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Local runtime state
+.runtime/
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Logs and editor/OS files
+*.log
+.DS_Store
+.idea/
+.vscode/

@@ -82,38 +82,44 @@ export const BrainDeltaSchema = z.discriminatedUnion("type", [
 		.strict(),
 ]);
 
-export const SttSessionInputSchema = z
+/**
+ * Provider-independent contract safety ceiling. Gateway/provider configured
+ * duration and byte limits remain authoritative and are normally much lower.
+ */
+export const STT_CONTRACT_MAX_AUDIO_BYTES = 10_000_000 as const;
+
+export const SttAudioBytesSchema = z
+	.custom<Uint8Array>(
+		(value): value is Uint8Array => value instanceof Uint8Array,
+		{ message: "Expected Uint8Array audio bytes" },
+	)
+	.refine((bytes) => bytes.byteLength > 0, {
+		message: "Expected non-empty audio bytes",
+	})
+	.refine((bytes) => bytes.byteLength <= STT_CONTRACT_MAX_AUDIO_BYTES, {
+		message: `Expected at most ${STT_CONTRACT_MAX_AUDIO_BYTES} contract audio bytes`,
+	});
+
+export const SttTranscriptionRequestDataSchema = z
 	.object({
 		conversationId: EntityIdSchema,
-		encoding: z.literal("pcm16le"),
-		sampleRate: z.literal(16_000),
-		channels: z.literal(1),
-		language: z.string().min(2).max(35),
+		turnId: EntityIdSchema,
+		audio: SttAudioBytesSchema,
+		contentType: z.literal("audio/wav"),
+		language: z.string().trim().min(2).max(35),
 	})
 	.strict();
 
-export const SttEventSchema = z.discriminatedUnion("type", [
-	z
-		.object({
-			type: z.literal("transcript.partial"),
-			text: z.string().max(20_000),
-			confidence: z.number().min(0).max(1).optional(),
-		})
-		.strict(),
-	z
-		.object({
-			type: z.literal("transcript.final"),
-			turnId: EntityIdSchema,
-			text: z.string().min(1).max(20_000),
-		})
-		.strict(),
-	z
-		.object({
-			type: z.literal("error"),
-			error: SafeErrorSchema,
-		})
-		.strict(),
-]);
+export const SttTranscriptionResultSchema = z
+	.object({
+		conversationId: EntityIdSchema,
+		turnId: EntityIdSchema,
+		text: z.string().trim().min(1).max(20_000),
+		final: z.literal(true),
+	})
+	.strict();
+
+export const SttHealthSchema = z.enum(["ready", "degraded", "unavailable"]);
 
 /**
  * Serializable synthesis data only. AbortSignal deliberately stays outside
@@ -145,8 +151,17 @@ export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type BrainToolMode = z.infer<typeof BrainToolModeSchema>;
 export type BrainTurnInput = z.infer<typeof BrainTurnInputSchema>;
 export type BrainDelta = z.infer<typeof BrainDeltaSchema>;
-export type SttSessionInput = z.infer<typeof SttSessionInputSchema>;
-export type SttEvent = z.infer<typeof SttEventSchema>;
+export type SttTranscriptionRequestData = z.infer<
+	typeof SttTranscriptionRequestDataSchema
+>;
+/** TypeScript-only request boundary: validated data plus live cancellation. */
+export type SttTranscriptionRequest = SttTranscriptionRequestData & {
+	signal: AbortSignal;
+};
+export type SttTranscriptionResult = z.infer<
+	typeof SttTranscriptionResultSchema
+>;
+export type SttHealth = z.infer<typeof SttHealthSchema>;
 export type TtsHealth = z.infer<typeof TtsHealthSchema>;
 export type TtsSynthesisRequestData = z.infer<
 	typeof TtsSynthesisRequestDataSchema
@@ -167,16 +182,9 @@ export interface BrainPort {
 	health(): Promise<ProviderHealth>;
 }
 
-export interface SttSession {
-	events(): AsyncIterable<SttEvent>;
-	sendAudio(frame: Uint8Array): Promise<void>;
-	commit(): Promise<void>;
-	close(): Promise<void>;
-}
-
 export interface SttPort {
-	connect(input: SttSessionInput, signal: AbortSignal): Promise<SttSession>;
-	health(): Promise<ProviderHealth>;
+	transcribe(request: SttTranscriptionRequest): Promise<SttTranscriptionResult>;
+	health(): Promise<SttHealth>;
 }
 
 export interface TtsPort {

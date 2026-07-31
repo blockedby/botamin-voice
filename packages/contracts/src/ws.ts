@@ -153,19 +153,6 @@ export const StateChangedEventSchema = z
 	})
 	.strict();
 
-export const TranscriptPartialEventSchema = z
-	.object({
-		...ServerEventBaseShape,
-		type: z.literal("transcript.partial"),
-		payload: z
-			.object({
-				text: z.string().max(20_000),
-				confidence: z.number().min(0).max(1).optional(),
-			})
-			.strict(),
-	})
-	.strict();
-
 export const TranscriptFinalEventSchema = z
 	.object({
 		...ServerEventBaseShape,
@@ -312,7 +299,6 @@ export const ServerPongEventSchema = z
 export const ServerWsEventSchema = z.discriminatedUnion("type", [
 	SessionReadyEventSchema,
 	StateChangedEventSchema,
-	TranscriptPartialEventSchema,
 	TranscriptFinalEventSchema,
 	AssistantTextDeltaEventSchema,
 	AssistantTextDoneEventSchema,

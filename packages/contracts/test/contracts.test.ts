@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { ServerWsEvent, TtsSynthesisRequest } from "../src";
+import type {
+	ServerWsEvent,
+	SttPort,
+	SttTranscriptionRequest,
+	TtsSynthesisRequest,
+} from "../src";
 import * as ContractExports from "../src";
 import {
 	AppendQualificationInputSchema,
@@ -22,6 +27,10 @@ import {
 	encodeBinaryAudioFrame,
 	QualificationPatchSchema,
 	ServerWsEventSchema,
+	STT_CONTRACT_MAX_AUDIO_BYTES,
+	SttHealthSchema,
+	SttTranscriptionRequestDataSchema,
+	SttTranscriptionResultSchema,
 	TtsAudioSegmentSchema,
 	TtsHealthSchema,
 	TtsSynthesisRequestDataSchema,
@@ -224,6 +233,141 @@ describe("shared contracts", () => {
 
 		expect(hello.type).toBe("client.hello");
 		expect(created.type).toBe("booking.created");
+	});
+
+	test("freezes atomic STT request data and its TypeScript-only AbortSignal boundary", async () => {
+		const data = {
+			conversationId,
+			turnId: "01J00000000000000000000003",
+			audio: new Uint8Array([0x52, 0x49, 0x46, 0x46]),
+			contentType: "audio/wav" as const,
+			language: "ru",
+		};
+		const request = {
+			...data,
+			signal: new AbortController().signal,
+		} satisfies SttTranscriptionRequest;
+
+		expect(SttTranscriptionRequestDataSchema.safeParse(data).success).toBe(
+			true,
+		);
+		// A live AbortSignal is deliberately rejected by the strict data schema.
+		expect(SttTranscriptionRequestDataSchema.safeParse(request).success).toBe(
+			false,
+		);
+		for (const invalid of [
+			{ ...data, conversationId: "not-an-id" },
+			{ ...data, turnId: "not-an-id" },
+			{ ...data, audio: new Uint8Array() },
+			{
+				...data,
+				audio: new Uint8Array(STT_CONTRACT_MAX_AUDIO_BYTES + 1),
+			},
+			{ ...data, audio: "RIFF" },
+			{ ...data, contentType: "audio/pcm" },
+			{ ...data, language: "" },
+			{ ...data, language: "   " },
+			{ ...data, provider: "openrouter" },
+		]) {
+			expect(SttTranscriptionRequestDataSchema.safeParse(invalid).success).toBe(
+				false,
+			);
+		}
+
+		const atomicStt: SttPort = {
+			async transcribe(input) {
+				return {
+					conversationId: input.conversationId,
+					turnId: input.turnId,
+					text: "Финальный текст",
+					final: true,
+				};
+			},
+			async health() {
+				return "ready";
+			},
+		};
+		const result = await atomicStt.transcribe(request);
+		expect(result).toEqual({
+			conversationId,
+			turnId: data.turnId,
+			text: "Финальный текст",
+			final: true,
+		});
+		type SttHasConnect = "connect" extends keyof SttPort ? true : false;
+		const sttHasConnect: SttHasConnect = false;
+		expect(sttHasConnect).toBe(false);
+		expect("connect" in atomicStt).toBe(false);
+	});
+
+	test("validates exactly one provider-neutral final STT result shape", () => {
+		const result = {
+			conversationId,
+			turnId: "01J00000000000000000000003",
+			text: "Давайте созвонимся завтра",
+			final: true,
+		};
+		expect(SttTranscriptionResultSchema.safeParse(result).success).toBe(true);
+		for (const invalid of [
+			{ ...result, conversationId: "not-an-id" },
+			{ ...result, turnId: "not-an-id" },
+			{ ...result, text: "" },
+			{ ...result, text: "   " },
+			{ ...result, final: false },
+			{ ...result, type: "transcript.final" },
+			[result],
+		]) {
+			expect(SttTranscriptionResultSchema.safeParse(invalid).success).toBe(
+				false,
+			);
+		}
+		expect(SttHealthSchema.options).toEqual([
+			"ready",
+			"degraded",
+			"unavailable",
+		]);
+	});
+
+	test("keeps audio.commit and one transcript.final but no transcript.partial", () => {
+		const commit = {
+			v: 1,
+			type: "audio.commit",
+			conversationId,
+			at,
+			payload: {},
+		};
+		const finalTranscript = {
+			v: 1,
+			type: "transcript.final",
+			conversationId,
+			seq: 2,
+			at,
+			payload: {
+				turnId: "01J00000000000000000000003",
+				text: "Финальный текст",
+			},
+		};
+		expect(ClientWsEventSchema.safeParse(commit).success).toBe(true);
+		expect(ServerWsEventSchema.safeParse(finalTranscript).success).toBe(true);
+		expect(
+			ServerWsEventSchema.safeParse({
+				...finalTranscript,
+				type: "transcript.partial",
+				payload: { text: "Фальшивый partial" },
+			}).success,
+		).toBe(false);
+		type ServerHasPartial = "transcript.partial" extends ServerWsEvent["type"]
+			? true
+			: false;
+		const serverHasPartial: ServerHasPartial = false;
+		expect(serverHasPartial).toBe(false);
+		for (const retiredExport of [
+			"SttSessionInputSchema",
+			"SttEventSchema",
+			"TranscriptPartialEventSchema",
+		]) {
+			expect(retiredExport in ContractExports).toBe(false);
+		}
 	});
 
 	test("keeps AbortSignal at the TypeScript-only TTS request boundary", () => {

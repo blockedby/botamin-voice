@@ -81,7 +81,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["maintrassy-qualified-15"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			}
@@ -144,7 +144,7 @@
 					"maxCreateCalls": 0,
 					"qualification": "none"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["rollprof-interest-13"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			}
@@ -169,6 +169,30 @@
 					"qualification": "none"
 				},
 				"allowedCaseClaimIds": ["building-supplies-1000-31"],
+				"expectedFailureModes": [],
+				"ttsMode": "required"
+			}
+		},
+		{
+			"id": "avito-fast-response-case",
+			"title": "Скорость ответа на Авито",
+			"tags": ["inbound", "case-claim", "avito", "booking-refused"],
+			"language": "ru",
+			"direction": "inbound",
+			"description": "Реалистичный пример скорости ответа с полным источником и без переноса результата кейса.",
+			"expected": {
+				"requiredStageOrder": ["GREETING", "DISCOVERY", "VALUE", "COMPLETE"],
+				"finalStages": ["COMPLETE"],
+				"requiredEventOrder": [],
+				"requiredSemantics": [],
+				"forbiddenSemantics": ["qualification_question"],
+				"allowedTools": [],
+				"booking": {
+					"outcome": "forbidden",
+					"maxCreateCalls": 0,
+					"qualification": "none"
+				},
+				"allowedCaseClaimIds": ["avito-conversion-10-45"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			}

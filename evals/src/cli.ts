@@ -1,23 +1,15 @@
 #!/usr/bin/env bun
 import { writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import type { NegativeControlManifest } from "./scorer.js";
 import {
 	type EvalPolicy,
 	loadJson,
 	loadJsonl,
 	type ScenarioFile,
 	scoreEval,
+	validateNegativeControlManifest,
 } from "./scorer.js";
-
-interface NegativeControlManifest {
-	schemaVersion: 1;
-	controls: Array<{
-		id: string;
-		scenarioId: string;
-		file: string;
-		expectedCriticalCodes: string[];
-	}>;
-}
 
 interface CliOptions {
 	scenarios: string;
@@ -103,8 +95,7 @@ async function main(): Promise<void> {
 	if (options.negativeManifest) {
 		const manifestPath = resolve(options.negativeManifest);
 		const manifest = await loadJson<NegativeControlManifest>(manifestPath);
-		if (manifest.schemaVersion !== 1)
-			throw new Error("Unsupported negative-control manifest version");
+		validateNegativeControlManifest(manifest, policy);
 		for (const control of manifest.controls) {
 			const scenario = scenarios.scenarios.find(
 				(candidate) => candidate.id === control.scenarioId,

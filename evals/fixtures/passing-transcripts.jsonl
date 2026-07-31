@@ -37,8 +37,8 @@
 {"schemaVersion":1,"scenarioId":"outbound-cold-base","sequence":4,"type":"message","role":"user","text":"Нужно системно звонить по холодной базе и выходить на закупщиков."}
 {"schemaVersion":1,"scenarioId":"outbound-cold-base","sequence":5,"type":"stage","stage":"DISCOVERY"}
 {"schemaVersion":1,"scenarioId":"outbound-cold-base","sequence":6,"type":"stage","stage":"VALUE"}
-{"schemaVersion":1,"scenarioId":"outbound-cold-base","sequence":7,"type":"message","role":"assistant","text":"Для холодной базы релевантен первичный разговор по согласованному сценарию и структурированная передача заинтересованных контактов. Как команда сейчас находит нужную роль?"}
-{"schemaVersion":1,"scenarioId":"outbound-cold-base","sequence":8,"type":"tts_input","text":"Для холодной базы релевантен первичный разговор по согласованному сценарию и структурированная передача заинтересованных контактов. Как команда сейчас находит нужную роль?"}
+{"schemaVersion":1,"scenarioId":"outbound-cold-base","sequence":7,"type":"message","role":"assistant","text":"В опубликованном кейсе Botamin для Главтрасс сообщается о 15 процентах в квалифицированный лид; это результат конкретного кейса, не прогноз для вашей компании. Как команда сейчас находит нужную роль?","claimRefs":["maintrassy-qualified-15"]}
+{"schemaVersion":1,"scenarioId":"outbound-cold-base","sequence":8,"type":"tts_input","text":"В опубликованном кейсе Botamin для Главтрасс сообщается о 15 процентах в квалифицированный лид; это результат конкретного кейса, не прогноз для вашей компании. Как команда сейчас находит нужную роль?","claimRefs":["maintrassy-qualified-15"]}
 {"schemaVersion":1,"scenarioId":"outbound-cold-base","sequence":9,"type":"message","role":"user","text":"Менеджеры ищут вручную, хочу посмотреть демо."}
 {"schemaVersion":1,"scenarioId":"outbound-cold-base","sequence":10,"type":"stage","stage":"BOOKING_OFFER"}
 {"schemaVersion":1,"scenarioId":"outbound-cold-base","sequence":11,"type":"message","role":"assistant","text":"Похоже, сценарий стоит разобрать на демонстрации. Зафиксировать следующий шаг с коллегой?","semantics":["booking_offer"]}
@@ -89,8 +89,8 @@
 {"schemaVersion":1,"scenarioId":"missed-contact-followup","sequence":4,"type":"message","role":"user","text":"Менеджеры делают один звонок, не дозвонились — лид пропал."}
 {"schemaVersion":1,"scenarioId":"missed-contact-followup","sequence":5,"type":"stage","stage":"DISCOVERY"}
 {"schemaVersion":1,"scenarioId":"missed-contact-followup","sequence":6,"type":"stage","stage":"VALUE"}
-{"schemaVersion":1,"scenarioId":"missed-contact-followup","sequence":7,"type":"message","role":"assistant","text":"Автоматизированный follow-up может вернуть часть недозвонов в процесс и выделить заинтересованных. Сколько попыток контакта сейчас допускает ваш процесс?"}
-{"schemaVersion":1,"scenarioId":"missed-contact-followup","sequence":8,"type":"tts_input","text":"Автоматизированный follow-up может вернуть часть недозвонов в процесс и выделить заинтересованных. Сколько попыток контакта сейчас допускает ваш процесс?"}
+{"schemaVersion":1,"scenarioId":"missed-contact-followup","sequence":7,"type":"message","role":"assistant","text":"В опубликованном кейсе Botamin для РоллПроф сообщается о 13 процентах контактов, доведённых до реального интереса; повторение результата не гарантируется. Сколько попыток контакта сейчас допускает ваш процесс?","claimRefs":["rollprof-interest-13"]}
+{"schemaVersion":1,"scenarioId":"missed-contact-followup","sequence":8,"type":"tts_input","text":"В опубликованном кейсе Botamin для РоллПроф сообщается о 13 процентах контактов, доведённых до реального интереса; повторение результата не гарантируется. Сколько попыток контакта сейчас допускает ваш процесс?","claimRefs":["rollprof-interest-13"]}
 {"schemaVersion":1,"scenarioId":"missed-contact-followup","sequence":9,"type":"message","role":"user","text":"Обычно одну, пока просто изучаю."}
 {"schemaVersion":1,"scenarioId":"missed-contact-followup","sequence":10,"type":"stage","stage":"COMPLETE"}
 {"schemaVersion":1,"scenarioId":"missed-contact-followup","sequence":11,"type":"message","role":"assistant","text":"Поняла. Тогда зафиксирую только идею: начать можно с сценария повторного контакта. Спасибо!"}
@@ -102,11 +102,23 @@
 {"schemaVersion":1,"scenarioId":"inbound-junk-leads-case","sequence":5,"type":"stage","stage":"DISCOVERY"}
 {"schemaVersion":1,"scenarioId":"inbound-junk-leads-case","sequence":6,"type":"stage","stage":"VALUE"}
 {"schemaVersion":1,"scenarioId":"inbound-junk-leads-case","sequence":7,"type":"message","role":"assistant","text":"AI-первая линия может собрать первичный контекст до передачи менеджеру. В опубликованном кейсе Botamin для поставщика стройматериалов описаны тысяча обращений и 31 процент горячих лидов; это не прогноз для вашей компании. Какой признак целевого лида для вас главный?","claimRefs":["building-supplies-1000-31"]}
-{"schemaVersion":1,"scenarioId":"inbound-junk-leads-case","sequence":8,"type":"tts_input","text":"AI-первая линия может собрать первичный контекст до передачи менеджеру. В опубликованном кейсе Botamin для поставщика стройматериалов описаны тысяча обращений и 31 процент горячих лидов; это не прогноз для вашей компании. Какой признак целевого лида для вас главный?"}
+{"schemaVersion":1,"scenarioId":"inbound-junk-leads-case","sequence":8,"type":"tts_input","text":"AI-первая линия может собрать первичный контекст до передачи менеджеру. В опубликованном кейсе Botamin для поставщика стройматериалов описаны тысяча обращений и 31 процент горячих лидов; это не прогноз для вашей компании. Какой признак целевого лида для вас главный?","claimRefs":["building-supplies-1000-31"]}
 {"schemaVersion":1,"scenarioId":"inbound-junk-leads-case","sequence":9,"type":"message","role":"user","text":"Наличие проекта и бюджета, но встречу пока не хочу."}
 {"schemaVersion":1,"scenarioId":"inbound-junk-leads-case","sequence":10,"type":"stage","stage":"COMPLETE"}
 {"schemaVersion":1,"scenarioId":"inbound-junk-leads-case","sequence":11,"type":"message","role":"assistant","text":"Поняла критерий. Спасибо, на этом остановимся."}
 {"schemaVersion":1,"scenarioId":"inbound-junk-leads-case","sequence":12,"type":"tts_input","text":"Поняла критерий. Спасибо, на этом остановимся."}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":1,"type":"stage","stage":"GREETING"}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что происходит с обращениями на Авито?"}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":3,"type":"tts_input","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что происходит с обращениями на Авито?"}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":4,"type":"message","role":"user","text":"Отвечаем через несколько часов и теряем покупателей."}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":5,"type":"stage","stage":"DISCOVERY"}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":6,"type":"stage","stage":"VALUE"}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":7,"type":"message","role":"assistant","text":"В опубликованном кейсе Botamin для продавца утеплительной пены на Авито заявлен рост с 10 до 45 процентов; это маркетинговое сообщение об одном кейсе, не обещание результата. Какая задержка первого ответа бывает сейчас?","claimRefs":["avito-conversion-10-45"]}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":8,"type":"tts_input","text":"В опубликованном кейсе Botamin для продавца утеплительной пены на Авито заявлен рост с 10 до 45 процентов; это маркетинговое сообщение об одном кейсе, не обещание результата. Какая задержка первого ответа бывает сейчас?","claimRefs":["avito-conversion-10-45"]}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":9,"type":"message","role":"user","text":"Обычно три часа, встречу пока не планирую."}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":10,"type":"stage","stage":"COMPLETE"}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":11,"type":"message","role":"assistant","text":"Поняла. Тогда на этом остановимся."}
+{"schemaVersion":1,"scenarioId":"avito-fast-response-case","sequence":12,"type":"tts_input","text":"Поняла. Тогда на этом остановимся."}
 {"schemaVersion":1,"scenarioId":"pricing-direct","sequence":1,"type":"stage","stage":"GREETING"}
 {"schemaVersion":1,"scenarioId":"pricing-direct","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}
 {"schemaVersion":1,"scenarioId":"pricing-direct","sequence":3,"type":"tts_input","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}

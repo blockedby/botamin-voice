@@ -1,0 +1,33 @@
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":1,"type":"stage","stage":"GREETING"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":3,"type":"tts_input","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":4,"type":"message","role":"user","text":"Нужна демо по входящим."}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":5,"type":"stage","stage":"DISCOVERY"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":6,"type":"stage","stage":"VALUE"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":7,"type":"message","role":"assistant","text":"Зафиксируем контакт; уточнение сценария будет только после сохранения и с вашего согласия."}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":8,"type":"tts_input","text":"Зафиксируем контакт; уточнение сценария будет только после сохранения и с вашего согласия."}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":9,"type":"message","role":"assistant","text":"Какая у вас CRM?","semantics":["qualification_question"]}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":10,"type":"stage","stage":"BOOKING_OFFER"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":11,"type":"message","role":"assistant","text":"Похоже, сценарий стоит разобрать на демонстрации. Зафиксировать следующий шаг с коллегой?","semantics":["booking_offer"]}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":12,"type":"tts_input","text":"Похоже, сценарий стоит разобрать на демонстрации. Зафиксировать следующий шаг с коллегой?"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":13,"type":"message","role":"user","text":"Да, давайте.","semantics":["booking_accepted"]}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":14,"type":"stage","stage":"COLLECT_BOOKING"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":15,"type":"message","role":"assistant","text":"Назовите, пожалуйста, имя и один удобный контакт."}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":16,"type":"tts_input","text":"Назовите, пожалуйста, имя и один удобный контакт."}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":17,"type":"message","role":"user","text":"Артур, +7 911 222-33-44, согласен.","semantics":["contact_consent_granted"]}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":18,"type":"tool_call","name":"create_booking","callId":"call_1"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":19,"type":"domain_event","name":"booking.created","bookingId":"bkg_fixture","callId":"call_1"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":20,"type":"tool_result","name":"create_booking","ok":true,"callId":"call_1","bookingId":"bkg_fixture","replayed":false,"payload":{"messageForAssistant":"Данные сохранены"}}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":21,"type":"message","role":"assistant","text":"Данные сохранены во внутренней брони. Календарное событие сейчас не создаётся; коллега продолжит общение по сохранённому контакту. Можно задать один необязательный вопрос?","semantics":["booking_confirmation","qualification_consent_request"]}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":22,"type":"tts_input","text":"Данные сохранены во внутренней брони. Календарное событие сейчас не создаётся; коллега продолжит общение по сохранённому контакту. Можно задать один необязательный вопрос?"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":23,"type":"message","role":"user","text":"Да, один вопрос можно.","semantics":["qualification_consent_granted"]}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":24,"type":"stage","stage":"POST_BOOKING_QUALIFICATION"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":25,"type":"message","role":"assistant","text":"Какой сценарий важнее для пилота: входящие или реактивация?","semantics":["qualification_question"]}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":26,"type":"tts_input","text":"Какой сценарий важнее для пилота: входящие или реактивация?"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":27,"type":"message","role":"user","text":"Входящие заявки."}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":28,"type":"tool_call","name":"append_booking_qualification","callId":"call_q","bookingId":"bkg_fixture"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":29,"type":"domain_event","name":"qualification.updated","bookingId":"bkg_fixture","callId":"call_q"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":30,"type":"tool_result","name":"append_booking_qualification","ok":true,"callId":"call_q","bookingId":"bkg_fixture","replayed":false}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":31,"type":"stage","stage":"COMPLETE"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":32,"type":"message","role":"assistant","text":"Спасибо, добавила этот контекст к сохранённой брони."}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":33,"type":"tts_input","text":"Спасибо, добавила этот контекст к сохранённой брони."}

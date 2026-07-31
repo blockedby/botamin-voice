@@ -1,0 +1,18 @@
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":1,"type":"stage","stage":"GREETING"}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":3,"type":"tts_input","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":4,"type":"message","role":"user","text":"Я сразу согласен на демонстрацию, без презентации."}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":5,"type":"stage","stage":"BOOKING_OFFER"}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":6,"type":"message","role":"assistant","text":"Хорошо, зафиксируем только минимальный следующий шаг. Назовите имя и удобный контакт."}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":7,"type":"tts_input","text":"Хорошо, зафиксируем только минимальный следующий шаг. Назовите имя и удобный контакт."}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":8,"type":"message","role":"user","text":"Максим, +7 999 555-44-33, согласен на передачу."}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":9,"type":"stage","stage":"COLLECT_BOOKING"}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":10,"type":"tool_call","name":"create_booking","callId":"call_1"}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":11,"type":"domain_event","name":"booking.created","bookingId":"bkg_fixture","callId":"call_1"}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":12,"type":"tool_result","name":"create_booking","ok":true,"callId":"call_1","bookingId":"bkg_fixture","replayed":false}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":13,"type":"message","role":"assistant","text":"Встреча уже добавлена в календарь. Можно задать вопрос?","semantics":["booking_confirmation","qualification_consent_request"]}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":14,"type":"tts_input","text":"Встреча уже добавлена в календарь. Можно задать вопрос?"}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":15,"type":"message","role":"user","text":"Нет.","semantics":["qualification_consent_declined"]}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":16,"type":"stage","stage":"COMPLETE"}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":17,"type":"message","role":"assistant","text":"Хорошо, спасибо!"}
+{"schemaVersion":1,"scenarioId":"immediate-demo-acceptance","sequence":18,"type":"tts_input","text":"Хорошо, спасибо!"}

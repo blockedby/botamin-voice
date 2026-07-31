@@ -1,0 +1,121 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://botamin.local/evals/scenario.schema.json",
+	"title": "Botamin offline conversation eval scenarios",
+	"type": "object",
+	"additionalProperties": false,
+	"required": ["schemaVersion", "scenarios"],
+	"properties": {
+		"schemaVersion": { "const": 1 },
+		"scenarios": {
+			"type": "array",
+			"minItems": 24,
+			"items": { "$ref": "#/$defs/scenario" }
+		}
+	},
+	"$defs": {
+		"scenario": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"id",
+				"title",
+				"tags",
+				"language",
+				"direction",
+				"description",
+				"expected"
+			],
+			"properties": {
+				"id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]+$" },
+				"title": { "type": "string", "minLength": 1 },
+				"tags": {
+					"type": "array",
+					"minItems": 1,
+					"uniqueItems": true,
+					"items": { "type": "string" }
+				},
+				"language": { "const": "ru" },
+				"direction": {
+					"enum": ["inbound", "outbound", "reactivation", "system"]
+				},
+				"description": { "type": "string", "minLength": 1 },
+				"expected": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": [
+						"requiredStageOrder",
+						"finalStages",
+						"requiredEventOrder",
+						"requiredSemantics",
+						"forbiddenSemantics",
+						"allowedTools",
+						"booking",
+						"allowedCaseClaimIds",
+						"expectedFailureModes",
+						"ttsMode"
+					],
+					"properties": {
+						"requiredStageOrder": {
+							"type": "array",
+							"items": { "type": "string" }
+						},
+						"finalStages": {
+							"type": "array",
+							"minItems": 1,
+							"items": { "type": "string" }
+						},
+						"requiredEventOrder": {
+							"type": "array",
+							"items": { "type": "string" }
+						},
+						"requiredSemantics": {
+							"type": "array",
+							"uniqueItems": true,
+							"items": { "type": "string" }
+						},
+						"forbiddenSemantics": {
+							"type": "array",
+							"uniqueItems": true,
+							"items": { "type": "string" }
+						},
+						"allowedTools": {
+							"type": "array",
+							"uniqueItems": true,
+							"items": {
+								"enum": ["create_booking", "append_booking_qualification"]
+							}
+						},
+						"booking": {
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["outcome", "maxCreateCalls", "qualification"],
+							"properties": {
+								"outcome": { "enum": ["required", "forbidden", "optional"] },
+								"maxCreateCalls": {
+									"type": "integer",
+									"minimum": 0,
+									"maximum": 2
+								},
+								"qualification": {
+									"enum": ["none", "accepted", "declined", "optional"]
+								}
+							}
+						},
+						"allowedCaseClaimIds": {
+							"type": "array",
+							"uniqueItems": true,
+							"items": { "type": "string" }
+						},
+						"expectedFailureModes": {
+							"type": "array",
+							"uniqueItems": true,
+							"items": { "type": "string" }
+						},
+						"ttsMode": { "enum": ["required", "outage"] }
+					}
+				}
+			}
+		}
+	}
+}

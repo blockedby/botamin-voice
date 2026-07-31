@@ -21,12 +21,13 @@ cp .env.example .env
 2. **Codex subscription:** выполните вход через ChatGPT, без OpenAI API key:
 
    ```bash
-   mkdir -p .runtime/codex-home
-   CODEX_HOME="$PWD/.runtime/codex-home" codex login --device-auth
-   CODEX_HOME="$PWD/.runtime/codex-home" codex login status
+   export CODEX_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/botamin-voice/codex-home"
+   mkdir -p "$CODEX_HOME"
+   codex login --device-auth
+   codex login status
    ```
 
-Для локальной версии `NOTIFIER=console`; webhook-поля можно оставить пустыми. Не коммитьте `.env` или `.runtime/`.
+Укажите этот абсолютный `CODEX_HOME` в `.env`. Для локальной версии `NOTIFIER=console`; webhook-поля можно оставить пустыми. Не коммитьте `.env` или Codex credentials.
 
 ## Неподвижные инварианты
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import {
@@ -797,7 +798,7 @@ export class CodexAppServerBrain implements BrainPort {
 			completed.turn.status === "completed" &&
 			this.options.toolMode === "envelope"
 		) {
-			const envelope = parseEnvelope(active.envelopeText);
+			const envelope = parseEnvelope(active.envelopeText, active.input);
 			if (!envelope) {
 				active.queue.push(
 					safeError(
@@ -823,7 +824,7 @@ export class CodexAppServerBrain implements BrainPort {
 				if (envelope.action.type !== "none") {
 					const request = ToolRequestSchema.safeParse({
 						name: envelope.action.type,
-						callId: `envelope:${active.input.turnId}`.slice(0, 128),
+						callId: envelopeCallId(active.input.turnId),
 						args: envelope.action.payload,
 					});
 					if (
@@ -1077,10 +1078,10 @@ export function createCodexBrainFromEnv(
 	});
 }
 
-function parseEnvelope(text: string) {
+function parseEnvelope(text: string, input: BrainTurnInput) {
 	try {
 		const parsed = BrainEnvelopeSchema.safeParse(
-			normalizeStructuredEnvelope(JSON.parse(text)),
+			normalizeStructuredEnvelope(JSON.parse(text), input),
 		);
 		return parsed.success ? parsed.data : undefined;
 	} catch {
@@ -1088,7 +1089,10 @@ function parseEnvelope(text: string) {
 	}
 }
 
-function normalizeStructuredEnvelope(value: unknown): unknown {
+function normalizeStructuredEnvelope(
+	value: unknown,
+	input: BrainTurnInput,
+): unknown {
 	if (!isRecord(value) || !isRecord(value.action)) return value;
 	const result = { ...value, action: { ...value.action } };
 	const action = result.action;
@@ -1096,19 +1100,42 @@ function normalizeStructuredEnvelope(value: unknown): unknown {
 	const payload = { ...action.payload };
 	action.payload = payload;
 	if (action.type === "create_booking") {
+		// Identity, replay, and consent evidence are server-owned. Model values are
+		// replaced before contract validation, while all business fields still pass
+		// through the strict CreateBookingInputSchema unchanged.
+		payload.conversationId = input.conversationId;
+		payload.idempotencyKey = envelopeIdempotencyKey(action.type, input.turnId);
+		payload.consentConfirmed = input.allowedActions.includes(action.type);
 		for (const key of ["company", "preferredTimeText"])
 			if (payload[key] === null) delete payload[key];
 	}
-	if (
-		action.type === "append_booking_qualification" &&
-		isRecord(payload.patch)
-	) {
-		const patch = { ...payload.patch };
-		payload.patch = patch;
-		for (const [key, entry] of Object.entries(patch))
-			if (entry === null) delete patch[key];
+	if (action.type === "append_booking_qualification") {
+		// An absent committed booking deliberately produces an invalid envelope;
+		// the model-provided booking ID is never retained as a fallback.
+		payload.bookingId = input.booking?.id;
+		payload.idempotencyKey = envelopeIdempotencyKey(action.type, input.turnId);
+		if (isRecord(payload.patch)) {
+			const patch = { ...payload.patch };
+			payload.patch = patch;
+			for (const [key, entry] of Object.entries(patch))
+				if (entry === null) delete patch[key];
+		}
 	}
 	return result;
+}
+
+function envelopeCallId(turnId: string): string {
+	return `envelope:${turnId}`;
+}
+
+function envelopeIdempotencyKey(
+	action: "create_booking" | "append_booking_qualification",
+	turnId: string,
+): string {
+	const digest = createHash("sha256")
+		.update(`${action}\u0000${envelopeCallId(turnId)}`)
+		.digest("hex");
+	return `codex-envelope:${action}:${digest}`;
 }
 
 function normalizeDynamicToolArguments(tool: string, value: unknown): unknown {

@@ -33,6 +33,8 @@ const EXTERNAL_TURN_ID = "01890f3a-8b7c-7def-9234-56789abcdef0";
 const GENERATION_ID = "01890f3a-8b7c-7def-a345-6789abcdef01";
 const PROVIDER_THREAD_ID = "thr_fake_1";
 const PROVIDER_TURN_ID = "019_fake_provider_turn";
+const BOOKING_ID = "01J00000000000000000000001";
+const DIFFERENT_TURN_ID = "01890f3a-8b7c-7def-b456-789abcdef012";
 
 const temporaryPaths: string[] = [];
 const brains: CodexAppServerBrain[] = [];
@@ -292,6 +294,48 @@ async function standardResponse(
 		return true;
 	}
 	return false;
+}
+
+async function runEnvelopeTurn(
+	envelope: unknown,
+	overrides: Partial<BrainTurnInput>,
+): Promise<BrainDelta[]> {
+	const { cwd, agentsPath } = await runtime();
+	const { brain } = createBrain(
+		cwd,
+		async (message, process) => {
+			if (await standardResponse(message, process, agentsPath)) return;
+			if (message.method !== "turn/start") return;
+			await process.send({
+				id: message.id,
+				result: { turn: { id: PROVIDER_TURN_ID, status: "inProgress" } },
+			});
+			await process.send({
+				method: "item/agentMessage/delta",
+				params: {
+					threadId: PROVIDER_THREAD_ID,
+					turnId: PROVIDER_TURN_ID,
+					itemId: "server_identity_envelope",
+					delta: JSON.stringify(envelope),
+				},
+			});
+			await process.send({
+				method: "turn/completed",
+				params: {
+					threadId: PROVIDER_THREAD_ID,
+					turn: { id: PROVIDER_TURN_ID, status: "completed", error: null },
+				},
+			});
+		},
+		{ toolMode: "envelope" },
+	);
+	const threadId = await brain.createThread(CONVERSATION_ID);
+	return collect(
+		brain.runTurn(
+			input({ threadId, ...overrides }),
+			new AbortController().signal,
+		),
+	);
 }
 
 describe("Codex app-server brain with deterministic fake process", () => {
@@ -886,6 +930,221 @@ describe("Codex app-server brain with deterministic fake process", () => {
 				nextStage: "DISCOVERY",
 			},
 		]);
+	});
+
+	test("envelope create booking replaces model identity, replay key, and consent with server evidence", async () => {
+		const envelope = {
+			speech: "Не должно озвучиваться до результата backend.",
+			nextStage: "BOOKED",
+			action: {
+				type: "create_booking",
+				payload: {
+					conversationId: "attacker-controlled-invalid-id",
+					idempotencyKey: "short",
+					name: "Иван",
+					contacts: [{ channel: "telegram", value: "@ivan" }],
+					company: null,
+					preferredTimeText: null,
+					consentConfirmed: false,
+				},
+			},
+		};
+		const authorized = {
+			stage: "COLLECT_BOOKING" as const,
+			allowedActions: ["create_booking" as const],
+		};
+		const first = await runEnvelopeTurn(envelope, authorized);
+		const replay = await runEnvelopeTurn(envelope, authorized);
+		const differentTurn = await runEnvelopeTurn(envelope, {
+			...authorized,
+			turnId: DIFFERENT_TURN_ID,
+		});
+		const firstRequest = first.find((delta) => delta.type === "tool.request");
+		const replayRequest = replay.find((delta) => delta.type === "tool.request");
+		const differentRequest = differentTurn.find(
+			(delta) => delta.type === "tool.request",
+		);
+		expect(firstRequest?.type).toBe("tool.request");
+		expect(replayRequest?.type).toBe("tool.request");
+		expect(differentRequest?.type).toBe("tool.request");
+		if (
+			firstRequest?.type !== "tool.request" ||
+			replayRequest?.type !== "tool.request" ||
+			differentRequest?.type !== "tool.request" ||
+			firstRequest.tool.name !== "create_booking" ||
+			replayRequest.tool.name !== "create_booking" ||
+			differentRequest.tool.name !== "create_booking"
+		)
+			throw new Error("Expected normalized create_booking requests");
+		expect(firstRequest.tool.args).toMatchObject({
+			conversationId: CONVERSATION_ID,
+			name: "Иван",
+			consentConfirmed: true,
+		});
+		expect(firstRequest.tool.args.idempotencyKey).not.toBe("short");
+		expect(firstRequest.tool.args.idempotencyKey.length).toBeGreaterThanOrEqual(
+			10,
+		);
+		expect(firstRequest.tool.args.idempotencyKey.length).toBeLessThanOrEqual(
+			128,
+		);
+		expect(replayRequest.tool.args.idempotencyKey).toBe(
+			firstRequest.tool.args.idempotencyKey,
+		);
+		expect(differentRequest.tool.args.idempotencyKey).not.toBe(
+			firstRequest.tool.args.idempotencyKey,
+		);
+	});
+
+	test("envelope qualification replaces malicious booking identity and replay key", async () => {
+		const deltas = await runEnvelopeTurn(
+			{
+				speech: "",
+				nextStage: "POST_BOOKING_QUALIFICATION",
+				action: {
+					type: "append_booking_qualification",
+					payload: {
+						bookingId: "attacker-controlled-invalid-id",
+						idempotencyKey: "tiny",
+						patch: {
+							role: "Основатель",
+							industry: null,
+							companySize: null,
+							monthlyLeadVolume: null,
+							currentChannels: null,
+							crm: null,
+							currentProcess: null,
+							pains: null,
+							desiredUseCase: null,
+							timeline: null,
+							notes: null,
+						},
+						completion: "complete",
+					},
+				},
+			},
+			{
+				stage: "POST_BOOKING_QUALIFICATION",
+				allowedActions: ["append_booking_qualification"],
+				booking: {
+					id: BOOKING_ID,
+					conversationId: CONVERSATION_ID,
+					status: "booked",
+					name: "Иван",
+					contacts: [{ channel: "telegram", value: "@ivan" }],
+					qualificationStatus: "none",
+					createdAt: "2026-07-30T20:22:00.000Z",
+					updatedAt: "2026-07-30T20:22:00.000Z",
+				},
+			},
+		);
+		const request = deltas.find((delta) => delta.type === "tool.request");
+		expect(request?.type).toBe("tool.request");
+		if (
+			request?.type !== "tool.request" ||
+			request.tool.name !== "append_booking_qualification"
+		)
+			throw new Error("Expected normalized qualification request");
+		expect(request.tool.args).toMatchObject({
+			bookingId: BOOKING_ID,
+			patch: { role: "Основатель" },
+			completion: "complete",
+		});
+		expect(request.tool.args.idempotencyKey).not.toBe("tiny");
+		expect(request.tool.args.idempotencyKey.length).toBeGreaterThanOrEqual(10);
+		expect(request.tool.args.idempotencyKey.length).toBeLessThanOrEqual(128);
+	});
+
+	test("envelope actions without server authorization or a committed booking emit no tool", async () => {
+		const createEnvelope = {
+			speech: "",
+			nextStage: "COLLECT_BOOKING",
+			action: {
+				type: "create_booking",
+				payload: {
+					conversationId: CONVERSATION_ID,
+					idempotencyKey: "model-booking-key",
+					name: "Иван",
+					contacts: [{ channel: "telegram", value: "@ivan" }],
+					company: null,
+					preferredTimeText: null,
+					consentConfirmed: true,
+				},
+			},
+		};
+		const qualificationEnvelope = {
+			speech: "",
+			nextStage: "POST_BOOKING_QUALIFICATION",
+			action: {
+				type: "append_booking_qualification",
+				payload: {
+					bookingId: BOOKING_ID,
+					idempotencyKey: "model-qualification-key",
+					patch: {
+						role: "Основатель",
+						industry: null,
+						companySize: null,
+						monthlyLeadVolume: null,
+						currentChannels: null,
+						crm: null,
+						currentProcess: null,
+						pains: null,
+						desiredUseCase: null,
+						timeline: null,
+						notes: null,
+					},
+					completion: "complete",
+				},
+			},
+		};
+		const unauthorized = await runEnvelopeTurn(createEnvelope, {
+			stage: "COLLECT_BOOKING",
+			allowedActions: [],
+		});
+		const missingBooking = await runEnvelopeTurn(qualificationEnvelope, {
+			stage: "POST_BOOKING_QUALIFICATION",
+			allowedActions: ["append_booking_qualification"],
+			booking: null,
+		});
+		for (const deltas of [unauthorized, missingBooking]) {
+			expect(deltas.some((delta) => delta.type === "tool.request")).toBe(false);
+			expect(deltas.some((delta) => delta.type === "error")).toBe(true);
+		}
+	});
+
+	test("server identity normalization does not relax booking business fields", async () => {
+		const deltas = await runEnvelopeTurn(
+			{
+				speech: "",
+				nextStage: "BOOKED",
+				action: {
+					type: "create_booking",
+					payload: {
+						conversationId: "invalid",
+						idempotencyKey: "x",
+						name: "   ",
+						contacts: [{ channel: "telegram", value: "@ivan" }],
+						company: null,
+						preferredTimeText: null,
+						consentConfirmed: false,
+						unexpectedBusinessField: "must fail strict validation",
+					},
+				},
+			},
+			{
+				stage: "COLLECT_BOOKING",
+				allowedActions: ["create_booking"],
+			},
+		);
+		expect(deltas.some((delta) => delta.type === "tool.request")).toBe(false);
+		expect(
+			deltas.some(
+				(delta) =>
+					delta.type === "error" &&
+					delta.error.code === "BRAIN_PROTOCOL_ERROR" &&
+					!delta.error.retryable,
+			),
+		).toBe(true);
 	});
 
 	test("structured envelope schema is provider-compatible and normalizes nullable optionals", async () => {

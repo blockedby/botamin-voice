@@ -136,6 +136,10 @@ async function collect(
 	return result;
 }
 
+function expectNoTerminalCompletion(events: OrchestratorEvent[]): void {
+	expect(events.filter((event) => event.type.endsWith(".done"))).toEqual([]);
+}
+
 function fixture(
 	options: {
 		stt?: SttPort;
@@ -430,9 +434,62 @@ describe("terminal and transport lifecycle fencing", () => {
 		expect(brain.turns).toHaveLength(0);
 		expect(tts.inputs).toHaveLength(0);
 		expect(lateEvents).toEqual([]);
+		expectNoTerminalCompletion(lateEvents);
 		expect(laterEvents).toEqual([
 			{ type: "ignored", generationId: generation2, source: "audio.commit" },
 		]);
+	});
+
+	test("abort-insensitive brain finishing after DECLINED emits no stale text.done", async () => {
+		let release!: () => void;
+		let started!: () => void;
+		const brainStarted = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		class AbortInsensitiveFinishingBrain implements BrainPort {
+			async createThread(): Promise<string> {
+				return "late-finishing-thread";
+			}
+			async *runTurn(): AsyncIterable<BrainDelta> {
+				started();
+				await gate;
+				yield* [] as BrainDelta[];
+			}
+			async interrupt(): Promise<void> {}
+			async health(): Promise<ProviderHealth> {
+				return { status: "healthy" };
+			}
+		}
+		const { orchestrator } = fixture({
+			brain: new AbortInsensitiveFinishingBrain(),
+			initialState: valueState(),
+		});
+		const iterator = orchestrator
+			.acceptAudioCommit(commit())
+			[Symbol.asyncIterator]();
+		expect((await iterator.next()).value).toMatchObject({
+			type: "transcript.final",
+		});
+		const pending = iterator.next();
+		await brainStarted;
+		expect(orchestrator.apply({ type: "clear_refusal" })).toMatchObject({
+			ok: true,
+			state: { stage: "DECLINED" },
+		});
+		release();
+		const lateEvents: OrchestratorEvent[] = [];
+		const first = await pending;
+		if (!first.done) lateEvents.push(first.value);
+		for (;;) {
+			const item = await iterator.next();
+			if (item.done) break;
+			lateEvents.push(item.value);
+		}
+		expect(lateEvents).toEqual([]);
+		expectNoTerminalCompletion(lateEvents);
 	});
 
 	test("terminal DECLINED aborts active brain and rejects its late tool", async () => {
@@ -486,13 +543,81 @@ describe("terminal and transport lifecycle fencing", () => {
 			state: { stage: "DECLINED" },
 		});
 		release();
-		await pending;
+		const lateEvents: OrchestratorEvent[] = [];
+		const first = await pending;
+		if (!first.done) lateEvents.push(first.value);
 		for (;;) {
 			const item = await iterator.next();
 			if (item.done) break;
-			expect(item.value.type).not.toMatch(/booking|tool|audio/u);
+			lateEvents.push(item.value);
 		}
+		for (const event of lateEvents)
+			expect(event.type).not.toMatch(/booking|tool|audio/u);
+		expectNoTerminalCompletion(lateEvents);
 		expect(bookings.domainEvents).toHaveLength(0);
+	});
+
+	test("terminal DECLINED suppresses late TTS segment and all completion", async () => {
+		let release!: () => void;
+		let started!: () => void;
+		const synthesisStarted = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		class AbortInsensitiveTts implements TtsPort {
+			async synthesize(request: TtsSynthesisRequest): Promise<TtsAudioSegment> {
+				started();
+				await gate;
+				return {
+					generationId: request.generationId,
+					segmentId: request.segmentId,
+					contentType: "audio/mpeg",
+					bytes: Uint8Array.from(createDeterministicMp3Fixture()),
+					final: true,
+				};
+			}
+			async health(): Promise<TtsHealth> {
+				return "ready";
+			}
+		}
+		const brain = new FakeBrain(
+			speechScript(
+				"Ответ достаточно длинный, чтобы синтез начался до внешнего завершения разговора.",
+			),
+		);
+		const { orchestrator } = fixture({
+			brain,
+			tts: new AbortInsensitiveTts(),
+			initialState: valueState(),
+		});
+		const iterator = orchestrator
+			.acceptAudioCommit(commit())
+			[Symbol.asyncIterator]();
+		expect((await iterator.next()).value).toMatchObject({
+			type: "transcript.final",
+		});
+		expect((await iterator.next()).value).toMatchObject({ type: "text.delta" });
+		const pending = iterator.next();
+		await synthesisStarted;
+		expect(orchestrator.apply({ type: "clear_refusal" })).toMatchObject({
+			ok: true,
+			state: { stage: "DECLINED" },
+		});
+		release();
+		const lateEvents: OrchestratorEvent[] = [];
+		const first = await pending;
+		if (!first.done) lateEvents.push(first.value);
+		for (;;) {
+			const item = await iterator.next();
+			if (item.done) break;
+			lateEvents.push(item.value);
+		}
+		expect(lateEvents.some((event) => event.type === "audio.segment")).toBe(
+			false,
+		);
+		expectNoTerminalCompletion(lateEvents);
 	});
 
 	test("all terminal stages reject fresh audio intake", async () => {
@@ -763,13 +888,56 @@ describe("booking and tool timeline", () => {
 				scenario.status,
 			);
 			expect(orchestrator.state.stage === "COMPLETE").toBe(scenario.terminal);
-			if (scenario.terminal) expect(tts.inputs).toHaveLength(0);
-			else
+			if (scenario.terminal) {
+				expect(tts.inputs).toHaveLength(0);
+				expect(
+					events.filter((event) => event.type === "text.done"),
+				).toHaveLength(1);
+				expect(events.some((event) => event.type === "audio.done")).toBe(false);
+			} else {
 				expect(tts.inputs.map((input) => input.text)).toEqual([
 					scenario.expected,
 				]);
+			}
 		});
 	}
+
+	test("current brain failure retains its truthful server-authored terminal response", async () => {
+		const brain = new FakeBrain([
+			{
+				type: "error",
+				turnId: turn1,
+				generationId: generation1,
+				error: {
+					code: "BRAIN_PROTOCOL_ERROR",
+					message: "private provider detail",
+					retryable: true,
+				},
+			},
+		]);
+		const { orchestrator } = fixture({
+			brain,
+			tts: null,
+			initialState: valueState(),
+		});
+		const events = await collect(orchestrator.acceptAudioCommit(commit()));
+		const expected =
+			"Сейчас не получается продолжить разговор. Данные ещё не были сохранены.";
+		expect(orchestrator.state.stage).toBe("ERROR");
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "degraded",
+				provider: "brain",
+				textFallback: expected,
+			}),
+		);
+		expect(events).toContainEqual({
+			type: "text.done",
+			generationId: generation1,
+			text: expected,
+		});
+		expect(JSON.stringify(events)).not.toContain("private provider detail");
+	});
 
 	test("dynamic callback awaits actual execution before safe confirmation", async () => {
 		class DynamicBrain implements BrainPort {
@@ -933,12 +1101,18 @@ describe("booking and tool timeline", () => {
 		await started;
 		await orchestrator.interrupt(generation1);
 		release();
-		await pending;
+		const lateEvents: OrchestratorEvent[] = [];
+		const first = await pending;
+		if (!first.done) lateEvents.push(first.value);
 		for (;;) {
 			const item = await iterator.next();
 			if (item.done) break;
-			expect(item.value.type).not.toBe("booking.committed");
+			lateEvents.push(item.value);
 		}
+		expect(lateEvents.some((event) => event.type === "booking.committed")).toBe(
+			false,
+		);
+		expectNoTerminalCompletion(lateEvents);
 		expect(delegate.domainEvents).toHaveLength(1);
 		expect(orchestrator.state.booking?.status).toBe("booked");
 
@@ -1130,6 +1304,7 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			{ threadId: "late-thread", turnId: turn1 },
 		]);
 		expect(JSON.stringify(seen)).not.toContain("Поздняя фраза");
+		expectNoTerminalCompletion(seen);
 	});
 
 	test("late complete MP3 after interruption is suppressed", async () => {
@@ -1190,6 +1365,10 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		expect(remaining.some((event) => event.type === "audio.segment")).toBe(
 			false,
 		);
+		expectNoTerminalCompletion([
+			...(late.done ? [] : [late.value]),
+			...remaining,
+		]);
 	});
 
 	test("repeated barge-in keeps abort-insensitive syntheses bounded at two and emits no stale audio", async () => {

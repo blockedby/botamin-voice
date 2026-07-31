@@ -121,10 +121,16 @@ interface RenderResult {
 	audioProduced: boolean;
 }
 
+interface TerminalResponsePermit {
+	generationId: string;
+	turnId: string;
+}
+
 interface ToolOutcome {
 	execution: SafeToolExecution;
 	events: OrchestratorEvent[];
 	serverResponse?: string;
+	terminalResponsePermit?: TerminalResponsePermit;
 	suppressModelSpeech: boolean;
 	/** The result settled while this generation still owned the turn. */
 	publishable: boolean;
@@ -194,7 +200,11 @@ export class ConversationOrchestrator {
 	> = [];
 	readonly #pendingDynamicResponses = new Map<
 		string,
-		Array<{ text: string; suppressModelSpeech: boolean }>
+		Array<{
+			text: string;
+			suppressModelSpeech: boolean;
+			terminalResponsePermit?: TerminalResponsePermit;
+		}>
 	>();
 	#threadId: string | undefined;
 	#state: ConversationState;
@@ -280,6 +290,9 @@ export class ConversationOrchestrator {
 					{
 						text: outcome.serverResponse,
 						suppressModelSpeech: outcome.suppressModelSpeech,
+						...(outcome.terminalResponsePermit
+							? { terminalResponsePermit: outcome.terminalResponsePermit }
+							: {}),
 					},
 				]);
 			}
@@ -429,11 +442,12 @@ export class ConversationOrchestrator {
 			const rendered = yield* this.#renderPhrase(input, text);
 			if (rendered.visibleText) visible.push(rendered.visibleText);
 			audioProduced ||= rendered.audioProduced;
+			if (!this.#generations.accept(input.generationId, input.turnId)) return;
 			this.apply({ type: "booking_confirmation_delivered" });
 			if (!this.#state.qualificationEnabled) this.apply({ type: "complete" });
 			if (isTerminalStage(this.#state.stage)) {
 				yield* this.#finishTerminalResponse(
-					input.generationId,
+					{ generationId: input.generationId, turnId: input.turnId },
 					visible,
 					audioProduced,
 				);
@@ -484,21 +498,33 @@ export class ConversationOrchestrator {
 				for (const dynamicResponse of this.#takeDynamicResponses(
 					input.generationId,
 				)) {
+					let terminalResponsePermit = dynamicResponse.terminalResponsePermit;
 					const rendered = yield* this.#renderToolResponse(
 						input,
 						dynamicResponse.text,
+						terminalResponsePermit,
 					);
 					if (rendered.visibleText) visible.push(rendered.visibleText);
 					audioProduced ||= rendered.audioProduced;
 					suppressModelSpeech ||= dynamicResponse.suppressModelSpeech;
-					if (this.#state.stage === "BOOKED") {
-						this.apply({ type: "booking_confirmation_delivered" });
-						if (!this.#state.qualificationEnabled)
-							this.apply({ type: "complete" });
+					if (!terminalResponsePermit) {
+						if (!this.#generations.accept(input.generationId, input.turnId))
+							return;
+						if (this.#state.stage === "BOOKED") {
+							this.apply({ type: "booking_confirmation_delivered" });
+							if (!this.#state.qualificationEnabled) {
+								this.apply({ type: "complete" });
+								terminalResponsePermit = {
+									generationId: input.generationId,
+									turnId: input.turnId,
+								};
+							}
+						}
 					}
 					if (isTerminalStage(this.#state.stage)) {
+						if (!terminalResponsePermit) return;
 						yield* this.#finishTerminalResponse(
-							input.generationId,
+							terminalResponsePermit,
 							visible,
 							audioProduced,
 						);
@@ -522,21 +548,32 @@ export class ConversationOrchestrator {
 					heldActionSpeech.length = 0;
 					suppressModelSpeech ||= outcome.suppressModelSpeech;
 					if (outcome.serverResponse) {
+						let terminalResponsePermit = outcome.terminalResponsePermit;
 						const rendered = yield* this.#renderToolResponse(
 							input,
 							outcome.serverResponse,
+							terminalResponsePermit,
 						);
 						if (rendered.visibleText) visible.push(rendered.visibleText);
 						audioProduced ||= rendered.audioProduced;
-						if (this.#state.stage === "BOOKED") {
-							this.apply({ type: "booking_confirmation_delivered" });
-							if (!this.#state.qualificationEnabled) {
-								this.apply({ type: "complete" });
+						if (!terminalResponsePermit) {
+							if (!this.#generations.accept(input.generationId, input.turnId))
+								return;
+							if (this.#state.stage === "BOOKED") {
+								this.apply({ type: "booking_confirmation_delivered" });
+								if (!this.#state.qualificationEnabled) {
+									this.apply({ type: "complete" });
+									terminalResponsePermit = {
+										generationId: input.generationId,
+										turnId: input.turnId,
+									};
+								}
 							}
 						}
 						if (isTerminalStage(this.#state.stage)) {
+							if (!terminalResponsePermit) return;
 							yield* this.#finishTerminalResponse(
-								input.generationId,
+								terminalResponsePermit,
 								visible,
 								audioProduced,
 							);
@@ -563,21 +600,33 @@ export class ConversationOrchestrator {
 			for (const dynamicResponse of this.#takeDynamicResponses(
 				input.generationId,
 			)) {
+				let terminalResponsePermit = dynamicResponse.terminalResponsePermit;
 				const rendered = yield* this.#renderToolResponse(
 					input,
 					dynamicResponse.text,
+					terminalResponsePermit,
 				);
 				if (rendered.visibleText) visible.push(rendered.visibleText);
 				audioProduced ||= rendered.audioProduced;
 				suppressModelSpeech ||= dynamicResponse.suppressModelSpeech;
-				if (this.#state.stage === "BOOKED") {
-					this.apply({ type: "booking_confirmation_delivered" });
-					if (!this.#state.qualificationEnabled)
-						this.apply({ type: "complete" });
+				if (!terminalResponsePermit) {
+					if (!this.#generations.accept(input.generationId, input.turnId))
+						return;
+					if (this.#state.stage === "BOOKED") {
+						this.apply({ type: "booking_confirmation_delivered" });
+						if (!this.#state.qualificationEnabled) {
+							this.apply({ type: "complete" });
+							terminalResponsePermit = {
+								generationId: input.generationId,
+								turnId: input.turnId,
+							};
+						}
+					}
 				}
 				if (isTerminalStage(this.#state.stage)) {
+					if (!terminalResponsePermit) return;
 					yield* this.#finishTerminalResponse(
-						input.generationId,
+						terminalResponsePermit,
 						visible,
 						audioProduced,
 					);
@@ -623,18 +672,19 @@ export class ConversationOrchestrator {
 				if (rendered.visibleText) visible.push(rendered.visibleText);
 				audioProduced ||= rendered.audioProduced;
 			}
-			this.apply({ type: "provider_failed" });
+			if (!this.#generations.accept(input.generationId, input.turnId)) return;
+			const failed = this.apply({ type: "provider_failed" });
+			if (failed.ok && isTerminalStage(this.#state.stage)) {
+				yield* this.#finishTerminalResponse(
+					{ generationId: input.generationId, turnId: input.turnId },
+					visible,
+					audioProduced,
+				);
+				return;
+			}
 		}
 
-		if (isTerminalStage(this.#state.stage)) {
-			yield* this.#finishTerminalResponse(
-				input.generationId,
-				visible,
-				audioProduced,
-			);
-		} else {
-			yield* this.#finishGeneration(input.generationId, visible, audioProduced);
-		}
+		yield* this.#finishGeneration(input.generationId, visible, audioProduced);
 	}
 
 	#acceptBrainDelta(
@@ -675,7 +725,8 @@ export class ConversationOrchestrator {
 			this.conversationId,
 			request,
 		);
-		const stillCurrent = this.#generations.accept(generationId, turnId);
+		const stillCurrent =
+			this.#canProcessTurns() && this.#generations.accept(generationId, turnId);
 		if (!execution.ok) {
 			if (!stillCurrent) {
 				return {
@@ -818,6 +869,11 @@ export class ConversationOrchestrator {
 			execution,
 			events,
 			...(serverResponse ? { serverResponse } : {}),
+			...(serverResponse && isTerminalStage(this.#state.stage)
+				? {
+						terminalResponsePermit: { generationId, turnId },
+					}
+				: {}),
 			suppressModelSpeech: true,
 			publishable: true,
 		};
@@ -826,12 +882,19 @@ export class ConversationOrchestrator {
 	async *#renderToolResponse(
 		turn: { turnId: string; generationId: string },
 		visibleText: string,
+		terminalResponsePermit?: TerminalResponsePermit,
 	): AsyncGenerator<OrchestratorEvent, RenderResult> {
 		const visible = visibleText.replace(/\s+/gu, " ").trim();
 		if (!visible) return { visibleText: "", audioProduced: false };
 		if (isTerminalStage(this.#state.stage)) {
-			// This is a truthful server-authored result of the durable tool that
-			// entered the terminal state. Terminal policy forbids starting TTS.
+			if (
+				terminalResponsePermit?.generationId !== turn.generationId ||
+				terminalResponsePermit.turnId !== turn.turnId
+			) {
+				return { visibleText: "", audioProduced: false };
+			}
+			// This permit proves the durable tool settled while the generation still
+			// owned the turn. Terminal policy forbids starting TTS for its response.
 			yield {
 				type: "text.delta",
 				generationId: turn.generationId,
@@ -935,18 +998,21 @@ export class ConversationOrchestrator {
 	}
 
 	async *#finishTerminalResponse(
-		generationId: string,
+		permit: TerminalResponsePermit,
 		visible: string[],
 		audioProduced: boolean,
 	): AsyncGenerator<OrchestratorEvent> {
+		// Entering a terminal state invalidates its generation. Only an explicit
+		// permit created by a current server-authored tool/failure path may finish.
 		yield {
 			type: "text.done",
-			generationId,
+			generationId: permit.generationId,
 			text: visible.join(" ").trim(),
 		};
-		if (audioProduced) yield { type: "audio.done", generationId };
-		this.#pendingDynamicEvents.delete(generationId);
-		this.#pendingDynamicResponses.delete(generationId);
+		if (audioProduced)
+			yield { type: "audio.done", generationId: permit.generationId };
+		this.#pendingDynamicEvents.delete(permit.generationId);
+		this.#pendingDynamicResponses.delete(permit.generationId);
 	}
 
 	async *#finishGeneration(
@@ -972,9 +1038,11 @@ export class ConversationOrchestrator {
 		return events;
 	}
 
-	#takeDynamicResponses(
-		generationId: string,
-	): Array<{ text: string; suppressModelSpeech: boolean }> {
+	#takeDynamicResponses(generationId: string): Array<{
+		text: string;
+		suppressModelSpeech: boolean;
+		terminalResponsePermit?: TerminalResponsePermit;
+	}> {
 		const responses = this.#pendingDynamicResponses.get(generationId) ?? [];
 		this.#pendingDynamicResponses.delete(generationId);
 		return responses;

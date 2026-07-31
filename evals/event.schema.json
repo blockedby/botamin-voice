@@ -1,0 +1,102 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://botamin.local/evals/event.schema.json",
+	"title": "One recorded Botamin conversation eval event",
+	"type": "object",
+	"additionalProperties": false,
+	"required": ["schemaVersion", "scenarioId", "sequence", "type"],
+	"properties": {
+		"schemaVersion": { "const": 1 },
+		"scenarioId": { "type": "string" },
+		"sequence": { "type": "integer", "minimum": 1 },
+		"type": {
+			"enum": [
+				"stage",
+				"message",
+				"tts_input",
+				"tool_call",
+				"tool_result",
+				"domain_event",
+				"provider_event",
+				"transport"
+			]
+		},
+		"stage": { "type": "string" },
+		"role": { "enum": ["user", "assistant", "system"] },
+		"text": { "type": "string" },
+		"semantics": {
+			"type": "array",
+			"uniqueItems": true,
+			"items": {
+				"enum": [
+					"booking_offer",
+					"booking_accepted",
+					"contact_consent_granted",
+					"booking_confirmation",
+					"qualification_consent_request",
+					"qualification_consent_granted",
+					"qualification_consent_declined",
+					"qualification_question",
+					"clear_refusal"
+				]
+			}
+		},
+		"claimRefs": {
+			"type": "array",
+			"uniqueItems": true,
+			"items": { "type": "string" }
+		},
+		"name": { "type": "string" },
+		"callId": { "type": "string" },
+		"ok": { "type": "boolean" },
+		"replayed": { "type": "boolean" },
+		"bookingId": { "type": "string" },
+		"status": { "type": "string" },
+		"service": { "type": "string" },
+		"payload": {}
+	},
+	"allOf": [
+		{
+			"if": { "properties": { "type": { "const": "message" } } },
+			"then": { "required": ["role", "text"] }
+		},
+		{
+			"if": { "properties": { "type": { "const": "tts_input" } } },
+			"then": { "required": ["text"] }
+		},
+		{
+			"if": { "properties": { "type": { "const": "stage" } } },
+			"then": { "required": ["stage"] }
+		},
+		{
+			"if": { "properties": { "type": { "const": "tool_call" } } },
+			"then": { "required": ["name", "callId"] }
+		},
+		{
+			"if": { "properties": { "type": { "const": "tool_result" } } },
+			"then": { "required": ["name", "callId", "ok"] }
+		},
+		{
+			"if": {
+				"properties": {
+					"type": { "const": "tool_call" },
+					"name": { "const": "append_booking_qualification" }
+				},
+				"required": ["type", "name"]
+			},
+			"then": { "required": ["bookingId"] }
+		},
+		{
+			"if": { "properties": { "type": { "const": "domain_event" } } },
+			"then": { "required": ["name", "callId", "bookingId"] }
+		},
+		{
+			"if": { "properties": { "type": { "const": "provider_event" } } },
+			"then": { "required": ["service", "status"] }
+		},
+		{
+			"if": { "properties": { "type": { "const": "transport" } } },
+			"then": { "required": ["status"] }
+		}
+	]
+}

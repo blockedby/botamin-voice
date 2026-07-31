@@ -1,0 +1,136 @@
+{
+	"schemaVersion": 1,
+	"controls": [
+		{
+			"id": "prebooking-qualification",
+			"scenarioId": "post-booking-one-answer",
+			"file": "prebooking-qualification.jsonl",
+			"expectedCriticalCodes": ["qualification_before_booking"]
+		},
+		{
+			"id": "duplicate-booking-event",
+			"scenarioId": "notifier-outage-booking-persists",
+			"file": "duplicate-booking-event.jsonl",
+			"expectedCriticalCodes": ["duplicate_booking"]
+		},
+		{
+			"id": "detector-fabricated_price",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "fabricated_price.jsonl",
+			"detectorCode": "fabricated_price",
+			"expectedCriticalCodes": ["fabricated_price"]
+		},
+		{
+			"id": "detector-unsupported_guarantee",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "unsupported_guarantee.jsonl",
+			"detectorCode": "unsupported_guarantee",
+			"expectedCriticalCodes": ["unsupported_guarantee"]
+		},
+		{
+			"id": "detector-calendar_claim",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "calendar_claim.jsonl",
+			"detectorCode": "calendar_claim",
+			"expectedCriticalCodes": ["calendar_claim"]
+		},
+		{
+			"id": "detector-unsupported_contact_promise",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "unsupported_contact_promise.jsonl",
+			"detectorCode": "unsupported_contact_promise",
+			"expectedCriticalCodes": ["unsupported_contact_promise"]
+		},
+		{
+			"id": "detector-unsupported_integration",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "unsupported_integration.jsonl",
+			"detectorCode": "unsupported_integration",
+			"expectedCriticalCodes": ["unsupported_integration"]
+		},
+		{
+			"id": "detector-human_impersonation",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "human_impersonation.jsonl",
+			"detectorCode": "human_impersonation",
+			"expectedCriticalCodes": ["human_impersonation"]
+		},
+		{
+			"id": "detector-system_prompt_disclosure",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "system_prompt_disclosure.jsonl",
+			"detectorCode": "system_prompt_disclosure",
+			"expectedCriticalCodes": ["system_prompt_disclosure"]
+		},
+		{
+			"id": "detector-secret_disclosure",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "secret_disclosure.jsonl",
+			"detectorCode": "secret_disclosure",
+			"expectedCriticalCodes": ["secret_disclosure"]
+		},
+		{
+			"id": "detector-provider_detail_disclosure",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "provider_detail_disclosure.jsonl",
+			"detectorCode": "provider_detail_disclosure",
+			"expectedCriticalCodes": ["provider_detail_disclosure"]
+		},
+		{
+			"id": "detector-pii_email_to_speech",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "pii_email_to_speech.jsonl",
+			"detectorCode": "pii_email_to_speech",
+			"expectedCriticalCodes": ["pii_email_to_speech"]
+		},
+		{
+			"id": "detector-pii_telegram_to_speech",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "pii_telegram_to_speech.jsonl",
+			"detectorCode": "pii_telegram_to_speech",
+			"expectedCriticalCodes": ["pii_telegram_to_speech"]
+		},
+		{
+			"id": "detector-pii_phone_to_speech",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "pii_phone_to_speech.jsonl",
+			"detectorCode": "pii_phone_to_speech",
+			"expectedCriticalCodes": ["pii_phone_to_speech"]
+		},
+		{
+			"id": "detector-raw_url_to_speech",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "raw_url_to_speech.jsonl",
+			"detectorCode": "raw_url_to_speech",
+			"expectedCriticalCodes": ["raw_url_to_speech"]
+		},
+		{
+			"id": "detector-internal_id_to_speech",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "internal_id_to_speech.jsonl",
+			"detectorCode": "internal_id_to_speech",
+			"expectedCriticalCodes": ["internal_id_to_speech"]
+		},
+		{
+			"id": "detector-tool_name_to_speech",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "tool_name_to_speech.jsonl",
+			"detectorCode": "tool_name_to_speech",
+			"expectedCriticalCodes": ["tool_name_to_speech"]
+		},
+		{
+			"id": "detector-tool_json_to_speech",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "tool_json_to_speech.jsonl",
+			"detectorCode": "tool_json_to_speech",
+			"expectedCriticalCodes": ["tool_json_to_speech"]
+		},
+		{
+			"id": "detector-system_payload_to_speech",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "system_payload_to_speech.jsonl",
+			"detectorCode": "system_payload_to_speech",
+			"expectedCriticalCodes": ["system_payload_to_speech"]
+		}
+	]
+}

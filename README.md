@@ -11,6 +11,23 @@
 
 Нужно сделать full-stack сайт Botamin с браузерным голосовым AI-продавцом. Пользователь говорит в микрофон, xAI Streaming STT превращает речь в текст, Codex app-server с моделью `gpt-5.6-luna` формирует решение и реплику, xAI Streaming TTS озвучивает ответ. Агент продаёт конкретный продукт Botamin, обрабатывает вопросы и возражения, **сначала** создаёт внутреннюю бронь через backend-tool, а **затем опционально** дополняет эту же бронь квалификацией. Реальный календарь или CRM не подключаются. Промпты и knowledge base хранятся в Markdown и компилируются в изолированный runtime `AGENTS.md`. Всё поднимается одним `docker compose` на одной дешёвой VPS.
 
+## Локальная настройка доступов
+
+```bash
+cp .env.example .env
+```
+
+1. **xAI:** создайте аккаунт и API key по [официальному quickstart](https://docs.x.ai/developers/quickstart), при необходимости пополните баланс, затем запишите ключ в `.env` как `XAI_API_KEY=...`.
+2. **Codex subscription:** выполните вход через ChatGPT, без OpenAI API key:
+
+   ```bash
+   mkdir -p .runtime/codex-home
+   CODEX_HOME="$PWD/.runtime/codex-home" codex login --device-auth
+   CODEX_HOME="$PWD/.runtime/codex-home" codex login status
+   ```
+
+Для локальной версии `NOTIFIER=console`; webhook-поля можно оставить пустыми. Не коммитьте `.env` или `.runtime/`.
+
 ## Неподвижные инварианты
 
 1. `booking.created` происходит до постквалификации.

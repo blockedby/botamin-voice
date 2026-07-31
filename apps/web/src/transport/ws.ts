@@ -11,6 +11,13 @@ import { decodeAndPairServerSegment, encodeClientPcmFrame } from "./binary";
 
 const WEB_SOCKET_OPEN = 1;
 
+type AudioSegmentEvent = Extract<ServerWsEvent, { type: "audio.segment" }>;
+
+interface PendingServerSegment {
+	event: AudioSegmentEvent;
+	suppressDelivery: boolean;
+}
+
 export interface WebSocketLike {
 	readonly readyState: number;
 	binaryType?: BinaryType;
@@ -65,7 +72,8 @@ export class VoiceTransport {
 	private resumeToken: string | null;
 	private clientSequence = 0;
 	private lastServerSequence = 0;
-	private pendingMetadata: AudioSegmentMetadata | null = null;
+	private pendingSegment: PendingServerSegment | null = null;
+	private readonly incompleteAudioSequences = new Set<number>();
 	private reconnectHandle: unknown = null;
 	private reconnectAttempt = 0;
 	private connectionEpoch = 0;
@@ -116,7 +124,8 @@ export class VoiceTransport {
 			if (!this.isCurrentSocket(socket, epoch)) return;
 			this.socket = null;
 			this.sessionReady = false;
-			this.pendingMetadata = null;
+			// Keep the incomplete sequence uncheckpointed so its replay can pair.
+			this.pendingSegment = null;
 			if (this.utteranceHasAudio && !this.utteranceCommitted) {
 				this.utteranceHasAudio = false;
 				this.utteranceNeedsRestart = true;
@@ -205,7 +214,8 @@ export class VoiceTransport {
 		if (this.canSend()) this.sendClientEvent("session.stop", { reason });
 		this.stopped = true;
 		this.sessionReady = false;
-		this.pendingMetadata = null;
+		this.pendingSegment = null;
+		this.incompleteAudioSequences.clear();
 		this.cancelReconnect();
 		const socket = this.socket;
 		this.socket = null;
@@ -241,8 +251,8 @@ export class VoiceTransport {
 	}
 
 	private receiveJson(raw: string): void {
-		if (this.pendingMetadata !== null) {
-			this.pendingMetadata = null;
+		if (this.pendingSegment !== null) {
+			this.pendingSegment = null;
 			this.reportProtocolError(
 				new Error("audio.segment metadata was not followed by a binary frame"),
 			);
@@ -264,8 +274,17 @@ export class VoiceTransport {
 			this.reportProtocolError(new Error("Server event conversation mismatch"));
 			return;
 		}
+
+		if (event.type === "audio.segment") {
+			const incomplete = this.incompleteAudioSequences.has(event.seq);
+			const suppressDelivery =
+				event.seq <= this.lastServerSequence && !incomplete;
+			if (!suppressDelivery) this.rememberIncompleteAudio(event.seq);
+			this.pendingSegment = { event, suppressDelivery };
+			return;
+		}
 		if (event.seq <= this.lastServerSequence) {
-			// Resume replays are harmless and must not duplicate state/audio effects.
+			// Resume replays are harmless and must not duplicate state effects.
 			return;
 		}
 		this.lastServerSequence = event.seq;
@@ -281,29 +300,37 @@ export class VoiceTransport {
 			this.utteranceHasAudio = false;
 			this.utteranceNeedsRestart = false;
 		}
-		if (event.type === "audio.segment") {
-			this.pendingMetadata = event.payload;
-		}
 		this.options.onEvent?.(event);
 	}
 
 	private receiveBinary(rawFrame: Uint8Array): void {
-		const metadata = this.pendingMetadata;
-		this.pendingMetadata = null;
-		if (!metadata) {
+		const pending = this.pendingSegment;
+		this.pendingSegment = null;
+		if (!pending) {
 			this.reportProtocolError(
 				new Error("Binary audio frame has no adjacent audio.segment metadata"),
 			);
 			return;
 		}
+
+		let bytes: Uint8Array;
 		try {
-			const bytes = decodeAndPairServerSegment(metadata, rawFrame);
-			this.options.onAudio?.(metadata, bytes);
+			bytes = decodeAndPairServerSegment(pending.event.payload, rawFrame);
 		} catch (error) {
 			this.reportProtocolError(
 				toError(error, "Invalid server audio segment pairing"),
 			);
+			return;
 		}
+		if (pending.suppressDelivery) return;
+
+		this.incompleteAudioSequences.delete(pending.event.seq);
+		this.lastServerSequence = Math.max(
+			this.lastServerSequence,
+			pending.event.seq,
+		);
+		this.options.onEvent?.(pending.event);
+		this.options.onAudio?.(pending.event.payload, bytes);
 	}
 
 	private sendHello(): void {
@@ -382,6 +409,13 @@ export class VoiceTransport {
 		if (this.reconnectHandle === null) return;
 		this.scheduler.cancel(this.reconnectHandle);
 		this.reconnectHandle = null;
+	}
+
+	private rememberIncompleteAudio(sequence: number): void {
+		this.incompleteAudioSequences.add(sequence);
+		if (this.incompleteAudioSequences.size <= 256) return;
+		const oldest = this.incompleteAudioSequences.values().next().value;
+		if (oldest !== undefined) this.incompleteAudioSequences.delete(oldest);
 	}
 
 	private reportProtocolError(error: Error): void {

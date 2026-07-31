@@ -62,7 +62,7 @@ function playbackHarness(
 }
 
 describe("complete MP3 phrase playback", () => {
-	test("decodes and plays three complete segments in order with a two-slot bound", async () => {
+	test("accepts a one-shot third segment through a bounded handoff and plays in order", async () => {
 		const harness = playbackHarness();
 		const started: number[] = [];
 		const queue = new PhrasePlaybackQueue(harness.apis, {
@@ -70,15 +70,19 @@ describe("complete MP3 phrase playback", () => {
 		});
 		queue.beginGeneration(generationId);
 
-		expect(await queue.enqueue(segment(10))).toBe(true);
-		expect(await queue.enqueue(segment(11))).toBe(true);
+		const first = queue.enqueue(segment(10));
+		const second = queue.enqueue(segment(11));
+		const third = queue.enqueue(segment(12));
+		await Promise.all([first, second]);
+		expect(await queue.enqueue(segment(13))).toBe(false);
+
 		expect(queue.bufferedSegmentCount).toBe(2);
-		expect(await queue.enqueue(segment(12))).toBe(false);
+		expect(queue.pendingHandoffCount).toBe(1);
+		expect(harness.decodedSizes).toEqual([789, 789]);
 
 		harness.sources[0]?.finish();
-		expect(started).toEqual([10, 11]);
-		expect(queue.bufferedSegmentCount).toBe(1);
-		expect(await queue.enqueue(segment(12))).toBe(true);
+		expect(await third).toBe(true);
+		expect(queue.pendingHandoffCount).toBe(0);
 		expect(queue.bufferedSegmentCount).toBe(2);
 
 		harness.sources[1]?.finish();
@@ -86,6 +90,33 @@ describe("complete MP3 phrase playback", () => {
 		expect(started).toEqual([10, 11, 12]);
 		expect(harness.decodedSizes).toEqual([789, 789, 789]);
 		expect(queue.bufferedSegmentCount).toBe(0);
+	});
+
+	test("starts a delayed prefetch decode when the current source already ended", async () => {
+		const decodes: Array<{ resolve(value: number): void }> = [];
+		const harness = playbackHarness(
+			() =>
+				new Promise<number>((resolve) => {
+					decodes.push({ resolve });
+				}),
+		);
+		const started: number[] = [];
+		const queue = new PhrasePlaybackQueue(harness.apis, {
+			onStarted: (value) => started.push(value.sequence),
+		});
+		queue.beginGeneration(generationId);
+
+		const first = queue.enqueue(segment(0));
+		decodes[0]?.resolve(100);
+		expect(await first).toBe(true);
+		const second = queue.enqueue(segment(1));
+		harness.sources[0]?.finish();
+		expect(started).toEqual([0]);
+
+		decodes[1]?.resolve(101);
+		expect(await second).toBe(true);
+		expect(started).toEqual([0, 1]);
+		expect(harness.sources[1]?.started).toBe(true);
 	});
 
 	test("rejects malformed MP3, metadata mismatch, duplicate/out-of-order, and stale generations", async () => {
@@ -159,11 +190,15 @@ describe("complete MP3 phrase playback", () => {
 		queue.beginGeneration(generationId);
 		await queue.enqueue(segment(0));
 		await queue.enqueue(segment(1));
+		const handedOff = queue.enqueue(segment(2));
+		expect(queue.pendingHandoffCount).toBe(1);
 
 		expect(queue.bargeIn()).toBe(generationId);
+		expect(await handedOff).toBe(false);
 		expect(harness.sources[0]?.stopped).toBe(true);
 		expect(queue.bufferedSegmentCount).toBe(0);
-		expect(await queue.enqueue(segment(2))).toBe(false);
+		expect(queue.pendingHandoffCount).toBe(0);
+		expect(await queue.enqueue(segment(3))).toBe(false);
 	});
 
 	test("drops a decode result that resolves after its generation was superseded", async () => {

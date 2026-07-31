@@ -11,6 +11,11 @@ import {
 	createDeterministicWavFixture,
 	parseMonoPcm16Wav,
 } from "../../../../packages/test-fixtures/src";
+import {
+	type AudioPlaybackApis,
+	PhrasePlaybackQueue,
+	type PlaybackSourceLike,
+} from "../audio/playback";
 import type { ReconnectScheduler, WebSocketLike } from "./ws";
 import { VoiceTransport } from "./ws";
 
@@ -51,6 +56,18 @@ class FakeSocket implements WebSocketLike {
 	disconnect(): void {
 		this.readyState = 3;
 		this.onclose?.();
+	}
+}
+
+class FakePlaybackSource implements PlaybackSourceLike {
+	onended: (() => void) | null = null;
+	started = false;
+	start(): void {
+		this.started = true;
+	}
+	stop(): void {}
+	finish(): void {
+		this.onended?.();
 	}
 }
 
@@ -113,7 +130,10 @@ function audioSegment(seq: number, binarySequence: number, byteLength: number) {
 		type: "audio.segment",
 		payload: {
 			generationId,
-			segmentId,
+			segmentId:
+				binarySequence === 0
+					? segmentId
+					: `01J${String(binarySequence + 5).padStart(23, "0")}`,
 			sequence: binarySequence,
 			contentType: "audio/mpeg",
 			byteLength,
@@ -308,6 +328,125 @@ describe("voice WebSocket transport", () => {
 		expect(transport.currentResumeToken).toBe("resume-token-new-0002");
 		expect(statuses).toContain("reconnecting");
 		expect(transport.isReady).toBe(true);
+	});
+
+	test("replays a metadata/binary pair exactly once after disconnect between frames", () => {
+		const sockets: FakeSocket[] = [];
+		const scheduler = new FakeScheduler();
+		const received: number[] = [];
+		const events: string[] = [];
+		const errors: string[] = [];
+		const transport = new VoiceTransport({
+			conversationId,
+			url: "ws://local",
+			createWebSocket: () => {
+				const socket = new FakeSocket();
+				sockets.push(socket);
+				return socket;
+			},
+			scheduler,
+			onEvent: (event) => events.push(`${event.type}:${event.seq}`),
+			onAudio: (metadata) => received.push(metadata.sequence),
+			onProtocolError: (error) => errors.push(error.message),
+		});
+		const mp3 = createDeterministicMp3Fixture();
+		const metadata = audioSegment(2, 42, mp3.byteLength);
+		const binary = encodeBinaryAudioFrame({
+			kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+			sequence: 42,
+			payload: mp3,
+		});
+
+		transport.connect();
+		sockets[0]?.open();
+		sockets[0]?.serverJson(sessionReady(1, "resume-token-atomic-1"));
+		sockets[0]?.serverJson(metadata);
+		expect(events).toEqual(["session.ready:1"]);
+		sockets[0]?.disconnect();
+
+		scheduler.runNext();
+		sockets[1]?.open();
+		sockets[1]?.serverJson(sessionReady(3, "resume-token-atomic-2"));
+		sockets[1]?.serverJson(metadata);
+		sockets[1]?.serverBinary(binary);
+		expect(received).toEqual([42]);
+		expect(events).toEqual([
+			"session.ready:1",
+			"session.ready:3",
+			"audio.segment:2",
+		]);
+
+		// A server replay after the completed pair is consumed but not redelivered.
+		sockets[1]?.serverJson(metadata);
+		sockets[1]?.serverBinary(binary);
+		expect(received).toEqual([42]);
+		expect(errors).toEqual([]);
+	});
+
+	test("hands three one-shot WS segments to bounded playback without dropping one", async () => {
+		const socket = new FakeSocket();
+		const sources: FakePlaybackSource[] = [];
+		const decodedSequences: number[] = [];
+		const started: number[] = [];
+		const accepted: Array<Promise<boolean>> = [];
+		const playbackApis: AudioPlaybackApis<number> = {
+			decodeAudioData: async (bytes) => {
+				decodedSequences.push(bytes.byteLength);
+				return bytes.byteLength;
+			},
+			createSource: () => {
+				const source = new FakePlaybackSource();
+				sources.push(source);
+				return source;
+			},
+		};
+		const playback = new PhrasePlaybackQueue(playbackApis, {
+			onStarted: (value) => started.push(value.sequence),
+		});
+		playback.beginGeneration(generationId);
+		const transport = new VoiceTransport({
+			conversationId,
+			url: "ws://local",
+			createWebSocket: () => socket,
+			onAudio: (metadata, bytes) => {
+				accepted.push(playback.enqueue({ ...metadata, bytes }));
+			},
+		});
+		transport.connect();
+		socket.open();
+		socket.serverJson(sessionReady());
+		const mp3 = createDeterministicMp3Fixture();
+
+		for (const [eventSequence, audioSequence] of [
+			[2, 10],
+			[3, 11],
+			[4, 12],
+		] as const) {
+			socket.serverJson(
+				audioSegment(eventSequence, audioSequence, mp3.byteLength),
+			);
+			socket.serverBinary(
+				encodeBinaryAudioFrame({
+					kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+					sequence: audioSequence,
+					payload: mp3,
+				}),
+			);
+		}
+
+		expect(accepted).toHaveLength(3);
+		await Promise.all(accepted.slice(0, 2));
+		expect(playback.bufferedSegmentCount).toBe(2);
+		expect(playback.pendingHandoffCount).toBe(1);
+		expect(decodedSequences).toHaveLength(2);
+
+		sources[0]?.finish();
+		expect(await accepted[2]).toBe(true);
+		sources[1]?.finish();
+		sources[2]?.finish();
+		expect(started).toEqual([10, 11, 12]);
+		expect(decodedSequences).toHaveLength(3);
+		expect(playback.bufferedSegmentCount).toBe(0);
 	});
 
 	test("requires an explicit fresh utterance after reconnect drops uncommitted PCM", () => {

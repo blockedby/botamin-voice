@@ -154,8 +154,17 @@ export class VoiceSessionController {
 		) {
 			return false;
 		}
-		if (!sendCommit()) return false;
+		// Reserve before the transport callback so a synchronous duplicate cannot race.
 		this.awaitingFinal = true;
+		try {
+			if (!sendCommit()) {
+				this.awaitingFinal = false;
+				return false;
+			}
+		} catch (error) {
+			this.awaitingFinal = false;
+			throw error;
+		}
 		this.apply({ type: "processing" });
 		return true;
 	}
@@ -164,7 +173,7 @@ export class VoiceSessionController {
 		if (this.stopped) return false;
 		switch (event.type) {
 			case "session.ready":
-				this.beginListening();
+				if (!this.awaitingFinal) this.beginListening();
 				return true;
 			case "transcript.final":
 				return this.acceptFinal(event.payload.turnId, event.payload.text);

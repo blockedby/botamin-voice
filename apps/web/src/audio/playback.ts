@@ -28,10 +28,16 @@ interface PlayingSlot<TDecoded> extends DecodedSlot<TDecoded> {
 	source: PlaybackSourceLike;
 }
 
+interface HandoffSlot {
+	segment: CompletePlaybackSegment;
+	epoch: number;
+	resolve(accepted: boolean): void;
+}
+
 /**
- * Ordered complete-MP3 player. Capacity is strictly one playing/starting slot
- * and one decoded/decoding prefetch slot; excess input is rejected for
- * upstream backpressure rather than buffered without a bound.
+ * Ordered complete-MP3 player. Capacity is strictly one playing/starting slot,
+ * one decoded/decoding prefetch slot, and one raw awaitable transport handoff;
+ * further input is rejected instead of growing the decoded queue.
  */
 export class PhrasePlaybackQueue<TDecoded = unknown> {
 	private generationId: string | null = null;
@@ -40,6 +46,7 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 	private starting: CompletePlaybackSegment | null = null;
 	private prefetched: DecodedSlot<TDecoded> | null = null;
 	private prefetching: CompletePlaybackSegment | null = null;
+	private handoff: HandoffSlot | null = null;
 	private epoch = 0;
 	private muted = false;
 
@@ -76,7 +83,6 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 			this.fail(new Error("Complete audio segment is not valid MP3"), segment);
 			return false;
 		}
-
 		if (
 			this.lastAcceptedSequence !== null &&
 			segment.sequence <= this.lastAcceptedSequence
@@ -87,7 +93,9 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 		const playingOccupied = this.playing !== null || this.starting !== null;
 		const prefetchOccupied =
 			this.prefetched !== null || this.prefetching !== null;
-		if (playingOccupied && prefetchOccupied) return false;
+		if (playingOccupied && prefetchOccupied && this.handoff !== null) {
+			return false;
+		}
 
 		const isolated: CompletePlaybackSegment = {
 			...segment,
@@ -96,35 +104,17 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 		this.lastAcceptedSequence = segment.sequence;
 		const epoch = this.epoch;
 
+		if (playingOccupied && prefetchOccupied) {
+			return new Promise<boolean>((resolve) => {
+				this.handoff = { segment: isolated, epoch, resolve };
+			});
+		}
 		if (!playingOccupied) {
 			this.starting = isolated;
-			try {
-				const decoded = await this.decode(isolated);
-				if (!this.isCurrent(isolated, epoch) || this.starting !== isolated) {
-					return false;
-				}
-				this.starting = null;
-				return this.startPlaying({ segment: isolated, decoded }, epoch);
-			} catch (error) {
-				if (this.isCurrent(isolated, epoch))
-					this.fail(toError(error), isolated);
-				return false;
-			}
+		} else {
+			this.prefetching = isolated;
 		}
-
-		this.prefetching = isolated;
-		try {
-			const decoded = await this.decode(isolated);
-			if (!this.isCurrent(isolated, epoch) || this.prefetching !== isolated) {
-				return false;
-			}
-			this.prefetching = null;
-			this.prefetched = { segment: isolated, decoded };
-			return true;
-		} catch (error) {
-			if (this.isCurrent(isolated, epoch)) this.fail(toError(error), isolated);
-			return false;
-		}
+		return this.decodeReserved(isolated, epoch);
 	}
 
 	/** Immediate local barge-in: stop, clear, and make the generation stale. */
@@ -158,9 +148,49 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 		);
 	}
 
+	/** Raw transport handoff is separate from the two decoded/decoding slots. */
+	get pendingHandoffCount(): number {
+		return this.handoff === null ? 0 : 1;
+	}
+
 	private async decode(segment: CompletePlaybackSegment): Promise<TDecoded> {
 		const exactBytes = segment.bytes.slice();
 		return this.apis.decodeAudioData(exactBytes.buffer);
+	}
+
+	private async decodeReserved(
+		segment: CompletePlaybackSegment,
+		epoch: number,
+	): Promise<boolean> {
+		try {
+			const decoded = await this.decode(segment);
+			if (!this.isCurrent(segment, epoch)) return false;
+
+			if (this.starting === segment) {
+				this.starting = null;
+				const started = this.startPlaying({ segment, decoded }, epoch);
+				if (started) this.drainHandoff();
+				return started;
+			}
+			if (this.prefetching !== segment) return false;
+
+			this.prefetching = null;
+			if (this.playing === null && this.starting === null) {
+				const started = this.startPlaying({ segment, decoded }, epoch);
+				if (started) this.drainHandoff();
+				return started;
+			}
+			this.prefetched = { segment, decoded };
+			return true;
+		} catch (error) {
+			if (
+				this.isCurrent(segment, epoch) &&
+				(this.starting === segment || this.prefetching === segment)
+			) {
+				this.fail(toError(error), segment);
+			}
+			return false;
+		}
 	}
 
 	private startPlaying(slot: DecodedSlot<TDecoded>, epoch: number): boolean {
@@ -183,13 +213,46 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 		if (this.playing !== slot) return;
 		this.playing = null;
 		if (!this.isCurrent(slot.segment, epoch)) return;
-		const next = this.prefetched;
-		if (next) {
+
+		if (this.prefetched) {
+			const next = this.prefetched;
 			this.prefetched = null;
-			this.startPlaying(next, epoch);
-			return;
+			if (!this.startPlaying(next, epoch)) return;
+		} else if (this.prefetching) {
+			// Reserve the newly empty playing slot for the earlier pending decode.
+			this.starting = this.prefetching;
+			this.prefetching = null;
 		}
-		if (this.generationId) this.callbacks.onIdle?.(this.generationId);
+		this.drainHandoff();
+		if (
+			this.playing === null &&
+			this.starting === null &&
+			this.prefetched === null &&
+			this.prefetching === null &&
+			this.handoff === null &&
+			this.generationId
+		) {
+			this.callbacks.onIdle?.(this.generationId);
+		}
+	}
+
+	private drainHandoff(): void {
+		const handoff = this.handoff;
+		if (!handoff || handoff.epoch !== this.epoch) return;
+		const playingOccupied = this.playing !== null || this.starting !== null;
+		const prefetchOccupied =
+			this.prefetched !== null || this.prefetching !== null;
+		if (playingOccupied && prefetchOccupied) return;
+
+		this.handoff = null;
+		if (!playingOccupied) {
+			this.starting = handoff.segment;
+		} else {
+			this.prefetching = handoff.segment;
+		}
+		void this.decodeReserved(handoff.segment, handoff.epoch).then(
+			handoff.resolve,
+		);
 	}
 
 	private isCurrent(segment: CompletePlaybackSegment, epoch: number): boolean {
@@ -210,10 +273,13 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 	private clearSlots(): void {
 		this.epoch += 1;
 		const source = this.playing?.source;
+		const handoff = this.handoff;
 		this.playing = null;
 		this.starting = null;
 		this.prefetched = null;
 		this.prefetching = null;
+		this.handoff = null;
+		handoff?.resolve(false);
 		if (source) {
 			source.onended = null;
 			try {

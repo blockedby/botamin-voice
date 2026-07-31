@@ -70,6 +70,64 @@ describe("final-only voice state", () => {
 		).toBe(false);
 	});
 
+	test("keeps a pending final processing across session.ready and suppresses duplicate commit", () => {
+		const controller = new VoiceSessionController();
+		controller.beginListening();
+		let sends = 0;
+		const nestedResults: boolean[] = [];
+		expect(
+			controller.commit(() => {
+				sends += 1;
+				nestedResults.push(
+					controller.commit(() => {
+						sends += 1;
+						return true;
+					}),
+				);
+				return true;
+			}),
+		).toBe(true);
+		expect(nestedResults).toEqual([false]);
+
+		expect(
+			controller.acceptEvent(
+				serverEvent(
+					"session.ready",
+					{
+						state: "GREETING",
+						resumeToken: "resume-token-0001",
+						clientConfig: {
+							inputSampleRate: 16_000,
+							inputEncoding: "pcm16le",
+							chunkMs: 100,
+							outputContentType: "audio/mpeg",
+							outputMode: "complete-phrase-segments",
+						},
+					},
+					2,
+				),
+			),
+		).toBe(true);
+		expect(controller.state.status).toBe("processing");
+		expect(controller.hasPendingCommit).toBe(true);
+		expect(
+			controller.commit(() => {
+				sends += 1;
+				return true;
+			}),
+		).toBe(false);
+		expect(sends).toBe(1);
+
+		const finalEvent = serverEvent(
+			"transcript.final",
+			{ turnId, text: "Финал после повторной готовности" },
+			3,
+		);
+		expect(controller.acceptEvent(finalEvent)).toBe(true);
+		expect(controller.acceptEvent(finalEvent)).toBe(false);
+		expect(controller.hasPendingCommit).toBe(false);
+	});
+
 	test("does not enter processing when transport rejects commit", () => {
 		const controller = new VoiceSessionController();
 		controller.beginListening();

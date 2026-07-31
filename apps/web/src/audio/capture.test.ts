@@ -63,6 +63,7 @@ function createCaptureHarness(sampleRate = 48_000, hasWorklet = true) {
 	const revoked: string[] = [];
 	return {
 		track,
+		stream,
 		node,
 		source,
 		get contextClosed() {
@@ -155,6 +156,58 @@ describe("PCM capture and resampling", () => {
 		expect(harness.source.disconnected).toBe(true);
 		expect(harness.contextClosed).toBe(true);
 		await expect(capture.start()).rejects.toThrow("single-utterance");
+	});
+
+	test("stop during permission prompt releases a stream that resolves late", async () => {
+		const harness = createCaptureHarness();
+		let resolvePermission: (stream: CaptureStreamLike) => void = () =>
+			undefined;
+		const permission = new Promise<CaptureStreamLike>((resolve) => {
+			resolvePermission = resolve;
+		});
+		const capture = new AudioWorkletCapture({
+			apis: {
+				...harness.apis,
+				getUserMedia: async () => permission,
+			},
+			onFrame: () => undefined,
+		});
+
+		const starting = capture.start();
+		await capture.stop();
+		resolvePermission(harness.stream);
+		await expect(starting).rejects.toThrow("cancelled");
+		expect(capture.isActive).toBe(false);
+		expect(harness.track.stopped).toBe(true);
+		expect(harness.contextClosed).toBe(false);
+	});
+
+	test("stop during worklet initialization closes acquired media and context", async () => {
+		const harness = createCaptureHarness();
+		let finishModule: () => void = () => undefined;
+		const moduleGate = new Promise<void>((resolve) => {
+			finishModule = resolve;
+		});
+		const context = harness.apis.createAudioContext();
+		if (!context.audioWorklet) throw new Error("test worklet missing");
+		context.audioWorklet.addModule = async () => moduleGate;
+		const capture = new AudioWorkletCapture({
+			apis: {
+				...harness.apis,
+				createAudioContext: () => context,
+			},
+			onFrame: () => undefined,
+		});
+
+		const starting = capture.start();
+		await Promise.resolve();
+		await Promise.resolve();
+		await capture.stop();
+		expect(harness.track.stopped).toBe(true);
+		expect(harness.contextClosed).toBe(true);
+		finishModule();
+		await expect(starting).rejects.toThrow("cancelled");
+		expect(capture.isActive).toBe(false);
 	});
 
 	test("stops before a byte limit and emits only the bounded final frame", async () => {

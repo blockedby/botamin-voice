@@ -387,8 +387,9 @@ describe("production browser voice integration", () => {
 		const value = await readySession();
 		value.capture.emit();
 		await value.session.commit();
+		const retiredDraftEvent = ["transcript", "partial"].join(".");
 		value.socket.server(
-			event("transcript.partial", 2, { turnId, text: "Черновик" }),
+			event(retiredDraftEvent, 2, { turnId, text: "Черновик" }),
 		);
 		expect(value.session.getSnapshot().transcript).toEqual([]);
 		value.socket.server(

@@ -372,8 +372,14 @@ LLM не может напрямую записать произвольный n
 
 # Local application
 APP_ORIGIN=http://localhost:5173
+AUTO_MIGRATE=true
 DATABASE_URL=file:./data/app.db
 LOG_LEVEL=info
+MAX_ACTIVE_CONVERSATIONS=3
+MAX_CONCURRENT_BRAIN_TURNS=3
+MAX_PENDING_BRAIN_TURNS=6
+SESSION_MAX_MINUTES=20
+TURN_TIMEOUT_MS=45000
 
 # Codex subscription brain
 # Authentication is performed separately with `codex login --device-auth`.
@@ -382,7 +388,8 @@ BRAIN_PROVIDER=codex-subscription
 CODEX_MODEL=gpt-5.6-luna
 CODEX_EFFORT=low
 CODEX_HOME=/home/your-user/.local/share/botamin-voice/codex-home
-CODEX_TOOL_MODE=dynamic
+# Safe without an injected backend executor; the orchestrator may explicitly select dynamic.
+CODEX_TOOL_MODE=envelope
 CODEX_CWD=.runtime/brain
 CODEX_MAX_CONCURRENT_TURNS=3
 

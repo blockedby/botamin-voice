@@ -1,0 +1,38 @@
+{
+	admin off
+	grace_period 10s
+}
+
+# Internal-only Caddy liveness endpoint. It remains HTTP even when SITE_ADDRESS
+# enables automatic public HTTPS.
+http://127.0.0.1:2019 {
+	respond /health/caddy "ok" 200
+}
+
+# Local default: SITE_ADDRESS=:80 and host access through localhost:5173.
+# Production: set SITE_ADDRESS to the public DNS name and map host 80/443;
+# Caddy then provisions TLS and proxies WebSocket upgrades automatically.
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	header {
+		-Server
+		Content-Security-Policy "default-src 'self'; connect-src 'self' wss: ws:; img-src 'self' data:; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+		Permissions-Policy "microphone=(self), camera=(), geolocation=()"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+
+	reverse_proxy app:3000 {
+		health_uri /health/live
+		health_interval 15s
+		health_timeout 3s
+		lb_try_duration 5s
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

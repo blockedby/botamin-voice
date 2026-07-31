@@ -150,7 +150,7 @@ const HEADING_LEVELS: Partial<Record<string, readonly number[]>> = {
 };
 
 const SECRET_PATTERNS = [
-  /(?:api[_ -]?key|access[_ -]?token|client[_ -]?secret|webhook[_ -]?secret)\s*[:=]/iu,
+  /["']?(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|client[_ -]?secret|webhook[_ -]?secret)["']?\s*[:=]/iu,
   /\b(?:sk|xai)-[a-z0-9_-]{12,}\b/iu,
   /\bBearer\s+[a-z0-9._-]{12,}/iu,
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/u,
@@ -158,6 +158,8 @@ const SECRET_PATTERNS = [
 ];
 const CURRENCY_PRICE =
   /(?:[$€£₽]\s*\d|\d\s*(?:₽|руб(?:\.?|лей)|USD|EUR|RUB)\b|\b(?:USD|EUR|RUB)\s*\d)/iu;
+const RUSSIAN_MAGNITUDE_PRICE =
+  /\b\d[\d ]*(?:[.,]\d+)?\s+(?:тыс\.?|тысяч(?:а|и)?|миллион(?:а|ов)?|млн\.?)\s+руб(?:ль|ля|лей)(?!\p{L})/iu;
 
 export interface CompileOptions {
   sourceRoot: string;
@@ -261,7 +263,7 @@ function validateSource(relativePath: string, source: string): string {
   }
   if (SECRET_PATTERNS.some((pattern) => pattern.test(normalized)))
     fail(`${relativePath} contains a secret-like pattern`);
-  if (CURRENCY_PRICE.test(normalized))
+  if (CURRENCY_PRICE.test(normalized) || RUSSIAN_MAGNITUDE_PRICE.test(normalized))
     fail(`${relativePath} contains a hard-coded numeric currency price`);
   if (relativePath === 'prompts/system.md' || relativePath === 'prompts/booking.md') {
     if (!normalized.includes(BOOKING_ORDER_SENTENCE))

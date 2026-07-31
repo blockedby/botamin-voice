@@ -13,7 +13,8 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { after, test } from 'node:test';
 import {
@@ -23,7 +24,10 @@ import {
   PROMPT_ORDER,
 } from '../src/index.js';
 
-const sourceRoot = resolve(process.cwd(), '..', '..');
+const testRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const packageRoot = basename(testRoot) === 'dist' ? dirname(testRoot) : testRoot;
+const sourceRoot = resolve(packageRoot, '..', '..');
+const cliPath = join(packageRoot, 'dist', 'src', 'cli.js');
 const temporaryPaths: string[] = [];
 
 async function temporaryDirectory(prefix: string): Promise<string> {
@@ -167,13 +171,38 @@ test('rejects invalid UTF-8, secret-like assignments, and numeric currency price
     /secret-like pattern/i,
   );
 
-  const price = await fixtureRoot((relativePath, source) =>
-    relativePath === 'prompts/product.md' ? `${source.toString('utf8')}\nPrice: $100` : source,
+  for (const field of ['access_token', 'refresh_token', 'id_token']) {
+    const authJson = await fixtureRoot((relativePath, source) =>
+      relativePath === 'prompts/system.md'
+        ? `${source.toString('utf8')}\n${JSON.stringify({ [field]: 'placeholder-token-value' })}`
+        : source,
+    );
+    await assert.rejects(
+      compilePromptBundle({ sourceRoot: authJson, runtimeDir: await runtimeDirectory() }),
+      /secret-like pattern/i,
+      `must reject quoted ${field} JSON fields`,
+    );
+  }
+
+  for (const priceClaim of ['Price: $100', 'Стоимость пилота: 100 тысяч рублей']) {
+    const price = await fixtureRoot((relativePath, source) =>
+      relativePath === 'prompts/product.md' ? `${source.toString('utf8')}\n${priceClaim}` : source,
+    );
+    await assert.rejects(
+      compilePromptBundle({ sourceRoot: price, runtimeDir: await runtimeDirectory() }),
+      /numeric currency price/i,
+    );
+  }
+
+  const nonPriceMagnitude = await fixtureRoot((relativePath, source) =>
+    relativePath === 'prompts/product.md'
+      ? `${source.toString('utf8')}\nПилот рассчитан на 100 тысяч обращений.`
+      : source,
   );
-  await assert.rejects(
-    compilePromptBundle({ sourceRoot: price, runtimeDir: await runtimeDirectory() }),
-    /numeric currency price/i,
-  );
+  await compilePromptBundle({
+    sourceRoot: nonPriceMagnitude,
+    runtimeDir: await runtimeDirectory(),
+  });
 });
 
 test('requires the booking-before-qualification rule in system and booking prompts', async () => {
@@ -248,7 +277,6 @@ test('refuses source-contained, symlinked, or contaminated runtime directories',
 
 test('CLI emits metadata only and writes the same output contract', async () => {
   const runtime = await runtimeDirectory();
-  const cliPath = resolve(process.cwd(), 'dist/src/cli.js');
   const result = spawnSync(
     process.execPath,
     [cliPath, '--source-root', sourceRoot, '--runtime-dir', runtime],

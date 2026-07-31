@@ -1,0 +1,49 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad="0.25", nodesep="0.26", ranksep="0.75", fontname="DejaVu Sans", label="Зависимости задач и merge gates", labelloc=t, fontsize=20, compound=true];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#30343b", fontname="DejaVu Sans", fontsize=9, margin="0.13,0.08"];
+  edge [color="#4b5563", penwidth=1.0, arrowsize=0.65, fontname="DejaVu Sans", fontsize=7];
+
+  subgraph cluster_w0 { label="Волна 0"; color="#c4c7cc"; style="rounded,dashed";
+    t00 [label="T00\ncontracts + skeleton", penwidth=2.0];
+    t01 [label="T01\nresearch + prompts"];
+  }
+  g0 [shape=diamond, label="G0\ncontracts"];
+
+  subgraph cluster_w1 { label="Волна 1"; color="#c4c7cc"; style="rounded,dashed";
+    t10 [label="T10\nweb voice"];
+    t11 [label="T11\nxAI STT"];
+    t12 [label="T12\nxAI TTS"];
+    t13 [label="T13\nCodex/Luna"];
+    t14 [label="T14\nbooking + DB"];
+    t15 [label="T15\nDocker/ops"];
+  }
+  g1 [shape=diamond, label="G1\nadapters"];
+
+  subgraph cluster_w2 { label="Волна 2"; color="#c4c7cc"; style="rounded,dashed";
+    t20 [label="T20\norchestrator", penwidth=2.0];
+    t21 [label="T21\nlanding + UX"];
+    t22 [label="T22\ncontract tests"];
+  }
+  g2 [shape=diamond, label="G2\nintegration"];
+
+  subgraph cluster_w3 { label="Волна 3"; color="#c4c7cc"; style="rounded,dashed";
+    t30 [label="T30\nfull E2E", penwidth=2.0];
+    t31 [label="T31\nconversation evals"];
+    t32 [label="T32\nhardening"];
+  }
+  g3 [shape=diamond, label="G3\nexternal smoke"];
+  t40 [label="T40\nrelease candidate", penwidth=2.0];
+  g4 [shape=doublecircle, label="G4\nRC"];
+
+  t00 -> g0;
+  t01 -> t20;
+  g0 -> {t10 t11 t12 t13 t14 t15};
+  {t10 t11 t12 t13 t14 t15} -> g1;
+  g1 -> {t20 t21 t22};
+  t01 -> t21;
+  {t20 t21 t22 t15} -> g2;
+  g2 -> t30;
+  t30 -> {t31 t32};
+  {t31 t32} -> g3;
+  g3 -> t40 -> g4;
+}

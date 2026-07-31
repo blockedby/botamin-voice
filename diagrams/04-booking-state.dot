@@ -1,0 +1,26 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad="0.25", nodesep="0.45", ranksep="0.75", fontname="DejaVu Sans", label="Необратимый lifecycle брони", labelloc=t, fontsize=20];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#30343b", fontname="DejaVu Sans", fontsize=11, margin="0.17,0.11"];
+  edge [color="#4b5563", penwidth=1.15, arrowsize=0.75, fontname="DejaVu Sans", fontsize=9];
+
+  none [label="NONE\nбронь отсутствует"];
+  collecting [label="COLLECTING\nминимальные данные"];
+  created [label="CREATED / BOOKED\nbookingId выдан", penwidth=2.1];
+  qualifying [label="QUALIFYING\nопциональные вопросы"];
+  enriched [shape=doublecircle, label="ENRICHED\nqualification complete"];
+  partial [shape=doublecircle, label="PARTIAL\nчастичные данные"];
+  skipped [shape=doublecircle, label="SKIPPED\nотказ / обрыв"];
+
+  none -> collecting [label="booking intent"];
+  collecting -> created [label="create_booking success"];
+  collecting -> none [label="не хватает контакта / отказ", style=dashed];
+  created -> qualifying [label="согласие после подтверждения"];
+  created -> skipped [label="не хочет / завершил"];
+  qualifying -> qualifying [label="append patch", constraint=false];
+  qualifying -> enriched [label="completion=complete"];
+  qualifying -> partial [label="completion=partial"];
+  qualifying -> skipped [label="completion=declined / disconnect"];
+
+  rule [shape=note, label="Инвариант:\nпосле CREATED перехода назад нет;\nошибка qualification не отменяет booking"];
+  created -> rule [style=dotted, arrowhead=none, constraint=false];
+}

@@ -1,0 +1,46 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad="0.25", nodesep="0.35", ranksep="0.75", fontname="DejaVu Sans", label="Conversation state machine", labelloc=t, fontsize=20];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#30343b", fontname="DejaVu Sans", fontsize=10, margin="0.15,0.09"];
+  edge [color="#4b5563", penwidth=1.05, arrowsize=0.7, fontname="DejaVu Sans", fontsize=8];
+
+  start [shape=circle, label="", width=0.25, fixedsize=true, fillcolor="#30343b"];
+  idle [label="IDLE"];
+  connecting [label="CONNECTING"];
+  greeting [label="GREETING"];
+  discovery [label="DISCOVERY"];
+  value [label="VALUE"];
+  objection [label="OBJECTION"];
+  offer [label="BOOKING_OFFER"];
+  collect [label="COLLECT_BOOKING"];
+  booked [label="BOOKED", penwidth=2.0];
+  qualify [label="POST_BOOKING_\nQUALIFICATION"];
+  complete [shape=doublecircle, label="COMPLETE"];
+  declined [shape=doublecircle, label="DECLINED"];
+  disconnected [shape=doublecircle, label="DISCONNECTED"];
+  error [shape=doublecircle, label="ERROR"];
+
+  start -> idle;
+  idle -> connecting [label="start"];
+  connecting -> greeting [label="voice.ready"];
+  greeting -> discovery;
+  discovery -> value [label="pain/use case known"];
+  value -> objection [label="question / concern"];
+  objection -> value [label="resolved", constraint=false];
+  value -> offer [label="fit + intent"];
+  offer -> collect [label="agreed"];
+  offer -> declined [label="clear refusal"];
+  collect -> booked [label="booking.created"];
+  booked -> qualify [label="consent"];
+  booked -> complete [label="skip / disconnect-safe"];
+  qualify -> qualify [label="partial patch", constraint=false];
+  qualify -> complete [label="done / declined"];
+
+  discovery -> declined [label="not relevant", style=dashed];
+  objection -> declined [label="clear refusal", style=dashed];
+  connecting -> error [label="provider fatal", style=dashed];
+  greeting -> disconnected [label="socket closed", style=dashed];
+  discovery -> disconnected [style=dashed];
+  value -> disconnected [style=dashed];
+  collect -> disconnected [label="до create", style=dashed];
+  qualify -> complete [label="обрыв после create", style=dashed];
+}

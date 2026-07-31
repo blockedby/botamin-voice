@@ -1,0 +1,32 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad="0.25", nodesep="0.35", ranksep="0.9", fontname="DejaVu Sans", label="Критический путь одного голосового turn", labelloc=t, fontsize=20];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#30343b", fontname="DejaVu Sans", fontsize=10, margin="0.14,0.09"];
+  edge [color="#4b5563", penwidth=1.1, arrowsize=0.72, fontname="DejaVu Sans", fontsize=8];
+
+  b [label="Browser\nMic / playback"];
+  g [label="Bun WS\ngateway"];
+  s [label="xAI STT"];
+  o [label="Orchestrator"];
+  l [label="Codex + Luna"];
+  d [shape=cylinder, label="Booking DB"];
+  t [label="xAI TTS"];
+
+  b -> g [label="1 · PCM16 ~100 ms", weight=3];
+  g -> s [label="2 · raw binary PCM", weight=3];
+  s -> g [label="3 · partial / speech_final", weight=3];
+  g -> o [label="4 · final user turn", weight=3];
+  o -> l [label="5 · turn/start + compact state", weight=3];
+  l -> o [label="6 · agentMessage delta", weight=3];
+  o -> t [label="7 · завершённая короткая фраза", weight=3];
+  t -> g [label="8 · PCM audio.delta", weight=3];
+  g -> b [label="9 · generationId + PCM", weight=3];
+
+  l -> o [label="tool request", style=dashed, constraint=false];
+  o -> d [label="10 · create / patch", style=dashed, constraint=false];
+  d -> o [label="tool result + event", style=dashed, constraint=false];
+  o -> l [label="tool result", style=dashed, constraint=false];
+
+  b -> o [label="barge-in: stop + interrupt", style=dotted, constraint=false];
+  o -> l [label="turn/interrupt", style=dotted, constraint=false];
+  o -> t [label="cancel utterance", style=dotted, constraint=false];
+}

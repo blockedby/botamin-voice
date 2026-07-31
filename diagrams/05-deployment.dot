@@ -1,0 +1,35 @@
+digraph G {
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.45", ranksep="0.65", fontname="DejaVu Sans", label="Deployment topology · одна VPS", labelloc=t, fontsize=20];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#30343b", fontname="DejaVu Sans", fontsize=10, margin="0.16,0.10"];
+  edge [color="#4b5563", penwidth=1.1, arrowsize=0.75, fontname="DejaVu Sans", fontsize=9];
+
+  internet [shape=ellipse, label="Internet / browser"];
+
+  subgraph cluster_vps {
+    label="Trusted VPS · docker compose";
+    color="#9ca3af"; style="rounded,dashed,filled"; fillcolor="#f8fafc";
+    caddy [label="caddy container\n:80/:443 · TLS"];
+    app [label="app container\nBun server + static React"];
+    codex [shape=component, label="child process\ncodex app-server"];
+    sqlite [shape=cylinder, label="/app/data\nSQLite WAL"];
+    prompts [shape=folder, label="bundled prompts / knowledge\nread-only"];
+    codexhome [shape=cylinder, label="/codex-home\nauth.json · persistent secret"];
+    caddydata [shape=cylinder, label="caddy-data\ncertificates"];
+
+    caddy -> app [label="HTTP/WSS"];
+    app -> codex [dir=both, label="JSONL stdio"];
+    app -> sqlite [dir=both];
+    app -> prompts [label="read"];
+    codex -> codexhome [dir=both, label="auth/cache"];
+    caddy -> caddydata [dir=both];
+  }
+
+  xai [shape=ellipse, label="xAI API\nSTT + TTS WSS"];
+  openai [shape=ellipse, label="OpenAI/Codex service\nLuna via subscription"];
+  webhook [shape=folder, label="Console / optional webhook"];
+
+  internet -> caddy [label="HTTPS/WSS"];
+  app -> xai [dir=both, label="TLS WSS"];
+  codex -> openai [dir=both, label="authenticated HTTPS"];
+  app -> webhook [label="booking events"];
+}

@@ -1,0 +1,39 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad="0.25", nodesep="0.45", ranksep="0.85", fontname="DejaVu Sans", label="Системный контекст", labelloc=t, fontsize=20];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#30343b", penwidth=1.2, fontname="DejaVu Sans", fontsize=11, margin="0.16,0.10"];
+  edge [color="#4b5563", penwidth=1.1, arrowsize=0.75, fontname="DejaVu Sans", fontsize=9];
+
+  user [shape=oval, label="Посетитель\nлендинга"];
+  browser [label="React в браузере\nMic · AudioWorklet · UI · Playback"];
+
+  subgraph cluster_vps {
+    label="Одна VPS · Docker Compose";
+    color="#9ca3af"; style="rounded,dashed,filled"; fillcolor="#f8fafc"; penwidth=1.2;
+    caddy [label="Caddy\nTLS · reverse proxy"];
+    api [label="Bun API / WS gateway\nSession · rate limit · transport"];
+    orch [label="ConversationOrchestrator\nState · policy · cancellation"];
+    brain [label="CodexAppServerBrain\nBrainPort · thread/turn"];
+    booking [label="BookingService\nIdempotency · outbox"];
+    db [shape=cylinder, label="SQLite WAL\nbookings · turns · events"];
+    notify [label="Notifier\nconsole JSON / webhook"];
+    codex [shape=component, label="codex app-server\nGPT-5.6 Luna\nsubscription auth"];
+  }
+
+  xstt [shape=ellipse, label="xAI Streaming STT\nWSS · PCM16 · ru"];
+  xtts [shape=ellipse, label="xAI Streaming TTS\nWSS · PCM · ru"];
+  receiver [shape=folder, label="Console / push receiver"];
+
+  user -> browser [label="голос / управление"];
+  browser -> caddy [dir=both, label="HTTPS + WSS\nJSON + binary PCM"];
+  caddy -> api [dir=both];
+  api -> xstt [dir=both, label="audio ↔ transcript"];
+  api -> orch [dir=both, label="events / deltas"];
+  orch -> brain [dir=both, label="turn / speech delta\ntool request"];
+  brain -> codex [dir=both, label="JSONL stdio"];
+  orch -> booking [dir=both, label="validated tools"];
+  booking -> db [dir=both, label="transaction"];
+  booking -> notify [label="outbox event"];
+  notify -> receiver [label="structured payload"];
+  orch -> xtts [dir=both, label="text ↔ audio chunks"];
+  xtts -> api [style=invis];
+}

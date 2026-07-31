@@ -1,0 +1,404 @@
+version: 1
+project: botamin-voice-agent
+spec_version: '0.2'
+date: '2026-07-30'
+invariants:
+- booking.created precedes every qualification question and update
+- qualification failure or disconnect never cancels an existing booking
+- create_booking is idempotent per conversation
+- provider credentials never reach the browser
+- the assistant never claims a real calendar event was created
+- prompts live in Markdown and no online editor is built
+- xAI provides STT and TTS; Codex subscription with gpt-5.6-luna provides the brain
+critical_path:
+- T00
+- T13
+- T14
+- T20
+- T30
+- T31
+- T40
+merge_gates:
+  G0:
+    name: contracts_frozen
+    requires:
+    - T00
+  G1:
+    name: adapters_ready
+    requires:
+    - T10
+    - T11
+    - T12
+    - T13
+    - T14
+    - T15
+    - T22
+  G2:
+    name: orchestrator_ready
+    requires:
+    - T20
+    - T21
+  G3:
+    name: end_to_end_ready
+    requires:
+    - T30
+  G4:
+    name: release_candidate
+    requires:
+    - T31
+    - T32
+    - T40
+tasks:
+- id: T00
+  wave: 0
+  priority: P0
+  owner: A0
+  title: Repository skeleton and shared contracts
+  depends_on: []
+  owned_paths:
+  - package.json
+  - bun.lock
+  - tsconfig*.json
+  - apps/web
+  - apps/server
+  - packages/contracts
+  - packages/test-fixtures
+  outputs:
+  - Bun workspace with React and server skeletons
+  - Zod schemas for REST, WS, tools and domain events
+  - BrainPort, SttPort, TtsPort and notifier interfaces
+  - fake adapters and baseline tests
+  acceptance:
+  - bun install succeeds
+  - bun run typecheck succeeds
+  - bun test succeeds
+  - browser and server compile against the same contracts
+  - no provider package is required by packages/contracts
+- id: T01
+  wave: 0
+  priority: P0
+  owner: A5
+  title: Product knowledge, claims and prompt skeleton
+  depends_on: []
+  owned_paths:
+  - prompts
+  - knowledge
+  - packages/prompt-compiler
+  outputs:
+  - Botamin facts and use cases
+  - case claims with source notes
+  - allowed and prohibited claims
+  - prompt file skeleton and compiler contract
+  acceptance:
+  - no mutable price is hard-coded in core prompts
+  - every numeric claim has a named source context
+  - booking-before-qualification rule is repeated in system and booking prompts
+  - prompt bundle has deterministic order and checksum
+- id: T10
+  wave: 1
+  priority: P0
+  owner: A1
+  title: Browser audio capture, transport and playback
+  depends_on:
+  - T00
+  owned_paths:
+  - apps/web/src/audio
+  - apps/web/src/transport
+  - apps/web/src/state/voice*
+  outputs:
+  - AudioWorklet capture and 16 kHz mono PCM16 output
+  - 100 ms binary WS frames
+  - 24 kHz PCM playback queue
+  - generation cancellation and reconnect
+  acceptance:
+  - deterministic audio fixture produces expected frame sizes
+  - old generation audio is dropped after interruption
+  - no xAI or Codex secret exists in the bundle
+  - fake server demo works in Chromium and WebKit
+- id: T11
+  wave: 1
+  priority: P0
+  owner: A2
+  title: xAI streaming STT adapter
+  depends_on:
+  - T00
+  owned_paths:
+  - apps/server/src/providers/xai/stt*
+  outputs:
+  - authenticated server-side STT WebSocket
+  - raw PCM relay and Smart Turn event mapping
+  - backpressure, timeout and retry policy
+  - external contract smoke test
+  acceptance:
+  - Russian audio fixture returns a final transcript
+  - partial and speech_final events map to shared contracts
+  - client never receives the xAI key
+  - close/error paths release buffers and sockets
+- id: T12
+  wave: 1
+  priority: P0
+  owner: A2
+  title: xAI streaming TTS adapter
+  depends_on:
+  - T00
+  owned_paths:
+  - apps/server/src/providers/xai/tts*
+  outputs:
+  - text.delta/text.done streaming client
+  - base64 audio decode and PCM chunk events
+  - multi-utterance reuse and cancellation
+  - character/cost telemetry
+  acceptance:
+  - Russian smoke comparison covers iris and eve before choosing the configured voice
+  - first audio chunk is emitted before full utterance completion
+  - cancelled utterance emits no later playable chunks
+  - text-only fallback is available on failure
+- id: T13
+  wave: 1
+  priority: P0
+  owner: A3
+  title: Codex app-server and GPT-5.6 Luna brain adapter
+  depends_on:
+  - T00
+  owned_paths:
+  - apps/server/src/providers/codex
+  - packages/codex-schemas
+  - scripts/codex*
+  outputs:
+  - bounded transport spike comparing official @openai/codex-sdk with direct app-server on Bun
+  - BrainPort implementation using direct JSONL JSON-RPC over stdio unless every mandatory SDK control passes
+  - process supervisor and request routing
+  - auth/model readiness checks
+  - isolated AGENTS.md prompt bundle and instructionSources verification
+  - thread, turn, delta and addressable interrupt support
+  - dynamic tool mode and envelope fallback
+  - generated version-pinned schemas and transport ADR evidence
+  acceptance:
+  - transport decision is supported by reproducible Bun test evidence
+  - model/list confirms gpt-5.6-luna
+  - thread/start confirms the expected compiled AGENTS.md instruction source
+  - streamed text delta arrives from a real test turn
+  - turn/interrupt completes as interrupted and late deltas are identifiable
+  - app is unready when subscription auth is absent
+  - shell/network attempts are blocked
+  - protocol drift fails contract tests, not production silently
+  - no provider-specific type escapes BrainPort
+- id: T14
+  wave: 1
+  priority: P0
+  owner: A4
+  title: Booking domain, SQLite persistence and notifier
+  depends_on:
+  - T00
+  owned_paths:
+  - apps/server/src/domain
+  - apps/server/src/db
+  - apps/server/src/notifiers
+  - drizzle
+  outputs:
+  - conversations, turns, bookings, events, idempotency and outbox schema
+  - transactional create_booking
+  - qualification patch service
+  - console notifier and webhook interface
+  - redaction and deletion services
+  acceptance:
+  - one booking per conversation is enforced by DB
+  - idempotent replay returns the same bookingId
+  - qualification never changes booking status away from booked
+  - notifier failure does not roll back booking
+  - restart preserves data
+- id: T15
+  wave: 1
+  priority: P0
+  owner: A6
+  title: Docker, Compose, TLS and auth bootstrap
+  depends_on:
+  - T00
+  owned_paths:
+  - Dockerfile
+  - docker-compose.yml
+  - infra
+  - scripts/deploy*
+  - .env.example
+  outputs:
+  - multi-stage image with pinned Codex CLI
+  - app and Caddy services
+  - data and CODEX_HOME volumes
+  - healthchecks, migrations and bootstrap commands
+  acceptance:
+  - clean VPS deploy starts with docker compose up -d
+  - HTTPS and WSS work
+  - device-auth result persists across app restarts
+  - secrets are absent from image history and compose output
+  - rollback and backup commands are documented
+- id: T20
+  wave: 2
+  priority: P0
+  owner: A5
+  title: Conversation orchestrator and state machines
+  depends_on:
+  - T00
+  - T01
+  - T11
+  - T12
+  - T13
+  - T14
+  can_start_with_fakes_after: T00
+  owned_paths:
+  - apps/server/src/orchestrator
+  - packages/prompt-compiler
+  outputs:
+  - deterministic conversation and booking transition policies
+  - compact brain context
+  - tool authorization and result handling
+  - speech sanitizer and sentence chunker
+  - interruption/generation coordination
+  - failure and degraded behavior
+  acceptance:
+  - all state table tests pass
+  - no path allows qualification before booking
+  - booking event is committed before qualification prompt
+  - late deltas from interrupted generation are ignored
+  - clear refusal ends without repeated selling
+- id: T21
+  wave: 2
+  priority: P0
+  owner: A1
+  title: Botamin landing and integrated voice UX
+  depends_on:
+  - T10
+  - T20
+  owned_paths:
+  - apps/web/src/components
+  - apps/web/src/pages
+  - apps/web/src/styles
+  outputs:
+  - Botamin-specific landing copy and cases
+  - voice widget states and transcript
+  - consent, booked, qualification, complete and error UI
+  - responsive and accessible controls
+  acceptance:
+  - one primary CTA starts the conversation
+  - mobile layout is usable
+  - user can stop, mute and interrupt
+  - provider details and stack traces are never shown
+  - UI does not claim calendar creation
+- id: T22
+  wave: 2
+  priority: P0
+  owner: A7
+  title: Component and provider contract test harness
+  depends_on:
+  - T10
+  - T11
+  - T12
+  - T13
+  - T14
+  owned_paths:
+  - tests/contracts
+  - tests/fixtures
+  - packages/test-fixtures
+  outputs:
+  - fake provider server/processes
+  - PCM and transcript fixtures
+  - provider contract test commands
+  - state and idempotency regression suite
+  - secret scan
+  acceptance:
+  - default tests need no external credentials
+  - external tests are clearly tagged
+  - contract failure messages identify the changed provider event
+  - critical invariants run in CI
+- id: T30
+  wave: 3
+  priority: P0
+  owner: A7
+  title: Full end-to-end integration
+  depends_on:
+  - T15
+  - T20
+  - T21
+  - T22
+  owned_paths:
+  - tests/e2e
+  - integration-only configuration
+  outputs:
+  - Playwright voice journey with synthetic audio
+  - real provider staging smoke
+  - booking and qualification DB assertions
+  - reconnect and barge-in coverage
+  - compose smoke test
+  acceptance:
+  - browser-to-provider-to-browser path works
+  - exactly one booking is created in happy path and retries
+  - disconnect after booking preserves the lead
+  - text fallback works when TTS is disabled
+  - evidence includes latency timestamps
+- id: T31
+  wave: 4
+  priority: P0
+  owner: A5+A7
+  title: Conversation evals and prompt tuning
+  depends_on:
+  - T30
+  owned_paths:
+  - evals
+  - prompts
+  - knowledge
+  outputs:
+  - at least 24 scripted scenarios
+  - automatic invariant and claim checks
+  - reviewed transcripts and prompt changes
+  - eval summary artifact
+  acceptance:
+  - 100 percent booking-order invariant pass
+  - at least 90 percent scenarios without critical failure
+  - zero fabricated price or guarantee
+  - zero secret/system prompt disclosure
+  - prompt changes include before/after evidence
+- id: T32
+  wave: 4
+  priority: P0
+  owner: A6+A7
+  title: Security, observability and recovery hardening
+  depends_on:
+  - T30
+  owned_paths:
+  - apps/server/src/observability
+  - infra
+  - tests/security
+  - scripts/backup*
+  outputs:
+  - latency and business metrics
+  - concurrency and buffer guards
+  - PII redaction tests
+  - backup/restore and auth failure drills
+  - outbox retry
+  acceptance:
+  - speech-final to playback p50 and p95 are reported
+  - no unbounded queue or audio buffer exists
+  - restore test succeeds
+  - Codex auth loss makes readiness fail safely
+  - notifier outage does not lose booking events
+- id: T40
+  wave: 5
+  priority: P0
+  owner: A0
+  title: Release candidate and handoff
+  depends_on:
+  - T31
+  - T32
+  owned_paths:
+  - README.md
+  - docs
+  - release artifacts
+  outputs:
+  - tagged release commit
+  - deployment and rollback instructions
+  - acceptance evidence bundle
+  - known limitations and configuration matrix
+  acceptance:
+  - clean deploy from documentation succeeds
+  - all P0 checklist items are checked
+  - docs match actual environment variables and commands
+  - no unresolved critical issue remains

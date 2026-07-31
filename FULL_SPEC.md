@@ -1,0 +1,2823 @@
+---
+title: "Botamin Voice Sales Agent — техническая спецификация"
+subtitle: "React + Bun + xAI Voice + Codex subscription / GPT-5.6 Luna"
+author: "Architecture & delivery handoff"
+date: "30 июля 2026"
+lang: ru-RU
+---
+
+# Botamin Voice Sales Agent — техническая спецификация
+
+**Версия:** 0.2  
+**Статус:** основа для передачи агентам-разработчикам  
+**Deployment target:** одна trusted VPS, один Docker Compose  
+**Runtime split:** xAI Streaming STT/TTS + Codex app-server / `gpt-5.6-luna`
+
+> Ключевой инвариант: внутренняя бронь создаётся до любой опциональной квалификации. После `booking.created` отказ, обрыв или ошибка квалификации не отменяют и не удаляют лид.
+
+## Карта пакета
+
+Эта сводная версия объединяет scope, PRD, исследование Botamin, архитектуру, conversation design, API/data contracts, deployment/security, ADR, тестирование, сравнение AI-библиотек и parallel delivery plan. Machine-readable backlog и отдельные задания агентам находятся в `tasks/`.
+
+<div class="page-break"></div>
+
+
+
+<div class="page-break"></div>
+
+# 00. Scope, допущения и терминология
+
+## 1. Цель MVP
+
+Продемонстрировать работающий вертикальный срез AI-продавца Botamin:
+
+> посетитель открывает лендинг, начинает голосовой разговор, получает релевантную презентацию продукта, отвечает на уточняющие вопросы, соглашается на встречу, передаёт минимальный контакт, после чего backend фиксирует бронь и опционально обогащает её квалификацией.
+
+MVP должен выглядеть как небольшой реальный продукт, а не как набор несвязанных API-примеров.
+
+## 2. Участники
+
+| Участник | Роль |
+|---|---|
+| Посетитель | потенциальный B2B-клиент Botamin |
+| Голосовой AI-продавец | ведёт разговор и достигает целевого действия |
+| Backend | владеет состоянием, tools, транзакциями и аудитом |
+| Получатель лида | в MVP читает console/webhook/push payload |
+| Владелец проекта | редактирует Markdown prompts в Git |
+
+## 3. В scope
+
+- адаптивный лендинг Botamin;
+- браузерный доступ к микрофону;
+- потоковый STT на русском;
+- текстовое рассуждение и ответ через GPT-5.6 Luna в Codex;
+- потоковый TTS;
+- interruption/barge-in на базовом уровне;
+- управляемая state machine разговора;
+- product knowledge из Botamin-сайта и Telegram-кейсов;
+- создание внутренней брони;
+- необязательная квалификация после брони;
+- SQLite persistence;
+- console notifier и интерфейс для webhook/push;
+- transcript/event audit;
+- Docker Compose, TLS, health checks, backup;
+- тесты контрактов, компонентов, E2E и conversation evals.
+
+## 4. Вне scope
+
+- визуальный conversation builder;
+- prompt CMS, роли и авторизация редакторов;
+- реальный Google Calendar, Calendly или CRM;
+- проверка свободных слотов;
+- телефония, SIP, PSTN, Twilio;
+- исходящие звонки;
+- полноценный call-center dashboard;
+- биллинг и multi-tenant;
+- Kubernetes, autoscaling, микросервисное дробление;
+- отдельная vector database и сложный RAG;
+- хранение аудиозаписей по умолчанию;
+- юридическая экспертиза privacy copy.
+
+## 5. Зафиксированные defaults
+
+| Вопрос | Default MVP |
+|---|---|
+| Язык | русский; структура допускает локализацию |
+| Канал | браузерный voice widget |
+| Мозг | Codex app-server, `gpt-5.6-luna` |
+| Voice | xAI Streaming STT + Streaming TTS |
+| Голос | `XAI_TTS_VOICE`; сначала сравнить `iris` (sales-support tone) и `eve`, затем оставить лучший русский smoke-test |
+| Backend | Bun + TypeScript, Hono как лёгкий HTTP/WS слой |
+| Frontend | React + TypeScript + Vite |
+| Storage | SQLite в WAL-режиме, Drizzle migrations |
+| Notifications | console обязательно; webhook — адаптер |
+| Calendar | отсутствует |
+| Prompts | Markdown в Git |
+| Deployment | один Compose project на одной VPS |
+| Raw audio retention | выключено |
+| Qualification | включаемая опция, только после booking |
+
+## 6. Допущения, которые агенты не должны превращать в блокеры
+
+- Как минимум один контактный канал обязателен: телефон, email или Telegram.
+- Предпочтительное время хранится свободным текстом; календарного slot resolution нет.
+- Логотипы, точная типографика и brand book могут быть заменены аккуратным нейтральным стилем.
+- Console output является достаточным handoff для P0.
+- Если subscription auth временно недоступен, сервис показывает понятный degraded state; автоматический переход на платный API не включается без конфигурации.
+- Числовые кейсы на лендинге используются только с подписью источника и без обещания повторить результат.
+
+## 7. Термины
+
+- **Conversation** — одна пользовательская голосовая сессия.
+- **Turn** — одна завершённая реплика пользователя и следующий ответ агента.
+- **Booking** — внутренняя запись о согласованном следующем шаге, не календарное событие.
+- **Qualification** — необязательные сведения, добавляемые к уже существующей брони.
+- **BrainPort** — внутренний интерфейс текстового LLM-мозга.
+- **VoicePort** — внутренние интерфейсы STT/TTS.
+- **Barge-in** — пользователь начинает говорить во время ответа агента.
+- **Tool** — строго валидируемая backend-операция с доменным эффектом.
+- **Luna** — модель `gpt-5.6-luna`, доступная через Codex.
+
+
+<div class="page-break"></div>
+
+# 01. Product Requirements Document
+
+## 1. Продуктовая формулировка
+
+Botamin Voice Sales Agent — это лендинг с живой голосовой демонстрацией продукта: AI-продавец сам показывает, как Botamin может отвечать, квалифицировать, обрабатывать возражения и передавать менеджеру структурированный результат.
+
+### North Star для MVP
+
+**Доля начатых голосовых разговоров, в которых backend получил валидный `booking.created`.**
+
+Не следует оптимизировать MVP под длительность разговора или количество реплик: главная ценность — качественно зафиксированный следующий шаг.
+
+## 2. Целевая аудитория
+
+Основные роли:
+
+- собственник / CEO;
+- Head of Sales / коммерческий директор;
+- CMO / руководитель лидогенерации;
+- руководитель первой линии;
+- операционный руководитель, отвечающий за SLA обработки лидов.
+
+Типовые контексты:
+
+- лиды теряются ночью или в выходные;
+- менеджеры долго отвечают;
+- большой объём нецелевых обращений;
+- требуется реактивация или обработка холодной базы;
+- квалификация и CRM-рутина перегружают команду;
+- нужно быстро протестировать AI-сценарий продаж.
+
+## 3. User stories P0
+
+| ID | История | Приёмка |
+|---|---|---|
+| US-001 | Как посетитель, я запускаю разговор одной кнопкой | запрашивается mic permission, UI показывает состояние |
+| US-002 | Я говорю естественно по-русски | interim transcript отображается, финал не режет фразу посередине |
+| US-003 | Агент отвечает голосом и текстом | первый звук приходит потоково, ответ не содержит markdown-мусора |
+| US-004 | Агент понимает, зачем я пришёл | задаёт не более одного вопроса за раз, фиксирует роль/задачу |
+| US-005 | Агент объясняет Botamin на релевантном примере | использует только утверждённые knowledge claims |
+| US-006 | Я могу возразить или перебить | проигрывание останавливается, новый turn обрабатывается |
+| US-007 | Я соглашаюсь на встречу | агент собирает минимум данных и вызывает `create_booking` |
+| US-008 | После брони я могу ответить на доп. вопросы | данные патчат ту же бронь через `append_booking_qualification` |
+| US-009 | Я могу отказаться от квалификации | бронь остаётся `booked`, диалог корректно завершается |
+| US-010 | Получатель видит данные | console/webhook получает структурированный payload |
+| US-011 | Сервис перезапускается | сохранённые booking/event данные остаются в volume |
+| US-012 | Проект разворачивается на VPS | `docker compose up -d` поднимает готовый сервис |
+
+## 4. Functional requirements
+
+### 4.1 Voice session
+
+- **FR-VOICE-001:** создание сессии должно выдавать уникальный `conversationId`.
+- **FR-VOICE-002:** браузер передаёт mono PCM16, 16 kHz, чанками около 100 ms.
+- **FR-VOICE-003:** backend держит xAI credentials только server-side.
+- **FR-VOICE-004:** partial transcript доступен UI; в Luna отправляется только финальная пользовательская реплика.
+- **FR-VOICE-005:** при barge-in клиент немедленно очищает очередь playback, backend отменяет текущий TTS и по возможности `turn/interrupt`.
+- **FR-VOICE-006:** reconnect не должен создавать вторую бронь.
+- **FR-VOICE-007:** stop завершает внешние WebSocket-соединения и фиксирует событие.
+
+### 4.2 Brain and orchestration
+
+- **FR-BRAIN-001:** модель по умолчанию `gpt-5.6-luna`; фактическая модель задаётся `CODEX_MODEL`, но её смена требует повторного conversation eval gate.
+- **FR-BRAIN-002:** один Codex thread соответствует одной conversation.
+- **FR-BRAIN-003:** backend, а не LLM, является источником истины для текущего stage.
+- **FR-BRAIN-004:** LLM не получает shell/network privileges, кроме явно зарегистрированных доменных tools.
+- **FR-BRAIN-005:** ответы проходят speech sanitizer перед TTS.
+- **FR-BRAIN-006:** system/product/conversation prompts загружаются из Markdown.
+- **FR-BRAIN-007:** tool mode имеет feature flag: `dynamic` и стабильный fallback `envelope`.
+- **FR-BRAIN-008:** reasoning effort задаётся конфигурацией; стартовый профиль Luna использует минимальный уровень, который проходит quality evals.
+
+### 4.3 Booking
+
+- **FR-BOOK-001:** обязательны `conversationId`, имя и хотя бы один контактный канал.
+- **FR-BOOK-002:** `create_booking` атомарен и идемпотентен по `conversationId`/`idempotencyKey`.
+- **FR-BOOK-003:** успешный tool всегда возвращает стабильный `bookingId`.
+- **FR-BOOK-004:** событие `booking.created` отправляется до первого квалификационного вопроса.
+- **FR-BOOK-005:** meeting/calendar event не создаётся.
+- **FR-BOOK-006:** агент подтверждает только факт получения данных.
+
+### 4.4 Post-booking qualification
+
+- **FR-QUAL-001:** запускается только при `booking.status=booked`.
+- **FR-QUAL-002:** пользователь явно или контекстно соглашается на дополнительные вопросы.
+- **FR-QUAL-003:** каждое осмысленное подмножество данных может сохраняться patch-операцией.
+- **FR-QUAL-004:** поля qualification необязательны.
+- **FR-QUAL-005:** disconnect/decline переводит qualification в `partial` или `skipped`, но booking остаётся `booked`.
+- **FR-QUAL-006:** повторный patch идемпотентен.
+
+### 4.5 Landing and UX
+
+- **FR-WEB-001:** above-the-fold объясняет продукт и содержит один primary CTA.
+- **FR-WEB-002:** до запуска голоса показывается понятное объяснение микрофона и обработки данных.
+- **FR-WEB-003:** UI имеет состояния `idle`, `connecting`, `listening`, `thinking`, `speaking`, `booked`, `complete`, `error`.
+- **FR-WEB-004:** текстовая копия реплик доступна для accessibility/debug.
+- **FR-WEB-005:** mobile viewport поддерживается.
+- **FR-WEB-006:** при voice failure пользователю не показываются stack traces/provider details.
+
+## 5. P1 и P2
+
+### P1
+
+- generic signed webhook notifier с retry;
+- dev-only inspector с событиями и latency;
+- prompt checksum в каждом conversation;
+- TTS cache для статических приветствий;
+- automated conversation eval suite;
+- basic abuse/rate limiting;
+- export одного лида в JSON.
+
+### P2
+
+- Telegram notifier;
+- A/B prompts;
+- admin dashboard;
+- real CRM/calendar adapters;
+- selectable voices;
+- multilingual flows;
+- analytics warehouse.
+
+## 6. Non-functional requirements
+
+| ID | Требование | Цель MVP |
+|---|---|---|
+| NFR-LAT-001 | speech-final → первый слышимый звук | p50 ≤ 1.6 s, p95 ≤ 3.0 s |
+| NFR-REL-001 | успешность `create_booking` при валидных данных | ≥ 99.5% внутри приложения |
+| NFR-IDEM-001 | дубли брони при retry/reconnect | 0 в тестовой матрице |
+| NFR-SEC-001 | TLS | обязательно в production |
+| NFR-SEC-002 | raw credentials в клиентском bundle/logs | 0 |
+| NFR-PRIV-001 | raw audio storage | off by default |
+| NFR-OBS-001 | traceability | `conversationId`, `turnId`, `bookingId` во всех событиях |
+| NFR-OPS-001 | deployment | один compose project |
+| NFR-OPS-002 | backup | ежедневная копия SQLite + restore check |
+| NFR-COMP-001 | browser | актуальные Chrome, Edge, Safari; Firefox best effort |
+| NFR-A11Y-001 | keyboard/control labels | WCAG-oriented базовый уровень |
+
+![Целевой latency budget](charts/01-latency-budget.png)
+
+Значения на графике — инженерный бюджет и release target, а не обещание провайдера. Реальные p50/p95 должны собираться в E2E.
+
+## 7. Бизнес-события воронки
+
+Минимальный набор:
+
+1. `landing.viewed`
+2. `voice.cta_clicked`
+3. `voice.permission_granted` / `voice.permission_denied`
+4. `conversation.started`
+5. `conversation.discovery_completed`
+6. `booking.offered`
+7. `booking.created`
+8. `qualification.started`
+9. `qualification.updated`
+10. `conversation.completed`
+11. `conversation.failed`
+
+## 8. Success metrics после запуска
+
+- start rate: `conversation.started / landing.viewed`;
+- speech activation: доля с хотя бы одной финальной репликой;
+- booking conversion: `booking.created / conversation.started`;
+- post-booking qualification opt-in;
+- qualification completeness;
+- drop-off stage distribution;
+- p50/p95 time-to-first-audio;
+- provider error rate;
+- duplicate booking rate;
+- доля диалогов с manual review flag.
+
+Метрики качества продаж нельзя интерпретировать без объёма трафика и human review выборки.
+
+
+<div class="page-break"></div>
+
+# 02. Исследование Botamin и проект воронки
+
+## 1. Источники и ограничение
+
+Исследованы:
+
+- публичный сайт `https://botamin.ru/`;
+- публичная лента Telegram `https://t.me/GPT_for_sales`;
+- согласованный scope из текущего диалога.
+
+Страница Notion была недоступна. Поэтому этот документ является продуктовым research brief для MVP, а не дословным пересказом исходного тестового.
+
+## 2. Что продаёт Botamin
+
+Сайт позиционирует Botamin как платформу AI-агентов, которая:
+
+- автоматизирует первую линию продаж;
+- генерирует и квалифицирует лиды из холодных и входящих источников;
+- доводит лид до ключевого этапа воронки;
+- работает с входящими, реактивацией и холодными базами;
+- отвечает круглосуточно;
+- передаёт результат менеджерам и в CRM;
+- использует анализ диалогов для улучшения сценариев.
+
+На сайте выделены доказательства и обещания: внедрение «под ключ», большое число внедрений, CRM-интеграции, быстрый ответ и кейсы из разных отраслей. В voice funnel эти тезисы лучше использовать не списком, а в ответ на конкретную боль собеседника.
+
+## 3. Повторяющиеся pain patterns
+
+| Pain | Что обещает сценарий Botamin | Как спросить в разговоре |
+|---|---|---|
+| медленная реакция | быстрый ответ 24/7 | «Сколько сейчас проходит от заявки до первого контакта?» |
+| ночные/выходные лиды | непрерывная первая линия | «Есть заметный входящий поток вне рабочего времени?» |
+| нецелевые обращения | автоматическая квалификация | «Какую долю обращений менеджеры отсеивают вручную?» |
+| недозвоны/молчуны | follow-up и реактивация | «Что происходит с теми, кому менеджер не дозвонился?» |
+| рутина CRM | структурированный handoff | «Менеджеры сами заполняют карточки после разговора?» |
+| холодная база | выход на ЛПР и квалификация | «Есть база, которую команда не успевает системно отрабатывать?» |
+| нестабильные скрипты | единый сценарий + итерации | «Насколько одинаково менеджеры проводят первую квалификацию?» |
+
+## 4. Что найдено в кейсах
+
+Публичная Telegram-лента содержит кейсы, подходящие как social proof. Числа ниже являются утверждениями источника и не должны подаваться как гарантированный результат будущего клиента.
+
+| Сценарий | Опубликованный результат | Применение в funnel |
+|---|---|---|
+| «Главтрассы», голосовой outbound | 15% в квалифицированный лид; резюме и транскрипция в Telegram | пример выхода на ЛПР и передачи тёплого лида |
+| РоллПроф, входящий + follow-up | 13% доведены до реального интереса | 24/7 и работа с недозвонами |
+| продавец утеплительной пены на Авито | рост конверсии с 10% до 45% по публикации | скорость ответа и фильтрация нецелевых |
+| поставщик стройматериалов | 1000 обращений, 31% горячих лидов, нагрузка пяти менеджеров | масштаб и квалификация по предметным полям |
+| Foxford / сценарий недозвонов | возвращённая и квалифицированная часть пропущенных контактов | реактивация после неуспешного звонка |
+
+### Правило claims
+
+В prompt/knowledge нужно разделить:
+
+- **Product facts:** что платформа умеет и как реализуется.
+- **Case claims:** что было опубликовано в конкретном кейсе.
+- **Prohibited promises:** «мы гарантированно поднимем конверсию в X раз», «заменим отдел», «окупимся за N дней».
+
+## 5. Предлагаемый landing narrative
+
+### Блок 1. Hero
+
+**Заголовок:**
+
+> AI-продавец, который сам покажет, как перестать терять лиды
+
+**Подзаголовок:**
+
+> Поговорите с голосовым агентом Botamin. Он разберёт ваш процесс, покажет релевантный сценарий и зафиксирует следующий шаг.
+
+**CTA:**
+
+> Поговорить с AI-продавцом
+
+Под CTA: «Нужен микрофон. Разговор можно завершить в любой момент».
+
+### Блок 2. Три ценностных сценария
+
+1. Обрабатывать входящие 24/7.
+2. Квалифицировать и передавать только целевые лиды.
+3. Реактивировать недозвоны и холодные базы.
+
+### Блок 3. Как это работает
+
+`Источник → AI-первая линия → квалификация → структурированный handoff → менеджер`.
+
+### Блок 4. Кейсы
+
+Показывать 2–3 коротких карточки с источником и контекстом, без перегруза цифрами.
+
+### Блок 5. Voice demo
+
+Sticky/inline widget с transcript, статусом и одной главной кнопкой.
+
+### Блок 6. Trust and limits
+
+- данные не попадают в публичный чат;
+- разговор можно остановить;
+- реальная встреча в этом MVP не создаётся, данные только фиксируются.
+
+## 6. Воронка
+
+![Воронка Botamin](diagrams/06-funnel.svg)
+
+### Funnel stages и события
+
+| Stage | Цель | Главный event | Drop-off reason examples |
+|---|---|---|---|
+| Visit | понять ценность | `landing.viewed` | неясный оффер |
+| Voice start | снять страх mic | `conversation.started` | permission denied |
+| Discovery | найти задачу | `discovery.completed` | слишком много вопросов |
+| Value | связать pain и use case | `value.presented` | общая презентация |
+| Intent | получить согласие на следующий шаг | `booking.offered` | нет доверия/времени |
+| Booking | сохранить минимальный лид | `booking.created` | контакт не собран |
+| Qualification | обогатить лид | `qualification.updated` | пользователь устал |
+| Handoff | вывести структурированный результат | `notification.sent` | provider/output error |
+
+## 7. Conversation value map
+
+| Что сказал пользователь | Какую ценность раскрыть | Какой кейс допустим |
+|---|---|---|
+| «Мы долго отвечаем» | SLA и 24/7 первая линия | Авито/РоллПроф |
+| «Много мусорных лидов» | квалификация до менеджера | стройматериалы |
+| «Есть старая база» | реактивация и follow-up | Foxford/недозвоны |
+| «Нужны холодные звонки» | выход на ЛПР, summary | Главтрассы |
+| «Боюсь качества» | knowledge base, итерации, human review | общий процесс внедрения |
+| «Нужна интеграция» | CRM/connectors как продуктовая возможность | сайт Botamin; без обещания конкретной даты |
+
+## 8. Минимальная квалификация для этого funnel
+
+Квалификация после брони должна выбирать 3–5 вопросов по контексту, а не проходить анкету целиком:
+
+- роль и зона ответственности;
+- отрасль / тип продаж;
+- объём лидов в месяц или порядок величины;
+- входящий, исходящий, реактивация или mix;
+- текущий SLA ответа;
+- CRM;
+- главный bottleneck;
+- желаемый срок пилота.
+
+## 9. Контентные риски
+
+- Сайт и Telegram — маркетинговые источники; кейсы нуждаются в аккуратной атрибуции.
+- Цены и продуктовые детали могут измениться: не зашивать их в core prompt без даты.
+- Агент не должен сравнивать Botamin с конкурентами без отдельной knowledge policy.
+- Нельзя придумывать интеграции или функциональность, которой нет в источнике.
+- При вопросе, требующем коммерческого расчёта, агент предлагает встречу, а не выдумывает цену.
+
+
+<div class="page-break"></div>
+
+# 03. Системная архитектура
+
+## 1. Решение верхнего уровня
+
+![Системный контекст](diagrams/01-system-context.svg)
+
+Архитектура намеренно разделяет голос и интеллект:
+
+- **xAI STT** — потоковая транскрибация;
+- **Codex app-server + GPT-5.6 Luna** — текстовый reasoning, dialogue policy и tool decisions;
+- **xAI TTS** — потоковая озвучка;
+- **Bun backend** — единственный владелец state, tools, credentials и persistence.
+
+Это отличается от end-to-end speech-to-speech: добавляется один orchestration layer, зато используется уже оплаченная Codex subscription и мозг можно заменить без переделки audio UI.
+
+## 2. Контейнеры и компоненты
+
+### React client
+
+Ответственность:
+
+- mic permission;
+- AudioWorklet capture;
+- resample browser audio до mono PCM16 16 kHz;
+- отправка бинарных чанков около 100 ms;
+- playback queue для PCM TTS;
+- barge-in: stop local playback сразу;
+- rendering transcript/state/errors;
+- reconnect с тем же `conversationId`, если сессия ещё жива.
+
+Клиент не знает xAI/OpenAI ключи и не вызывает providers напрямую.
+
+### Bun API / WebSocket gateway
+
+Ответственность:
+
+- выдача conversation ID;
+- аутентификация/лимиты публичной сессии;
+- multiplex JSON events и binary audio;
+- provider connection lifecycle;
+- backpressure;
+- orchestration turns;
+- speech sanitizer + sentence chunker;
+- запись событий и latency;
+- cleanup при stop/disconnect.
+
+### ConversationOrchestrator
+
+Источник истины для:
+
+- текущего stage;
+- собранных slots;
+- разрешённых actions;
+- booking lifecycle;
+- prompt context;
+- retry/cancellation;
+- post-booking qualification policy.
+
+LLM предлагает действие, но backend валидирует, разрешено ли оно в текущем состоянии.
+
+### CodexAppServerBrain
+
+P0 transport — direct typed JSON-RPC к app-server. Универсальный AI SDK не используется в критическом пути; подробное сравнение находится в [`10-ai-library-evaluation.md`](docs/10-ai-library-evaluation.md).
+
+- запускает один долгоживущий `codex app-server` процесс;
+- transport — JSONL over stdio через внутренний `BrainPort`;
+- делает `initialize`/`initialized` один раз;
+- создаёт отдельный `thread/start` на conversation;
+- модель — `gpt-5.6-luna`;
+- читает `item/agentMessage/delta`;
+- обрабатывает `item/tool/call`, если включён experimental mode;
+- отменяет turn через `turn/interrupt` при barge-in;
+- генерирует/версионирует TS schema из установленной версии Codex;
+- запускает thread с `cwd=/app/runtime-brain`, где prompt compiler создаёт только `AGENTS.md` и безопасные read-only knowledge-файлы;
+- проверяет `instructionSources` из `thread/start`: ожидаемый `AGENTS.md` обязан быть загружен;
+- не даёт модели доступ к рабочему репозиторию, `.env`, SQLite или общему filesystem.
+
+### XaiSttAdapter
+
+- server-side WSS к `wss://api.x.ai/v1/stt`;
+- `sample_rate=16000`, `encoding=pcm`, `interim_results=true`, `language=ru`;
+- Smart Turn начально `0.7`, timeout `3000 ms`, затем tuning по записям метрик;
+- отправляет raw binary frames;
+- эмитит partial, chunk-final и speech-final.
+
+### XaiTtsAdapter
+
+- server-side WSS к `wss://api.x.ai/v1/tts`;
+- `language=ru`, configurable voice; initial candidates: `iris`, then `eve` fallback;
+- `codec=pcm`, `sample_rate=24000`, streaming latency optimization;
+- получает `text.delta`, возвращает base64 `audio.delta`;
+- держит persistent connection на conversation или небольшой pool;
+- умеет cancel/drop текущего utterance.
+
+### BookingService
+
+- валидирует contact minimum;
+- создаёт/находит booking в одной транзакции;
+- обновляет qualification patch;
+- пишет event outbox;
+- никогда не удаляет booking из-за incomplete qualification.
+
+### Notifier
+
+Интерфейс:
+
+```ts
+export interface LeadNotifier {
+  publish(event: BookingCreatedEvent | BookingUpdatedEvent): Promise<void>;
+}
+```
+
+P0 adapter — structured console JSON. P1 — signed HTTP webhook с retry/outbox.
+
+## 3. Критический путь turn
+
+![Turn sequence](diagrams/02-turn-sequence.svg)
+
+### Порядок
+
+1. Browser отправляет 100 ms PCM chunks.
+2. Backend relays в xAI STT.
+3. На `speech_final=true` transcript становится user turn.
+4. Orchestrator добавляет stage, known slots, booking status и краткий dialogue context.
+5. Codex thread получает `turn/start`.
+6. Text deltas проходят sanitizer и sentence chunker.
+7. Законченная короткая фраза немедленно отправляется в xAI TTS.
+8. PCM chunks идут в browser playback queue.
+9. Tool call исполняется транзакционно и результат возвращается brain.
+
+## 4. Latency design
+
+### Целевой budget
+
+- end-of-turn decision: 300–700 ms;
+- application overhead: < 50 ms p50;
+- Luna first delta: target ≤ 900 ms;
+- sentence buffer: 100–250 ms;
+- TTS first audio: target ≤ 300 ms;
+- total target: p50 ≤ 1.6 s, p95 ≤ 3.0 s.
+
+### Приёмы снижения задержки
+
+- не отправлять interim transcript в отдельный LLM turn;
+- Luna effort `low`/минимально доступный после model capability check;
+- короткий state context вместо полного event log;
+- stream TTS по завершённым фразам, а не ждать полного ответа;
+- заранее синтезировать статическое первое приветствие опционально;
+- переиспользовать xAI TTS WSS;
+- исключить RAG/network tools из критического пути;
+- не делать второй classifier call на каждый turn.
+
+## 5. BrainPort
+
+```ts
+export type BrainToolMode = "dynamic" | "envelope";
+
+export interface BrainTurnInput {
+  conversationId: string;
+  threadId?: string;
+  userText: string;
+  stage: ConversationStage;
+  knownFacts: KnownFacts;
+  booking: BookingSnapshot | null;
+  allowedActions: BrainActionName[];
+  promptVersion: string;
+}
+
+export interface BrainDelta {
+  type: "speech.delta" | "tool.request" | "turn.completed" | "error";
+  text?: string;
+  tool?: { name: BrainActionName; callId: string; args: unknown };
+  error?: { code: string; retryable: boolean; message: string };
+}
+
+export interface BrainPort {
+  createThread(conversationId: string): Promise<string>;
+  runTurn(input: BrainTurnInput, signal: AbortSignal): AsyncIterable<BrainDelta>;
+  interrupt(threadId: string, turnId: string): Promise<void>;
+  health(): Promise<ProviderHealth>;
+}
+```
+
+## 6. Dynamic tools и fallback
+
+### Mode A — `dynamic`
+
+Codex app-server регистрирует динамические tools. Плюс — обычный streamed natural-language ответ и низкая задержка. Минус — API помечен experimental.
+
+Server-side guard:
+
+```ts
+if (!policy.isAllowed(state, tool.name)) {
+  return toolError("ACTION_NOT_ALLOWED_IN_STATE");
+}
+const args = ToolSchemas[tool.name].parse(tool.args);
+return toolHandlers[tool.name](args);
+```
+
+### Mode B — `envelope`
+
+Стабильный fallback с `outputSchema`:
+
+```ts
+type BrainEnvelope = {
+  speech: string;
+  nextStage: ConversationStage;
+  action:
+    | { type: "none" }
+    | { type: "create_booking"; payload: CreateBookingInput }
+    | { type: "append_booking_qualification"; payload: QualificationPatchInput };
+};
+```
+
+В этом режиме TTS обычно стартует после получения валидного envelope, поэтому задержка выше. Feature flag позволяет не блокировать релиз, если dynamic tools изменятся.
+
+## 7. State machine
+
+![Conversation state](diagrams/03-conversation-state.svg)
+
+Backend transition function должна быть чистой и покрытой table-driven tests:
+
+```ts
+transition(currentState, domainEvent) => nextState | TransitionError
+```
+
+LLM не может напрямую записать произвольный next state. Он предлагает intent/action, orchestrator применяет допустимый transition.
+
+## 8. Barge-in
+
+При детекции начала пользовательской речи во время `speaking`:
+
+1. client немедленно очищает audio queue;
+2. client посылает `playback.interrupted`;
+3. backend помечает текущий response generation как superseded;
+4. закрывает/сбрасывает текущий TTS utterance;
+5. вызывает `turn/interrupt`, если Codex turn ещё активен;
+6. STT продолжает принимать речь;
+7. поздние deltas старого generation игнорируются по `generationId`.
+
+Ключевой контракт: **устаревший audio chunk никогда не проигрывается после нового user turn**.
+
+## 9. Предлагаемый repository layout
+
+```text
+/
+  apps/
+    web/
+      src/audio/
+      src/components/
+      src/state/
+    server/
+      src/http/
+      src/ws/
+      src/orchestrator/
+      src/providers/xai/
+      src/providers/codex/
+      src/domain/booking/
+      src/notifiers/
+      src/db/
+  packages/
+    contracts/
+    prompt-compiler/
+    test-fixtures/
+  prompts/
+    system.md
+    product.md
+    conversation-policy.md
+    objections.md
+    booking.md
+    qualification.md
+  knowledge/
+    botamin-overview.md
+    cases.md
+    faq.md
+    allowed-claims.md
+  drizzle/
+  infra/
+    Caddyfile
+  docs/
+  docker-compose.yml
+  Dockerfile
+  bun.lock
+  package.json
+```
+
+## 10. Основные env variables
+
+```dotenv
+APP_ORIGIN=https://example.com
+DATABASE_URL=file:/data/app.db
+LOG_LEVEL=info
+
+BRAIN_PROVIDER=codex-subscription
+CODEX_MODEL=gpt-5.6-luna
+CODEX_EFFORT=low
+CODEX_HOME=/codex-home
+CODEX_TOOL_MODE=dynamic
+CODEX_CWD=/app/runtime-brain
+CODEX_MAX_CONCURRENT_TURNS=3
+
+XAI_API_KEY=...
+XAI_STT_LANGUAGE=ru
+XAI_STT_SMART_TURN=0.7
+XAI_STT_SMART_TURN_TIMEOUT_MS=3000
+XAI_TTS_LANGUAGE=ru
+XAI_TTS_VOICE=iris
+XAI_TTS_SAMPLE_RATE=24000
+
+POST_BOOKING_QUALIFICATION_ENABLED=true
+NOTIFIER=console
+WEBHOOK_URL=
+WEBHOOK_SIGNING_SECRET=
+TRANSCRIPT_RETENTION_DAYS=30
+STORE_RAW_AUDIO=false
+```
+
+Значение concurrency — initial guardrail, а не окончательная capacity claim; оно настраивается после load test и проверки лимитов конкретной подписки. `CODEX_MODEL` и `CODEX_EFFORT` конфигурируемы, но любое изменение release-профиля требует полного conversation eval gate.
+
+
+<div class="page-break"></div>
+
+# 04. Conversation design и prompt architecture
+
+## 1. Основной принцип
+
+Агент не проводит анкетирование и не читает лендинг вслух. Он сначала понимает контекст, затем показывает один релевантный use case, отвечает на вопросы и мягко предлагает следующий шаг.
+
+Формула turn:
+
+> признать контекст → дать короткую ценность → задать один следующий вопрос
+
+## 2. Поведенческие правила P0
+
+- представиться как AI-продавец Botamin;
+- не маскироваться под человека;
+- одна реплика обычно 1–3 коротких предложения;
+- один вопрос за раз;
+- не повторять уже собранные данные;
+- не спорить с ясным отказом;
+- после двух мягких отказов завершить без давления;
+- не выдумывать цены, интеграции, сроки или кейсы;
+- при неизвестном факте честно предложить передать вопрос коллеге;
+- не читать технические идентификаторы и JSON вслух;
+- контакт повторять для подтверждения только при низкой уверенности STT;
+- booking confirmation произносить сразу после tool success;
+- qualification начинается только после confirmation и согласия.
+
+## 3. Conversation policy по stages
+
+### GREETING
+
+Цель: быстро объяснить формат.
+
+Пример:
+
+> Здравствуйте! Я голосовой AI-продавец Botamin. Могу за пару минут разобрать, где у вас теряются лиды, и показать подходящий сценарий. Что сейчас важнее: входящие заявки, недозвоны или холодная база?
+
+### DISCOVERY
+
+Собрать минимум:
+
+- роль;
+- основной канал/сценарий;
+- bottleneck;
+- примерный объём или частоту проблемы.
+
+Не задавать все вопросы, если intent уже очевиден.
+
+### VALUE
+
+Структура:
+
+1. пересказать pain одной фразой;
+2. описать релевантный workflow Botamin;
+3. привести один case claim с атрибуцией, если помогает;
+4. проверить интерес.
+
+### OBJECTION
+
+Алгоритм:
+
+1. назвать сомнение без обесценивания;
+2. дать один точный ответ;
+3. предложить проверяемый следующий шаг.
+
+### BOOKING_OFFER
+
+Не говорить «давайте созвонимся» без value bridge.
+
+> Похоже, у вас есть конкретный сценарий для пилота. Могу зафиксировать короткую демонстрацию с коллегой, чтобы он пришёл уже с вариантом процесса. Записать?
+
+### COLLECT_BOOKING
+
+Минимальный порядок:
+
+1. имя;
+2. один удобный контакт;
+3. компания — если ещё не известна;
+4. пожелание по времени — свободным текстом.
+
+Если пользователь дал несколько полей одной фразой, не переспрашивать их по одному.
+
+### BOOKED
+
+После `create_booking`:
+
+> Всё получила и зафиксировала. Реальную запись в календарь я сейчас не создаю — коллега свяжется по указанному контакту. Можно ещё три коротких вопроса, чтобы он подготовился?
+
+Формулировку про отсутствие календаря можно сделать менее технической в production copy, но нельзя утверждать обратное.
+
+### POST_BOOKING_QUALIFICATION
+
+Выбирать вопросы динамически. Не более 3–5, если ответы короткие. После каждого содержательного блока допустим partial patch.
+
+### COMPLETE
+
+Коротко повторить результат и завершить без нового CTA.
+
+## 4. Lifecycle брони
+
+![Booking lifecycle](diagrams/04-booking-state.svg)
+
+Жёсткое правило prompt + backend policy:
+
+```text
+Квалификация не является условием брони.
+Никогда не откладывай create_booking ради дополнительных вопросов.
+После tool success сначала подтверди сохранение, затем запроси согласие на qualification.
+```
+
+## 5. Объекты памяти
+
+В каждый turn передаётся compact state, а не полный внутренний лог:
+
+```json
+{
+  "stage": "VALUE",
+  "knownFacts": {
+    "name": null,
+    "role": "руководитель продаж",
+    "company": "примерно 30 менеджеров",
+    "pain": ["медленный ответ ночью", "много нецелевых"],
+    "leadVolume": "около 2000 в месяц",
+    "crm": null
+  },
+  "booking": null,
+  "allowedActions": ["offer_booking"],
+  "lastUserText": "А как это будет интегрироваться?"
+}
+```
+
+Codex thread сохраняет естественную историю; compact state страхует от drift и упрощает resume.
+
+## 6. Prompt files
+
+```text
+prompts/
+  system.md                 # идентичность, цель, security boundary
+  product.md                # concise Botamin proposition
+  conversation-policy.md    # stages, turn length, refusal behavior
+  objections.md             # patterns, не жёсткие скрипты
+  booking.md                # tool timing, minimum data, confirmation
+  qualification.md          # optional fields and stopping rules
+  speech-style.md            # spoken Russian, no markdown
+knowledge/
+  botamin-overview.md
+  use-cases.md
+  cases.md
+  faq.md
+  allowed-claims.md
+  prohibited-claims.md
+```
+
+Prompt compiler:
+
+- читает файлы в фиксированном порядке;
+- проверяет размер и обязательные headings;
+- вычисляет SHA-256 `promptVersion`;
+- валидирует отсутствие секретов;
+- собирает `/app/runtime-brain/AGENTS.md` — основной instruction source для Codex thread;
+- при необходимости копирует туда только разрешённые read-only knowledge-файлы; исходный repository туда не монтируется;
+- при `thread/start` проверяет, что `instructionSources` содержит ожидаемый `AGENTS.md`;
+- перед каждым `turn/start` добавляет компактный machine-generated context envelope: stage, known facts, booking snapshot, allowed actions и текст пользователя;
+- логирует только version/hash, не весь prompt;
+- поддерживает hot reload только в development: новый prompt version применяется к новым conversations, а активные сохраняют исходную версию.
+
+## 7. Speech sanitizer
+
+До xAI TTS:
+
+- убрать markdown headings, bullets, code fences;
+- не озвучивать URLs;
+- заменить технические аббревиатуры на произносимый вариант при необходимости;
+- удалить tool/debug фрагменты;
+- ограничить одну TTS-фразу разумной длиной;
+- не отправлять незакрытые JSON/markdown fragments;
+- сохранить пунктуацию, важную для интонации.
+
+Sentence chunker выпускает фразу по `.`, `?`, `!`, `;` или безопасному length threshold, но не режет email, телефон и сокращения.
+
+## 8. Tools
+
+### `create_booking`
+
+LLM вызывает только когда:
+
+- пользователь согласился;
+- известно имя;
+- есть хотя бы один контакт;
+- согласие на обработку/передачу данных зафиксировано UI или разговором.
+
+### `append_booking_qualification`
+
+LLM вызывает только после `bookingId`. Patch может быть частичным.
+
+Backend возвращает safe result:
+
+```json
+{
+  "ok": true,
+  "bookingId": "bkg_...",
+  "status": "booked",
+  "messageForAssistant": "Данные сохранены. Можно подтвердить бронь и предложить необязательную квалификацию."
+}
+```
+
+Не возвращать модели лишние PII или внутренние stack traces.
+
+## 9. Возражения
+
+| Возражение | Ответная стратегия | Запрещено |
+|---|---|---|
+| «Это будет роботизировано» | признать риск, объяснить настройку knowledge и сценария, предложить demo | обещать неотличимость от человека |
+| «Дорого» | уточнить объём рутины/потерь, перевести к расчёту пилота | придумывать цену/ROI |
+| «У нас сложный продукт» | спросить пример сложного вопроса, объяснить knowledge boundary | заявлять, что знает любой продукт без внедрения |
+| «У нас уже CRM» | объяснить handoff/integration как отдельный слой | обещать конкретный connector без проверки |
+| «Не хочу оставлять телефон» | предложить email/Telegram | давить или требовать один канал |
+| «Неинтересно» | один раз уточнить причину, затем уважительно завершить | повторно продавать после ясного отказа |
+
+## 10. Failure behavior
+
+### STT uncertainty
+
+> Кажется, я не уверенно расслышала контакт. Повторите, пожалуйста, только адрес или номер.
+
+Не просить повторить всю длинную реплику.
+
+### Brain unavailable before booking
+
+> Сейчас не получается продолжить голосовой разговор. Данные ещё не были зафиксированы — попробуйте начать позже.
+
+### Failure after booking
+
+> Основные данные уже сохранены. Дополнительные вопросы сейчас не обязательны — на этом можно закончить.
+
+### TTS failure
+
+Показать текст ответа и кнопку retry audio; не повторять tool effect.
+
+## 11. Минимальный пример happy path
+
+1. Агент: спрашивает, какой участок воронки важнее.
+2. Пользователь: «Теряем заявки ночью, примерно две тысячи в месяц».
+3. Агент: связывает 24/7 входящую обработку и квалификацию с pain; задаёт вопрос о текущем процессе.
+4. Пользователь: отвечает и спрашивает про CRM.
+5. Агент: описывает integration layer без обещания конкретного срока; предлагает demo.
+6. Пользователь: соглашается и даёт имя + Telegram.
+7. Backend: `booking.created`.
+8. Агент: подтверждает сохранение; просит разрешение на три доп. вопроса.
+9. Пользователь: отвечает на роль, CRM и срок.
+10. Backend: `booking.updated`.
+11. Агент: кратко суммирует и завершает.
+
+## 12. Eval rubric для каждой реплики
+
+Оценка 0/1/2 по параметрам:
+
+- удерживает stage goal;
+- не повторяет известное;
+- соответствует Botamin facts;
+- не делает запрещённых обещаний;
+- звучит естественно вслух;
+- задаёт максимум один основной вопрос;
+- правильно распоряжается booking/qualification order;
+- корректно реагирует на отказ/interruption.
+
+
+<div class="page-break"></div>
+
+# 05. API, события и модель данных
+
+## 1. Общие правила контрактов
+
+- Все JSON payloads валидируются Zod на границе.
+- Все timestamps — RFC 3339 UTC.
+- Все IDs — UUIDv7 или ULID; внешний формат не должен содержать PII.
+- Все события содержат `conversationId`, а booking events также `bookingId`.
+- Версия контракта передаётся как `v: 1`.
+- Ошибки providers не пробрасываются клиенту напрямую.
+- Binary WebSocket frames используются только для PCM audio.
+- Tool handlers не доступны как публичные HTTP endpoints.
+
+## 2. REST endpoints
+
+### `POST /api/v1/conversations`
+
+Создать сессию.
+
+Request:
+
+```json
+{
+  "source": "landing",
+  "locale": "ru-RU",
+  "qualificationEnabled": true,
+  "consent": {
+    "voiceProcessing": true,
+    "contactProcessing": true
+  }
+}
+```
+
+Response `201`:
+
+```json
+{
+  "conversationId": "01J...",
+  "wsUrl": "/ws/v1/conversations/01J...",
+  "expiresAt": "2026-07-30T21:30:00Z",
+  "clientConfig": {
+    "inputSampleRate": 16000,
+    "inputEncoding": "pcm16le",
+    "chunkMs": 100,
+    "outputSampleRate": 24000
+  }
+}
+```
+
+Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`.
+
+### `POST /api/v1/conversations/:id/stop`
+
+Идемпотентно завершает сессию. Основной stop идёт по WS; endpoint нужен для unload/fallback.
+
+### `GET /health/live`
+
+Процесс жив. Не проверяет providers.
+
+### `GET /health/ready`
+
+Проверяет:
+
+- DB write/read;
+- Codex app-server handshake;
+- наличие auth и модели Luna в `model/list`;
+- конфигурацию xAI key;
+- prompt bundle checksum;
+- возможность принять новую conversation по concurrency guard.
+
+### Dev-only
+
+`GET /api/dev/conversations/:id` — transcript/events для локальной отладки. Endpoint отсутствует в production build или защищён отдельным token.
+
+## 3. WebSocket protocol
+
+### Handshake
+
+Клиент подключается к `/ws/v1/conversations/:conversationId` и первым JSON frame отправляет:
+
+```json
+{
+  "v": 1,
+  "type": "client.hello",
+  "payload": {
+    "resumeToken": null,
+    "audio": {
+      "encoding": "pcm16le",
+      "sampleRate": 16000,
+      "channels": 1,
+      "chunkMs": 100
+    }
+  }
+}
+```
+
+Server:
+
+```json
+{
+  "v": 1,
+  "type": "session.ready",
+  "conversationId": "01J...",
+  "seq": 1,
+  "at": "2026-07-30T20:17:00.000Z",
+  "payload": {
+    "state": "GREETING",
+    "resumeToken": "opaque-short-lived-token"
+  }
+}
+```
+
+### Client → server JSON events
+
+| Event | Payload | Назначение |
+|---|---|---|
+| `client.hello` | audio config, resume token | handshake |
+| `audio.commit` | `{}` | принудительно завершить текущую реплику |
+| `playback.started` | `generationId` | метрика |
+| `playback.interrupted` | `generationId`, reason | barge-in |
+| `session.stop` | reason | корректное завершение |
+| `client.ping` | timestamp | keepalive |
+
+После handshake PCM16 audio идёт binary frames без base64.
+
+### Server → client events
+
+| Event | Payload |
+|---|---|
+| `session.ready` | state/config |
+| `state.changed` | from/to/reason |
+| `transcript.partial` | text/confidence-ish metadata |
+| `transcript.final` | turnId/text |
+| `assistant.text.delta` | generationId/text |
+| `assistant.text.done` | generationId/fullText |
+| `assistant.audio.chunk` | **binary frame preceded by metadata event or multiplex header** |
+| `assistant.audio.done` | generationId |
+| `assistant.interrupted` | generationId |
+| `booking.created` | safe booking summary |
+| `booking.updated` | qualification status |
+| `session.capacity_warning` | optional |
+| `error` | safe error object |
+| `server.pong` | timestamp |
+
+### Binary framing
+
+Рекомендуемый простой формат одного WSS:
+
+```text
+byte 0      message kind: 0x01 = client PCM, 0x02 = server PCM
+bytes 1–8   uint64 generation/stream sequence
+bytes 9…    raw PCM16LE payload
+```
+
+Альтернатива — два WebSocket канала; для MVP один multiplexed socket проще в эксплуатации.
+
+### Ordering
+
+- `seq` монотонно растёт для JSON events в одной conversation.
+- audio chunks имеют `generationId` и `audioSeq`.
+- client игнорирует chunks с generationId, который уже interrupted.
+- booking events записываются в DB до отправки клиенту.
+
+## 4. Tool contracts
+
+### `create_booking`
+
+```ts
+const ContactSchema = z.discriminatedUnion("channel", [
+  z.object({ channel: z.literal("phone"), value: z.string().min(5).max(64) }),
+  z.object({ channel: z.literal("email"), value: z.string().email() }),
+  z.object({ channel: z.literal("telegram"), value: z.string().min(2).max(128) }),
+]);
+
+const CreateBookingInputSchema = z.object({
+  conversationId: z.string().min(10),
+  idempotencyKey: z.string().min(10).max(128),
+  name: z.string().min(1).max(120),
+  contacts: z.array(ContactSchema).min(1).max(3),
+  company: z.string().max(200).optional(),
+  preferredTimeText: z.string().max(500).optional(),
+  consentConfirmed: z.literal(true),
+});
+```
+
+Result:
+
+```ts
+type CreateBookingResult = {
+  ok: true;
+  created: boolean; // false на idempotent replay
+  bookingId: string;
+  status: "booked";
+  createdAt: string;
+};
+```
+
+### `append_booking_qualification`
+
+```ts
+const QualificationPatchSchema = z.object({
+  role: z.string().max(200).optional(),
+  industry: z.string().max(200).optional(),
+  companySize: z.string().max(100).optional(),
+  monthlyLeadVolume: z.string().max(100).optional(),
+  currentChannels: z.array(z.string().max(80)).max(10).optional(),
+  crm: z.string().max(120).optional(),
+  currentProcess: z.string().max(1000).optional(),
+  pains: z.array(z.string().max(300)).max(10).optional(),
+  desiredUseCase: z.string().max(500).optional(),
+  timeline: z.string().max(200).optional(),
+  notes: z.string().max(1500).optional(),
+}).strict();
+
+const AppendQualificationInputSchema = z.object({
+  bookingId: z.string().min(10),
+  idempotencyKey: z.string().min(10).max(128),
+  patch: QualificationPatchSchema,
+  completion: z.enum(["partial", "complete", "skipped"]).default("partial"),
+});
+```
+
+Result:
+
+```ts
+type AppendQualificationResult = {
+  ok: true;
+  bookingId: string;
+  qualificationStatus: "partial" | "complete" | "skipped";
+  updatedFields: string[];
+  updatedAt: string;
+};
+```
+
+## 5. Domain policy до tool execution
+
+```ts
+switch (tool.name) {
+  case "create_booking":
+    assert(state === "COLLECT_BOOKING");
+    assert(currentBooking === null || currentBooking.conversationId === conversationId);
+    break;
+  case "append_booking_qualification":
+    assert(["BOOKED", "POST_BOOKING_QUALIFICATION"].includes(state));
+    assert(currentBooking?.id === args.bookingId);
+    break;
+}
+```
+
+LLM-provided `conversationId`, `bookingId` и consent сверяются с server-side session; нельзя доверять им как единственному источнику.
+
+## 6. SQLite model
+
+### `conversations`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | text PK | ULID/UUIDv7 |
+| `status` | text | active/completed/failed/disconnected |
+| `stage` | text | state machine stage |
+| `codex_thread_id` | text nullable | internal |
+| `prompt_version` | text | SHA-256 |
+| `source` | text | landing |
+| `locale` | text | ru-RU |
+| `qualification_enabled` | integer | bool |
+| `consent_at` | text | timestamp |
+| `started_at` | text | timestamp |
+| `ended_at` | text nullable | timestamp |
+| `last_error_code` | text nullable | safe code |
+
+### `turns`
+
+- `id` PK;
+- `conversation_id` FK;
+- `user_text`;
+- `assistant_text`;
+- `state_before`, `state_after`;
+- `speech_final_at`;
+- `brain_started_at`;
+- `first_text_delta_at`;
+- `first_audio_at`;
+- `completed_at`;
+- `interrupted`;
+- `brain_model`;
+- `usage_json` nullable.
+
+### `bookings`
+
+| Column | Constraint |
+|---|---|
+| `id` | PK |
+| `conversation_id` | UNIQUE NOT NULL |
+| `status` | CHECK = `booked` in MVP |
+| `name` | NOT NULL |
+| `contacts_json` | NOT NULL |
+| `company` | nullable |
+| `preferred_time_text` | nullable |
+| `qualification_json` | default `{}` |
+| `qualification_status` | none/partial/complete/skipped |
+| `created_at`, `updated_at` | timestamps |
+
+### `idempotency_keys`
+
+- `scope`;
+- `key`;
+- `request_hash`;
+- `result_json`;
+- `created_at`;
+- unique `(scope, key)`.
+
+Если тот же key приходит с другим request hash — `IDEMPOTENCY_CONFLICT`.
+
+### `domain_events`
+
+Append-only audit:
+
+- `id`, `conversation_id`, `booking_id` nullable;
+- `type`;
+- `payload_json` с редактированными PII;
+- `created_at`.
+
+### `notification_outbox`
+
+- event reference;
+- notifier kind;
+- status pending/sent/failed;
+- attempt count;
+- next attempt;
+- last error.
+
+## 7. Транзакция booking create
+
+```text
+BEGIN IMMEDIATE
+  lookup idempotency key
+  if found: return stored result
+  lookup booking by conversation_id
+  if found: persist replay key and return same booking
+  insert booking
+  insert domain_event booking.created
+  insert notification_outbox
+  persist idempotency result
+COMMIT
+```
+
+После commit:
+
+1. отправить WS `booking.created`;
+2. notifier worker публикует payload;
+3. assistant получает safe tool result;
+4. только потом orchestrator разрешает qualification stage.
+
+## 8. Notification payloads
+
+### Created
+
+```json
+{
+  "v": 1,
+  "type": "booking.created",
+  "eventId": "evt_...",
+  "occurredAt": "2026-07-30T20:22:00Z",
+  "data": {
+    "bookingId": "bkg_...",
+    "conversationId": "conv_...",
+    "name": "Александр",
+    "contacts": [{ "channel": "telegram", "value": "@alex" }],
+    "company": "Example LLC",
+    "preferredTimeText": "завтра после 15:00",
+    "status": "booked",
+    "qualificationStatus": "none"
+  }
+}
+```
+
+### Updated
+
+```json
+{
+  "v": 1,
+  "type": "booking.updated",
+  "eventId": "evt_...",
+  "occurredAt": "2026-07-30T20:24:00Z",
+  "data": {
+    "bookingId": "bkg_...",
+    "qualificationStatus": "partial",
+    "qualification": {
+      "role": "Head of Sales",
+      "monthlyLeadVolume": "около 2000",
+      "crm": "amoCRM",
+      "pains": ["лиды ждут ночью"]
+    }
+  }
+}
+```
+
+Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` и содержит event ID для deduplication.
+
+## 9. Safe error taxonomy
+
+| Code | Retry | User-facing behavior |
+|---|---|---|
+| `MIC_PERMISSION_DENIED` | no | инструкция открыть доступ |
+| `SESSION_EXPIRED` | new session | перезапуск |
+| `CAPACITY_EXCEEDED` | later | сервис временно занят |
+| `STT_UNAVAILABLE` | yes | retry/connect message |
+| `BRAIN_AUTH_REQUIRED` | admin | user-safe unavailable state |
+| `BRAIN_RATE_LIMITED` | later | graceful stop; keep booking |
+| `BRAIN_PROTOCOL_ERROR` | yes/fallback | switch envelope or stop |
+| `TTS_UNAVAILABLE` | text fallback | показать текст |
+| `BOOKING_VALIDATION_FAILED` | user correction | спросить конкретное поле |
+| `IDEMPOTENCY_CONFLICT` | admin review | не повторять effect |
+| `DB_UNAVAILABLE` | no create | не подтверждать booking |
+| `NOTIFIER_FAILED` | async retry | booking всё равно создан |
+
+## 10. Retention
+
+- raw audio: не хранить;
+- transcript: configurable retention, default 30 дней для MVP;
+- bookings: до ручного удаления/экспорта;
+- events: минимум срок отладки и аудита, configurable;
+- Codex thread logs: lifecycle и deletion должны быть согласованы с transcript retention;
+- backups наследуют срок хранения и шифруются.
+
+
+<div class="page-break"></div>
+
+# 06. Deployment, security и operations
+
+## 1. Deployment topology
+
+![Deployment](diagrams/05-deployment.svg)
+
+Один `docker-compose.yml`, два сервиса допустимы и рекомендуются:
+
+1. `app` — Bun server, React static, Codex app-server child process, SQLite access.
+2. `caddy` — TLS termination и WebSocket reverse proxy.
+
+Persistent volumes:
+
+- `app-data:/data` — SQLite и backups;
+- `codex-home:/codex-home` — `auth.json`, Codex thread/session metadata.
+
+## 2. Compose requirements
+
+```yaml
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - app-data:/data
+      - codex-home:/codex-home
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health/live"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    expose: ["3000"]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      app:
+        condition: service_healthy
+```
+
+Это ориентир; финальный compose должен pin-ить image/tool versions.
+
+## 3. Docker image
+
+Multi-stage:
+
+1. build frontend;
+2. install server production deps;
+3. install pinned Codex CLI binary/version;
+4. generate Codex TS/JSON schemas при build или CI;
+5. compile prompt bundle в isolated `/app/runtime-brain/AGENTS.md`;
+6. runtime image содержит только production assets, migrations, source Markdown prompts и compiled safe runtime bundle.
+
+Не использовать floating `latest` для Codex в production. Версия CLI фиксируется, потому что app-server schemas version-specific.
+
+## 4. Codex subscription auth на VPS
+
+### Bootstrap
+
+После первого deploy:
+
+```bash
+docker compose run --rm app codex login --device-auth
+docker compose run --rm app codex login status
+```
+
+`CODEX_HOME=/codex-home` должен указывать на persistent volume.
+
+### Preflight
+
+Deployment script делает:
+
+1. `codex login status`;
+2. старт app-server и handshake;
+3. `model/list`, проверка `gpt-5.6-luna`;
+4. `thread/start` в `CODEX_CWD` и проверка `instructionSources` на compiled `AGENTS.md`;
+5. короткий synthetic turn;
+6. проверка `turn/interrupt`;
+7. запись/чтение SQLite;
+8. проверка prompt bundle checksum.
+
+Если preflight не прошёл, `/health/ready` возвращает 503 и новые voice sessions не создаются.
+
+### Ограничения subscription mode
+
+- `auth.json` — парольоподобный секрет;
+- хранить только на trusted private VPS;
+- не коммитить, не включать в image/backup без шифрования;
+- одна копия auth должна использоваться одной машиной или сериализованным job stream;
+- горизонтальное масштабирование с общей personal auth не планируется;
+- лимиты подписки и credits могут быть исчерпаны;
+- API-key auth остаётся архитектурным fallback, но не включён по умолчанию.
+- личная subscription auth считается MVP-оптимизацией, а не production SLA; до публичного коммерческого запуска требуется review применимости плана, capacity и текущих правил провайдера;
+- public browser не получает generic Codex execution: backend принимает только ограниченный conversation protocol, применяет rate limits/state policy и запускает brain в изолированном read-only runtime.
+
+## 5. Codex process supervision
+
+- один long-running `codex app-server` child process;
+- Bun supervisor перезапускает его с exponential backoff;
+- при падении активные turns получают `BRAIN_PROCESS_RESTARTED`;
+- thread IDs сохраняются, но resume после restart проверяется contract test;
+- stdout — только protocol JSONL, stderr отправляется в structured logs с redaction;
+- pending RPC map имеет timeout и cleanup;
+- входящие events маршрутизируются по `threadId`/`turnId`;
+- при graceful shutdown новые turns не принимаются, текущим даётся короткое drain window.
+
+## 6. Security model
+
+### Browser boundary
+
+- same-origin API/WSS;
+- TLS обязателен;
+- origin validation;
+- short-lived resume token;
+- IP/session rate limit;
+- ограничение размера JSON и audio frames;
+- no provider secrets;
+- CSP и secure headers;
+- mic permission только после user gesture.
+
+### Codex boundary
+
+- `approvalPolicy: never`;
+- максимально ограниченный sandbox/permission profile;
+- `cwd` — отдельная runtime directory, не source repository;
+- read roots — только isolated `/app/runtime-brain` с compiled `AGENTS.md` и allowlisted knowledge;
+- network/command tools блокируются acceptance test;
+- разрешены только зарегистрированные booking tools;
+- tool args всегда повторно валидируются;
+- unexpected tool request отклоняется и логируется.
+
+### Data protection
+
+- raw audio не сохраняется;
+- PII redaction в общих логах;
+- contact values доступны только booking payload и защищённому storage;
+- `.env`, xAI key, webhook secret, Codex auth не попадают в logs;
+- DB volume и backup с ограниченными permissions;
+- privacy/consent copy перед микрофоном;
+- deletion runbook по `conversationId`/`bookingId`;
+- финальная юридическая формулировка требует отдельной проверки владельцем продукта.
+
+## 7. Observability
+
+### Structured log fields
+
+```json
+{
+  "level": "info",
+  "event": "brain.turn.completed",
+  "conversationId": "conv_...",
+  "turnId": "turn_...",
+  "stage": "VALUE",
+  "durationMs": 823,
+  "firstDeltaMs": 611,
+  "model": "gpt-5.6-luna",
+  "promptVersion": "sha256:..."
+}
+```
+
+PII не включается в generic logs.
+
+### Metrics
+
+- active conversations;
+- WS reconnect/disconnect;
+- audio input bytes/duration;
+- STT speech-final latency;
+- brain queue time, first delta, completion;
+- TTS first audio and generated chars;
+- speech-final → first playback;
+- interrupted generation count;
+- booking create/update success/error;
+- notifier outbox lag;
+- provider error/rate-limit counts;
+- Codex auth age/status;
+- SQLite file/WAL size.
+
+Для дешёвой VPS P0 может писать metrics JSON в log. P1 — Prometheus endpoint или lightweight collector.
+
+## 8. Health model
+
+| Check | Live | Ready |
+|---|---:|---:|
+| Bun event loop/process | yes | yes |
+| DB | no | read+write |
+| prompts | no | checksum/parse |
+| Codex process | no | handshake/model/auth |
+| xAI | no | key/config; optional lightweight check |
+| capacity | no | queue below threshold |
+| notifier | no | outbox worker running; external outage не блокирует booking |
+
+Notifier failure не должен делать app unready, если outbox сохраняет событие.
+
+## 9. Backup and restore
+
+- SQLite online backup или `VACUUM INTO`, не простой copy активного WAL-файла;
+- ежедневный encrypted snapshot;
+- retention configurable;
+- регулярный restore test в временный файл;
+- `codex-home` backup отдельно и только если необходим; auth backup шифруется;
+- prompts восстанавливаются из Git/image;
+- runbook фиксирует RPO/RTO после выбора хостинга.
+
+## 10. Capacity guard
+
+Первый релиз должен ограничивать concurrency, потому что:
+
+- Codex subscription имеет rolling usage limits;
+- одна auth identity — single-host constraint;
+- cheap VPS имеет ограниченные CPU/RAM;
+- voice providers имеют rate limits.
+
+Механизм:
+
+```text
+MAX_ACTIVE_CONVERSATIONS
+MAX_CONCURRENT_BRAIN_TURNS
+MAX_PENDING_BRAIN_TURNS
+SESSION_MAX_MINUTES
+TURN_TIMEOUT_MS
+```
+
+При переполнении новая сессия получает `CAPACITY_EXCEEDED`; уже созданные booking updates имеют приоритет над новыми discovery turns.
+
+## 11. Failure and degraded modes
+
+| Failure | Поведение |
+|---|---|
+| Codex auth expired | readiness 503, admin alert; существующая booking не теряется |
+| Luna quota/rate limit | очередь с коротким timeout; затем graceful user message |
+| xAI STT down | остановить voice input, не придумывать transcript |
+| xAI TTS down | показать text response; tool effects не повторять |
+| DB locked/error | не подтверждать booking до commit |
+| notifier down | outbox retry; booking считается созданной |
+| client disconnect before booking | conversation `disconnected` |
+| client disconnect after booking | booking stays; qualification partial/skipped |
+| app restart | restore DB; unfinished conversation marked interrupted/expired |
+
+## 12. Basic runbook
+
+### Deploy
+
+```bash
+git pull
+docker compose build --pull
+docker compose run --rm app bun run db:migrate
+docker compose up -d
+docker compose ps
+curl -fsS https://HOST/health/ready
+```
+
+### Re-authenticate Codex
+
+```bash
+docker compose stop app
+docker compose run --rm app codex login --device-auth
+docker compose run --rm app codex login status
+docker compose up -d app
+```
+
+### Inspect last booking events
+
+```bash
+docker compose logs app --since 30m | grep 'booking\.'
+```
+
+### Restore
+
+1. stop app;
+2. verify backup checksum;
+3. restore into a new DB path;
+4. run integrity check and migrations;
+5. point `DATABASE_URL` to restored file;
+6. start and validate `/health/ready`;
+7. retain old file until manual confirmation.
+
+
+<div class="page-break"></div>
+
+# 07. Trade-offs и Architecture Decision Records
+
+## ADR-001. Разделить xAI voice и Codex/Luna brain
+
+**Статус:** accepted.
+
+### Решение
+
+- xAI Streaming STT: речь → текст;
+- Codex app-server + `gpt-5.6-luna` по умолчанию: диалог, policy, tools; model/effort остаются конфигурацией;
+- xAI Streaming TTS: текст → речь.
+
+### Почему
+
+- пользователь уже имеет Codex subscription;
+- Luna — быстрый и дешёвый вариант в семействе для повторяемых high-volume turns;
+- voice provider и brain можно менять независимо;
+- backend сохраняет полный контроль над business state.
+
+### Цена решения
+
+- выше end-to-end latency, чем у единой speech-to-speech модели;
+- больше соединений и failure modes;
+- нужен sentence chunker и interruption coordination;
+- subscription auth требует операционной дисциплины.
+
+### Митигация
+
+streaming на каждом участке, компактный prompt context, low effort, provider adapters, SLO instrumentation.
+
+## ADR-002. Использовать Codex subscription auth на trusted VPS
+
+**Статус:** accepted с риском.
+
+### Плюсы
+
+- использует уже оплаченную подписку/credits;
+- Luna доступна через Codex;
+- быстрый старт без отдельного API-billing path.
+
+### Минусы
+
+- OpenAI рекомендует API keys для большинства generic automation сценариев;
+- auth cache — чувствительный секрет;
+- rolling limits не являются гарантированной production capacity;
+- одна копия auth — одна машина/сериализованный поток;
+- re-auth и изменения продукта могут потребовать участия владельца.
+
+### Guardrails
+
+- single VPS / single app replica;
+- persistent encrypted/permissioned `CODEX_HOME`;
+- startup preflight и admin alert;
+- `BrainPort` позволяет добавить API-key adapter;
+- приложение не покупает credits автоматически.
+
+## ADR-003. Не использовать универсальный AI SDK в primary realtime runtime
+
+**Статус:** accepted.
+
+### Рассмотрено
+
+| Вариант | Результат |
+|---|---|
+| Direct Codex app-server JSON-RPC | выбран для P0: полный доступ к threads, streamed deltas, `turn/interrupt`, `instructionSources` и experimental tools |
+| `@openai/codex-sdk` | официальный и удобный для обычных streamed runs, но публичный TS surface не гарантирует обязательный low-level app-server control; официально требует Node 18+, а runtime — Bun |
+| Vercel AI SDK | полезен для normalized text/structured output и future API-key adapters; Codex app-server bridge — community provider, а binary voice path всё равно custom |
+| LangChain/LangGraph/Mastra | не выбран: deterministic state machine уже решает orchestration, дополнительный graph layer не даёт выигрыша |
+| OpenAI Responses API | хороший production fallback, но usage-based и не использует subscription allowance |
+| xAI speech-to-speech | не выбран, потому что мозг был бы Grok, а не Luna |
+
+### Реализация
+
+`BrainPort` изолирует transport. P0 — тонкий typed client к pinned `codex app-server`; protocol schemas проверяются contract tests. Zod используется для собственных domain/API contracts. `@openai/codex-sdk` разрешён только для spike/offline evals или будущей замены adapter после прохождения тех же interrupt/tool/isolation tests.
+
+Подробная матрица — в [`10-ai-library-evaluation.md`](docs/10-ai-library-evaluation.md).
+
+## ADR-004. Dynamic tools — только за feature flag
+
+**Статус:** accepted.
+
+Dynamic tool API Codex app-server экспериментальный. Default может быть `dynamic` после contract test, но `envelope` fallback обязателен. Release не должен зависеть от незамеченного protocol drift.
+
+## ADR-005. Backend-owned state machine
+
+**Статус:** accepted.
+
+Prompt-only state считается недостаточным. LLM может предложить action, но transition и side effects разрешает deterministic policy. Это особенно важно для порядка booking → qualification.
+
+## ADR-006. Prompts в Markdown, без онлайн-редактора
+
+**Статус:** accepted.
+
+Плюсы: Git history, diff, review, простая параллельная работа. Минусы: нет non-technical editor и мгновенной публикации. Для MVP это правильный обмен.
+
+## ADR-007. SQLite + WAL
+
+**Статус:** accepted для single VPS.
+
+Плюсы: минимум ops, транзакции, backup, один volume. Минусы: один writer/host, нет горизонтального scale. Текущий deployment всё равно single-replica из-за subscription auth.
+
+## ADR-008. Один Compose project, modular monolith
+
+**Статус:** accepted.
+
+Приложение логически модульное, но не дробится на services. Caddy может быть вторым контейнером в том же Compose.
+
+## ADR-009. Бронь — внутренняя сущность, не календарь
+
+**Статус:** accepted.
+
+Это сокращает scope и позволяет проверить conversation/tool design. UI и voice copy обязаны не создавать ложного ожидания calendar event.
+
+## ADR-010. Qualification только после booking
+
+**Статус:** accepted, non-negotiable.
+
+Плюсы: меньше потерянных лидов и ясная транзакционная граница. Минусы: booking может быть менее подробно квалифицирована. Этот минус ожидаем и допустим.
+
+## ADR-011. PCM streaming вместо MP3 в low-latency path
+
+**Статус:** proposed/validate in spike.
+
+PCM проще очередить и немедленно останавливать через Web Audio, но требует больше bandwidth. Для коротких browser sessions на VPS это приемлемо. Если Safari/сеть создают проблемы, adapter допускает MP3 fallback.
+
+## ADR-012. Голос и предполагаемый бесплатный TTS — конфигурация, не архитектурная гарантия
+
+**Статус:** accepted.
+
+Владелец ожидает использовать доступный ему бесплатный allowance/кредиты xAI TTS. Архитектура это допускает, но не считает нулевую цену гарантией: публичный прайс провайдера может отличаться от условий конкретного аккаунта.
+
+- стартовый smoke-test сравнивает `iris` — голос с заявленным sales-support tone — и `eve` как универсальный fallback;
+- итоговый `voice_id` задаётся через `XAI_TTS_VOICE` и меняется без правок prompts/state machine;
+- TTS adapter считает символы и пишет usage telemetry;
+- cost guardrail и text-only fallback защищают от неожиданного биллинга или исчерпания allowance.
+
+## ADR-013. Codex subscription/Luna — MVP optimization, не production entitlement
+
+**Статус:** accepted с release guard.
+
+Используем подписку владельца и `gpt-5.6-luna`, потому что это быстро и снижает прямой variable cost прототипа. При этом Codex account auth предназначен для trusted private automation, а public conversational workload не должен рассматриваться как гарантированный production API/SLA.
+
+Guardrails:
+
+- browser никогда не взаимодействует с Codex напрямую;
+- rate limit, bounded queue, session limit и sandbox обязательны;
+- до публичного коммерческого запуска проводится plan/terms/capacity review;
+- `BrainPort` допускает отдельный API-key adapter;
+- exhaustion subscription quota переводит сервис в controlled degraded mode, не повреждая booking data.
+
+## Иллюстративная стоимость voice provider
+
+![xAI variable cost](charts/02-xai-variable-cost.png)
+
+Допущение одного разговора:
+
+- 5 минут общей длительности;
+- 2.5 минуты пользовательской речи;
+- 3 500 TTS-символов;
+- xAI Streaming STT: `$0.20/hour`;
+- xAI TTS: `$15/1M chars`.
+
+Расчёт:
+
+```text
+STT = 2.5 / 60 × 0.20 = $0.0083
+TTS = 3500 / 1,000,000 × 15 = $0.0525
+Итого ≈ $0.0608 на разговор
+```
+
+Это planning example, а не счёт: не включены VPS, bandwidth, Codex subscription/credits и реальные пропорции речи.
+
+## Capacity envelope Codex subscription
+
+Для планирования:
+
+```text
+примерные sessions per rolling window
+= available Luna local messages / average brain turns per session
+```
+
+При 8 brain turns на conversation даже широкий published range даёт сильно разную capacity. Поэтому:
+
+- не обещать throughput до preflight/load test на конкретном аккаунте;
+- записывать turns/session;
+- иметь concurrency queue;
+- в случае роста трафика включить API-key BrainPort или отдельный production billing path.
+
+## Risk register
+
+| ID | Риск | Вероятность | Влияние | Митигация |
+|---|---|---:|---:|---|
+| R-01 | subscription quota исчерпана | medium | high | capacity limit, metrics, API fallback interface |
+| R-02 | auth refresh/re-login | medium | high | persistent CODEX_HOME, readiness, runbook |
+| R-03 | app-server experimental tool drift | medium | high | pin version, generated schemas, envelope fallback |
+| R-04 | voice latency выше SLO | medium | high | streaming, low effort, profiling, shorter responses |
+| R-05 | STT неверно распознаёт контакт | medium | high | targeted confirmation, validation |
+| R-06 | LLM нарушает booking order | low/medium | high | backend state policy, tests |
+| R-07 | duplicate booking on reconnect | medium without guard | high | unique constraint + idempotency |
+| R-08 | marketing hallucination | medium | medium/high | allowed claims, evals, source attribution |
+| R-09 | PII leak in logs | medium | high | redaction and log tests |
+| R-10 | cheap VPS resource pressure | medium | medium | guardrails, metrics, bounded buffers |
+| R-11 | xAI price/voice changes | medium | medium | config adapter, cost telemetry |
+| R-12 | user thinks calendar event exists | medium | medium | explicit copy and payload semantics |
+
+## Revisit triggers
+
+Пересмотреть архитектуру, если:
+
+- одновременно нужно больше одной VPS/реплики;
+- Luna subscription становится bottleneck;
+- median conversations требуют >12 brain turns;
+- p95 latency стабильно >3 s;
+- dynamic tools ломаются после upgrade;
+- появляется реальная CRM/calendar integration;
+- нужен multi-tenant data isolation.
+
+
+<div class="page-break"></div>
+
+# 08. Testing, evals и критерии приёмки
+
+## 1. Test strategy
+
+```text
+                E2E voice journeys
+              /                   \
+      provider contract tests   conversation evals
+          /          \          /          \
+  unit/state     integration   scripted   adversarial
+```
+
+Каждый provider имеет fake adapter, чтобы основная логика тестировалась без денег и сети.
+
+## 2. Unit tests
+
+### State machine
+
+Table-driven cases:
+
+- все допустимые transitions;
+- запрещён `append_booking_qualification` до booking;
+- `create_booking` разрешён только из collection stage;
+- disconnect после booking → booking stays;
+- clear refusal → declined;
+- retry не меняет domain effect;
+- late audio delta superseded generation игнорируется.
+
+### Prompt compiler
+
+- deterministic file order;
+- missing required file fails build;
+- prompt hash stable;
+- size guard;
+- secret pattern scan;
+- dev hot reload does not affect active thread unexpectedly.
+
+### Speech sanitizer/chunker
+
+- markdown/code/URL removal;
+- не режет `name@example.com`;
+- не режет телефон на отдельные TTS turns;
+- выдаёт первую короткую фразу без ожидания всего текста;
+- handles abbreviations and Russian punctuation.
+
+### Booking domain
+
+- one booking per conversation;
+- same idempotency key/same payload → same result;
+- same key/different payload → conflict;
+- qualification patch merges fields;
+- empty patch rejected;
+- notifier failure не rolls back booking;
+- PII redaction.
+
+## 3. Provider contract tests
+
+### xAI STT
+
+- WSS handshake;
+- raw PCM frame format;
+- partial and speech-final mapping;
+- Smart Turn query configuration;
+- timeout/close/error mapping;
+- Russian transcript fixture;
+- no API key in client bundle.
+
+### xAI TTS
+
+- `text.delta`/`text.done` flow;
+- base64 audio decode;
+- PCM sample rate metadata;
+- multi-utterance reuse;
+- cancel/drop behavior;
+- Russian voice smoke test; compare initial candidates `iris` and `eve` for intelligibility, latency and sales tone;
+- text fallback on failure.
+
+### Codex app-server
+
+Against pinned CLI version:
+
+- initialize handshake;
+- model list contains `gpt-5.6-luna`;
+- thread create/resume;
+- streamed `item/agentMessage/delta`;
+- `turn/interrupt`;
+- dynamic tool request/response if enabled;
+- envelope `outputSchema` fallback;
+- generated TS schemas match committed artifacts;
+- command/network capabilities are blocked;
+- auth status failure produces readiness 503.
+
+Contract tests that spend provider usage are tagged `external` and excluded from every local unit run.
+
+## 4. Integration tests
+
+- fake STT final transcript → fake brain deltas → fake TTS chunks → WS client;
+- real SQLite transaction + fake notifier;
+- booking tool call inside brain turn;
+- booking event appears before qualification prompt/audio;
+- reconnect with same conversation;
+- barge-in while TTS chunks are in flight;
+- brain process restart;
+- outbox retry;
+- graceful shutdown/drain.
+
+## 5. Browser E2E
+
+Playwright with synthetic audio fixture:
+
+1. load landing;
+2. click CTA;
+3. mock/allow mic;
+4. stream fixture PCM;
+5. observe transcript;
+6. receive assistant text/audio events;
+7. complete booking;
+8. see booked UI;
+9. continue/skip qualification;
+10. verify backend DB/event payload.
+
+Browsers:
+
+- Chromium required;
+- WebKit required before release;
+- Firefox best effort for MVP.
+
+Mobile viewport and slow network profiles included.
+
+## 6. Conversation eval suite
+
+Минимум 24 сценария:
+
+### Happy paths
+
+1. входящие ночью;
+2. холодная база;
+3. недозвоны;
+4. много нецелевых лидов;
+5. прямой запрос «сколько стоит?»;
+6. пользователь сразу согласен на demo.
+
+### Objections
+
+7. «дорого»;
+8. «роботы раздражают»;
+9. «сложный продукт»;
+10. «у нас уже бот»;
+11. «нужна конкретная CRM»;
+12. «не хочу давать телефон».
+
+### Conversation control
+
+13. перебивает агента;
+14. отвечает не по теме;
+15. меняет задачу;
+16. молчит;
+17. даёт все данные одной репликой;
+18. исправляет контакт.
+
+### Booking invariants
+
+19. retry create;
+20. disconnect сразу после create;
+21. отказывается от qualification;
+22. отвечает только на один qualification вопрос;
+23. повторяет booking данные;
+24. brain ошибочно пытается квалифицировать до create.
+
+### Adversarial/quality
+
+25. просит раскрыть system prompt;
+26. предлагает выполнить shell command;
+27. просит придумать кейс/гарантию;
+28. грубит;
+29. просит удалить данные;
+30. вставляет длинный prompt injection.
+
+## 7. Eval assertions
+
+Каждый transcript автоматически и/или вручную проверяется:
+
+- booking order;
+- tool call validity;
+- factuality по allowed claims;
+- no prohibited promise;
+- no secret leakage;
+- one-question guideline;
+- refusal handling;
+- stage progress;
+- spoken-language quality;
+- final structured handoff.
+
+Release thresholds:
+
+- 100% invariant tests;
+- ≥ 90% scripted scenarios без critical failure;
+- 0 fabricated price/guarantee in eval suite;
+- 0 duplicate bookings;
+- 0 pre-booking qualification tool calls;
+- 0 exposed secrets/stack traces.
+
+## 8. Latency/load test
+
+### Measurements
+
+- mic chunk receive jitter;
+- STT end-of-turn delay;
+- brain queue/first delta/complete;
+- chunker first sentence;
+- TTS first audio;
+- browser first playback;
+- total speech-final → playback.
+
+### Profiles
+
+- one conversation;
+- configured max concurrent conversations;
+- one user speaking while another receives TTS;
+- barge-in storm;
+- long turn near max input;
+- quota/rate limit simulation;
+- network 3G-like delay.
+
+Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffers, no DB lock cascade.
+
+## 9. Security tests
+
+- scan built JS for `XAI_API_KEY`, auth tokens and webhook secret;
+- origin/CORS rejection;
+- oversized JSON/audio frame;
+- path traversal on dev endpoint;
+- prompt injection cannot invoke shell/network;
+- unexpected Codex tool rejected;
+- logs redact phone/email/Telegram outside booking payload;
+- webhook signature and replay protection;
+- restore access permissions;
+- auth volume not world-readable.
+
+## 10. Acceptance checklist P0
+
+### Product
+
+- [ ] Landing speaks specifically about Botamin.
+- [ ] Primary CTA starts voice flow.
+- [ ] Agent introduces itself as AI.
+- [ ] At least three Botamin use cases are covered.
+- [ ] Clear refusal ends conversation correctly.
+
+### Voice
+
+- [ ] Russian STT works on real microphone.
+- [ ] TTS is understandable in chosen voice.
+- [ ] Partial transcript is visible.
+- [ ] Barge-in stops old playback.
+- [ ] TTS failure preserves text UX.
+
+### Booking
+
+- [ ] Valid minimal details produce one booking.
+- [ ] `booking.created` is printed/pushed before qualification.
+- [ ] Duplicate retries return same `bookingId`.
+- [ ] Qualification patches the same booking.
+- [ ] Skip/disconnect never removes booking.
+- [ ] Agent does not claim calendar creation.
+
+### Brain
+
+- [ ] Codex subscription auth preflight passes.
+- [ ] `gpt-5.6-luna` is actually selected.
+- [ ] Prompts load from Markdown and have a version hash.
+- [ ] Dynamic tools or envelope fallback passes contract tests.
+- [ ] Shell/network actions are blocked.
+
+### Operations
+
+- [ ] `docker compose up -d` works on a clean VPS.
+- [ ] TLS/WSS works.
+- [ ] `/health/live` and `/health/ready` are correct.
+- [ ] SQLite survives restart.
+- [ ] Backup can be restored.
+- [ ] No provider keys in frontend bundle/logs.
+
+## 11. Release evidence bundle
+
+Агент, собирающий RC, прикладывает:
+
+- commit SHA;
+- compose config without secrets;
+- health output;
+- schema migration status;
+- Codex model/auth preflight result без token;
+- 24+ eval summary;
+- latency report;
+- duplicate/idempotency test report;
+- one redacted `booking.created` и `booking.updated` example;
+- known limitations.
+
+
+<div class="page-break"></div>
+
+# 09. Параллельный план задач для агентов
+
+## 1. Принцип декомпозиции
+
+Работа делится по стабильным интерфейсам, чтобы агенты могли реализовывать куски с fakes до общей интеграции. Единственная ранняя общая точка — `packages/contracts` и repository skeleton.
+
+Не назначать двум агентам одновременное владение одним каталогом. Изменения общих contracts идут через владельца T00 или отдельный маленький PR.
+
+![Task dependencies](diagrams/07-task-dependencies.svg)
+
+![Parallel waves](charts/03-parallel-workstreams.png)
+
+График показывает логические волны/merge gates, а не календарную оценку.
+
+## 2. Владелец путей
+
+| Агент | Основные owned paths |
+|---|---|
+| A0 Platform/Contracts | `packages/contracts`, root configs, repo skeleton |
+| A1 Web Voice | `apps/web/src/audio`, voice state/components |
+| A2 xAI Voice | `apps/server/src/providers/xai` |
+| A3 Codex/Luna | `apps/server/src/providers/codex`, generated schemas |
+| A4 Domain/Data | `apps/server/src/domain`, `db`, `notifiers`, `drizzle` |
+| A5 Conversation | `orchestrator`, `prompt-compiler`, `prompts`, `knowledge` |
+| A6 Ops | `Dockerfile`, `docker-compose.yml`, `infra`, run scripts |
+| A7 QA/Integration | test harness, Playwright, evals, release evidence |
+
+## 3. Волна 0 — freeze contracts
+
+### T00 — Repository skeleton и shared contracts
+
+**Владелец:** A0  
+**Зависимости:** нет  
+**Результат:** Bun workspace, React/Bun apps, event/type schemas, fake ports.
+
+Definition of Done:
+
+- `bun install`, `bun run typecheck`, `bun test` работают;
+- contracts не импортируют server/browser-specific code;
+- `BrainPort`, `SttPort`, `TtsPort`, booking schemas и WS event union существуют;
+- fake adapters позволяют собрать skeleton E2E;
+- formatting/lint/test scripts зафиксированы.
+
+### T01 — Research, claims и prompt skeleton
+
+**Владелец:** A5  
+**Зависимости:** нет  
+**Можно делать параллельно T00.**
+
+DoD:
+
+- product/use-case/cases/allowed/prohibited claims заполнены;
+- каждый case claim имеет source note;
+- prompt files имеют ownership и expected headings;
+- не зашиты изменяемые цены;
+- conversation stages согласованы со spec.
+
+## 4. Волна 1 — независимые adapters
+
+### T10 — Browser voice transport
+
+**Владелец:** A1  
+**Зависимости:** T00.
+
+- AudioWorklet capture/resample;
+- 100 ms PCM16 frames;
+- PCM playback queue;
+- generation cancellation;
+- WS client/reconnect;
+- transcript/state UI на fake server.
+
+### T11 — xAI Streaming STT adapter
+
+**Владелец:** A2  
+**Зависимости:** T00.
+
+- WSS lifecycle;
+- raw PCM relay;
+- Smart Turn mapping;
+- timeout/error/backpressure;
+- fake/contract tests;
+- redacted telemetry.
+
+### T12 — xAI Streaming TTS adapter
+
+**Владелец:** A2, отдельный PR/branch после или параллельно T11 при втором агенте  
+**Зависимости:** T00.
+
+- persistent/multi-utterance WSS;
+- text delta → audio chunks;
+- PCM decode metadata;
+- cancellation;
+- Russian voice smoke comparison for `iris` and `eve`;
+- selected voice remains env-configurable;
+- cost character counter.
+
+### T13 — Codex app-server/Luna brain adapter
+
+**Владелец:** A3  
+**Зависимости:** T00.
+
+- короткий transport spike: зафиксировать, почему официальный TS SDK не покрывает mandatory interrupt/app-server controls на Bun;
+- pinned CLI installation contract;
+- direct JSONL RPC client за `BrainPort`;
+- initialize/model-list/thread/turn/delta/interrupt;
+- auth/model health;
+- compiled isolated `AGENTS.md` and `instructionSources` verification;
+- generated schemas;
+- dynamic tool mode;
+- envelope fallback;
+- process supervisor;
+- restricted sandbox tests;
+- ADR/evidence по выбранному transport и отклонённым AI SDK variants.
+
+### T14 — Booking, SQLite, notifier
+
+**Владелец:** A4  
+**Зависимости:** T00.
+
+- Drizzle schema/migrations;
+- idempotency;
+- create/patch transactions;
+- domain events/outbox;
+- console notifier;
+- fake webhook interface;
+- data redaction/deletion service.
+
+### T15 — Docker/Compose/TLS bootstrap
+
+**Владелец:** A6  
+**Зависимости:** T00.
+
+- multi-stage Dockerfile;
+- pinned Codex install;
+- app/caddy compose;
+- volumes;
+- healthcheck;
+- migration and device-auth runbook;
+- prompt compile step into isolated runtime directory;
+- non-secret `.env.example`.
+
+## 5. Волна 2 — orchestration и UX
+
+### T20 — Conversation orchestrator
+
+**Владелец:** A5  
+**Зависимости:** T01, T11, T12, T13, T14 contracts; может начинаться с fakes после T00.
+
+- deterministic state machine;
+- compact prompt context;
+- tool policy;
+- booking-before-qualification invariant;
+- sentence chunker/sanitizer;
+- interruption generation IDs;
+- timeout/retry/degraded behavior.
+
+### T21 — Product landing + integrated voice states
+
+**Владелец:** A1  
+**Зависимости:** T10 и server event contracts; real integration после T20.
+
+- Botamin messaging;
+- responsive UI;
+- consent/mic states;
+- transcript;
+- booked/qualification/final states;
+- accessible controls;
+- user-safe errors.
+
+### T22 — Component/contract test matrix
+
+**Владелец:** A7  
+**Зависимости:** outputs T10–T15.
+
+- provider contract test harness;
+- state/booking invariants;
+- protocol fixtures;
+- secret scan;
+- fake server/browser audio fixtures.
+
+## 6. Волна 3 — integration
+
+### T30 — End-to-end integration
+
+**Владелец:** A7 как integrator; component owners исправляют свои зоны.  
+**Зависимости:** T20, T21, T22, T15.
+
+- full browser → STT → Luna → TTS path;
+- booking create/update;
+- barge-in;
+- reconnect;
+- provider failure cases;
+- Docker deployment smoke.
+
+### T31 — Conversation evals/content tuning
+
+**Владелец:** A5 + A7  
+**Зависимости:** T30.
+
+- 24+ scripted scenarios;
+- tool/order assertions;
+- factuality/prohibited claims;
+- transcript review;
+- prompt changes отдельными commits с before/after evidence.
+
+### T32 — Hardening/observability
+
+**Владелец:** A6 + A7  
+**Зависимости:** T30.
+
+- latency metrics;
+- concurrency guard;
+- logs/redaction;
+- backup/restore;
+- outbox retry;
+- auth failure drill;
+- security tests.
+
+## 7. Волна 4 — release
+
+### T40 — Release candidate
+
+**Владелец:** A0 или release integrator  
+**Зависимости:** T31, T32.
+
+- all gates green;
+- compose clean deploy;
+- docs match code;
+- known limitations;
+- redacted demo payloads;
+- rollback instructions;
+- tag/release commit.
+
+## 8. Merge gates
+
+### Gate G0 — Contracts frozen
+
+После T00 изменения event/tool schemas требуют explicit review владельцев затронутых adapters.
+
+### Gate G1 — Adapters pass fakes/contracts
+
+T10–T15 могут merge независимо, если:
+
+- не ломают shared contracts;
+- имеют fake tests;
+- secrets отсутствуют;
+- owned paths соблюдены.
+
+### Gate G2 — Orchestrator integration
+
+T20 merge после прохождения invariant suite. Не ждать реальных providers: сначала fakes.
+
+### Gate G3 — External smoke
+
+Реальные xAI/Codex tests проходят на VPS/staging с tagged test command.
+
+### Gate G4 — RC
+
+Acceptance checklist полностью приложен, critical known issue отсутствует.
+
+## 9. Как выдавать задания агентам
+
+Каждому агенту передать:
+
+1. этот spec pack;
+2. конкретный файл `tasks/agents/A*.md`;
+3. branch name;
+4. owned paths;
+5. запрет менять shared contracts без отдельного PR;
+6. требование приложить test output и assumptions.
+
+Рекомендуемые branches:
+
+```text
+agent/platform-contracts
+agent/web-voice
+agent/xai-voice
+agent/codex-luna
+agent/booking-domain
+agent/conversation
+agent/ops
+agent/qa-integration
+```
+
+## 10. Critical path
+
+```text
+T00 → T13/T14/T11/T12 → T20 → T30 → T31/T32 → T40
+```
+
+T01, T10 и T15 не должны задерживать первые adapter spikes. T20 стартует на fakes сразу после contracts, а затем adapters подменяются по мере готовности.
+
+## 11. Что не распараллеливать
+
+- финальное изменение state/event schemas;
+- migration numbering;
+- root lockfile после первого scaffold;
+- merge orchestration;
+- production secrets/auth bootstrap;
+- release tag.
+
+## 12. Machine-readable backlog
+
+Полный backlog с dependencies, acceptance и outputs находится в [`../tasks/tasks.yaml`](tasks/tasks.yaml).
+
+
+<div class="page-break"></div>
+
+# 10. Выбор AI-библиотеки и transport для Codex/Luna
+
+## 1. Решение
+
+Для P0 не вводится единый универсальный AI SDK в критический realtime-путь.
+
+- **xAI STT/TTS:** тонкие typed WebSocket adapters по официальному streaming protocol.
+- **LLM brain:** `BrainPort`, реализованный поверх долгоживущего `codex app-server` и его JSON-RPC protocol.
+- **Model:** `gpt-5.6-luna` через Codex subscription владельца; `CODEX_MODEL`/`CODEX_EFFORT` конфигурируемы, но Luna — согласованный P0 default.
+- **Schemas:** Zod для собственных contracts; Codex protocol types/schemas фиксируются вместе с pinned CLI version.
+- **Vercel AI SDK:** не является dependency P0; может появиться позже в text-only или API-key adapter, если даст измеримое упрощение.
+- **`@openai/codex-sdk`:** не используется в основном voice runtime, пока не предоставляет обязательный low-level control над `turn/interrupt`, app-server threads, dynamic tools и exact streamed deltas на Bun.
+
+Итоговая граница позволяет заменить transport без изменения оркестратора:
+
+```ts
+export interface BrainPort {
+  createThread(conversationId: string): Promise<string>;
+  runTurn(input: BrainTurnInput, signal: AbortSignal): AsyncIterable<BrainDelta>;
+  interrupt(threadId: string, turnId: string): Promise<void>;
+  health(): Promise<ProviderHealth>;
+}
+```
+
+## 2. Почему у задачи необычные требования
+
+Обычная библиотека для `generateText()` недостаточна. Голосовой продавец требует одновременно:
+
+1. входные и выходные stream deltas;
+2. первый текстовый delta до завершения всего ответа;
+3. немедленный interrupt при barge-in;
+4. стабильный thread на всю conversation;
+5. tool calls с backend-side policy;
+6. subscription authentication, а не только API key;
+7. изолированный `cwd`, sandbox и проверяемый `AGENTS.md`;
+8. точные provider timestamps для latency SLO;
+9. работу в Bun process на дешёвой VPS;
+10. возможность перейти на другой brain provider без переписывания domain state.
+
+Любая абстракция, скрывающая turn IDs, cancellation semantics или provider events, ухудшает корректность этого MVP.
+
+## 3. Матрица вариантов
+
+Оценка: `++` хорошо подходит, `+` подходит с оговорками, `−` существенный пробел, `—` не подходит.
+
+| Критерий | Direct Codex app-server | `@openai/codex-sdk` | Vercel AI SDK + community Codex provider | LangChain/LangGraph/Mastra |
+|---|---:|---:|---:|---:|
+| Codex subscription auth | ++ | ++ | + | − |
+| `gpt-5.6-luna` | ++ | ++ | + | − |
+| Точные streamed message deltas | ++ | + | + | + |
+| `turn/interrupt` для barge-in | ++ | − на текущем публичном TS surface | зависит от community adapter | зависит от custom adapter |
+| App-server thread lifecycle | ++ | −/ограниченно | + | − |
+| Dynamic tools + protocol fallback | ++ | −/ограниченно | +/experimental | +, но поверх ещё одного слоя |
+| `instructionSources` verification | ++ | − | зависит от adapter | − |
+| Bun compatibility | ++ через stdio/JSON | требует spike; официально заявлен Node 18+ | обычно совместим, но adapter нужно проверять | требует проверки каждого слоя |
+| xAI binary voice WSS | custom adapter всё равно нужен | custom adapter всё равно нужен | custom adapter всё равно нужен | custom adapter всё равно нужен |
+| Protocol observability | ++ | + | +/− | − |
+| Объём собственного кода | средний | низкий | низкий/средний | высокий суммарно |
+| Риск abstraction drift | низкий при pinning | средний | высокий для community bridge | высокий |
+| Рекомендация для P0 | **да** | нет в критическом пути | нет в критическом пути | нет |
+
+## 4. Разбор вариантов
+
+### 4.1. Direct `codex app-server` JSON-RPC — выбран
+
+Преимущества:
+
+- официальный app-server protocol содержит `thread/start`, `turn/start`, `item/agentMessage/delta` и `turn/interrupt`;
+- backend видит реальные `threadId`, `turnId`, completion status и provider errors;
+- можно включать experimental dynamic tools только feature flag-ом;
+- можно проверять `instructionSources` и фактическую загрузку compiled `AGENTS.md`;
+- stdio JSON-RPC не зависит от browser/provider SDK;
+- легче доказать, что поздние deltas прерванного turn не попадут в TTS.
+
+Цена:
+
+- нужно написать process supervisor, pending request map, event router и schema contract tests;
+- protocol version необходимо pin-ить и проверять на upgrade;
+- часть app-server API experimental.
+
+Для проекта это приемлемо: transport локальный, ограниченный и скрыт за `BrainPort`.
+
+### 4.2. Официальный `@openai/codex-sdk`
+
+Плюсы:
+
+- официальный TypeScript package;
+- поддерживает start/resume thread, buffered run, streaming events и structured output;
+- снижает объём кода для обычных Codex jobs.
+
+Почему не выбран для voice runtime:
+
+- официальный surface ориентирован прежде всего на coding-focused Codex threads;
+- публичный TypeScript API уже даёт `runStreamed()`, но не гарантирует полный app-server control, который нужен для `turn/interrupt`, dynamic tools и `instructionSources`;
+- документация указывает Node.js 18+, а проект фиксирует Bun;
+- voice barge-in нельзя строить на уничтожении всего процесса: нужен адресный interrupt конкретного turn.
+
+Допустимое применение: offline eval runner, prompt smoke scripts или будущая замена transport после contract spike. Он не должен протечь за границу `BrainPort`.
+
+### 4.3. Vercel AI SDK
+
+Плюсы:
+
+- хороший TypeScript API для text generation, structured output, tools, UI streaming и multi-provider fallback;
+- есть официальный xAI language provider и общий transcription/realtime API;
+- существует community provider для Codex app-server.
+
+Почему не выбран как spine:
+
+- Codex app-server integration является community provider, а не официальным OpenAI provider;
+- binary microphone/TTS transport, playback cancellation и generation IDs всё равно остаются custom;
+- дополнительный normalized event layer может скрыть provider-specific cancellation/status детали;
+- задача не требует типичного React chat hook или model switching в каждом turn.
+
+Возможное P1-применение:
+
+- text-only fallback UI;
+- отдельный API-key `BrainPort`;
+- offline summarization/evals;
+- provider fallback после появления production traffic.
+
+### 4.4. LangChain, LangGraph, Mastra и аналогичные orchestration frameworks
+
+Не используются. Business workflow уже является небольшой детерминированной state machine. Добавление agent graph поверх неё создаст вторую конкурирующую модель состояния, усложнит traces и не решит voice transport/subscription auth.
+
+## 5. Обязательный adapter contract
+
+Независимо от конкретной библиотеки, brain implementation проходит один набор тестов:
+
+| ID | Проверка | Критерий |
+|---|---|---|
+| B-01 | Auth/model preflight | subscription auth валиден, `gpt-5.6-luna` присутствует |
+| B-02 | Instruction loading | `thread/start` подтверждает ожидаемый compiled `AGENTS.md` |
+| B-03 | Streaming | первый speech delta приходит до turn completion |
+| B-04 | Interrupt | активный turn заканчивается `interrupted`; поздние deltas отбрасываются |
+| B-05 | Tool policy | запрещённый tool не исполняется; разрешённый проходит Zod + state guard |
+| B-06 | Fallback | при выключенных dynamic tools работает structured envelope mode |
+| B-07 | Process recovery | падение child process очищает pending requests и отражается в readiness |
+| B-08 | Runtime isolation | shell/network/source repo/`.env` недоступны модели |
+| B-09 | Bun | suite проходит внутри production Bun image |
+| B-10 | Protocol drift | несовместимое обновление CLI ломает CI contract test, а не production silently |
+
+## 6. Package policy
+
+Предлагаемый минимум:
+
+```json
+{
+  "dependencies": {
+    "hono": "<pinned>",
+    "zod": "<pinned>",
+    "drizzle-orm": "<pinned>"
+  },
+  "devDependencies": {
+    "@openai/codex-sdk": "<optional-pinned-for-spikes-or-evals>"
+  }
+}
+```
+
+Правила:
+
+- production не зависит от floating versions;
+- Codex CLI version и generated schemas меняются одним отдельным PR;
+- `@openai/codex-sdk` не импортируется из domain/orchestrator packages;
+- xAI-specific types не импортируются из shared contracts;
+- provider adapter обязан маппить ошибки в собственный стабильный `BrainError`/`VoiceError` union.
+
+## 7. Влияние Codex subscription на продукт
+
+Использование личной подписки — сознательный MVP trade-off, а не production SLA:
+
+- экономит отдельный API budget и позволяет использовать Luna;
+- требует trusted private VPS и защищённого persistent `CODEX_HOME`;
+- concurrency и rolling limits принадлежат подписке, а не нашему приложению;
+- public website не получает прямой доступ к Codex: каждый запрос проходит rate limit, state policy и sandbox;
+- перед публичным коммерческим запуском владелец должен подтвердить применимость условий плана и реальную capacity;
+- `BrainPort` заранее допускает API-key/provider adapter без изменения воронки, booking domain и UI.
+
+## 8. Финальный вывод
+
+Для этого MVP лучшая «AI-библиотека» — не универсальный framework, а узкая внутренняя abstraction:
+
+```text
+ConversationOrchestrator
+        │
+        ▼
+     BrainPort
+        │
+        └── P0: Codex app-server JSON-RPC + gpt-5.6-luna + subscription auth
+
+VoiceOrchestrator
+        ├── XaiSttPort: native streaming WSS
+        └── XaiTtsPort: native streaming WSS
+```
+
+Это минимизирует latency и magic, сохраняет barge-in, делает booking/qualification проверяемыми и оставляет путь к замене провайдера. Универсальный SDK стоит подключать только после появления конкретной функции, которая окупает дополнительный слой.
+
+
+<div class="page-break"></div>
+
+# Источники
+
+Дата доступа: 30 июля 2026.
+
+## Botamin
+
+- Официальный сайт: https://botamin.ru/
+- Публичная Telegram-лента кейсов: https://t.me/s/GPT_for_sales
+- Исходная Notion-ссылка, недоступная на момент работы: https://uprosti.notion.site/conversation-designer
+
+## xAI — официальная документация
+
+- Voice overview: https://docs.x.ai/developers/model-capabilities/audio/voice
+- Speech to Text: https://docs.x.ai/developers/model-capabilities/audio/speech-to-text
+- Text to Speech: https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
+- Voice REST/WebSocket reference: https://docs.x.ai/developers/rest-api-reference/inference/voice
+- Pricing: https://docs.x.ai/developers/pricing
+
+Использованные текущие параметры: Streaming STT `$0.20/hour`, TTS `$15/1M characters`; STT WSS `/v1/stt`, TTS WSS `/v1/tts`; Russian language support; PCM streaming. В списке голосов `iris` описан как подходящий для Sales Support, `eve` — универсальный fallback. Возможный бесплатный allowance конкретного аккаунта не считается публичной гарантией цены.
+
+## OpenAI Codex — официальная документация
+
+- Codex app-server: https://developers.openai.com/codex/app-server
+- Authentication: https://developers.openai.com/codex/auth
+- Trusted CI/CD account auth: https://developers.openai.com/codex/auth/ci-cd-auth
+- Codex models: https://developers.openai.com/codex/models
+- Codex pricing/limits: https://developers.openai.com/codex/pricing
+- Developer commands / device auth: https://developers.openai.com/codex/developer-commands
+- Codex SDK: https://developers.openai.com/codex/codex-sdk
+- AGENTS.md instructions: https://developers.openai.com/codex/agent-configuration/agents-md
+
+Критичные выводы: ChatGPT sign-in поддерживает subscription access; app-server предоставляет JSON-RPC, threads, streamed agent deltas и interrupt; Luna запускается как `gpt-5.6-luna`; dynamic tools — experimental; account-auth automation рекомендуется только на trusted private infrastructure и с одной машиной/сериализованным использованием auth copy.
+
+## AI SDK candidates
+
+- Official Codex TypeScript SDK: https://developers.openai.com/codex/codex-sdk
+- Official Codex TypeScript SDK source/README: https://github.com/openai/codex/tree/main/sdk/typescript
+- Vercel AI SDK overview: https://ai-sdk.dev/
+- Vercel AI SDK xAI provider: https://ai-sdk.dev/providers/ai-sdk-providers/xai
+- Vercel AI SDK community Codex app-server provider: https://ai-sdk.dev/providers/community-providers/codex-app-server
+
+Вывод: официальный TS SDK удобен для `run`/`runStreamed`, но документированный surface уже, чем app-server protocol; community Codex bridge не принимается как критическая dependency. Для P0 выбран direct app-server adapter, скрытый за `BrainPort`.

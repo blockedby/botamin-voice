@@ -1,0 +1,26 @@
+digraph G {
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.32", ranksep="0.45", fontname="DejaVu Sans", label="Воронка сайта Botamin", labelloc=t, fontsize=20];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#30343b", fontname="DejaVu Sans", fontsize=10, margin="0.18,0.10"];
+  edge [color="#4b5563", penwidth=1.1, arrowsize=0.72, fontname="DejaVu Sans", fontsize=8];
+
+  visit [label="1 · VISIT\nПонять оффер и кейсы\nevent: landing.viewed", width=4.7];
+  start [label="2 · VOICE START\nCTA → mic consent\nevent: conversation.started", width=4.35];
+  disc [label="3 · DISCOVERY\nЗадача, канал, pain\nevent: discovery.completed", width=4.0];
+  value [label="4 · VALUE\nРелевантный use case + proof\nevent: value.presented", width=3.65];
+  intent [label="5 · INTENT\nСогласие на следующий шаг\nevent: booking.offered", width=3.3];
+  booking [label="6 · BOOKING\nМинимальный контакт → bookingId\nevent: booking.created", width=2.95, penwidth=2.0];
+  qual [label="7 · QUALIFICATION\n3–5 вопросов после брони\nevent: qualification.updated", width=2.6];
+  handoff [label="8 · HANDOFF\nConsole/push payload\nevent: notification.sent", width=2.25];
+
+  visit -> start -> disc -> value -> intent -> booking -> qual -> handoff;
+  booking -> handoff [label="skip qualification", style=dashed, constraint=false];
+
+  d1 [shape=note, label="drop-off:\nнеясный оффер"];
+  d2 [shape=note, label="drop-off:\nmic denied"];
+  d3 [shape=note, label="drop-off:\nслишком много вопросов"];
+  d4 [shape=note, label="drop-off:\nнет доверия / fit"];
+  visit -> d1 [style=dotted, arrowhead=none, constraint=false];
+  start -> d2 [style=dotted, arrowhead=none, constraint=false];
+  disc -> d3 [style=dotted, arrowhead=none, constraint=false];
+  intent -> d4 [style=dotted, arrowhead=none, constraint=false];
+}

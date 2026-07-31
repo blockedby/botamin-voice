@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CreateConversationRequest } from "@botamin/contracts";
-import type { GatewaySession } from "./session";
 import { SessionRegistry } from "./registry";
+import type { GatewaySession } from "./session";
 
 const request: CreateConversationRequest = {
 	source: "landing",

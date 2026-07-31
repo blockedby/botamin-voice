@@ -2,8 +2,8 @@ import type { CreateConversationRequest } from "@botamin/contracts";
 import type { GatewaySession } from "./session";
 import {
 	type BrainTurnAdmission,
-	BrainTurnQueue,
 	type BrainTurnPriority,
+	BrainTurnQueue,
 } from "./turn-queue";
 
 export interface CreateSessionContext {

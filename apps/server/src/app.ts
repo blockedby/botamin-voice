@@ -4,11 +4,11 @@ import {
 	CreateConversationResponseSchema,
 	EntityIdSchema,
 	LiveHealthResponseSchema,
+	type SafeErrorCode,
 	StopConversationRequestSchema,
 	StopConversationResponseSchema,
-	type SafeErrorCode,
 } from "@botamin/contracts";
-import { Hono, type Context } from "hono";
+import { type Context, Hono } from "hono";
 import { serveStatic, upgradeWebSocket } from "hono/bun";
 import type { WSContext } from "hono/ws";
 import {

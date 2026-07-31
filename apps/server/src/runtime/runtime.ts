@@ -1,32 +1,24 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-	ConversationStageSchema,
 	type BookingService,
 	type BrainPort,
+	ConversationStageSchema,
 	type CreateConversationRequest,
 	type ReadyHealthResponse,
+	ReadyHealthResponseSchema,
 	type SttPort,
 	type TtsPort,
-	ReadyHealthResponseSchema,
 } from "@botamin/contracts";
+import type { DomainDatabase } from "../db";
 import {
 	ConversationStore,
 	closeDomainDatabase,
 	openDomainDatabase,
 } from "../db";
-import type { DomainDatabase } from "../db";
 import { SqliteBookingService } from "../domain/booking";
 import { TranscriptRetentionWorker } from "../domain/privacy";
-import {
-	ConversationOrchestrator,
-	createInitialConversationState,
-} from "../orchestrator";
-import { createCodexBrainFromEnv } from "../providers/codex";
-import { OpenRouterSttAdapter } from "../providers/openrouter/stt";
-import { OpenRouterCredentialHealth } from "../providers/openrouter/stt/credential-health";
-import { OpenRouterTtsAdapter } from "../providers/openrouter/tts";
 import { SessionRegistry } from "../gateway/registry";
 import { GatewaySession, type SessionPersistence } from "../gateway/session";
 import {
@@ -35,6 +27,14 @@ import {
 	PollingNotificationWorker,
 	SignedWebhookNotifier,
 } from "../notifiers";
+import {
+	ConversationOrchestrator,
+	createInitialConversationState,
+} from "../orchestrator";
+import { createCodexBrainFromEnv } from "../providers/codex";
+import { OpenRouterSttAdapter } from "../providers/openrouter/stt";
+import { OpenRouterCredentialHealth } from "../providers/openrouter/stt/credential-health";
+import { OpenRouterTtsAdapter } from "../providers/openrouter/tts";
 import { createRuntimeConfig, type RuntimeConfig } from "./config";
 
 export interface RuntimeGatewaySession {

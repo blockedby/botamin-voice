@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PcmUtteranceAssembler, encodeCanonicalPcm16Wav } from "./wav";
+import { encodeCanonicalPcm16Wav, PcmUtteranceAssembler } from "./wav";
 
 describe("gateway canonical PCM16 to WAV", () => {
 	test("encodes one accepted utterance into the exact strict mono PCM16 16 kHz WAV", () => {

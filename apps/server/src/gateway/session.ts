@@ -1,21 +1,21 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import type { BookingService } from "@botamin/contracts";
 import {
 	BINARY_AUDIO_FRAME_KIND,
 	ClientHelloEventSchema,
 	ClientWsEventSchema,
 	decodeBinaryAudioFrame,
-	encodeBinaryAudioFrame,
 	EntityIdSchema,
+	encodeBinaryAudioFrame,
 	type KnownFacts,
 	type SafeErrorCode,
-	ServerWsEventSchema,
 	type ServerWsEvent,
+	ServerWsEventSchema,
 } from "@botamin/contracts";
 import type {
 	ConversationOrchestrator,
 	OrchestratorEvent,
 } from "../orchestrator/orchestrator";
-import type { BookingService } from "@botamin/contracts";
 import { PcmUtteranceAssembler, PcmUtteranceError } from "./wav";
 
 const CLIENT_CONFIG = Object.freeze({

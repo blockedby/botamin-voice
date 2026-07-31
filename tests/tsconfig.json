@@ -12,7 +12,10 @@
 		"fixtures/**/*.ts",
 		"../apps/server/src/**/*.ts",
 		"../apps/web/src/audio/**/*.ts",
+		"../apps/web/src/integration/**/*.ts",
+		"../apps/web/src/state/**/*.ts",
 		"../apps/web/src/transport/**/*.ts",
+		"../apps/web/src/components/voiceTypes.ts",
 		"../packages/contracts/src/**/*.ts",
 		"../packages/test-fixtures/src/**/*.ts"
 	]

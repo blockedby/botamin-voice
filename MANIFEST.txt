@@ -89,6 +89,7 @@ prompts/speech-style.md
 prompts/system.md
 scripts/build-charts.py
 scripts/build-spec.sh
+scripts/run-pandoc.sh
 scripts/update-release-artifacts.py
 scripts/validate-spec.py
 sources.md

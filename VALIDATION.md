@@ -11,10 +11,10 @@ This report covers the migration only. It does not claim an OpenRouter adapter i
 ## Reproducible build
 
 ```bash
-PATH="/tmp/botamin-tools:$PATH" bash scripts/build-spec.sh
+bash scripts/build-spec.sh
 ```
 
-The host had no `pandoc`; the successful run used pinned container image `pandoc/core:3.6` through a temporary local wrapper. The script regenerated both maintained charts, `FULL_SPEC.md`, and `technical-spec.html`. DOT sources were rendered with temporary `@viz-js/viz@3.17.0`; all seven SVGs parse successfully.
+`scripts/run-pandoc.sh` pins Pandoc `3.10.1`, using an exact local binary when available and otherwise `pandoc/core:3.10.1`. The build regenerates both maintained charts, `FULL_SPEC.md`, and `technical-spec.html`. DOT sources were rendered with pinned temporary `@viz-js/viz@3.17.0`; all seven SVGs parse successfully.
 
 ## Specification validator
 

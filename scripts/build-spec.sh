@@ -46,7 +46,7 @@ for file in "$ROOT"/docs/*.md "$ROOT/sources.md"; do
     "$file" >> "$OUT"
 done
 
-pandoc "$OUT" \
+"$ROOT/scripts/run-pandoc.sh" "$OUT" \
   --standalone \
   --toc \
   --toc-depth=3 \

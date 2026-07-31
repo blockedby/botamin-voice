@@ -1,4 +1,4 @@
-import type { AudioClientConfig } from "@botamin/contracts";
+import type { AudioClientConfig, ServerWsEvent } from "@botamin/contracts";
 
 const audioConfig = {
 	inputSampleRate: 16_000,
@@ -7,6 +7,13 @@ const audioConfig = {
 	outputContentType: "audio/mpeg",
 	outputMode: "complete-phrase-segments",
 } satisfies AudioClientConfig;
+
+/** Browser-side narrowing for the one atomic transcript event. */
+export function isFinalTranscriptEvent(
+	event: ServerWsEvent,
+): event is Extract<ServerWsEvent, { type: "transcript.final" }> {
+	return event.type === "transcript.final";
+}
 
 export function App() {
 	return (

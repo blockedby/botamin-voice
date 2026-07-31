@@ -14,10 +14,11 @@ import {
 	MpegAudioBytesSchema,
 	type Notifier,
 	type ProviderHealth,
-	type SttEvent,
+	type SttHealth,
 	type SttPort,
-	type SttSession,
-	type SttSessionInput,
+	type SttTranscriptionRequest,
+	type SttTranscriptionResult,
+	SttTranscriptionResultSchema,
 	type TtsAudioSegment,
 	type TtsHealth,
 	type TtsPort,
@@ -77,58 +78,61 @@ export class FakeBrain implements BrainPort {
 	}
 }
 
-class FakeSttSession implements SttSession {
-	readonly audioFrames: Uint8Array[] = [];
-	committed = false;
-	closed = false;
-	#script: SttEvent[];
-
-	constructor(script: SttEvent[]) {
-		this.#script = script;
-	}
-
-	async *events(): AsyncIterable<SttEvent> {
-		for (const event of this.#script) {
-			if (this.closed) return;
-			yield event;
-		}
-	}
-
-	async sendAudio(frame: Uint8Array): Promise<void> {
-		this.audioFrames.push(frame.slice());
-	}
-
-	async commit(): Promise<void> {
-		this.committed = true;
-	}
-
-	async close(): Promise<void> {
-		this.closed = true;
-	}
+export interface FakeSttOptions {
+	text?: string;
+	health?: SttHealth;
+	/** Allows tests to pause or mutate cancellation state before resolution. */
+	beforeResolve?: (request: SttTranscriptionRequest) => void | Promise<void>;
+	/** Server-owned turn guard; no provider semantics are assumed. */
+	isTurnCurrent?: (request: SttTranscriptionRequest) => boolean;
 }
 
 export class FakeStt implements SttPort {
-	readonly sessions: SttSessionInput[] = [];
-	lastSession: SttSession | null = null;
-	#scripts: SttEvent[][];
+	readonly inputs: SttTranscriptionRequest[] = [];
+	readonly obsoleteTurns = new Set<string>();
+	#options: FakeSttOptions;
 
-	constructor(...scripts: SttEvent[][]) {
-		this.#scripts = [...scripts];
+	constructor(options: FakeSttOptions = {}) {
+		if (options.text !== undefined && options.text.trim().length === 0) {
+			throw new TypeError("Fake STT text must be non-empty");
+		}
+		this.#options = options;
 	}
 
-	async connect(
-		input: SttSessionInput,
-		signal: AbortSignal,
-	): Promise<SttSession> {
-		if (signal.aborted) throw new Error("STT connection aborted");
-		this.sessions.push(input);
-		const session = new FakeSttSession(this.#scripts.shift() ?? []);
-		this.lastSession = session;
-		return session;
+	markTurnObsolete(turnId: string): void {
+		this.obsoleteTurns.add(turnId);
 	}
 
-	async health(): Promise<ProviderHealth> {
-		return HEALTHY;
+	async transcribe(
+		request: SttTranscriptionRequest,
+	): Promise<SttTranscriptionResult> {
+		this.inputs.push(request);
+		this.#assertCurrent(request);
+		await this.#options.beforeResolve?.(request);
+		this.#assertCurrent(request);
+
+		return SttTranscriptionResultSchema.parse({
+			conversationId: request.conversationId,
+			turnId: request.turnId,
+			text: this.#options.text ?? "Давайте созвонимся завтра",
+			final: true,
+		});
+	}
+
+	async health(): Promise<SttHealth> {
+		return this.#options.health ?? "ready";
+	}
+
+	#assertCurrent(request: SttTranscriptionRequest): void {
+		if (
+			request.signal.aborted ||
+			this.obsoleteTurns.has(request.turnId) ||
+			this.#options.isTurnCurrent?.(request) === false
+		) {
+			const error = new Error("STT transcription aborted or turn obsolete");
+			error.name = "AbortError";
+			throw error;
+		}
 	}
 }
 

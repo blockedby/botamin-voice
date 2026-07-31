@@ -11,7 +11,7 @@ import {
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
 	MpegAudioBytesSchema,
-	type SttSessionInput,
+	type SttTranscriptionRequest,
 	type TtsSynthesisRequest,
 } from "@botamin/contracts";
 import {
@@ -25,6 +25,13 @@ import {
 	createDeterministicMp3Fixture,
 	createMalformedMp3Fixture,
 } from "./mp3";
+import {
+	createDeterministicWavFixture,
+	DETERMINISTIC_WAV_FIXTURE_PROPERTIES,
+	encodeMonoPcm16Wav,
+	MONO_PCM16_16_KHZ_WAV_PROPERTIES,
+	parseMonoPcm16Wav,
+} from "./wav";
 
 const conversationId = "01J00000000000000000000000";
 const turnId = "01J00000000000000000000003";
@@ -64,34 +71,32 @@ describe("fake full turn", () => {
 		const timeline: string[] = [];
 		const notifier = new FakeNotifier();
 		const bookings = new FakeBookingService({ notifier });
-		const stt = new FakeStt([
-			{ type: "transcript.partial", text: "Давайте" },
-			{
-				type: "transcript.final",
-				turnId,
-				text: "Давайте созвонимся завтра",
-			},
-		]);
+		const stt = new FakeStt({ text: "Давайте созвонимся завтра" });
 		const brain = new FakeBrain(brainScript);
 		const tts = new FakeTts();
 		const controller = new AbortController();
-		const sttInput: SttSessionInput = {
+		const sttInput: SttTranscriptionRequest = {
 			conversationId,
-			encoding: "pcm16le",
-			sampleRate: 16_000,
-			channels: 1,
+			turnId,
+			audio: createDeterministicWavFixture(),
+			contentType: "audio/wav",
 			language: "ru",
+			signal: controller.signal,
 		};
 
-		const sttSession = await stt.connect(sttInput, controller.signal);
-		await sttSession.sendAudio(new Uint8Array([0, 0, 1, 0]));
-		await sttSession.commit();
-
-		let userText = "";
-		for await (const event of sttSession.events()) {
-			timeline.push(event.type);
-			if (event.type === "transcript.final") userText = event.text;
-		}
+		const transcription = await stt.transcribe(sttInput);
+		timeline.push("transcript.final");
+		expect(transcription).toEqual({
+			conversationId,
+			turnId,
+			text: "Давайте созвонимся завтра",
+			final: true,
+		});
+		expect(stt.inputs).toEqual([sttInput]);
+		expect(
+			timeline.filter((entry) => entry === "transcript.final"),
+		).toHaveLength(1);
+		const userText = transcription.text;
 
 		const turn: BrainTurnInput = {
 			conversationId,
@@ -297,6 +302,73 @@ describe("fake full turn", () => {
 		);
 	});
 
+	test("returns a deterministic strict mono PCM16 16 kHz WAV fixture", () => {
+		const fixture = createDeterministicWavFixture();
+		expect(Object.isFrozen(MONO_PCM16_16_KHZ_WAV_PROPERTIES)).toBe(true);
+		expect(Object.isFrozen(DETERMINISTIC_WAV_FIXTURE_PROPERTIES)).toBe(true);
+		expect(DETERMINISTIC_WAV_FIXTURE_PROPERTIES).toEqual({
+			durationMs: 100,
+			sampleCount: 1_600,
+			dataByteLength: 3_200,
+			byteLength: 3_244,
+		});
+		expect(fixture.byteLength).toBe(
+			DETERMINISTIC_WAV_FIXTURE_PROPERTIES.byteLength,
+		);
+		expect(fixture.slice(0, 12)).toEqual(
+			new Uint8Array([
+				0x52, 0x49, 0x46, 0x46, 0xa4, 0x0c, 0, 0, 0x57, 0x41, 0x56, 0x45,
+			]),
+		);
+
+		const parsed = parseMonoPcm16Wav(fixture);
+		expect(parsed).toMatchObject({
+			...MONO_PCM16_16_KHZ_WAV_PROPERTIES,
+			sampleCount: DETERMINISTIC_WAV_FIXTURE_PROPERTIES.sampleCount,
+			dataByteLength: DETERMINISTIC_WAV_FIXTURE_PROPERTIES.dataByteLength,
+		});
+		const sampleView = new DataView(
+			parsed.pcm16.buffer,
+			parsed.pcm16.byteOffset,
+			parsed.pcm16.byteLength,
+		);
+		expect(sampleView.getInt16(0, true)).toBe(1_000);
+		expect(sampleView.getInt16(800 * 2, true)).toBe(-1_000);
+		expect(sampleView.getInt16(400 * 2, true)).toBe(0);
+
+		const secondFixture = createDeterministicWavFixture();
+		expect(secondFixture).toEqual(fixture);
+		secondFixture.fill(0);
+		expect(createDeterministicWavFixture()).toEqual(fixture);
+	});
+
+	test("strictly rejects malformed PCM and non-canonical WAV fixtures", () => {
+		expect(() => encodeMonoPcm16Wav(new Uint8Array())).toThrow("non-empty");
+		expect(() => encodeMonoPcm16Wav(new Uint8Array([0]))).toThrow(
+			"whole non-empty 16-bit samples",
+		);
+
+		const fixture = createDeterministicWavFixture();
+		for (const mutate of [
+			(bytes: Uint8Array) => {
+				bytes[0] = 0;
+			},
+			(bytes: Uint8Array) => {
+				new DataView(bytes.buffer).setUint32(4, 0, true);
+			},
+			(bytes: Uint8Array) => {
+				new DataView(bytes.buffer).setUint32(24, 8_000, true);
+			},
+			(bytes: Uint8Array) => {
+				new DataView(bytes.buffer).setUint32(40, 2, true);
+			},
+		]) {
+			const malformed = fixture.slice();
+			mutate(malformed);
+			expect(() => parseMonoPcm16Wav(malformed)).toThrow();
+		}
+	});
+
 	test("preserves every MP3 byte across server encode and browser decode", () => {
 		const mp3 = createDeterministicMp3Fixture();
 		const metadata = {
@@ -394,5 +466,41 @@ describe("fake full turn", () => {
 			guardedTts.synthesize(createRequest(new AbortController().signal)),
 		).rejects.toHaveProperty("name", "AbortError");
 		expect(await new FakeTts({ health: "degraded" }).health()).toBe("degraded");
+	});
+
+	test("enforces atomic STT abort, stale-turn, and health hooks", async () => {
+		const createRequest = (signal: AbortSignal): SttTranscriptionRequest => ({
+			conversationId,
+			turnId,
+			audio: createDeterministicWavFixture(),
+			contentType: "audio/wav",
+			language: "ru",
+			signal,
+		});
+		const preAborted = new AbortController();
+		preAborted.abort();
+		await expect(
+			new FakeStt().transcribe(createRequest(preAborted.signal)),
+		).rejects.toHaveProperty("name", "AbortError");
+
+		const during = new AbortController();
+		await expect(
+			new FakeStt({ beforeResolve: () => during.abort() }).transcribe(
+				createRequest(during.signal),
+			),
+		).rejects.toHaveProperty("name", "AbortError");
+
+		const stale = new FakeStt();
+		stale.markTurnObsolete(turnId);
+		await expect(
+			stale.transcribe(createRequest(new AbortController().signal)),
+		).rejects.toHaveProperty("name", "AbortError");
+		await expect(
+			new FakeStt({ isTurnCurrent: () => false }).transcribe(
+				createRequest(new AbortController().signal),
+			),
+		).rejects.toHaveProperty("name", "AbortError");
+		expect(await new FakeStt({ health: "degraded" }).health()).toBe("degraded");
+		expect(() => new FakeStt({ text: "" })).toThrow("non-empty");
 	});
 });

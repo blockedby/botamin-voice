@@ -1,3 +1,6 @@
+STATUS: SUPERSEDED BY CORRECTION-004_OPENROUTER_VOICE_ONLY.md
+DO NOT IMPLEMENT
+
 # CORRECTION-003 — OpenRouter TTS, TypeScript-native implementation
 
 **Проект:** Botamin Voice Sales Agent

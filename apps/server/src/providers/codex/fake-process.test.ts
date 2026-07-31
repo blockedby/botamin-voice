@@ -216,7 +216,7 @@ function createBrain(
 		env: {
 			PATH: "/usr/bin",
 			HOME: "/safe/home",
-			XAI_API_KEY: "must-not-leak",
+			OPENROUTER_API_KEY: "must-not-leak",
 			DATABASE_URL: "must-not-leak",
 		},
 		spawn: (command, options) => {
@@ -352,7 +352,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		expect(
 			processRef?.messages.filter((message) => message.method === "initialize"),
 		).toHaveLength(1);
-		expect(processRef?.environment.XAI_API_KEY).toBeUndefined();
+		expect(processRef?.environment.OPENROUTER_API_KEY).toBeUndefined();
 		expect(processRef?.environment.DATABASE_URL).toBeUndefined();
 		const isolatedHome = processRef?.environment.CODEX_HOME;
 		expect(isolatedHome).toStartWith("/tmp/botamin-codex-app-home-");

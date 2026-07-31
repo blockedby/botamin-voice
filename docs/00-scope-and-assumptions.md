@@ -22,7 +22,7 @@ MVP должен выглядеть как небольшой реальный �
 
 - адаптивный лендинг Botamin;
 - браузерный доступ к микрофону;
-- потоковый STT на русском;
+- phrase-level STT на русском: chunked PCM16 до backend, bounded WAV request после `audio.commit`, final transcript only;
 - текстовое рассуждение и ответ через GPT-5.6 Luna в Codex;
 - phrase-level TTS через полные MP3-сегменты, запускаемый до завершения полного ответа;
 - interruption/barge-in на базовом уровне;
@@ -58,7 +58,8 @@ MVP должен выглядеть как небольшой реальный �
 | Язык | русский; структура допускает локализацию |
 | Канал | браузерный voice widget |
 | Мозг | Codex app-server, `gpt-5.6-luna` |
-| Voice | xAI Streaming STT + OpenRouter TTS через backend-only TypeScript/Bun adapter |
+| Voice | OpenRouter — единственный STT/TTS gateway; один backend-only key |
+| STT profile | `openai/gpt-audio-mini` / `wav` / `ru`, configurable audio-input model; atomic final transcript only |
 | TTS profile | `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`, все значения конфигурируемы; usage платный, бесплатный tier не предполагается |
 | Backend | Bun + TypeScript, Hono как лёгкий HTTP/WS слой |
 | Frontend | React + TypeScript + Vite |
@@ -86,7 +87,7 @@ MVP должен выглядеть как небольшой реальный �
 - **Booking** — внутренняя запись о согласованном следующем шаге, не календарное событие.
 - **Qualification** — необязательные сведения, добавляемые к уже существующей брони.
 - **BrainPort** — внутренний интерфейс текстового LLM-мозга.
-- **VoicePort** — provider-neutral внутренние `SttPort` и `TtsPort`; один TTS request возвращает один полный `audio/mpeg` phrase segment.
+- **VoicePort** — provider-neutral внутренние `SttPort` и `TtsPort`: один STT request принимает bounded `audio/wav` и возвращает один final transcript; один TTS request возвращает один полный `audio/mpeg` phrase segment.
 - **Barge-in** — пользователь начинает говорить во время ответа агента.
 - **Tool** — строго валидируемая backend-операция с доменным эффектом.
 - **Luna** — модель `gpt-5.6-luna`, доступная через Codex.

@@ -204,7 +204,7 @@ test("rejects invalid UTF-8, secret-like assignments, and numeric currency price
 
 	const secret = await fixtureRoot((relativePath, source) =>
 		relativePath === "prompts/system.md"
-			? `${source.toString("utf8")}\n${["XAI_API_", "KEY=not-a-real-key"].join("")}`
+			? `${source.toString("utf8")}\n${["OPENROUTER_API_", "KEY=not-a-real-key"].join("")}`
 			: source,
 	);
 	await assert.rejects(

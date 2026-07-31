@@ -24,14 +24,12 @@ digraph G {
     caddy -> caddydata [dir=both];
   }
 
-  xai [shape=ellipse, label="xAI API\nStreaming STT WSS"];
-  openrouter [shape=ellipse, label="OpenRouter TTS\nHTTPS audio/speech\npaid usage"];
+  openrouter [shape=ellipse, label="OpenRouter voice gateway\none backend-only key\npaid HTTPS usage"];
   openai [shape=ellipse, label="OpenAI/Codex service\nLuna via subscription"];
   webhook [shape=folder, label="Console / optional webhook"];
 
   internet -> caddy [label="HTTPS/WSS"];
-  app -> xai [dir=both, label="STT · TLS WSS"];
-  app -> openrouter [dir=both, label="native Bun fetch\ncomplete MP3 phrase"];
+  app -> openrouter [dir=both, label="STT: chat/completions\nbase64 WAV → final transcript\nTTS: audio/speech → complete MP3"];
   codex -> openai [dir=both, label="authenticated HTTPS"];
   app -> webhook [label="booking events"];
 }

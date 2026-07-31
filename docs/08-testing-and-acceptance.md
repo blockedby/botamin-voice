@@ -55,15 +55,19 @@ Table-driven cases:
 
 ## 3. Provider contract tests
 
-### xAI STT
+### OpenRouter STT
 
-- WSS handshake;
-- raw PCM frame format;
-- partial and speech-final mapping;
-- Smart Turn query configuration;
-- timeout/close/error mapping;
-- Russian transcript fixture;
-- no API key in client bundle.
+Default deterministic suite uses a protocol-faithful fake `POST /api/v1/chat/completions` endpoint and no external credentials:
+
+- backend bounds 16 kHz mono PCM16 by utterance duration/bytes and writes a valid WAV header;
+- exactly one `audio.commit` creates one native-fetch request with base64 WAV `input_audio` and configured audio-capable model;
+- one valid response maps to one final transcript; no provider session/partial event is assumed;
+- malformed/empty transcript response, `400`, `401`, `402`, `404`, `413`, `429` with bounded `Retry-After`, and retryable `5xx` map to typed errors;
+- connect/total timeout, one-retry maximum, user abort, duplicate commit and stale-turn suppression are deterministic;
+- retry repeats only transcription and never invokes brain, tools or notifier;
+- API key, raw/WAV/base64 audio, transcript PII and provider error bodies are absent from browser/logs/snapshots.
+
+The paid Russian smoke is tagged `external`, excluded from default CI and records only safe status/latency/byte/model evidence. It must be reported as not run unless actually observed.
 
 ### OpenRouter TTS
 
@@ -102,7 +106,7 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 ## 4. Integration tests
 
-- fake STT final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
+- bounded PCM16 chunks → `audio.commit` → fake OpenRouter WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
 - real SQLite transaction + fake notifier;
 - booking tool call inside brain turn;
 - booking event appears before qualification prompt/audio;
@@ -120,7 +124,7 @@ Playwright with synthetic audio fixture:
 2. click CTA;
 3. mock/allow mic;
 4. stream fixture PCM;
-5. observe transcript;
+5. observe listening/processing states and then one final transcript, with no provider interim-text expectation;
 6. receive assistant text and ordered complete MP3 segment events;
 7. complete booking;
 8. see booked UI;
@@ -214,13 +218,13 @@ Release thresholds:
 
 ### Measurements
 
-- mic chunk receive jitter;
-- STT end-of-turn delay;
-- brain queue/first delta/complete;
+- mic chunk receive jitter and bounded utterance assembly;
+- `audio.commit` → OpenRouter final transcript;
+- final transcript → brain queue/first delta/complete;
 - chunker first sentence;
 - TTS first audio;
 - browser first playback;
-- total speech-final → playback.
+- final transcript → playback and total `audio.commit` → playback.
 
 ### Profiles
 
@@ -236,7 +240,7 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ## 9. Security tests
 
-- scan built JS for `XAI_API_KEY`, `OPENROUTER_API_KEY`, auth tokens and webhook secret;
+- scan built JS for `OPENROUTER_API_KEY`, auth tokens and webhook secret;
 - prove browser never requests `openrouter.ai` directly;
 - origin/CORS rejection;
 - oversized JSON/audio frame;
@@ -260,7 +264,7 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ### Voice
 
-- [ ] Russian STT works on real microphone.
+- [ ] Opt-in paid Russian STT smoke returns one final transcript from a bounded WAV; no provider interim transcript is claimed.
 - [ ] Chosen OpenRouter voice is understandable in the target-VPS Russian smoke.
 - [ ] Complete `audio/mpeg` phrase segments decode in sequence in Chromium and WebKit.
 - [ ] Partial transcript is visible.
@@ -306,8 +310,8 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 - health output;
 - schema migration status;
 - Codex model/auth preflight result без token;
-- target-VPS OpenRouter Russian MP3 smoke status, latency, byte count, provider generation ID if present and selected model/voice/format;
-- evidence timestamps for speech-final, first Luna delta, TTS request/completion and playback;
+- target-VPS OpenRouter Russian STT and MP3 smoke statuses, latency, byte counts, safe provider IDs if present and selected model/voice/format;
+- evidence timestamps for `audio.commit`, STT request/final result, first Luna delta, TTS request/completion and playback;
 - 24+ eval summary;
 - latency report;
 - duplicate/idempotency test report;

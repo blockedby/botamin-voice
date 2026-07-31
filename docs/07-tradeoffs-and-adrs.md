@@ -1,12 +1,12 @@
 # 07. Trade-offs и Architecture Decision Records
 
-## ADR-001. Разделить speech providers и Codex/Luna brain
+## ADR-001. Разделить OpenRouter voice gateway и Codex/Luna brain
 
 **Статус:** accepted.
 
 ### Решение
 
-- xAI Streaming STT: речь → текст;
+- OpenRouter phrase-level STT: речь → текст;
 - Codex app-server + `gpt-5.6-luna` по умолчанию: диалог, policy, tools; model/effort остаются конфигурацией;
 - OpenRouter TTS: текст → complete MP3 phrase segments через server-side Bun adapter.
 
@@ -19,14 +19,14 @@
 
 ### Цена решения
 
-- выше end-to-end latency, чем у единой speech-to-speech модели;
-- больше соединений и failure modes;
+- phrase-level STT ждёт конец реплики, WAV upload и inference, поэтому end-to-end latency выше и provider interim text отсутствует;
+- больше HTTP requests и failure modes;
 - нужен sentence chunker и interruption coordination;
 - subscription auth требует операционной дисциплины.
 
 ### Митигация
 
-streaming на каждом участке, компактный prompt context, low effort, provider adapters, SLO instrumentation.
+chunked browser capture, bounded utterance, short TTS phrases, compact prompt context, low effort, provider adapters and separate commit-to-final/final-to-playback instrumentation.
 
 ## ADR-002. Использовать Codex subscription auth на trusted VPS
 
@@ -67,7 +67,7 @@ streaming на каждом участке, компактный prompt context,
 | Vercel AI SDK | полезен для normalized text/structured output и future API-key adapters; Codex app-server bridge — community provider, а binary voice path всё равно custom |
 | LangChain/LangGraph/Mastra | не выбран: deterministic state machine уже решает orchestration, дополнительный graph layer не даёт выигрыша |
 | OpenAI Responses API | хороший production fallback, но usage-based и не использует subscription allowance |
-| xAI speech-to-speech | не выбран, потому что мозг был бы Grok, а не Luna |
+| End-to-end speech-to-speech provider | не выбран: текстовый brain и domain/tool policy должны оставаться Codex/Luna и backend-owned |
 
 ### Реализация
 
@@ -147,7 +147,7 @@ Guardrails:
 
 **Status:** accepted.
 
-Use a TypeScript/Bun adapter with native `fetch` against `POST https://openrouter.ai/api/v1/audio/speech`. Default profile: `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`. Do not use Edge Community TTS, Python sidecars or direct xAI TTS in P0. Keep `TtsPort` provider-neutral and retain text-only degradation.
+Use a TypeScript/Bun adapter with native `fetch` against `POST https://openrouter.ai/api/v1/audio/speech`. Default profile: `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`. Do not use a second TTS gateway, Python sidecar or provider SDK in P0. Keep `TtsPort` provider-neutral and retain text-only degradation.
 
 Consequences and guardrails:
 
@@ -158,11 +158,28 @@ Consequences and guardrails:
 - `401`, `402`, `404`, bounded `429`/retryable `5xx`, circuit breaker, character budgets and text-only behavior follow the contracts in docs 03/05/06.
 - Retry repeats only pure synthesis and never repeats Luna or business side effects.
 
+## ADR-016 — OpenRouter is the only P0 voice gateway
+
+**Status:** accepted; Correction 004 authority.
+
+Use one backend-only `OPENROUTER_API_KEY` for both voice paths. STT is native Bun `fetch` to `/api/v1/chat/completions` with one bounded base64 WAV `input_audio` after `audio.commit`; the configurable default model is `openai/gpt-audio-mini`. Return one final transcript through an atomic provider-neutral `SttPort`.
+
+Official evidence documents chat-completions audio input, base64, model-dependent formats and audio-input model filtering. It does not currently document a dedicated realtime STT WebSocket. Therefore browser PCM16 may remain chunked to the backend, but active architecture must not call provider STT streaming or promise provider interim transcripts.
+
+Consequences and guardrails:
+
+- accept extra post-commit upload/inference latency and measure `audio.commit → final transcript` separately;
+- bound utterance duration/bytes, WAV/base64 memory, timeouts and retry count;
+- abort and suppress stale turns before they can invoke Luna/tools;
+- map `400/401/402/404/413/429/5xx` to typed safe errors without key/audio/PII logs;
+- default tests use a fake endpoint; paid Russian smoke is opt-in and must be reported only when observed;
+- no second voice provider, credential, task path, diagram or source requirement is active.
+
 ## Metered voice cost inputs
 
-![xAI STT + OpenRouter TTS metered usage](../charts/02-xai-stt-openrouter-tts-cost.png)
+![OpenRouter STT + OpenRouter TTS metered usage](../charts/02-openrouter-stt-tts-cost.png)
 
-The chart deliberately contains no numeric currency estimate. Variable usage depends on measured xAI STT audio duration and OpenRouter TTS input characters multiplied by the current account/model rates at deployment. The release owner records current pricing evidence and measured volumes; VPS, bandwidth and Codex subscription/credits are accounted separately.
+The chart deliberately contains no numeric currency estimate. Variable usage depends on measured OpenRouter STT audio usage and OpenRouter TTS input characters multiplied by the current account/model rates and units verified at deployment. The release owner records current pricing evidence and measured volumes; VPS, bandwidth and Codex subscription/credits are accounted separately.
 
 ## Capacity envelope Codex subscription
 
@@ -187,14 +204,14 @@ The chart deliberately contains no numeric currency estimate. Variable usage dep
 | R-01 | subscription quota исчерпана | medium | high | capacity limit, metrics, API fallback interface |
 | R-02 | auth refresh/re-login | medium | high | persistent CODEX_HOME, readiness, runbook |
 | R-03 | app-server experimental tool drift | medium | high | pin version, generated schemas, envelope fallback |
-| R-04 | voice latency выше SLO | medium | high | streaming, low effort, profiling, shorter responses |
+| R-04 | phrase-level voice latency выше SLO | medium | high | bounded utterances, separate timing, low effort, shorter TTS phrases |
 | R-05 | STT неверно распознаёт контакт | medium | high | targeted confirmation, validation |
 | R-06 | LLM нарушает booking order | low/medium | high | backend state policy, tests |
 | R-07 | duplicate booking on reconnect | medium without guard | high | unique constraint + idempotency |
 | R-08 | marketing hallucination | medium | medium/high | allowed claims, evals, source attribution |
 | R-09 | PII leak in logs | medium | high | redaction and log tests |
 | R-10 | cheap VPS resource pressure | medium | medium | guardrails, metrics, bounded buffers |
-| R-11 | OpenRouter model/voice/price or upstream availability changes | medium | medium/high | env profile, external smoke, character telemetry, budget/circuit, text-only |
+| R-11 | OpenRouter STT/TTS model, voice, price or upstream availability changes | medium | medium/high | env profiles, opt-in external smokes, usage telemetry, bounds/circuit, safe degraded modes |
 | R-12 | user thinks calendar event exists | medium | medium | explicit copy and payload semantics |
 
 ## Revisit triggers

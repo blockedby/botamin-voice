@@ -49,7 +49,7 @@ function defaultSpawn(
 
 /**
  * Builds an allowlisted child environment. In particular, application secrets
- * (xAI, webhook, database and .env-derived values) are not inherited.
+ * (OpenRouter, webhook, database and .env-derived values) are not inherited.
  */
 export function createIsolatedCodexAppHome(authHome: string): string {
 	const appHome = mkdtempSync(join(tmpdir(), "botamin-codex-app-home-"));

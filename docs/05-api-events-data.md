@@ -65,8 +65,9 @@ Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`.
 - DB write/read;
 - Codex app-server handshake;
 - наличие auth и модели Luna в `model/list`;
-- конфигурацию xAI key для STT;
-- при `TTS_PROVIDER=openrouter`: наличие `OPENROUTER_API_KEY`, schema-valid model/voice/`mp3`, доступность queue/circuit state и разрешённый text-only startup policy;
+- ровно один `OPENROUTER_API_KEY` для обоих voice paths;
+- при `STT_PROVIDER=openrouter`: schema-valid audio-input model/`wav`/language, utterance byte/time limits и request timeout/retry limits; readiness не утверждает наличие provider streaming session;
+- при `TTS_PROVIDER=openrouter`: schema-valid model/voice/`mp3`, доступность queue/circuit state и разрешённый text-only output startup policy;
 - prompt bundle checksum;
 - возможность принять новую conversation по concurrency guard.
 
@@ -124,22 +125,21 @@ Server:
 | Event | Payload | Назначение |
 |---|---|---|
 | `client.hello` | audio config, resume token | handshake |
-| `audio.commit` | `{}` | принудительно завершить текущую реплику |
+| `audio.commit` | `{}` | закрыть bounded utterance и создать ровно один atomic final-transcription request |
 | `playback.started` | `generationId` | метрика |
 | `playback.interrupted` | `generationId`, reason | barge-in |
 | `session.stop` | reason | корректное завершение |
 | `client.ping` | timestamp | keepalive |
 
-После handshake PCM16 audio идёт binary frames без base64.
+После handshake PCM16 audio идёт binary frames без base64. Gateway ограничивает accumulated duration/bytes; base64 WAV создаётся только server-side после `audio.commit`. Browser chunks не означают streaming transport до provider.
 
 ### Server → client events
 
 | Event | Payload |
 |---|---|
 | `session.ready` | state/config |
-| `state.changed` | from/to/reason |
-| `transcript.partial` | text/confidence-ish metadata |
-| `transcript.final` | turnId/text |
+| `state.changed` | from/to/reason; voice UI uses listening/processing states |
+| `transcript.final` | turnId/text; единственное STT text event после atomic provider result |
 | `assistant.text.delta` | generationId/text |
 | `assistant.text.done` | generationId/fullText |
 | `audio.segment` | generationId, segmentId, sequence, `contentType=audio/mpeg`, byteLength, `final=true`; immediately followed by one complete binary MP3 payload |
@@ -153,7 +153,7 @@ Server:
 
 ### Binary framing
 
-Client microphone frames remain PCM16LE. Server audio is an atomic phrase-level MP3 payload associated with the preceding `audio.segment` metadata event:
+Client microphone frames remain PCM16LE and are accumulated only within configured utterance duration/byte bounds until `audio.commit`. Server audio is an atomic phrase-level MP3 payload associated with the preceding `audio.segment` metadata event:
 
 ```text
 byte 0:     kind (0x01 client PCM16LE, 0x02 server MP3 segment)
@@ -168,12 +168,42 @@ The implementation may use a referenced binary payload instead of adjacency if i
 ### Ordering
 
 - `seq` монотонно растёт для JSON events в одной conversation.
+- один accepted `audio.commit` создаёт не более одного active STT request и одного `transcript.final`; duplicate commits и stale results подавляются.
 - audio segments имеют `generationId`, unique `segmentId` и monotonic `sequence`.
 - client decodes/plays complete segments in order and ignores segments from an interrupted or obsolete generation.
 - одновременно допустимы максимум один playing и один prefetched segment.
 - booking events записываются в DB до отправки клиенту.
 
-## 4. Provider-neutral TTS contracts
+## 4. Provider-neutral voice contracts
+
+### Atomic SttPort
+
+```ts
+export type SttTranscriptionRequest = {
+  conversationId: string;
+  turnId: string;
+  audio: Uint8Array;
+  contentType: "audio/wav";
+  language: string;
+  signal: AbortSignal;
+};
+
+export type SttTranscriptionResult = {
+  conversationId: string;
+  turnId: string;
+  text: string;
+  final: true;
+};
+
+export interface SttPort {
+  transcribe(request: SttTranscriptionRequest): Promise<SttTranscriptionResult>;
+  health(): Promise<"ready" | "degraded" | "unavailable">;
+}
+```
+
+No `connect`, `sendAudio`, provider session, partial event or provider HTTP type crosses `SttPort`. The gateway owns chunked PCM16 transport, bounding and WAV wrapping. The adapter posts one base64 `input_audio` to `/api/v1/chat/completions`; only a non-empty validated, current final transcript can reach Luna.
+
+### Atomic TtsPort
 
 ```ts
 export type TtsSynthesisRequest = {
@@ -202,7 +232,21 @@ export interface TtsPort {
 
 The adapter validates `2xx`, compatible `audio/mpeg`, non-empty bounded bytes and current `generationId` before returning. OpenRouter types and response objects do not cross `TtsPort`.
 
-### OpenRouter failure mapping
+### OpenRouter STT failure mapping
+
+| HTTP | Mapping | Retry/behavior |
+|---:|---|---|
+| 400 | invalid audio/request | no retry; safe input error |
+| 401 | missing/invalid shared key | no retry; readiness/config error |
+| 402 | insufficient credits | no retry; voice input unavailable |
+| 404 | model unavailable/config error | no retry; readiness/config error |
+| 413 | utterance/request too large | no retry; enforce local bounds |
+| 429 | rate limited | at most one retry; bounded `Retry-After` |
+| 500/502/503/524/529 | gateway/upstream | at most one bounded retry |
+
+STT retry repeats only the same transcription request. Abort/stale turn returns no transcript; no STT retry invokes Luna, `create_booking`, `append_booking_qualification` or notifier. Error parsing and telemetry never log Authorization, WAV/base64 bytes, transcript text or PII.
+
+### OpenRouter TTS failure mapping
 
 | HTTP | Mapping | Retry/degradation |
 |---:|---|---|
@@ -331,7 +375,7 @@ LLM-provided `conversationId`, `bookingId` и consent сверяются с serv
 - `user_text`;
 - `assistant_text`;
 - `state_before`, `state_after`;
-- `speech_final_at`;
+- `audio_commit_at`, `stt_request_at`, `stt_final_at`;
 - `brain_started_at`;
 - `first_text_delta_at`;
 - `first_audio_at`;

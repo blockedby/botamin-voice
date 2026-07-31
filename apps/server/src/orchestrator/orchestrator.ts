@@ -43,6 +43,7 @@ export type OrchestratorEvent =
 			from: ConversationState["stage"];
 			to: ConversationState["stage"];
 			reason: string;
+			errorCode?: SafeErrorCode;
 	  }
 	| {
 			type: "booking.committed";
@@ -156,6 +157,10 @@ const BRAIN_FAILURE_AFTER_BOOKING =
 	"Основные данные уже сохранены. Дополнительные вопросы необязательны, и на этом можно закончить.";
 const STT_FAILURE =
 	"Речь сейчас не распознаётся. Повторите, пожалуйста, реплику ещё раз.";
+const PRE_BOOKING_DECLINE =
+	"Поняла, спасибо за разговор. Если задача станет актуальной, можно вернуться позже.";
+const QUALIFICATION_DECLINE =
+	"Поняла. Основные данные уже сохранены, дополнительные вопросы пропускаем.";
 const TERMINAL_STAGES = new Set<ConversationState["stage"]>([
 	"COMPLETE",
 	"DECLINED",
@@ -172,6 +177,72 @@ function qualificationConfirmation(
 	if (status === "partial") return QUALIFICATION_PARTIAL_CONFIRMATION;
 	if (status === "complete") return QUALIFICATION_COMPLETE_CONFIRMATION;
 	return QUALIFICATION_SKIPPED_CONFIRMATION;
+}
+
+function normalizeIntentText(userText: string): string {
+	return userText
+		.toLocaleLowerCase("ru-RU")
+		.replace(/[^\p{L}\p{N}\s]/gu, " ")
+		.replace(/\s+/gu, " ")
+		.trim();
+}
+
+/** Conservative server-owned evidence for spoken post-booking consent. */
+function hasExplicitQualificationConsent(userText: string): boolean {
+	const normalized = normalizeIntentText(userText);
+	if (!normalized || normalized.length > 120) return false;
+	if (
+		/\b(?:нет|не\s+надо|не\s+хочу|не\s+нужно|не\s+задавайте)\b/u.test(
+			normalized,
+		)
+	) {
+		return false;
+	}
+	return /^(?:да|конечно|можно|хорошо|ладно|задавайте|спрашивайте)(?:\s|$)/u.test(
+		normalized,
+	);
+}
+
+export type ConservativeNegativeIntent =
+	| "pre_booking_refusal"
+	| "qualification_decline"
+	| null;
+
+/** High-precision refusal detection; objections and uncertain language stay put. */
+export function classifyConservativeNegativeIntent(
+	userText: string,
+	state: ConversationState,
+): ConservativeNegativeIntent {
+	const normalized = normalizeIntentText(userText);
+	if (
+		!normalized ||
+		normalized.length > 160 ||
+		/(?:^|\s)(?:но|может|пока)(?:\s|$)/u.test(normalized)
+	) {
+		return null;
+	}
+	if (state.booking === null) {
+		return /^(?:нет спасибо|нет спасибо (?:мне )?не интересно|спасибо не интересно|мне не интересно|не нужно|не надо|отказываюсь|я отказываюсь|не хочу (?:продолжать|общаться|разговаривать|оставлять контакты|бронировать)|давайте (?:закончим|завершим)(?: разговор)?|прекратим разговор)(?: пожалуйста)?$/u.test(
+			normalized,
+		)
+			? "pre_booking_refusal"
+			: null;
+	}
+	if (state.stage === "BOOKED" && state.bookingConfirmationDelivered) {
+		return /^(?:нет|нет спасибо|нет не задавайте|не задавайте|не надо|не нужно|не хочу|пропустим|давайте пропустим)(?: дополнительные вопросы)?$/u.test(
+			normalized,
+		)
+			? "qualification_decline"
+			: null;
+	}
+	if (state.stage === "POST_BOOKING_QUALIFICATION") {
+		return /^(?:(?:не хочу|не буду) (?:отвечать|продолжать)(?: на)?|не задавайте|давайте (?:закончим|завершим|пропустим)|пропустим)(?: дополнительные вопросы| опрос| квалификацию)?(?: пожалуйста)?$/u.test(
+			normalized,
+		)
+			? "qualification_decline"
+			: null;
+	}
+	return null;
 }
 
 /**
@@ -209,6 +280,8 @@ export class ConversationOrchestrator {
 	#threadId: string | undefined;
 	#state: ConversationState;
 	#lifecycleInterruption: Promise<void> = Promise.resolve();
+	#closed = false;
+	#closePromise: Promise<void> | null = null;
 
 	constructor(options: ConversationOrchestratorOptions) {
 		this.conversationId = options.conversationId;
@@ -369,6 +442,38 @@ export class ConversationOrchestrator {
 		}
 		const userText = final.text.trim();
 		this.#sttTurns.finish(accepted.turn);
+		const negativeIntent = classifyConservativeNegativeIntent(
+			userText,
+			this.#state,
+		);
+		if (negativeIntent) {
+			const from = this.#state.stage;
+			const declined = this.apply(
+				negativeIntent === "qualification_decline" && from === "BOOKED"
+					? { type: "qualification_consent_declined" }
+					: { type: "clear_refusal" },
+			);
+			if (declined.ok) {
+				const text = this.#state.booking
+					? QUALIFICATION_DECLINE
+					: PRE_BOOKING_DECLINE;
+				yield {
+					type: "transcript.final",
+					turnId: input.turnId,
+					text: userText,
+				};
+				yield { type: "text.delta", generationId: input.generationId, text };
+				yield { type: "text.done", generationId: input.generationId, text };
+				yield {
+					type: "state.changed",
+					generationId: input.generationId,
+					from,
+					to: this.#state.stage,
+					reason: "explicit_user_refusal",
+				};
+				return;
+			}
+		}
 		let active: ReturnType<GenerationCoordinator["start"]>["active"];
 		try {
 			// Final acceptance and current-generation ownership are one synchronous
@@ -404,9 +509,40 @@ export class ConversationOrchestrator {
 	}
 
 	async disconnect(): Promise<void> {
+		if (this.#closed) return;
 		if (this.#state.stage !== "DISCONNECTED")
 			this.apply({ type: "disconnect" });
 		await this.#lifecycleInterruption;
+	}
+
+	/** Permanently fences intake and releases shared provider session state. */
+	close(timeoutMs = 5_000): Promise<void> {
+		if (this.#closePromise) return this.#closePromise;
+		this.#closed = true;
+		this.#sttTurns.close();
+		const interruption = this.#invalidateActiveWork("conversation_closed");
+		const releaseBrain = this.#brain.releaseConversation
+			? this.#brain
+					.releaseConversation(this.conversationId)
+					.catch(() => undefined)
+			: Promise.resolve();
+		const resetTts = this.#tts?.resetSession
+			? Promise.resolve(this.#tts.resetSession(this.conversationId)).catch(
+					() => undefined,
+				)
+			: Promise.resolve();
+		this.#pendingDynamicEvents.clear();
+		this.#pendingDynamicResponses.clear();
+		this.#deferredDomainEvents.length = 0;
+		this.#threadId = undefined;
+		this.#tools.clear();
+		this.#generations.close();
+		this.#closePromise = Promise.all([
+			settleWithin(interruption, timeoutMs),
+			settleWithin(releaseBrain, timeoutMs),
+			settleWithin(resetTts, timeoutMs),
+		]).then(() => undefined);
+		return this.#closePromise;
 	}
 
 	async *#runBrainTurn(
@@ -464,6 +600,7 @@ export class ConversationOrchestrator {
 		const chunker = new StreamingSentenceChunker(this.#chunkerOptions);
 		const heldActionSpeech: string[] = [];
 		let suppressModelSpeech = false;
+		let toolSettledThisTurn = false;
 		let brainFailure: Extract<BrainDelta, { type: "error" }> | undefined;
 		try {
 			this.#threadId ??= await this.#brain.createThread(this.conversationId);
@@ -536,13 +673,22 @@ export class ConversationOrchestrator {
 					brainFailure = delta;
 					break;
 				}
-				if (delta.type === "turn.completed") continue;
+				if (delta.type === "turn.completed") {
+					const stageEvent = this.#applyBrainStageProposal(
+						input.generationId,
+						toolSettledThisTurn ? undefined : delta.nextStage,
+						input.userText,
+					);
+					if (stageEvent) yield stageEvent;
+					continue;
+				}
 				if (delta.type === "tool.request") {
 					const outcome = await this.#performTool(
 						input.generationId,
 						input.turnId,
 						delta.tool,
 					);
+					toolSettledThisTurn = true;
 					for (const event of outcome.events) yield event;
 					chunker.clear();
 					heldActionSpeech.length = 0;
@@ -660,21 +806,30 @@ export class ConversationOrchestrator {
 			const fallback = this.#state.booking
 				? BRAIN_FAILURE_AFTER_BOOKING
 				: BRAIN_FAILURE_BEFORE_BOOKING;
-			yield {
-				type: "degraded",
-				generationId: input.generationId,
-				provider: "brain",
-				code: brainFailure.error.code,
-				textFallback: fallback,
-			};
-			if (visible.length === 0) {
-				const rendered = yield* this.#renderPhrase(input, fallback);
-				if (rendered.visibleText) visible.push(rendered.visibleText);
-				audioProduced ||= rendered.audioProduced;
-			}
-			if (!this.#generations.accept(input.generationId, input.turnId)) return;
+			const from = this.#state.stage;
 			const failed = this.apply({ type: "provider_failed" });
-			if (failed.ok && isTerminalStage(this.#state.stage)) {
+			if (failed.ok && this.#state.stage === "ERROR") {
+				yield {
+					type: "state.changed",
+					generationId: input.generationId,
+					from,
+					to: "ERROR",
+					reason: "provider_failed",
+					errorCode: brainFailure.error.code,
+				};
+				yield {
+					type: "degraded",
+					generationId: input.generationId,
+					provider: "brain",
+					code: brainFailure.error.code,
+					textFallback: fallback,
+				};
+				yield {
+					type: "text.delta",
+					generationId: input.generationId,
+					text: fallback,
+				};
+				visible.push(fallback);
 				yield* this.#finishTerminalResponse(
 					{ generationId: input.generationId, turnId: input.turnId },
 					visible,
@@ -685,6 +840,55 @@ export class ConversationOrchestrator {
 		}
 
 		yield* this.#finishGeneration(input.generationId, visible, audioProduced);
+	}
+
+	#applyBrainStageProposal(
+		generationId: string,
+		nextStage: ConversationState["stage"] | undefined,
+		userText: string,
+	): Extract<OrchestratorEvent, { type: "state.changed" }> | null {
+		const from = this.#state.stage;
+		if (!nextStage || nextStage === from) return null;
+		const edge = `${from}->${nextStage}`;
+		let event: ConversationEvent | null = null;
+		switch (edge) {
+			case "GREETING->DISCOVERY":
+				event = { type: "discovery_requested" };
+				break;
+			case "GREETING->BOOKING_OFFER":
+			case "DISCOVERY->BOOKING_OFFER":
+			case "VALUE->BOOKING_OFFER":
+			case "OBJECTION->BOOKING_OFFER":
+				event = { type: "booking_offered" };
+				break;
+			case "DISCOVERY->VALUE":
+				event = { type: "value_ready" };
+				break;
+			case "VALUE->OBJECTION":
+				event = { type: "objection_raised" };
+				break;
+			case "OBJECTION->VALUE":
+				event = { type: "objection_resolved" };
+				break;
+			case "BOOKING_OFFER->COLLECT_BOOKING":
+				event = { type: "booking_accepted" };
+				break;
+			case "BOOKED->POST_BOOKING_QUALIFICATION":
+				if (hasExplicitQualificationConsent(userText)) {
+					event = { type: "qualification_consent_granted" };
+				}
+				break;
+		}
+		if (!event) return null;
+		const result = this.apply(event);
+		if (!result.ok || this.#state.stage !== nextStage) return null;
+		return {
+			type: "state.changed",
+			generationId,
+			from,
+			to: nextStage,
+			reason: "brain_stage_proposal_validated",
+		};
 	}
 
 	#acceptBrainDelta(
@@ -822,12 +1026,14 @@ export class ConversationOrchestrator {
 			}
 		}
 		if (!stillCurrent) {
-			for (const event of events) {
-				if (
-					event.type === "booking.committed" ||
-					event.type === "booking.updated"
-				) {
-					this.#deferredDomainEvents.push(event);
+			if (!this.#closed) {
+				for (const event of events) {
+					if (
+						event.type === "booking.committed" ||
+						event.type === "booking.updated"
+					) {
+						this.#deferredDomainEvents.push(event);
+					}
 				}
 			}
 			return {
@@ -1050,6 +1256,7 @@ export class ConversationOrchestrator {
 
 	#canProcessTurns(): boolean {
 		return (
+			!this.#closed &&
 			this.#state.stage !== "DISCONNECTED" &&
 			!isTerminalStage(this.#state.stage)
 		);
@@ -1074,4 +1281,23 @@ export class ConversationOrchestrator {
 	async #interruptActiveGeneration(): Promise<void> {
 		await this.#invalidateActiveWork("superseded");
 	}
+}
+
+async function settleWithin(
+	promise: Promise<unknown>,
+	timeoutMs: number,
+): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	await Promise.race([
+		promise.then(
+			() => undefined,
+			() => undefined,
+		),
+		new Promise<void>((resolve) => {
+			timer = setTimeout(resolve, timeoutMs);
+			timer.unref?.();
+		}),
+	]).finally(() => {
+		if (timer) clearTimeout(timer);
+	});
 }

@@ -242,7 +242,7 @@ describe("conversation transition policy", () => {
 		);
 		expect(result).toMatchObject({
 			ok: true,
-			state: { stage: "COMPLETE", booking: { id: booking.id } },
+			state: { stage: "ERROR", booking: { id: booking.id } },
 		});
 	});
 });

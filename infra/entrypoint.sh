@@ -43,15 +43,26 @@ load_secret WEBHOOK_URL /run/secrets/webhook_url
 
 require_uint CODEX_MAX_CONCURRENT_TURNS 1 32
 require_uint MAX_ACTIVE_CONVERSATIONS 1 100
+require_uint MAX_ACTIVE_CONVERSATIONS_PER_SOURCE 1 100
 require_uint MAX_CONCURRENT_BRAIN_TURNS 1 32
 require_uint MAX_PENDING_BRAIN_TURNS 0 256
+require_uint BRAIN_QUEUE_TIMEOUT_MS 250 300000
 require_uint SESSION_MAX_MINUTES 1 120
+require_uint SESSION_STOP_DRAIN_MS 100 30000
+require_uint TRUSTED_PROXY_HOPS 0 3
+require_uint ADMISSION_WINDOW_MS 1000 600000
+require_uint MAX_CONVERSATION_CREATES_PER_SOURCE 1 1000
+require_uint MAX_SESSION_CONNECTIONS_PER_SOURCE 1 2000
+require_uint CLIENT_HELLO_TIMEOUT_MS 250 5000
+require_uint ABANDONED_SESSION_TIMEOUT_MS 1000 60000
+require_uint TRANSCRIPT_RETENTION_DAYS 1 3650
+require_uint WEBHOOK_TIMEOUT_MS 100 30000
 require_uint STT_CONNECT_TIMEOUT_MS 100 60000
 require_uint STT_TOTAL_TIMEOUT_MS 100 120000
 require_uint STT_MAX_RETRIES 0 1
 require_uint STT_RETRY_BASE_MS 0 10000
-require_uint STT_MAX_UTTERANCE_MS 1000 120000
-require_uint STT_MAX_AUDIO_BYTES 1 10000000
+require_uint STT_MAX_UTTERANCE_MS 100 120000
+require_uint STT_MAX_AUDIO_BYTES 3244 10000000
 require_uint TTS_MAX_CONCURRENCY 1 16
 require_uint TTS_PREFETCH_SEGMENTS 0 4
 require_uint TTS_MAX_CHARS_PER_SEGMENT 1 1000
@@ -59,6 +70,14 @@ require_uint TTS_MAX_CHARS_PER_TURN 1 20000
 require_uint TTS_MAX_CHARS_PER_SESSION 1 100000
 require_uint TURN_TIMEOUT_MS 1000 300000
 
+if [ "$MAX_ACTIVE_CONVERSATIONS_PER_SOURCE" -gt "$MAX_ACTIVE_CONVERSATIONS" ]; then
+  log "MAX_ACTIVE_CONVERSATIONS_PER_SOURCE cannot exceed MAX_ACTIVE_CONVERSATIONS"
+  exit 64
+fi
+if [ "$CLIENT_HELLO_TIMEOUT_MS" -gt "$ABANDONED_SESSION_TIMEOUT_MS" ]; then
+  log "CLIENT_HELLO_TIMEOUT_MS cannot exceed ABANDONED_SESSION_TIMEOUT_MS"
+  exit 64
+fi
 if [ "$MAX_CONCURRENT_BRAIN_TURNS" -gt "$MAX_ACTIVE_CONVERSATIONS" ]; then
   log "MAX_CONCURRENT_BRAIN_TURNS cannot exceed MAX_ACTIVE_CONVERSATIONS"
   exit 64
@@ -85,9 +104,9 @@ case "${AUTO_MIGRATE:-}" in
     ;;
 esac
 case "${CODEX_TOOL_MODE:-}" in
-  envelope|dynamic) ;;
+  envelope) ;;
   *)
-    log "CODEX_TOOL_MODE must be envelope or dynamic"
+    log "CODEX_TOOL_MODE must be envelope in the production runtime"
     exit 64
     ;;
 esac
@@ -102,6 +121,19 @@ case "${TTS_TEXT_ONLY_FALLBACK:-}" in
   true|false) ;;
   *)
     log "TTS_TEXT_ONLY_FALLBACK must be true or false"
+    exit 64
+    ;;
+esac
+case "${NOTIFIER:-}" in
+  console) ;;
+  webhook)
+    if [ -z "${WEBHOOK_URL:-}" ] || [ -z "${WEBHOOK_SIGNING_SECRET:-}" ]; then
+      log "WEBHOOK_URL and WEBHOOK_SIGNING_SECRET are required for NOTIFIER=webhook"
+      exit 64
+    fi
+    ;;
+  *)
+    log "NOTIFIER must be console or webhook"
     exit 64
     ;;
 esac

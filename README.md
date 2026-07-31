@@ -30,7 +30,7 @@ cp .env.example .env
    codex login status
    ```
 
-Укажите этот абсолютный `CODEX_HOME` в `.env`. Для локальной версии `NOTIFIER=console`; webhook-поля можно оставить пустыми. Не коммитьте `.env` или Codex credentials.
+Укажите этот абсолютный `CODEX_HOME` в `.env`. Для локальной версии `NOTIFIER=console`; PII идёт только в выделенный lead sink, а не в обычный application logger. Для `NOTIFIER=webhook` обязательны URL и signing secret; persisted worker выполняет bounded retry. Не коммитьте `.env` или Codex credentials.
 
 ## Неподвижные инварианты
 

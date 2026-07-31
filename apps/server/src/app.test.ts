@@ -1,44 +1,221 @@
 import { describe, expect, test } from "bun:test";
 import {
-	AudioCommitEventSchema,
+	ApiErrorResponseSchema,
+	CreateConversationResponseSchema,
 	LiveHealthResponseSchema,
-	TranscriptFinalEventSchema,
+	ReadyHealthResponseSchema,
+	StopConversationResponseSchema,
 } from "@botamin/contracts";
-import { app } from "./app";
+import { bunRequestBodyHardLimit, createServerApp } from "./app";
+import type { RuntimeConfig } from "./runtime/config";
+import type { RuntimeGatewaySession, ServerRuntime } from "./runtime/runtime";
 
-describe("server skeleton", () => {
-	test("serves a contract-valid liveness response", async () => {
-		const response = await app.request("/health/live");
-		const body: unknown = await response.json();
+const conversationId = "01J00000000000000000000000";
+const origin = "http://localhost:5173";
 
-		expect(response.status).toBe(200);
-		expect(LiveHealthResponseSchema.parse(body)).toEqual({ status: "ok" });
+function runtime(
+	options: { ready?: boolean; capacity?: boolean } = {},
+): ServerRuntime & { stopped: string[] } {
+	const sessions = new Map<string, RuntimeGatewaySession>();
+	const stopped: string[] = [];
+	return {
+		config: {
+			appOrigin: origin,
+			limits: {
+				httpBodyBytes: 8_192,
+				wsJsonBytes: 8_192,
+				wsFrameBytes: 3_209,
+				historyEvents: 128,
+				historyBytes: 5_000_000,
+			},
+		} as RuntimeConfig,
+		registry: {
+			create: () => {
+				if (options.capacity === false) return null;
+				const session: RuntimeGatewaySession = {
+					conversationId,
+					expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+					takeClientToken: () => "t".repeat(43),
+					attach: () => undefined,
+					receive: async () => undefined,
+					detach: () => undefined,
+				};
+				sessions.set(conversationId, session);
+				return session;
+			},
+			get: (id) => sessions.get(id) ?? null,
+			stop: async (id) => {
+				stopped.push(id);
+				sessions.delete(id);
+			},
+		},
+		readiness: async () =>
+			ReadyHealthResponseSchema.parse({
+				status: options.ready === false ? "unready" : "ready",
+				checks: [
+					{
+						name: "capacity",
+						status: options.capacity === false ? "unready" : "ready",
+					},
+				],
+			}),
+		dispose: async () => undefined,
+		stopped,
+	};
+}
+
+const validRequest = {
+	source: "landing",
+	locale: "ru-RU",
+	qualificationEnabled: true,
+	consent: { voiceProcessing: true, contactProcessing: true },
+};
+
+describe("production server REST contracts", () => {
+	test("serves shallow liveness and dependency readiness", async () => {
+		const app = createServerApp(runtime());
+		const live = await app.request("/health/live");
+		expect(live.status).toBe(200);
+		expect(LiveHealthResponseSchema.parse(await live.json())).toEqual({
+			status: "ok",
+		});
+		const ready = await app.request("/health/ready");
+		expect(ready.status).toBe(200);
+		expect(ReadyHealthResponseSchema.parse(await ready.json()).status).toBe(
+			"ready",
+		);
 	});
 
-	test("compiles the server baseline against atomic STT WebSocket events", () => {
-		const conversationId = "01J00000000000000000000000";
-		const at = "2026-07-30T20:22:00.000Z";
-		expect(
-			AudioCommitEventSchema.parse({
-				v: 1,
-				type: "audio.commit",
-				conversationId,
-				at,
-				payload: {},
-			}).type,
-		).toBe("audio.commit");
-		expect(
-			TranscriptFinalEventSchema.parse({
-				v: 1,
-				type: "transcript.final",
-				conversationId,
-				seq: 1,
-				at,
-				payload: {
-					turnId: "01J00000000000000000000003",
-					text: "Финальный текст",
+	test("requires both consents and returns only a safe structured error", async () => {
+		const app = createServerApp(runtime());
+		const response = await app.request("/api/v1/conversations", {
+			method: "POST",
+			headers: { "content-type": "application/json", origin },
+			body: JSON.stringify({
+				...validRequest,
+				consent: { voiceProcessing: true, contactProcessing: false },
+			}),
+		});
+		expect(response.status).toBe(400);
+		expect(ApiErrorResponseSchema.parse(await response.json()).error.code).toBe(
+			"CONSENT_REQUIRED",
+		);
+	});
+
+	test("creates a contract-valid same-origin conversation", async () => {
+		const app = createServerApp(runtime());
+		const response = await app.request("/api/v1/conversations", {
+			method: "POST",
+			headers: { "content-type": "application/json", origin },
+			body: JSON.stringify(validRequest),
+		});
+		expect(response.status).toBe(201);
+		const created = CreateConversationResponseSchema.parse(
+			await response.json(),
+		);
+		expect(created.conversationId).toBe(conversationId);
+		expect(created.wsUrl).toBe(`/ws/v1/conversations/${conversationId}`);
+		expect(created.clientToken).toHaveLength(43);
+	});
+
+	test("rate-limits valid conversation creates per direct source", async () => {
+		const app = createServerApp(runtime());
+		for (let attempt = 0; attempt < 5; attempt += 1) {
+			const response = await app.request("/api/v1/conversations", {
+				method: "POST",
+				headers: { "content-type": "application/json", origin },
+				body: JSON.stringify(validRequest),
+			});
+			expect(response.status).toBe(201);
+		}
+		const limited = await app.request("/api/v1/conversations", {
+			method: "POST",
+			headers: { "content-type": "application/json", origin },
+			body: JSON.stringify(validRequest),
+		});
+		expect(limited.status).toBe(429);
+		expect(ApiErrorResponseSchema.parse(await limited.json()).error.code).toBe(
+			"CAPACITY_EXCEEDED",
+		);
+	});
+
+	test("rejects unavailable capacity before creating a session", async () => {
+		const app = createServerApp(runtime({ capacity: false }));
+		const response = await app.request("/api/v1/conversations", {
+			method: "POST",
+			headers: { "content-type": "application/json", origin },
+			body: JSON.stringify(validRequest),
+		});
+		expect(response.status).toBe(503);
+		expect(ApiErrorResponseSchema.parse(await response.json()).error.code).toBe(
+			"CAPACITY_EXCEEDED",
+		);
+	});
+
+	test("does not serve landing HTML from API paths or wrong methods", async () => {
+		const app = createServerApp(runtime());
+		const response = await app.request("/api/v1/conversations", {
+			headers: { origin },
+		});
+		expect(response.status).toBe(404);
+		expect(response.headers.get("content-type") ?? "").not.toContain(
+			"text/html",
+		);
+	});
+
+	test("Bun passes a 9KB body to Hono for the structured application 413", async () => {
+		const fake = runtime();
+		const app = createServerApp(fake);
+		const server = Bun.serve({
+			port: 0,
+			fetch: app.fetch,
+			maxRequestBodySize: bunRequestBodyHardLimit(fake.config),
+		});
+		try {
+			const response = await fetch(
+				`http://127.0.0.1:${server.port}/api/v1/conversations`,
+				{
+					method: "POST",
+					headers: { "content-type": "application/json", origin },
+					body: JSON.stringify({ padding: "x".repeat(9_000) }),
 				},
-			}).type,
-		).toBe("transcript.final");
+			);
+			expect(response.status).toBe(413);
+			expect(ApiErrorResponseSchema.parse(await response.json())).toMatchObject(
+				{
+					error: { code: "INVALID_EVENT", retryable: false },
+				},
+			);
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	test("stops idempotently with the exact contract response", async () => {
+		const fake = runtime();
+		const app = createServerApp(fake);
+		await app.request("/api/v1/conversations", {
+			method: "POST",
+			headers: { "content-type": "application/json", origin },
+			body: JSON.stringify(validRequest),
+		});
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			const response = await app.request(
+				`/api/v1/conversations/${conversationId}/stop`,
+				{
+					method: "POST",
+					headers: { "content-type": "application/json", origin },
+					body: JSON.stringify({ reason: "user_requested" }),
+				},
+			);
+			expect(response.status).toBe(200);
+			expect(
+				StopConversationResponseSchema.parse(await response.json()),
+			).toEqual({
+				conversationId,
+				stopped: true,
+			});
+		}
+		expect(fake.stopped).toEqual([conversationId, conversationId]);
 	});
 });

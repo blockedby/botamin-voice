@@ -147,6 +147,10 @@ export class BookingToolExecutor {
 
 	constructor(private readonly bookings: BookingService) {}
 
+	clear(): void {
+		this.#calls.clear();
+	}
+
 	async execute(
 		state: ConversationState,
 		conversationId: string,
@@ -297,6 +301,11 @@ export class BookingToolExecutor {
 					message: "The qualification operation could not be completed",
 				};
 			}
+		}
+		while (this.#calls.size >= 256) {
+			const oldest = this.#calls.keys().next().value;
+			if (!oldest) break;
+			this.#calls.delete(oldest);
 		}
 		this.#calls.set(authorization.request.callId, {
 			canonicalRequest,

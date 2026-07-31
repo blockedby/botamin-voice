@@ -835,10 +835,19 @@ AUTO_MIGRATE=true
 DATABASE_URL=file:./data/app.db
 LOG_LEVEL=info
 MAX_ACTIVE_CONVERSATIONS=3
+MAX_ACTIVE_CONVERSATIONS_PER_SOURCE=2
 MAX_CONCURRENT_BRAIN_TURNS=3
 MAX_PENDING_BRAIN_TURNS=6
+BRAIN_QUEUE_TIMEOUT_MS=45000
 SESSION_MAX_MINUTES=20
+SESSION_STOP_DRAIN_MS=5000
 TURN_TIMEOUT_MS=45000
+TRUSTED_PROXY_HOPS=0
+ADMISSION_WINDOW_MS=60000
+MAX_CONVERSATION_CREATES_PER_SOURCE=5
+MAX_SESSION_CONNECTIONS_PER_SOURCE=20
+CLIENT_HELLO_TIMEOUT_MS=2000
+ABANDONED_SESSION_TIMEOUT_MS=10000
 
 # Codex subscription brain
 # Authentication is performed separately with `codex login --device-auth`.
@@ -847,7 +856,7 @@ BRAIN_PROVIDER=codex-subscription
 CODEX_MODEL=gpt-5.6-luna
 CODEX_EFFORT=low
 CODEX_HOME=/home/your-user/.local/share/botamin-voice/codex-home
-# Safe without an injected backend executor; the orchestrator may explicitly select dynamic.
+# Production runtime is fixed to the server-validated envelope mode.
 CODEX_TOOL_MODE=envelope
 CODEX_CWD=.runtime/brain
 CODEX_MAX_CONCURRENT_TURNS=3
@@ -911,13 +920,14 @@ POST_BOOKING_QUALIFICATION_ENABLED=true
 NOTIFIER=console
 WEBHOOK_URL=
 WEBHOOK_SIGNING_SECRET=
+WEBHOOK_TIMEOUT_MS=5000
 
 # Privacy and retention
 TRANSCRIPT_RETENTION_DAYS=30
 STORE_RAW_AUDIO=false
 ```
 
-Значение concurrency — initial guardrail, а не окончательная capacity claim; оно настраивается после load test и проверки лимитов конкретной подписки. `CODEX_MODEL` и `CODEX_EFFORT` конфигурируемы, но любое изменение release-профиля требует полного conversation eval gate.
+Значение concurrency — initial guardrail, а не окончательная capacity claim; оно настраивается после load test и проверки лимитов конкретной подписки. `MAX_PENDING_BRAIN_TURNS` ограничивает сохранённые в памяти committed WAV; booked sessions имеют отдельную приоритетную FIFO-очередь, а внутри каждой очереди сохраняется порядок поступления. `TRUSTED_PROXY_HOPS=0` безопасно игнорирует forwarding headers для прямого Bun-запуска; Compose явно задаёт `1`, потому что app доступен только через Caddy. `CODEX_MODEL` и `CODEX_EFFORT` конфигурируемы, но любое изменение release-профиля требует полного conversation eval gate.
 
 
 <div class="page-break"></div>
@@ -1228,6 +1238,7 @@ Response `201`:
 {
   "conversationId": "01J...",
   "wsUrl": "/ws/v1/conversations/01J...",
+  "clientToken": "opaque-one-use-client-token-32-bytes",
   "expiresAt": "2026-07-30T21:30:00Z",
   "clientConfig": {
     "inputSampleRate": 16000,
@@ -1239,7 +1250,7 @@ Response `201`:
 }
 ```
 
-Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`.
+Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`. Application JSON over 8192 bytes returns the same structured error envelope with HTTP `413`; Bun's transport hard cap is deliberately higher so this contract is not replaced by an unstructured runtime response. Per-source create admission returns structured HTTP `429`.
 
 ### `POST /api/v1/conversations/:id/stop`
 
@@ -1260,7 +1271,8 @@ Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`.
 - при `STT_PROVIDER=openrouter`: schema-valid audio-input model/`wav`/language, utterance byte/time limits и request timeout/retry limits; readiness не утверждает наличие provider streaming session;
 - при `TTS_PROVIDER=openrouter`: schema-valid model/voice/`mp3`, доступность queue/circuit state и разрешённый text-only output startup policy;
 - prompt bundle checksum;
-- возможность принять новую conversation по concurrency guard.
+- запущенный persisted notification-outbox worker (provider delivery failure itself remains retryable and does not make booking uncommitted);
+- возможность принять новую conversation по active/queued concurrency guards.
 
 ### Dev-only
 
@@ -1277,7 +1289,7 @@ Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`.
   "v": 1,
   "type": "client.hello",
   "payload": {
-    "resumeToken": null,
+    "resumeToken": "opaque-one-use-client-token-32-bytes",
     "audio": {
       "encoding": "pcm16le",
       "sampleRate": 16000,
@@ -1321,6 +1333,8 @@ Server:
 | `playback.interrupted` | `generationId`, reason | barge-in |
 | `session.stop` | reason | корректное завершение |
 | `client.ping` | timestamp | keepalive |
+
+Первый `client.hello` обязан предъявить одноразовый `clientToken` из REST response; `session.ready` сразу заменяет его новым resume token. На session допускается один pending hello-кандидат с коротким deadline и один bound socket. Reconnect заменяет bound socket только после полной проверки hello/token; неподтверждённый кандидат его не вытесняет.
 
 После handshake PCM16 audio идёт binary frames без base64. Gateway/utterance assembler ограничивает accumulated duration/bytes и после `audio.commit` кодирует ровно один validated mono PCM16 WAV. Этот WAV передаётся atomic `SttPort`; только OpenRouter adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks не означают streaming transport до provider.
 
@@ -1707,10 +1721,10 @@ Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` �
 ## 11. Retention
 
 - raw audio: не хранить;
-- transcript: configurable retention, default 30 дней для MVP;
-- bookings: до ручного удаления/экспорта;
+- transcript: `TRANSCRIPT_RETENTION_DAYS`, default 30 дней; startup и hourly runner удаляют bounded batches из `turns` по durable timestamp, не удаляя conversation/booking;
+- bookings: до ручного удаления/экспорта и никогда не каскадно из transcript purge;
 - events: минимум срок отладки и аудита, configurable;
-- Codex thread logs: lifecycle и deletion должны быть согласованы с transcript retention;
+- Codex thread state: stop/expiry прерывает turn, вызывает `thread/delete`, очищает process-local maps; TTS session budgets также reset;
 - backups наследуют срок хранения и шифруются.
 
 
@@ -1943,8 +1957,14 @@ Notifier failure не должен делать app unready, если outbox с�
 
 ```text
 MAX_ACTIVE_CONVERSATIONS
+MAX_ACTIVE_CONVERSATIONS_PER_SOURCE
 MAX_CONCURRENT_BRAIN_TURNS
 MAX_PENDING_BRAIN_TURNS
+BRAIN_QUEUE_TIMEOUT_MS
+MAX_CONVERSATION_CREATES_PER_SOURCE
+MAX_SESSION_CONNECTIONS_PER_SOURCE
+CLIENT_HELLO_TIMEOUT_MS
+ABANDONED_SESSION_TIMEOUT_MS
 STT_MAX_UTTERANCE_MS
 STT_MAX_AUDIO_BYTES
 STT_TOTAL_TIMEOUT_MS
@@ -1956,7 +1976,9 @@ SESSION_MAX_MINUTES
 TURN_TIMEOUT_MS
 ```
 
-При переполнении новая сессия получает `CAPACITY_EXCEEDED`; уже созданные booking updates имеют приоритет над новыми discovery turns.
+При переполнении новая сессия/turn получает structured `CAPACITY_EXCEEDED`. Committed WAV остаётся bounded in-memory до admission или timeout. Очередь разделена на booked и standard FIFO lanes: booked lane выбирается первой, порядок внутри lane не меняется. Stop/expiry отменяет queued work и является bounded cancellation barrier для STT/brain/TTS/tool events.
+
+Source key берётся из direct peer address. Forwarded IP игнорируется при безопасном default `TRUSTED_PROXY_HOPS=0`; Compose задаёт ровно один trusted Caddy hop. Malformed forwarding chains fail closed. Create/WS attempt windows и active sessions per source дополняют global limits; Origin остаётся дополнительной, но не единственной защитой. REST выдаёт одноразовый first-hello token, pending socket ограничен одним и abandoned REST-created session освобождается раньше общего TTL.
 
 ## 11. Failure and degraded modes
 

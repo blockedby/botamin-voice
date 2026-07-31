@@ -15,6 +15,13 @@
 			"when": 1785502801000,
 			"tag": "0001_subject_scopes_and_outbox_claim",
 			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "6",
+			"when": 1785502802000,
+			"tag": "0002_transcript_retention_index",
+			"breakpoints": true
 		}
 	]
 }

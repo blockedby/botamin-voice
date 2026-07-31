@@ -36,6 +36,8 @@ import { isCompleteMp3File } from "./mp3";
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 524, 529]);
 const MAX_OBSOLETE_GENERATIONS = 10_000;
+const MAX_TRACKED_SESSIONS = 256;
+const MAX_TRACKED_TURNS = 4_096;
 
 export interface OpenRouterTtsTelemetryEvent {
 	provider: "openrouter";
@@ -128,6 +130,10 @@ export class OpenRouterTtsAdapter implements TtsPort {
 		for (const key of this.#turnCharacters.keys()) {
 			if (key.startsWith(`${conversationId}:`))
 				this.#turnCharacters.delete(key);
+		}
+		for (const key of this.#activeSegments) {
+			if (key.startsWith(`${conversationId}:`))
+				this.#activeSegments.delete(key);
 		}
 	}
 
@@ -399,6 +405,20 @@ export class OpenRouterTtsAdapter implements TtsPort {
 
 	#reserveBudget(request: TtsSynthesisRequest, characters: number): void {
 		const turnKey = `${request.conversationId}:${request.turnId}`;
+		if (!this.#sessionCharacters.has(request.conversationId)) {
+			while (this.#sessionCharacters.size >= MAX_TRACKED_SESSIONS) {
+				const oldest = this.#sessionCharacters.keys().next().value;
+				if (!oldest) break;
+				this.#sessionCharacters.delete(oldest);
+			}
+		}
+		if (!this.#turnCharacters.has(turnKey)) {
+			while (this.#turnCharacters.size >= MAX_TRACKED_TURNS) {
+				const oldest = this.#turnCharacters.keys().next().value;
+				if (!oldest) break;
+				this.#turnCharacters.delete(oldest);
+			}
+		}
 		this.#sessionCharacters.set(
 			request.conversationId,
 			(this.#sessionCharacters.get(request.conversationId) ?? 0) + characters,

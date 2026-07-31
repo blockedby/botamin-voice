@@ -33,13 +33,20 @@ class FakeSocket implements WebSocketLike {
 	onerror: ((event: unknown) => void) | null = null;
 	onmessage: ((event: { data: unknown }) => void) | null = null;
 	readonly sent: Array<string | Uint8Array> = [];
+	readonly actions: string[] = [];
 	closed = false;
 
 	send(data: string | Uint8Array): void {
 		if (this.readyState !== 1) throw new Error("socket is not open");
 		this.sent.push(data);
+		this.actions.push(
+			typeof data === "string"
+				? `send:${(JSON.parse(data) as { type: string }).type}`
+				: "send:binary",
+		);
 	}
 	close(): void {
+		this.actions.push("close");
 		this.closed = true;
 		this.readyState = 3;
 	}
@@ -494,7 +501,7 @@ describe("voice WebSocket transport", () => {
 		expect(transport.commit()).toBe(false);
 	});
 
-	test("mute blocks microphone frames and stop cancels reconnect/cleans the socket", () => {
+	test("terminal stop sends once before outbound fencing/close and cancels reconnect", () => {
 		const socket = new FakeSocket();
 		const scheduler = new FakeScheduler();
 		const transport = new VoiceTransport({
@@ -508,9 +515,21 @@ describe("voice WebSocket transport", () => {
 		socket.serverJson(sessionReady());
 		transport.setMuted(true);
 		expect(transport.sendPcmFrame(new Uint8Array([0, 0]))).toBe(false);
-		transport.stop();
+
+		transport.disableReconnect();
+		expect(transport.ping()).toBe(false);
+		transport.stop("client_error");
+		transport.stop("client_error");
+
 		expect(socket.closed).toBe(true);
 		expect(scheduler.jobs).toHaveLength(0);
-		expect(sentJson(socket).at(-1)?.type).toBe("session.stop");
+		expect(
+			sentJson(socket).filter((event) => event.type === "session.stop"),
+		).toHaveLength(1);
+		expect(sentJson(socket).at(-1)).toMatchObject({
+			type: "session.stop",
+			payload: { reason: "client_error" },
+		});
+		expect(socket.actions.slice(-2)).toEqual(["send:session.stop", "close"]);
 	});
 });

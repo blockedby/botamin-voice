@@ -25,6 +25,7 @@ export class AtomicSttTurnGate {
 	#acceptedTurnIds = new Set<string>();
 	#active: MutableSttTurn | null = null;
 	#sequence = 0;
+	#acceptedCount = 0;
 	#accepting = true;
 	#closed = false;
 
@@ -35,6 +36,12 @@ export class AtomicSttTurnGate {
 			return { ok: false, reason: "duplicate" };
 		}
 		this.#acceptedTurnIds.add(turnId);
+		this.#acceptedCount += 1;
+		while (this.#acceptedTurnIds.size > 512) {
+			const oldest = this.#acceptedTurnIds.values().next().value;
+			if (!oldest) break;
+			this.#acceptedTurnIds.delete(oldest);
+		}
 		const supersededTurnId = this.#active?.turnId;
 		this.#active?.controller.abort("stale turn");
 		this.#sequence += 1;
@@ -112,10 +119,11 @@ export class AtomicSttTurnGate {
 		this.#closed = true;
 		this.#accepting = false;
 		this.abort();
+		this.#acceptedTurnIds.clear();
 	}
 
 	get acceptedCommits(): number {
-		return this.#acceptedTurnIds.size;
+		return this.#acceptedCount;
 	}
 
 	#snapshot(): AcceptedSttTurn {

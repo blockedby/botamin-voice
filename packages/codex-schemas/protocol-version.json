@@ -1,0 +1,9 @@
+{
+	"codexCliVersion": "codex-cli 0.146.0",
+	"generationMode": "experimental",
+	"generatedAtPolicy": "reproducible-no-timestamp",
+	"files": {
+		"generated/codex_app_server_protocol.schemas.json": "5d2d65fd2143f07914070c46dc2b43ab6a8c3b9f6e8c62604f7f663b2a6551c2",
+		"generated/codex_app_server_protocol.v2.schemas.json": "db3067e87fad193b67e285e8083d4bf3dd4796976d98424a750307c230615d5d"
+	}
+}

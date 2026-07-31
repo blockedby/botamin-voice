@@ -1,0 +1,32 @@
+{
+  "name": "@botamin/prompt-compiler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist/src",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "types": "dist/src/index.d.ts",
+  "bin": {
+    "prompt-compiler": "dist/src/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"*.{json,md}\" \"../../prompts/*.md\" \"../../knowledge/*.md\"",
+    "check": "npm run typecheck && npm test && npm run format:check"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "prettier": "^3.6.0",
+    "typescript": "^5.9.0"
+  }
+}

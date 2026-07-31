@@ -8,6 +8,7 @@ import type {
 	VoiceUiState,
 } from "./VoiceDemo";
 import {
+	activateVoiceStart,
 	completeVoiceSession,
 	handOffVoiceControlFocus,
 	stopVoiceSession,
@@ -15,6 +16,14 @@ import {
 } from "./VoiceDemo";
 
 const noop = () => undefined;
+
+function liveRegionContent(html: string): string {
+	const region = html.match(
+		/<div class="visually-hidden" data-voice-live-region="true"[\s\S]*?<\/div>/,
+	)?.[0];
+	expect(region).toBeDefined();
+	return region ?? "";
+}
 
 function renderVoice(
 	state: VoiceUiState,
@@ -78,7 +87,8 @@ describe("VoiceDemo state semantics", () => {
 			const html = renderVoice(state);
 			expect(html).toContain(`data-voice-state="${state.kind}"`);
 			expect(html).toContain(expectedLabel);
-			expect(html).toContain('role="status"');
+			expect(html.match(/role="status"/g)?.length).toBe(1);
+			expect(html.match(/aria-live="polite"/g)?.length).toBe(1);
 			expect(html).not.toContain("stack trace");
 			expect(html).not.toContain("OpenRouter");
 			expect(html).not.toContain("Codex");
@@ -148,6 +158,27 @@ describe("VoiceDemo controls and transcript", () => {
 		expect(muted).toContain('aria-pressed="true"');
 	});
 
+	test("Enter start activation focuses stable status after the CTA unmounts, including microphone denial", () => {
+		for (const nextState of ["connecting", "permission-denied"] as const) {
+			const events: string[] = [];
+			let state: VoiceUiState = { kind: "idle" };
+			const stableStatus = {
+				focus: () => events.push(`focus:${state.kind}`),
+			};
+
+			activateVoiceStart(() => {
+				events.push("start");
+				state = { kind: nextState };
+			}, stableStatus);
+
+			expect(events).toEqual(["start", `focus:${nextState}`]);
+			const changed = renderVoice(state);
+			expect(changed).not.toContain("primary-voice-cta");
+			expect(changed).toContain('class="voice-status');
+			expect(changed).toContain('tabindex="-1"');
+		}
+	});
+
 	test("hands focus from controls that disappear to a stable exact target", () => {
 		const focused: string[] = [];
 		const targets = {
@@ -214,7 +245,60 @@ describe("VoiceDemo controls and transcript", () => {
 		expect(html).toContain("Завершить разговор");
 	});
 
-	test("uses exactly one booking live region while keeping visual status and transcript", () => {
+	test("keeps one consolidated polite live region with changing post-booking updates", () => {
+		const transcript = [
+			{
+				id: "committed",
+				speaker: "agent" as const,
+				text: "Контакт и следующий шаг записаны.",
+			},
+		];
+		const html = renderVoice({ kind: "booked" }, { transcript });
+		const qualification = renderVoice(
+			{
+				kind: "qualification",
+				bookingOutcome: "committed",
+				questionNumber: 2,
+				questionCount: 4,
+			},
+			{ transcript },
+		);
+		const disconnected = renderVoice(
+			{ kind: "disconnected", bookingOutcome: "committed" },
+			{ transcript },
+		);
+		const audioError = renderVoice(
+			{ kind: "audio-error", bookingOutcome: "committed" },
+			{
+				transcript: [
+					...transcript,
+					{
+						id: "final-audio-fallback",
+						speaker: "agent",
+						text: "Продолжим по видимому тексту.",
+					},
+				],
+			},
+		);
+
+		for (const rendered of [html, qualification, disconnected, audioError]) {
+			expect(rendered.match(/role="status"/g)?.length).toBe(1);
+			expect(rendered.match(/aria-live="polite"/g)?.length).toBe(1);
+		}
+		const bookedLive = liveRegionContent(html);
+		expect(bookedLive.match(/Лид и следующий шаг записаны/g)?.length).toBe(1);
+		expect(bookedLive).toContain("Это не календарная встреча");
+		expect(liveRegionContent(qualification)).toContain(
+			"Дополнительный вопрос 2 из 4",
+		);
+		expect(liveRegionContent(disconnected)).toContain("Связь прервана");
+		expect(liveRegionContent(audioError)).toContain("Продолжаем текстом");
+		expect(liveRegionContent(audioError)).toContain(
+			"Финальная реплика, Botamin: Продолжим по видимому тексту.",
+		);
+	});
+
+	test("keeps visual booking status and transcript outside the sole live region", () => {
 		const html = renderVoice(
 			{ kind: "booked" },
 			{

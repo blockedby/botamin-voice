@@ -209,6 +209,16 @@ interface FocusableTarget {
 	focus: () => void;
 }
 
+export function activateVoiceStart(
+	onStart: () => void,
+	status: FocusableTarget | null,
+) {
+	// Native buttons dispatch the same click path for Enter/Space. Run the action
+	// first, then move focus before React removes the activating CTA.
+	onStart();
+	status?.focus();
+}
+
 export function handOffVoiceControlFocus(
 	control: "interrupt" | "session",
 	targets: {
@@ -321,24 +331,43 @@ function ConsentPanel({
 	);
 }
 
-function Transcript({
-	entries,
-	announceUpdates,
-}: {
-	entries: readonly FinalTranscriptEntry[];
-	announceUpdates: boolean;
-}) {
+export function getVoiceLiveStatusAnnouncement(
+	state: VoiceUiState,
+	muted: boolean,
+): string {
+	const presentation = getVoiceStatePresentation(state, muted);
+	if (state.kind === "booked") {
+		return "Лид и следующий шаг записаны. Это не календарная встреча.";
+	}
+	if (state.kind === "complete" && state.bookingOutcome === "committed") {
+		const qualification =
+			state.qualificationStatus === "complete"
+				? "Квалификация завершена."
+				: state.qualificationStatus === "partial"
+					? "Квалификация завершена частично."
+					: "Дополнительная квалификация пропущена.";
+		return `${qualification} ${presentation.label}. ${presentation.detail}`;
+	}
+	return `${presentation.label}. ${presentation.detail}`;
+}
+
+export function getLatestFinalTranscriptAnnouncement(
+	entries: readonly FinalTranscriptEntry[],
+): string {
+	const latest = entries.at(-1);
+	if (!latest) return "";
+	const speaker = latest.speaker === "agent" ? "Botamin" : "Вы";
+	return `Финальная реплика, ${speaker}: ${latest.text}`;
+}
+
+function Transcript({ entries }: { entries: readonly FinalTranscriptEntry[] }) {
 	return (
 		<section className="transcript" aria-labelledby="transcript-title">
 			<div className="transcript-heading">
 				<h3 id="transcript-title">Текст разговора</h3>
 				<span>только финальные реплики</span>
 			</div>
-			<div
-				className="transcript-log"
-				aria-live={announceUpdates ? "polite" : undefined}
-				aria-atomic={announceUpdates ? "false" : undefined}
-			>
+			<div className="transcript-log">
 				{entries.length === 0 ? (
 					<p className="transcript-empty">
 						Здесь появятся ваши завершённые реплики и ответы агента.
@@ -448,6 +477,7 @@ export function VoiceDemo(props: VoiceDemoProps) {
 		handOffVoiceControlFocus("session", focusTargets());
 	const stateActions: VoiceDemoProps = {
 		...props,
+		onStart: () => activateVoiceStart(props.onStart, statusRef.current),
 		onRetryPermission: () => {
 			handOffSessionFocus();
 			props.onRetryPermission();
@@ -472,6 +502,21 @@ export function VoiceDemo(props: VoiceDemoProps) {
 			aria-labelledby="voice-demo-title"
 			data-voice-state={props.state.kind}
 		>
+			<div
+				className="visually-hidden"
+				data-voice-live-region="true"
+				role="status"
+				aria-live="polite"
+				aria-atomic="false"
+			>
+				<span data-voice-live-status="true">
+					{getVoiceLiveStatusAnnouncement(props.state, props.muted)}
+				</span>
+				<span data-voice-live-transcript="true">
+					{getLatestFinalTranscriptAnnouncement(props.transcript)}
+				</span>
+			</div>
+
 			<header className="voice-demo-header">
 				<div>
 					<p className="eyebrow">Живой демо-разговор · около 4 минут</p>
@@ -484,8 +529,6 @@ export function VoiceDemo(props: VoiceDemoProps) {
 				className={`voice-status tone-${presentation.tone}`}
 				ref={statusRef}
 				tabIndex={-1}
-				role={bookingCommitted ? undefined : "status"}
-				aria-live={bookingCommitted ? undefined : "polite"}
 			>
 				<div className="status-orbit" aria-hidden="true">
 					<span />
@@ -512,12 +555,7 @@ export function VoiceDemo(props: VoiceDemoProps) {
 			) : null}
 
 			{bookingCommitted ? (
-				<div
-					className="booking-confirmation"
-					role="status"
-					aria-live="polite"
-					aria-atomic="true"
-				>
+				<div className="booking-confirmation">
 					<strong>Лид и следующий шаг записаны</strong>
 					<p>
 						Это не календарная встреча. Команда Botamin получила договорённость
@@ -526,10 +564,7 @@ export function VoiceDemo(props: VoiceDemoProps) {
 				</div>
 			) : null}
 
-			<Transcript
-				entries={props.transcript}
-				announceUpdates={!bookingCommitted}
-			/>
+			<Transcript entries={props.transcript} />
 
 			<div className="voice-actions">
 				<StateActions {...stateActions} />

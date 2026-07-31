@@ -1,21 +1,30 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
+	AtomicServerAudioSegmentFrameSchema,
+	BINARY_AUDIO_FRAME_KIND,
 	BookingToolExecutionSchema,
 	type BrainDelta,
 	type BrainTurnInput,
 	type CreateBookingInput,
+	decodeBinaryAudioFrame,
 	EntityIdSchema,
+	encodeBinaryAudioFrame,
+	MpegAudioBytesSchema,
 	type SttSessionInput,
 	type TtsSynthesisRequest,
 } from "@botamin/contracts";
 import {
-	createDeterministicMp3Fixture,
 	FakeBookingService,
 	FakeBrain,
 	FakeNotifier,
 	FakeStt,
 	FakeTts,
 } from "./fakes";
+import {
+	createDeterministicMp3Fixture,
+	createMalformedMp3Fixture,
+} from "./mp3";
 
 const conversationId = "01J00000000000000000000000";
 const turnId = "01J00000000000000000000003";
@@ -247,14 +256,19 @@ describe("fake full turn", () => {
 		expect(repeatedFirst.bookingId).toBe(first.bookingId);
 	});
 
-	test("returns deterministic valid-ish MP3 bytes as one atomic segment", async () => {
+	test("returns the known-valid deterministic MP3 as one atomic segment", async () => {
 		const fixture = createDeterministicMp3Fixture();
-		expect(fixture.byteLength).toBe(417);
+		const malformed = createMalformedMp3Fixture();
+		expect(fixture.byteLength).toBe(789);
 		expect(fixture.slice(0, 4)).toEqual(
-			new Uint8Array([0xff, 0xfb, 0x90, 0x64]),
+			new Uint8Array([0x49, 0x44, 0x33, 0x04]),
 		);
+		expect(malformed).not.toEqual(fixture);
+		expect(MpegAudioBytesSchema.safeParse(fixture).success).toBe(true);
+		expect(MpegAudioBytesSchema.safeParse(malformed).success).toBe(false);
 
-		const customFixture = new Uint8Array([0xff, 0xfb, 0x90, 0x64]);
+		const customFixture = fixture.slice();
+		const expectedBytes = customFixture.slice();
 		const tts = new FakeTts({
 			mp3: customFixture,
 			providerGenerationId: "provider-generation:opaque",
@@ -276,9 +290,73 @@ describe("fake full turn", () => {
 			contentType: "audio/mpeg",
 			final: true,
 		});
-		expect(segment.bytes).toEqual(new Uint8Array([0xff, 0xfb, 0x90, 0x64]));
+		expect(segment.bytes).toEqual(expectedBytes);
 		expect(tts.inputs).toEqual([input]);
-		expect(() => new FakeTts({ mp3: new Uint8Array() })).toThrow("non-empty");
+		expect(() => new FakeTts({ mp3: malformed })).toThrow(
+			"structurally valid MP3",
+		);
+	});
+
+	test("preserves every MP3 byte across server encode and browser decode", () => {
+		const mp3 = createDeterministicMp3Fixture();
+		const metadata = {
+			generationId,
+			segmentId: "01J00000000000000000000005",
+			sequence: 42,
+			contentType: "audio/mpeg" as const,
+			byteLength: mp3.byteLength,
+			final: true as const,
+		};
+		const rawFrame = encodeBinaryAudioFrame({
+			kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+			sequence: metadata.sequence,
+			payload: mp3,
+		});
+
+		expect(
+			AtomicServerAudioSegmentFrameSchema.safeParse({ metadata, rawFrame })
+				.success,
+		).toBe(true);
+		const decoded = decodeBinaryAudioFrame(rawFrame);
+		expect(decoded.kind).toBe(BINARY_AUDIO_FRAME_KIND.serverMp3Segment);
+		expect(decoded.sequence).toBe(metadata.sequence);
+		expect(decoded.payload.byteLength).toBe(metadata.byteLength);
+		expect(decoded.payload).toEqual(mp3);
+	});
+
+	test("ffprobe accepts the deterministic MP3 fixture when available", () => {
+		const result = spawnSync(
+			"ffprobe",
+			[
+				"-v",
+				"error",
+				"-show_entries",
+				"stream=codec_name,codec_type,sample_rate,channels",
+				"-of",
+				"json",
+				"-i",
+				"pipe:0",
+			],
+			{ input: createDeterministicMp3Fixture(), encoding: "utf8" },
+		);
+		if (
+			(result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
+		) {
+			console.warn("ffprobe unavailable; skipping external MP3 decode check");
+			return;
+		}
+
+		expect(result.error).toBeUndefined();
+		expect(result.status).toBe(0);
+		const probe = JSON.parse(result.stdout) as {
+			streams?: Array<Record<string, unknown>>;
+		};
+		expect(probe.streams?.[0]).toMatchObject({
+			codec_name: "mp3",
+			codec_type: "audio",
+			sample_rate: "24000",
+			channels: 1,
+		});
 	});
 
 	test("enforces abort and server-owned current-generation hooks", async () => {

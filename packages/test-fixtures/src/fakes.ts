@@ -11,6 +11,7 @@ import {
 	type BrainTurnInput,
 	CreateBookingInputSchema,
 	type CreateBookingResult,
+	MpegAudioBytesSchema,
 	type Notifier,
 	type ProviderHealth,
 	type SttEvent,
@@ -22,18 +23,11 @@ import {
 	type TtsPort,
 	type TtsSynthesisRequest,
 } from "@botamin/contracts";
+import { createDeterministicMp3Fixture } from "./mp3";
 
 const HEALTHY: ProviderHealth = { status: "healthy" };
 const DEFAULT_AT = "2026-07-30T20:22:00.000Z";
-const MPEG1_LAYER3_128KBPS_44KHZ_FRAME_BYTES = 417;
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-
-/** One deterministic, frame-sized MPEG-1 Layer III payload for contract tests. */
-export function createDeterministicMp3Fixture(): Uint8Array {
-	const bytes = new Uint8Array(MPEG1_LAYER3_128KBPS_44KHZ_FRAME_BYTES);
-	bytes.set([0xff, 0xfb, 0x90, 0x64]);
-	return bytes;
-}
 
 function createIncrementingEntityIdFactory(): () => string {
 	let counter = 0;
@@ -156,10 +150,11 @@ export class FakeTts implements TtsPort {
 
 	constructor(options: FakeTtsOptions = {}) {
 		const mp3 = options.mp3 ?? createDeterministicMp3Fixture();
-		if (mp3.byteLength === 0) {
-			throw new TypeError("Fake TTS MP3 fixture must be non-empty");
+		const result = MpegAudioBytesSchema.safeParse(mp3);
+		if (!result.success) {
+			throw new TypeError("Fake TTS fixture must be structurally valid MP3");
 		}
-		this.#mp3 = mp3.slice();
+		this.#mp3 = result.data.slice();
 		this.#options = options;
 	}
 

@@ -2,12 +2,20 @@ import { z } from "zod";
 import {
 	ContractVersionSchema,
 	EntityIdSchema,
+	MpegAudioBytesSchema,
 	NonEmptyUint8ArraySchema,
 	Rfc3339UtcSchema,
 	SafeErrorSchema,
 } from "./common";
 import { ConversationStageSchema } from "./domain";
 import { AudioClientConfigSchema } from "./rest";
+
+/** Binary-frame sequences are unsigned integers exactly representable by JS. */
+export const BinaryAudioFrameSequenceSchema = z
+	.number()
+	.int()
+	.nonnegative()
+	.max(Number.MAX_SAFE_INTEGER);
 
 export const InputAudioConfigSchema = z
 	.object({
@@ -207,7 +215,7 @@ export const AudioSegmentMetadataSchema = z
 	.object({
 		generationId: EntityIdSchema,
 		segmentId: EntityIdSchema,
-		sequence: z.number().int().nonnegative(),
+		sequence: BinaryAudioFrameSequenceSchema,
 		contentType: z.literal("audio/mpeg"),
 		byteLength: z.number().int().positive(),
 		final: z.literal(true),
@@ -323,16 +331,111 @@ export const WsJsonEventSchema = z.union([
 	ServerWsEventSchema,
 ]);
 
-export const BINARY_AUDIO_FRAME_KIND = {
+/**
+ * Canonical microphone/server audio frame kinds. The wire layout is shared by
+ * browser and server implementations and is independent of Node/Bun Buffer.
+ */
+export const BINARY_AUDIO_FRAME_KIND = Object.freeze({
 	clientPcm16: 0x01,
 	serverMp3Segment: 0x02,
-} as const;
+} as const);
+export const BINARY_AUDIO_FRAME_KIND_OFFSET = 0 as const;
+export const BINARY_AUDIO_FRAME_SEQUENCE_OFFSET = 1 as const;
+export const BINARY_AUDIO_FRAME_SEQUENCE_BYTES = 8 as const;
+export const BINARY_AUDIO_FRAME_HEADER_BYTES = 9 as const;
+export const BINARY_AUDIO_FRAME_PAYLOAD_OFFSET =
+	BINARY_AUDIO_FRAME_HEADER_BYTES;
+export const BINARY_AUDIO_FRAME_BYTE_ORDER = "big-endian" as const;
+
+export type BinaryAudioFrameKind =
+	(typeof BINARY_AUDIO_FRAME_KIND)[keyof typeof BINARY_AUDIO_FRAME_KIND];
+export interface BinaryAudioFrame {
+	kind: BinaryAudioFrameKind;
+	sequence: number;
+	payload: Uint8Array;
+}
+
+function isBinaryAudioFrameKind(value: number): value is BinaryAudioFrameKind {
+	return (
+		value === BINARY_AUDIO_FRAME_KIND.clientPcm16 ||
+		value === BINARY_AUDIO_FRAME_KIND.serverMp3Segment
+	);
+}
+
+/**
+ * Encode byte 0 kind, bytes 1-8 unsigned sequence in big-endian/network order,
+ * and bytes 9+ payload. Sequence must be a nonnegative JS safe integer.
+ */
+export function encodeBinaryAudioFrame(frame: BinaryAudioFrame): Uint8Array {
+	if (!isBinaryAudioFrameKind(frame.kind)) {
+		throw new RangeError(`Unknown binary audio frame kind: ${frame.kind}`);
+	}
+	if (!Number.isSafeInteger(frame.sequence) || frame.sequence < 0) {
+		throw new RangeError(
+			"Binary audio frame sequence must be a nonnegative JS safe integer",
+		);
+	}
+	if (
+		!(frame.payload instanceof Uint8Array) ||
+		frame.payload.byteLength === 0
+	) {
+		throw new TypeError("Binary audio frame payload must be non-empty bytes");
+	}
+
+	const rawFrame = new Uint8Array(
+		BINARY_AUDIO_FRAME_HEADER_BYTES + frame.payload.byteLength,
+	);
+	rawFrame[BINARY_AUDIO_FRAME_KIND_OFFSET] = frame.kind;
+	const view = new DataView(rawFrame.buffer);
+	const high = Math.floor(frame.sequence / 0x1_0000_0000);
+	const low = frame.sequence - high * 0x1_0000_0000;
+	view.setUint32(BINARY_AUDIO_FRAME_SEQUENCE_OFFSET, high, false);
+	view.setUint32(BINARY_AUDIO_FRAME_SEQUENCE_OFFSET + 4, low, false);
+	rawFrame.set(frame.payload, BINARY_AUDIO_FRAME_PAYLOAD_OFFSET);
+	return rawFrame;
+}
+
+/** Decode the canonical 9-byte network-order header and copy its payload. */
+export function decodeBinaryAudioFrame(rawFrame: Uint8Array): BinaryAudioFrame {
+	if (!(rawFrame instanceof Uint8Array)) {
+		throw new TypeError("Binary audio frame must be Uint8Array bytes");
+	}
+	if (rawFrame.byteLength <= BINARY_AUDIO_FRAME_HEADER_BYTES) {
+		throw new RangeError(
+			"Binary audio frame must contain a 9-byte header and non-empty payload",
+		);
+	}
+
+	const kind = rawFrame[BINARY_AUDIO_FRAME_KIND_OFFSET];
+	if (kind === undefined || !isBinaryAudioFrameKind(kind)) {
+		throw new RangeError(`Unknown binary audio frame kind: ${kind}`);
+	}
+	const view = new DataView(
+		rawFrame.buffer,
+		rawFrame.byteOffset,
+		rawFrame.byteLength,
+	);
+	const high = view.getUint32(BINARY_AUDIO_FRAME_SEQUENCE_OFFSET, false);
+	const low = view.getUint32(BINARY_AUDIO_FRAME_SEQUENCE_OFFSET + 4, false);
+	const sequence = high * 0x1_0000_0000 + low;
+	if (!Number.isSafeInteger(sequence)) {
+		throw new RangeError(
+			"Binary audio frame sequence exceeds Number.MAX_SAFE_INTEGER",
+		);
+	}
+
+	return {
+		kind,
+		sequence,
+		payload: rawFrame.slice(BINARY_AUDIO_FRAME_PAYLOAD_OFFSET),
+	};
+}
 
 /** Existing microphone framing remains mono PCM16LE at 16 kHz. */
 export const ClientBinaryAudioFrameMetadataSchema = z
 	.object({
 		direction: z.literal("client"),
-		streamSeq: z.number().int().nonnegative(),
+		streamSeq: BinaryAudioFrameSequenceSchema,
 		encoding: z.literal("pcm16le"),
 		sampleRate: z.literal(16_000),
 	})
@@ -351,22 +454,57 @@ export const BinaryAudioFrameMetadataSchema = z.discriminatedUnion(
 );
 
 /**
- * Runtime validation for adjacency: one audio.segment metadata payload is
- * followed by exactly one complete, non-empty binary payload of the same size.
+ * Validates the adjacent JSON metadata and canonical raw binary frame as one
+ * coherent server MP3 segment. metadata.byteLength counts payload bytes only.
  */
 export const AtomicServerAudioSegmentFrameSchema = z
 	.object({
 		metadata: AudioSegmentMetadataSchema,
-		bytes: NonEmptyUint8ArraySchema,
+		rawFrame: NonEmptyUint8ArraySchema,
 	})
 	.strict()
-	.superRefine((frame, context) => {
-		if (frame.metadata.byteLength !== frame.bytes.byteLength) {
+	.superRefine((atomicFrame, context) => {
+		let decoded: BinaryAudioFrame;
+		try {
+			decoded = decodeBinaryAudioFrame(atomicFrame.rawFrame);
+		} catch (error) {
+			context.addIssue({
+				code: "custom",
+				message:
+					error instanceof Error ? error.message : "Invalid binary audio frame",
+				path: ["rawFrame"],
+			});
+			return;
+		}
+
+		if (decoded.kind !== BINARY_AUDIO_FRAME_KIND.serverMp3Segment) {
+			context.addIssue({
+				code: "custom",
+				message: "audio.segment must be paired with a server MP3 frame kind",
+				path: ["rawFrame", BINARY_AUDIO_FRAME_KIND_OFFSET],
+			});
+		}
+		if (decoded.sequence !== atomicFrame.metadata.sequence) {
+			context.addIssue({
+				code: "custom",
+				message: "Binary frame sequence does not match audio.segment metadata",
+				path: ["rawFrame"],
+			});
+		}
+		if (decoded.payload.byteLength !== atomicFrame.metadata.byteLength) {
 			context.addIssue({
 				code: "custom",
 				message:
 					"Binary MP3 payload length does not match audio.segment metadata",
-				path: ["bytes"],
+				path: ["rawFrame"],
+			});
+		}
+		const mp3Result = MpegAudioBytesSchema.safeParse(decoded.payload);
+		if (!mp3Result.success) {
+			context.addIssue({
+				code: "custom",
+				message: "Binary audio.segment payload is not structurally valid MP3",
+				path: ["rawFrame", BINARY_AUDIO_FRAME_PAYLOAD_OFFSET],
 			});
 		}
 	});

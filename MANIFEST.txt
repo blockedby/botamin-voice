@@ -57,6 +57,7 @@ knowledge/faq.md
 knowledge/prohibited-claims.md
 knowledge/use-cases.md
 package.json
+packages/contracts/README.md
 packages/contracts/package.json
 packages/contracts/src/common.ts
 packages/contracts/src/domain.ts
@@ -78,6 +79,7 @@ packages/test-fixtures/package.json
 packages/test-fixtures/src/fakes.ts
 packages/test-fixtures/src/full-turn.test.ts
 packages/test-fixtures/src/index.ts
+packages/test-fixtures/src/mp3.ts
 packages/test-fixtures/tsconfig.build.json
 packages/test-fixtures/tsconfig.json
 prompts/booking.md

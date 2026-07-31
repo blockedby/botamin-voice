@@ -2352,9 +2352,16 @@ model/voice/<code>mp3</code>, доступность queue/circuit state и
 <span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;at&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-07-30T20:17:00.000Z&quot;</span><span class="fu">,</span></span>
 <span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;payload&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
 <span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;state&quot;</span><span class="fu">:</span> <span class="st">&quot;GREETING&quot;</span><span class="fu">,</span></span>
-<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;resumeToken&quot;</span><span class="fu">:</span> <span class="st">&quot;opaque-short-lived-token&quot;</span></span>
-<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
-<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;resumeToken&quot;</span><span class="fu">:</span> <span class="st">&quot;opaque-short-lived-token&quot;</span><span class="fu">,</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;clientConfig&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;inputSampleRate&quot;</span><span class="fu">:</span> <span class="dv">16000</span><span class="fu">,</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;inputEncoding&quot;</span><span class="fu">:</span> <span class="st">&quot;pcm16le&quot;</span><span class="fu">,</span></span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;chunkMs&quot;</span><span class="fu">:</span> <span class="dv">100</span><span class="fu">,</span></span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;outputContentType&quot;</span><span class="fu">:</span> <span class="st">&quot;audio/mpeg&quot;</span><span class="fu">,</span></span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;outputMode&quot;</span><span class="fu">:</span> <span class="st">&quot;complete-phrase-segments&quot;</span></span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <h3 id="client-server-json-events">Client → server JSON events</h3>
 <table>
 <thead>
@@ -2476,13 +2483,19 @@ payload</td>
 <p>Client microphone frames remain PCM16LE. Server audio is an atomic
 phrase-level MP3 payload associated with the preceding
 <code>audio.segment</code> metadata event:</p>
-<pre class="text"><code>client binary: kind=0x01, stream sequence, raw PCM16LE
-server metadata JSON: audio.segment(generationId, segmentId, sequence, audio/mpeg, byteLength, final=true)
-server binary: kind=0x02, segment sequence, one complete MP3 file payload</code></pre>
+<pre class="text"><code>byte 0:     kind (0x01 client PCM16LE, 0x02 server MP3 segment)
+bytes 1-8: unsigned sequence, big-endian/network byte order
+bytes 9+:  payload (raw PCM16LE or one complete MP3 file)</code></pre>
+<p>Sequence is a nonnegative JavaScript safe integer
+(<code>0..Number.MAX_SAFE_INTEGER</code>). For
+<code>audio.segment</code>, metadata <code>byteLength</code> counts only
+the MP3 payload at bytes 9+, excluding the 9-byte frame header. The
+server metadata sequence and raw frame sequence must match, and kind
+must be <code>0x02</code>.</p>
 <p>The implementation may use a referenced binary payload instead of
-adjacency if it preserves the same identity, ordering and size contract.
-It must never expose partial <code>response.body</code> chunks as
-independent MP3 files.</p>
+adjacency if it preserves the same identity, ordering, canonical frame
+layout and payload-size contract. It must never expose partial
+<code>response.body</code> chunks as independent MP3 files.</p>
 <h3 id="ordering">Ordering</h3>
 <ul>
 <li><code>seq</code> монотонно растёт для JSON events в одной

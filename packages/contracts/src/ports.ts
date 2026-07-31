@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
 	EntityIdSchema,
-	NonEmptyUint8ArraySchema,
+	MpegAudioBytesSchema,
 	SafeErrorSchema,
 } from "./common";
 import type {
@@ -136,7 +136,7 @@ export const TtsAudioSegmentSchema = z
 		segmentId: EntityIdSchema,
 		providerGenerationId: z.string().min(1).max(512).optional(),
 		contentType: z.literal("audio/mpeg"),
-		bytes: NonEmptyUint8ArraySchema,
+		bytes: MpegAudioBytesSchema,
 		final: z.literal(true),
 	})
 	.strict();

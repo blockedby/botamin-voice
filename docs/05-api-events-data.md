@@ -107,7 +107,14 @@ Server:
   "at": "2026-07-30T20:17:00.000Z",
   "payload": {
     "state": "GREETING",
-    "resumeToken": "opaque-short-lived-token"
+    "resumeToken": "opaque-short-lived-token",
+    "clientConfig": {
+      "inputSampleRate": 16000,
+      "inputEncoding": "pcm16le",
+      "chunkMs": 100,
+      "outputContentType": "audio/mpeg",
+      "outputMode": "complete-phrase-segments"
+    }
   }
 }
 ```
@@ -149,12 +156,14 @@ Server:
 Client microphone frames remain PCM16LE. Server audio is an atomic phrase-level MP3 payload associated with the preceding `audio.segment` metadata event:
 
 ```text
-client binary: kind=0x01, stream sequence, raw PCM16LE
-server metadata JSON: audio.segment(generationId, segmentId, sequence, audio/mpeg, byteLength, final=true)
-server binary: kind=0x02, segment sequence, one complete MP3 file payload
+byte 0:     kind (0x01 client PCM16LE, 0x02 server MP3 segment)
+bytes 1-8: unsigned sequence, big-endian/network byte order
+bytes 9+:  payload (raw PCM16LE or one complete MP3 file)
 ```
 
-The implementation may use a referenced binary payload instead of adjacency if it preserves the same identity, ordering and size contract. It must never expose partial `response.body` chunks as independent MP3 files.
+Sequence is a nonnegative JavaScript safe integer (`0..Number.MAX_SAFE_INTEGER`). For `audio.segment`, metadata `byteLength` counts only the MP3 payload at bytes 9+, excluding the 9-byte frame header. The server metadata sequence and raw frame sequence must match, and kind must be `0x02`.
+
+The implementation may use a referenced binary payload instead of adjacency if it preserves the same identity, ordering, canonical frame layout and payload-size contract. It must never expose partial `response.body` chunks as independent MP3 files.
 
 ### Ordering
 

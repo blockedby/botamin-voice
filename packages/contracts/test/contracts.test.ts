@@ -6,7 +6,10 @@ import {
 	AtomicServerAudioSegmentFrameSchema,
 	AudioClientConfigSchema,
 	AudioSegmentEventSchema,
+	BINARY_AUDIO_FRAME_BYTE_ORDER,
+	BINARY_AUDIO_FRAME_HEADER_BYTES,
 	BINARY_AUDIO_FRAME_KIND,
+	BINARY_AUDIO_FRAME_PAYLOAD_OFFSET,
 	BinaryAudioFrameMetadataSchema,
 	BookingDomainEventSchema,
 	BookingSnapshotSchema,
@@ -14,7 +17,9 @@ import {
 	ClientWsEventSchema,
 	CreateBookingInputSchema,
 	CreateConversationRequestSchema,
+	decodeBinaryAudioFrame,
 	EntityIdSchema,
+	encodeBinaryAudioFrame,
 	QualificationPatchSchema,
 	ServerWsEventSchema,
 	TtsAudioSegmentSchema,
@@ -27,6 +32,12 @@ const bookingId = "01J00000000000000000000001";
 const eventId = "01J00000000000000000000002";
 const foreignConversationId = "01J00000000000000000000009";
 const at = "2026-07-30T20:22:00.000Z";
+function createStructurallyValidMp3Frame(): Uint8Array {
+	const bytes = new Uint8Array(96);
+	bytes.set([0xff, 0xf3, 0x44, 0xc4]);
+	return bytes;
+}
+
 const bookingSnapshot = {
 	id: bookingId,
 	conversationId,
@@ -252,7 +263,7 @@ describe("shared contracts", () => {
 			segmentId: "01J00000000000000000000005",
 			providerGenerationId: "provider-generation:opaque",
 			contentType: "audio/mpeg",
-			bytes: new Uint8Array([0xff, 0xfb, 0x90, 0x64]),
+			bytes: createStructurallyValidMp3Frame(),
 			final: true,
 		};
 		expect(TtsAudioSegmentSchema.safeParse(segment).success).toBe(true);
@@ -261,6 +272,7 @@ describe("shared contracts", () => {
 			{ ...segment, segmentId: "segment" },
 			{ ...segment, providerGenerationId: "" },
 			{ ...segment, bytes: new Uint8Array() },
+			{ ...segment, bytes: new TextEncoder().encode("not-mp3") },
 			{ ...segment, bytes: "mp3" },
 			{ ...segment, contentType: "audio/wav" },
 			{ ...segment, final: false },
@@ -316,6 +328,7 @@ describe("shared contracts", () => {
 			{ ...metadata.payload, segmentId: "segment" },
 			{ ...metadata.payload, sequence: -1 },
 			{ ...metadata.payload, sequence: 0.5 },
+			{ ...metadata.payload, sequence: Number.MAX_SAFE_INTEGER + 1 },
 			{ ...metadata.payload, contentType: "audio/wav" },
 			{ ...metadata.payload, byteLength: 0 },
 			{ ...metadata.payload, final: false },
@@ -336,26 +349,80 @@ describe("shared contracts", () => {
 		expect(browserConsumed.payload.segmentId).toBe(metadata.payload.segmentId);
 	});
 
-	test("pairs audio.segment metadata with one atomic binary MP3 payload", () => {
-		const bytes = new Uint8Array([0xff, 0xfb, 0x90, 0x64]);
+	test("round-trips the canonical A2 server frame through the A1 decoder", () => {
+		const mp3 = createStructurallyValidMp3Frame();
+		const sequence = 0x01_02_03_04_05;
+		const rawFrame = encodeBinaryAudioFrame({
+			kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+			sequence,
+			payload: mp3,
+		});
 		const metadata = {
 			generationId: "01J00000000000000000000004",
 			segmentId: "01J00000000000000000000005",
-			sequence: 0,
+			sequence,
 			contentType: "audio/mpeg",
-			byteLength: bytes.byteLength,
+			byteLength: mp3.byteLength,
 			final: true,
 		};
+
+		expect(BINARY_AUDIO_FRAME_HEADER_BYTES).toBe(9);
+		expect(BINARY_AUDIO_FRAME_PAYLOAD_OFFSET).toBe(9);
+		expect(BINARY_AUDIO_FRAME_BYTE_ORDER).toBe("big-endian");
+		expect(rawFrame.slice(0, 9)).toEqual(
+			new Uint8Array([0x02, 0, 0, 0, 1, 2, 3, 4, 5]),
+		);
+		expect(rawFrame.byteLength).toBe(9 + metadata.byteLength);
 		expect(
-			AtomicServerAudioSegmentFrameSchema.safeParse({ metadata, bytes })
+			AtomicServerAudioSegmentFrameSchema.safeParse({ metadata, rawFrame })
 				.success,
 		).toBe(true);
-		for (const invalidBytes of [new Uint8Array(), bytes.slice(0, 3)]) {
+
+		const decoded = decodeBinaryAudioFrame(rawFrame);
+		expect(decoded.kind).toBe(BINARY_AUDIO_FRAME_KIND.serverMp3Segment);
+		expect(decoded.sequence).toBe(metadata.sequence);
+		expect(decoded.payload.byteLength).toBe(metadata.byteLength);
+		expect(decoded.payload).toEqual(mp3);
+	});
+
+	test("rejects raw server frame kind, sequence, size, and shape mismatches", () => {
+		const mp3 = createStructurallyValidMp3Frame();
+		const metadata = {
+			generationId: "01J00000000000000000000004",
+			segmentId: "01J00000000000000000000005",
+			sequence: 7,
+			contentType: "audio/mpeg",
+			byteLength: mp3.byteLength,
+			final: true,
+		};
+		const encode = (kind: 1 | 2, sequence: number, payload = mp3) =>
+			encodeBinaryAudioFrame({ kind, sequence, payload });
+
+		for (const invalid of [
+			{
+				metadata,
+				rawFrame: encode(BINARY_AUDIO_FRAME_KIND.clientPcm16, 7),
+			},
+			{
+				metadata,
+				rawFrame: encode(BINARY_AUDIO_FRAME_KIND.serverMp3Segment, 8),
+			},
+			{
+				metadata: { ...metadata, byteLength: metadata.byteLength + 1 },
+				rawFrame: encode(BINARY_AUDIO_FRAME_KIND.serverMp3Segment, 7),
+			},
+			{
+				metadata,
+				rawFrame: encode(
+					BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+					7,
+					mp3.slice(0, -1),
+				),
+			},
+			{ metadata, bytes: mp3 },
+		]) {
 			expect(
-				AtomicServerAudioSegmentFrameSchema.safeParse({
-					metadata,
-					bytes: invalidBytes,
-				}).success,
+				AtomicServerAudioSegmentFrameSchema.safeParse(invalid).success,
 			).toBe(false);
 		}
 	});
@@ -386,6 +453,19 @@ describe("shared contracts", () => {
 			clientPcm16: 0x01,
 			serverMp3Segment: 0x02,
 		});
+		expect(() =>
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.clientPcm16,
+				sequence: Number.MAX_SAFE_INTEGER + 1,
+				payload: new Uint8Array([0, 0]),
+			}),
+		).toThrow("safe integer");
+		expect(
+			BinaryAudioFrameMetadataSchema.safeParse({
+				...clientMetadata,
+				streamSeq: Number.MAX_SAFE_INTEGER + 1,
+			}).success,
+		).toBe(false);
 		expect(
 			BinaryAudioFrameMetadataSchema.safeParse({
 				direction: "server",

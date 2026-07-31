@@ -131,6 +131,19 @@ describe("fake full turn", () => {
 			await bookings.findByConversationId(conversationId);
 		if (!committedBooking) throw new Error("Expected a committed booking");
 
+		BookingToolExecutionSchema.parse({
+			type: "create_booking",
+			stage: "COLLECT_BOOKING",
+			sessionConversationId: conversationId,
+			currentBooking: committedBooking,
+			input: bookingInput,
+		});
+		const exactReplay = await bookings.createBooking(bookingInput);
+		expect(exactReplay).toMatchObject({
+			created: false,
+			bookingId: committedBooking.id,
+		});
+
 		const replayInput = {
 			...bookingInput,
 			idempotencyKey: "booking-turn-0002",

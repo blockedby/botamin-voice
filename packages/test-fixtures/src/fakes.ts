@@ -238,7 +238,7 @@ export class FakeBookingService implements BookingService {
 		if (replay) {
 			if (replay.request !== request)
 				throw new FakeBookingError("IDEMPOTENCY_CONFLICT");
-			return replay.result;
+			return { ...replay.result, created: false };
 		}
 
 		const existingId = this.#bookingIdByConversation.get(parsed.conversationId);

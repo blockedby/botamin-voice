@@ -141,6 +141,47 @@ function input(overrides: Partial<BrainTurnInput> = {}): BrainTurnInput {
 	};
 }
 
+function dynamicToolCallParams(
+	callId: string,
+	tool: "create_booking" | "append_booking_qualification",
+): Record<string, unknown> {
+	return {
+		threadId: PROVIDER_THREAD_ID,
+		turnId: PROVIDER_TURN_ID,
+		callId,
+		tool,
+		arguments:
+			tool === "create_booking"
+				? {
+						conversationId: CONVERSATION_ID,
+						idempotencyKey: `booking-${callId}`,
+						name: "Иван",
+						contacts: [{ channel: "telegram", value: "@ivan" }],
+						company: null,
+						preferredTimeText: null,
+						consentConfirmed: true,
+					}
+				: {
+						bookingId: CONVERSATION_ID,
+						idempotencyKey: `qualification-${callId}`,
+						patch: {
+							role: "Основатель",
+							industry: null,
+							companySize: null,
+							monthlyLeadVolume: null,
+							currentChannels: null,
+							crm: null,
+							currentProcess: null,
+							pains: null,
+							desiredUseCase: null,
+							timeline: null,
+							notes: null,
+						},
+						completion: "complete",
+					},
+	};
+}
+
 async function collect(
 	iterable: AsyncIterable<BrainDelta>,
 ): Promise<BrainDelta[]> {
@@ -159,6 +200,7 @@ function createBrain(
 		toolMode?: "dynamic" | "envelope";
 		executeTool?: CodexBrainOptions["executeTool"];
 		requestTimeoutMs?: number;
+		turnTimeoutMs?: number;
 		restartDelayMs?: number;
 		codexHome?: string;
 	} = {},
@@ -188,7 +230,7 @@ function createBrain(
 		effort: "low",
 		toolMode: options.toolMode ?? "envelope",
 		runtimeCwd: cwd,
-		turnTimeoutMs: 1_000,
+		turnTimeoutMs: options.turnTimeoutMs ?? 1_000,
 		supervisor,
 		...(options.executeTool ? { executeTool: options.executeTool } : {}),
 	});
@@ -504,6 +546,275 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		).toBeNull();
 	});
 
+	test("a later failed tool discards all action-enabled dynamic speech", async () => {
+		const { cwd, agentsPath } = await runtime();
+		const executions: string[] = [];
+		const { brain } = createBrain(
+			cwd,
+			async (message, process) => {
+				if (await standardResponse(message, process, agentsPath)) return;
+				if (message.method === "turn/start") {
+					await process.send({
+						id: message.id,
+						result: {
+							turn: { id: PROVIDER_TURN_ID, status: "inProgress" },
+						},
+					});
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId: "before_tools",
+							delta: "Начинаю оформление. ",
+						},
+					});
+					await process.send({
+						id: "tool_success_1",
+						method: "item/tool/call",
+						params: dynamicToolCallParams("call-success-1", "create_booking"),
+					});
+				}
+				if (message.id === "tool_success_1" && "result" in message) {
+					expect(message.result).toMatchObject({ success: true });
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId: "after_first_success",
+							delta: "Бронирование создано. ",
+						},
+					});
+					await process.send({
+						id: "tool_failure_2",
+						method: "item/tool/call",
+						params: dynamicToolCallParams(
+							"call-failure-2",
+							"append_booking_qualification",
+						),
+					});
+				}
+				if (message.id === "tool_failure_2" && "result" in message) {
+					expect(message.result).toMatchObject({ success: false });
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId: "unsafe_final_success",
+							delta: "Всё успешно завершено.",
+						},
+					});
+					await process.send({
+						method: "turn/completed",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turn: {
+								id: PROVIDER_TURN_ID,
+								status: "completed",
+								error: null,
+							},
+						},
+					});
+				}
+			},
+			{
+				toolMode: "dynamic",
+				executeTool: async (request) => {
+					executions.push(request.name);
+					return { ok: executions.length === 1 };
+				},
+			},
+		);
+		const threadId = await brain.createThread(CONVERSATION_ID);
+		const deltas = await collect(
+			brain.runTurn(
+				input({
+					threadId,
+					stage: "POST_BOOKING_QUALIFICATION",
+					allowedActions: ["create_booking", "append_booking_qualification"],
+				}),
+				new AbortController().signal,
+			),
+		);
+		expect(executions).toEqual([
+			"create_booking",
+			"append_booking_qualification",
+		]);
+		expect(deltas).toEqual([
+			{
+				type: "turn.completed",
+				turnId: EXTERNAL_TURN_ID,
+				generationId: GENERATION_ID,
+			},
+		]);
+	});
+
+	test("all-success dynamic tools release buffered speech once in delta order", async () => {
+		const { cwd, agentsPath } = await runtime();
+		let executions = 0;
+		const { brain } = createBrain(
+			cwd,
+			async (message, process) => {
+				if (await standardResponse(message, process, agentsPath)) return;
+				if (message.method === "turn/start") {
+					await process.send({
+						id: message.id,
+						result: {
+							turn: { id: PROVIDER_TURN_ID, status: "inProgress" },
+						},
+					});
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId: "ordered_1",
+							delta: "Первый фрагмент. ",
+						},
+					});
+					await process.send({
+						id: "ordered_tool_1",
+						method: "item/tool/call",
+						params: dynamicToolCallParams("ordered-call-1", "create_booking"),
+					});
+				}
+				if (message.id === "ordered_tool_1" && "result" in message) {
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId: "ordered_2",
+							delta: "Второй фрагмент. ",
+						},
+					});
+					await process.send({
+						id: "ordered_tool_2",
+						method: "item/tool/call",
+						params: dynamicToolCallParams(
+							"ordered-call-2",
+							"append_booking_qualification",
+						),
+					});
+				}
+				if (message.id === "ordered_tool_2" && "result" in message) {
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId: "ordered_3",
+							delta: "Третий фрагмент.",
+						},
+					});
+					await process.send({
+						method: "turn/completed",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turn: {
+								id: PROVIDER_TURN_ID,
+								status: "completed",
+								error: null,
+							},
+						},
+					});
+				}
+			},
+			{
+				toolMode: "dynamic",
+				executeTool: async () => {
+					executions += 1;
+					return { ok: true };
+				},
+			},
+		);
+		const threadId = await brain.createThread(CONVERSATION_ID);
+		const deltas = await collect(
+			brain.runTurn(
+				input({
+					threadId,
+					stage: "POST_BOOKING_QUALIFICATION",
+					allowedActions: ["create_booking", "append_booking_qualification"],
+				}),
+				new AbortController().signal,
+			),
+		);
+		expect(executions).toBe(2);
+		expect(deltas.map((delta) => delta.type)).toEqual([
+			"speech.delta",
+			"speech.delta",
+			"speech.delta",
+			"turn.completed",
+		]);
+		expect(
+			deltas.flatMap((delta) =>
+				delta.type === "speech.delta" ? [delta.text] : [],
+			),
+		).toEqual(["Первый фрагмент. ", "Второй фрагмент. ", "Третий фрагмент."]);
+	});
+
+	test("action-enabled dynamic turns without tools release speech at terminal", async () => {
+		const { cwd, agentsPath } = await runtime();
+		let executions = 0;
+		const { brain } = createBrain(
+			cwd,
+			async (message, process) => {
+				if (await standardResponse(message, process, agentsPath)) return;
+				if (message.method !== "turn/start") return;
+				await process.send({
+					id: message.id,
+					result: { turn: { id: PROVIDER_TURN_ID, status: "inProgress" } },
+				});
+				for (const [itemId, delta] of [
+					["no_tool_1", "Уточню детали. "],
+					["no_tool_2", "Когда вам удобно?"],
+				] as const)
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId,
+							delta,
+						},
+					});
+				await process.send({
+					method: "turn/completed",
+					params: {
+						threadId: PROVIDER_THREAD_ID,
+						turn: {
+							id: PROVIDER_TURN_ID,
+							status: "completed",
+							error: null,
+						},
+					},
+				});
+			},
+			{
+				toolMode: "dynamic",
+				executeTool: async () => {
+					executions += 1;
+					return { ok: true };
+				},
+			},
+		);
+		const threadId = await brain.createThread(CONVERSATION_ID);
+		const deltas = await collect(
+			brain.runTurn(
+				input({ threadId, allowedActions: ["create_booking"] }),
+				new AbortController().signal,
+			),
+		);
+		expect(executions).toBe(0);
+		expect(
+			deltas.flatMap((delta) =>
+				delta.type === "speech.delta" ? [delta.text] : [delta.type],
+			),
+		).toEqual(["Уточню детали. ", "Когда вам удобно?", "turn.completed"]);
+	});
+
 	test("envelope mode suppresses JSON deltas and emits validated fallback output", async () => {
 		const { cwd, agentsPath } = await runtime();
 		const envelope = JSON.stringify({
@@ -718,6 +1029,137 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		);
 		expect(wireResult).toMatchObject({ success: false });
 		expect(deltas.some((delta) => delta.type === "speech.delta")).toBe(false);
+	});
+
+	test("a thrown dynamic executor error cannot leak speech or error details", async () => {
+		const { cwd, agentsPath } = await runtime();
+		let wireError: unknown;
+		const { brain } = createBrain(
+			cwd,
+			async (message, process) => {
+				if (await standardResponse(message, process, agentsPath)) return;
+				if (message.method === "turn/start") {
+					await process.send({
+						id: message.id,
+						result: {
+							turn: { id: PROVIDER_TURN_ID, status: "inProgress" },
+						},
+					});
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId: "before_executor_throw",
+							delta: "Успешно сохраняю встречу.",
+						},
+					});
+					await process.send({
+						id: "throwing_tool",
+						method: "item/tool/call",
+						params: dynamicToolCallParams("throwing-call", "create_booking"),
+					});
+				}
+				if (message.id === "throwing_tool" && "error" in message) {
+					wireError = message.error;
+					await process.send({
+						method: "turn/completed",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turn: {
+								id: PROVIDER_TURN_ID,
+								status: "completed",
+								error: null,
+							},
+						},
+					});
+				}
+			},
+			{
+				toolMode: "dynamic",
+				executeTool: async () => {
+					throw new Error("private executor detail");
+				},
+			},
+		);
+		const threadId = await brain.createThread(CONVERSATION_ID);
+		const deltas = await collect(
+			brain.runTurn(
+				input({ threadId, allowedActions: ["create_booking"] }),
+				new AbortController().signal,
+			),
+		);
+		expect(wireError).toEqual({
+			code: -32602,
+			message: "Tool request rejected by Botamin",
+		});
+		expect(deltas).toEqual([
+			{
+				type: "turn.completed",
+				turnId: EXTERNAL_TURN_ID,
+				generationId: GENERATION_ID,
+			},
+		]);
+	});
+
+	test("an action-enabled dynamic timeout discards speech and interrupts", async () => {
+		const { cwd, agentsPath } = await runtime();
+		let interrupted: unknown;
+		const { brain } = createBrain(
+			cwd,
+			async (message, process) => {
+				if (await standardResponse(message, process, agentsPath)) return;
+				if (message.method === "turn/start") {
+					await process.send({
+						id: message.id,
+						result: {
+							turn: { id: PROVIDER_TURN_ID, status: "inProgress" },
+						},
+					});
+					await process.send({
+						method: "item/agentMessage/delta",
+						params: {
+							threadId: PROVIDER_THREAD_ID,
+							turnId: PROVIDER_TURN_ID,
+							itemId: "before_timeout",
+							delta: "Встреча успешно создана.",
+						},
+					});
+				}
+				if (message.method === "turn/interrupt") {
+					interrupted = message.params;
+					await process.send({ id: message.id, result: {} });
+				}
+			},
+			{
+				toolMode: "dynamic",
+				executeTool: async () => ({ ok: true }),
+				turnTimeoutMs: 20,
+			},
+		);
+		const threadId = await brain.createThread(CONVERSATION_ID);
+		const deltas = await collect(
+			brain.runTurn(
+				input({ threadId, allowedActions: ["create_booking"] }),
+				new AbortController().signal,
+			),
+		);
+		expect(interrupted).toEqual({
+			threadId: PROVIDER_THREAD_ID,
+			turnId: PROVIDER_TURN_ID,
+		});
+		expect(deltas).toEqual([
+			{
+				type: "error",
+				turnId: EXTERNAL_TURN_ID,
+				generationId: GENERATION_ID,
+				error: {
+					code: "BRAIN_PROTOCOL_ERROR",
+					retryable: true,
+					message: "Brain turn timed out",
+				},
+			},
+		]);
 	});
 
 	test("dynamic mode refuses startup without an awaited executor", async () => {

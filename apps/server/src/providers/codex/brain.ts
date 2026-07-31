@@ -325,7 +325,11 @@ interface ActiveTurn {
 	interruptPromise?: Promise<void>;
 	suppressSpeech: boolean;
 	dynamicSpeechBuffer: string[];
-	dynamicExecutionSucceeded: boolean;
+	dynamicToolInvocations: number;
+	dynamicToolsPending: number;
+	dynamicToolsSucceeded: number;
+	dynamicToolFailed: boolean;
+	dynamicTerminalCompletion?: TurnCompletedParams;
 }
 
 export class CodexAppServerBrain implements BrainPort {
@@ -346,6 +350,7 @@ export class CodexAppServerBrain implements BrainPort {
 			this.loadedThreads.clear();
 			for (const active of this.activeByThread.values()) {
 				if (active.terminal) continue;
+				this.failDynamicTurn(active);
 				active.queue.push({
 					type: "error",
 					turnId: active.input.turnId,
@@ -439,7 +444,10 @@ export class CodexAppServerBrain implements BrainPort {
 			buffered: [],
 			suppressSpeech: false,
 			dynamicSpeechBuffer: [],
-			dynamicExecutionSucceeded: false,
+			dynamicToolInvocations: 0,
+			dynamicToolsPending: 0,
+			dynamicToolsSucceeded: 0,
+			dynamicToolFailed: false,
 		};
 		this.activeByThread.set(threadId, active);
 		let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -492,6 +500,7 @@ export class CodexAppServerBrain implements BrainPort {
 			if (signal.aborted) abort();
 			timeout = setTimeout(() => {
 				if (active.terminal) return;
+				this.failDynamicTurn(active);
 				void this.interrupt(threadId, input.turnId).catch(() => undefined);
 				active.queue.push(
 					safeError(
@@ -652,13 +661,11 @@ export class CodexAppServerBrain implements BrainPort {
 			}
 			// This identity check is what drops late deltas from interrupted turns.
 			if (active.providerTurnId !== delta.turnId) return;
+			if (active.dynamicTerminalCompletion) return;
 			if (this.options.toolMode === "envelope")
 				active.envelopeText += delta.delta;
 			else if (!active.suppressSpeech) {
-				if (
-					active.input.allowedActions.length === 0 ||
-					active.dynamicExecutionSucceeded
-				)
+				if (active.input.allowedActions.length === 0)
 					this.pushSpeech(active, delta.delta);
 				else active.dynamicSpeechBuffer.push(delta.delta);
 			}
@@ -677,7 +684,11 @@ export class CodexAppServerBrain implements BrainPort {
 				active.buffered.push({ method, params });
 				return;
 			}
-			if (active.providerTurnId !== completed.turn.id) return;
+			if (
+				active.providerTurnId !== completed.turn.id ||
+				active.dynamicTerminalCompletion
+			)
+				return;
 			this.completeTurn(active, completed);
 		}
 	}
@@ -691,6 +702,22 @@ export class CodexAppServerBrain implements BrainPort {
 			threadId: active.threadId,
 			status: completed.turn.status,
 		});
+		if (
+			completed.turn.status === "completed" &&
+			this.isActionEnabledDynamicTurn(active) &&
+			active.dynamicToolsPending > 0
+		) {
+			active.dynamicTerminalCompletion = completed;
+			return;
+		}
+		this.finalizeTurn(active, completed);
+	}
+
+	private finalizeTurn(
+		active: ActiveTurn,
+		completed: TurnCompletedParams,
+	): void {
+		if (completed.turn.status !== "completed") this.failDynamicTurn(active);
 		if (completed.turn.status === "failed") {
 			active.queue.push(
 				safeError(
@@ -752,12 +779,17 @@ export class CodexAppServerBrain implements BrainPort {
 				}
 			}
 		}
-		if (
-			this.options.toolMode === "dynamic" &&
-			active.input.allowedActions.length > 0 &&
-			!active.dynamicExecutionSucceeded
-		)
-			active.dynamicSpeechBuffer.length = 0;
+		if (this.isActionEnabledDynamicTurn(active)) {
+			if (
+				completed.turn.status === "completed" &&
+				active.dynamicToolsPending === 0 &&
+				active.dynamicToolsSucceeded === active.dynamicToolInvocations &&
+				!active.dynamicToolFailed
+			) {
+				for (const text of active.dynamicSpeechBuffer.splice(0))
+					this.pushSpeech(active, text);
+			} else active.dynamicSpeechBuffer.length = 0;
+		}
 		active.queue.push({
 			type: "turn.completed",
 			turnId: active.input.turnId,
@@ -773,10 +805,16 @@ export class CodexAppServerBrain implements BrainPort {
 			throw new Error("Dynamic tools are disabled");
 		const call = parseDynamicToolCall(params);
 		const active = this.activeByThread.get(call.threadId);
-		if (!active || active.terminal || active.providerTurnId !== call.turnId)
+		if (
+			!active ||
+			active.terminal ||
+			active.dynamicTerminalCompletion ||
+			active.providerTurnId !== call.turnId
+		)
 			throw new Error("Dynamic tool call is not active");
+		active.dynamicToolInvocations += 1;
 		if (call.namespace !== null) {
-			active.suppressSpeech = true;
+			this.failDynamicTurn(active);
 			throw new Error("Dynamic tool namespace is not top-level");
 		}
 		const request = ToolRequestSchema.safeParse({
@@ -788,24 +826,21 @@ export class CodexAppServerBrain implements BrainPort {
 			!request.success ||
 			!active.input.allowedActions.includes(request.data.name)
 		) {
-			active.suppressSpeech = true;
+			this.failDynamicTurn(active);
 			throw new Error("Dynamic tool call rejected by policy");
 		}
 		let execution: { ok: boolean };
+		active.dynamicToolsPending += 1;
 		try {
 			execution = await execute(request.data, active.input);
+			if (execution.ok) active.dynamicToolsSucceeded += 1;
+			else this.failDynamicTurn(active);
 		} catch (error) {
-			active.suppressSpeech = true;
-			active.dynamicSpeechBuffer.length = 0;
+			this.failDynamicTurn(active);
 			throw error;
-		}
-		if (execution.ok) {
-			active.dynamicExecutionSucceeded = true;
-			for (const text of active.dynamicSpeechBuffer.splice(0))
-				this.pushSpeech(active, text);
-		} else {
-			active.suppressSpeech = true;
-			active.dynamicSpeechBuffer.length = 0;
+		} finally {
+			active.dynamicToolsPending -= 1;
+			this.finalizeDeferredDynamicTurn(active);
 		}
 		return {
 			contentItems: [
@@ -818,6 +853,32 @@ export class CodexAppServerBrain implements BrainPort {
 			],
 			success: execution.ok,
 		};
+	}
+
+	private isActionEnabledDynamicTurn(active: ActiveTurn): boolean {
+		return (
+			this.options.toolMode === "dynamic" &&
+			active.input.allowedActions.length > 0
+		);
+	}
+
+	private failDynamicTurn(active: ActiveTurn): void {
+		if (!this.isActionEnabledDynamicTurn(active)) return;
+		active.dynamicToolFailed = true;
+		active.suppressSpeech = true;
+		active.dynamicSpeechBuffer.length = 0;
+	}
+
+	private finalizeDeferredDynamicTurn(active: ActiveTurn): void {
+		if (
+			active.terminal ||
+			active.dynamicToolsPending > 0 ||
+			!active.dynamicTerminalCompletion
+		)
+			return;
+		const completed = active.dynamicTerminalCompletion;
+		delete active.dynamicTerminalCompletion;
+		this.finalizeTurn(active, completed);
 	}
 
 	private pushSpeech(active: ActiveTurn, text: string): void {
@@ -847,6 +908,7 @@ export class CodexAppServerBrain implements BrainPort {
 		active: ActiveTurn,
 		client: JsonlRpcClient,
 	): Promise<void> {
+		this.failDynamicTurn(active);
 		if (!active.providerTurnId)
 			return Promise.reject(new Error("Codex turn is not addressable"));
 		if (!active.interruptPromise) {

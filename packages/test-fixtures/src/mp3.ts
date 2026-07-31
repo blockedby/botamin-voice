@@ -37,3 +37,19 @@ export function createDeterministicMp3Fixture(): Uint8Array {
 export function createMalformedMp3Fixture(): Uint8Array {
 	return decodeBase64Fixture(MALFORMED_MP3_BASE64);
 }
+
+/** Return a deterministic prefix that is not a complete MP3 file. */
+export function createTruncatedMp3Fixture(): Uint8Array {
+	return createDeterministicMp3Fixture().slice(0, 32);
+}
+
+/** Return canonical malformed MP3 variants for decoder negative tests. */
+export function createInvalidMp3Fixtures(): Readonly<{
+	malformed: Uint8Array;
+	truncated: Uint8Array;
+}> {
+	return Object.freeze({
+		malformed: createMalformedMp3Fixture(),
+		truncated: createTruncatedMp3Fixture(),
+	});
+}

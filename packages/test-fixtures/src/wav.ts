@@ -16,6 +16,32 @@ export const DETERMINISTIC_WAV_FIXTURE_PROPERTIES = Object.freeze({
 	byteLength: 3_244 as const,
 });
 
+/** The canonical non-zero PCM samples used by the deterministic WAV fixture. */
+export function createDeterministicPcm16Fixture(): Uint8Array {
+	const pcm16 = new Uint8Array(
+		DETERMINISTIC_WAV_FIXTURE_PROPERTIES.dataByteLength,
+	);
+	const view = new DataView(pcm16.buffer);
+	view.setInt16(0, 1_000, true);
+	view.setInt16(800 * 2, -1_000, true);
+	return pcm16;
+}
+
+/** Raw provider-invalid PCM bytes, intentionally without a WAV container. */
+export function createRawPcm16Fixture(): Uint8Array {
+	return createDeterministicPcm16Fixture();
+}
+
+/** Return one isolated canonical 100 ms browser microphone PCM16 frame. */
+export function createDeterministicPcm16Frame(): Uint8Array {
+	return createDeterministicPcm16Fixture();
+}
+
+/** Return isolated bounded browser frames for an utterance fixture. */
+export function createDeterministicPcm16Frames(): readonly Uint8Array[] {
+	return Object.freeze([createDeterministicPcm16Frame()]);
+}
+
 export interface ParsedMonoPcm16Wav {
 	contentType: "audio/wav";
 	audioFormat: 1;
@@ -133,13 +159,38 @@ export function parseMonoPcm16Wav(bytes: Uint8Array): ParsedMonoPcm16Wav {
 
 /** Return an isolated copy of a valid deterministic 100 ms WAV fixture. */
 export function createDeterministicWavFixture(): Uint8Array {
-	const pcm16 = new Uint8Array(
-		DETERMINISTIC_WAV_FIXTURE_PROPERTIES.dataByteLength,
-	);
-	const view = new DataView(pcm16.buffer);
-	view.setInt16(0, 1_000, true);
-	view.setInt16(800 * 2, -1_000, true);
+	const pcm16 = createDeterministicPcm16Fixture();
 	const fixture = encodeMonoPcm16Wav(pcm16);
 	parseMonoPcm16Wav(fixture);
 	return fixture;
+}
+
+/** Return canonical WAV bytes that each violate exactly one parser invariant. */
+export function createInvalidWavFixtures(): Readonly<{
+	truncated: Uint8Array;
+	emptyData: Uint8Array;
+	wrongFormat: Uint8Array;
+	wrongRiffSize: Uint8Array;
+}> {
+	const valid = createDeterministicWavFixture();
+	const emptyData = valid.slice(
+		0,
+		MONO_PCM16_16_KHZ_WAV_PROPERTIES.headerBytes,
+	);
+	new DataView(emptyData.buffer).setUint32(4, 36, true);
+	new DataView(emptyData.buffer).setUint32(40, 0, true);
+	const wrongFormat = valid.slice();
+	new DataView(wrongFormat.buffer).setUint16(20, 3, true);
+	const wrongRiffSize = valid.slice();
+	new DataView(wrongRiffSize.buffer).setUint32(4, valid.byteLength - 7, true);
+	return Object.freeze({
+		truncated: valid.slice(0, 43),
+		emptyData,
+		wrongFormat,
+		wrongRiffSize,
+	});
+}
+
+export function createMalformedWavFixture(): Uint8Array {
+	return createInvalidWavFixtures().truncated;
 }

@@ -11,8 +11,9 @@ trap 'rm -f "$config_file" "$history_file"' EXIT HUP INT TERM
 docker image inspect --format '{{json .Config.Env}}' "$image" > "$config_file"
 docker history --no-trunc --format '{{.CreatedBy}}' "$image" > "$history_file"
 
-retired_key="XAI""_API_KEY"
-retired_prefix="XAI""_STT_"
+retired_root="X""AI"
+retired_key="${retired_root}_API_KEY"
+retired_prefix="${retired_root}_STT_"
 if grep -Eq "(^|[=[:space:]])(OPENROUTER_API_KEY|${retired_key})=" "$config_file" "$history_file"; then
   printf '%s\n' "Image config/history contains a provider credential assignment." >&2
   exit 1

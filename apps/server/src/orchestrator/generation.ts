@@ -32,6 +32,11 @@ export class GenerationCoordinator {
 			throw new Error(`Generation ${generationId} has already been used`);
 		}
 		this.#seen.add(generationId);
+		while (this.#seen.size > 512) {
+			const oldest = this.#seen.values().next().value;
+			if (!oldest) break;
+			this.#seen.delete(oldest);
+		}
 		const superseded = this.#active
 			? {
 					generationId: this.#active.generationId,
@@ -86,6 +91,12 @@ export class GenerationCoordinator {
 
 	finish(generationId: string): void {
 		if (this.#active?.generationId === generationId) this.#active = null;
+	}
+
+	close(): void {
+		this.#active?.controller.abort("conversation closed");
+		this.#active = null;
+		this.#seen.clear();
 	}
 
 	current(): SupersededGeneration | null {

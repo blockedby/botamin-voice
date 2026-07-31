@@ -11,11 +11,44 @@ import {
 import { Hono, type Context } from "hono";
 import { serveStatic, upgradeWebSocket } from "hono/bun";
 import type { WSContext } from "hono/ws";
+import {
+	resolveRequestSourceKey,
+	SourceAdmissionLimiter,
+} from "./gateway/admission";
 import type { GatewaySocket } from "./gateway/session";
+import type { RuntimeConfig } from "./runtime/config";
 import type { ServerRuntime } from "./runtime/runtime";
 
-export function createServerApp(runtime: ServerRuntime): Hono {
-	const app = new Hono();
+interface ServerAppEnv {
+	Bindings: { remoteAddress?: string };
+}
+
+export const BUN_REQUEST_BODY_HARD_LIMIT_BYTES = 65_536 as const;
+
+export function bunRequestBodyHardLimit(config: RuntimeConfig): number {
+	return Math.max(
+		BUN_REQUEST_BODY_HARD_LIMIT_BYTES,
+		config.limits.httpBodyBytes + 1_024,
+	);
+}
+
+export function createServerApp(runtime: ServerRuntime): Hono<ServerAppEnv> {
+	const app = new Hono<ServerAppEnv>();
+	const admissionConfig = runtime.config.admission ?? {
+		trustedProxyHops: 0,
+		windowMs: 60_000,
+		maxCreatesPerSource: 5,
+		maxSocketConnectionsPerSource: 20,
+		maxActivePerSource: 2,
+		clientHelloTimeoutMs: 2_000,
+		abandonedSessionMs: 10_000,
+	};
+	const admission = new SourceAdmissionLimiter({
+		windowMs: admissionConfig.windowMs,
+		maxCreatesPerSource: admissionConfig.maxCreatesPerSource,
+		maxSocketConnectionsPerSource:
+			admissionConfig.maxSocketConnectionsPerSource,
+	});
 
 	app.use("*", async (context, next) => {
 		await next();
@@ -36,11 +69,28 @@ export function createServerApp(runtime: ServerRuntime): Hono {
 		if (!validRequiredOrigin(context, runtime.config.appOrigin)) {
 			return apiError(context, 403, "INVALID_EVENT", false);
 		}
+		const sourceKey = requestSourceKey(
+			context,
+			admissionConfig.trustedProxyHops,
+		);
+		if (sourceKey === null) {
+			return apiError(context, 403, "INVALID_EVENT", false);
+		}
+		if (!admission.allowCreate(sourceKey)) {
+			return apiError(context, 429, "CAPACITY_EXCEEDED", true);
+		}
 		const body = await readBoundedJson(
 			context,
 			runtime.config.limits.httpBodyBytes,
 		);
-		if (!body.ok) return apiError(context, 400, "INVALID_EVENT", false);
+		if (!body.ok) {
+			return apiError(
+				context,
+				body.reason === "too_large" ? 413 : 400,
+				"INVALID_EVENT",
+				false,
+			);
+		}
 		const parsed = CreateConversationRequestSchema.safeParse(body.value);
 		if (!parsed.success) {
 			const consent =
@@ -65,7 +115,7 @@ export function createServerApp(runtime: ServerRuntime): Hono {
 		}
 		let session: ReturnType<ServerRuntime["registry"]["create"]>;
 		try {
-			session = runtime.registry.create(parsed.data);
+			session = runtime.registry.create(parsed.data, sourceKey);
 		} catch {
 			return apiError(context, 503, "DB_UNAVAILABLE", true);
 		}
@@ -75,6 +125,7 @@ export function createServerApp(runtime: ServerRuntime): Hono {
 		const response = CreateConversationResponseSchema.parse({
 			conversationId: session.conversationId,
 			wsUrl: `/ws/v1/conversations/${session.conversationId}`,
+			clientToken: session.takeClientToken(),
 			expiresAt: session.expiresAt.toISOString(),
 			clientConfig: {
 				inputSampleRate: 16_000,
@@ -99,13 +150,22 @@ export function createServerApp(runtime: ServerRuntime): Hono {
 			context,
 			runtime.config.limits.httpBodyBytes,
 		);
-		if (
-			!body.ok ||
-			!StopConversationRequestSchema.safeParse(body.value).success
-		) {
+		if (!body.ok) {
+			return apiError(
+				context,
+				body.reason === "too_large" ? 413 : 400,
+				"INVALID_EVENT",
+				false,
+			);
+		}
+		const stopped = StopConversationRequestSchema.safeParse(body.value);
+		if (!stopped.success) {
 			return apiError(context, 400, "INVALID_EVENT", false);
 		}
-		await runtime.registry.stop(id);
+		await runtime.registry.stop(
+			id,
+			stopped.data.reason === "user_requested" ? "completed" : "disconnected",
+		);
 		return context.json(
 			StopConversationResponseSchema.parse({
 				conversationId: id,
@@ -118,6 +178,16 @@ export function createServerApp(runtime: ServerRuntime): Hono {
 	app.get("/ws/v1/conversations/:id", async (context) => {
 		if (!validRequiredOrigin(context, runtime.config.appOrigin)) {
 			return apiError(context, 403, "INVALID_EVENT", false);
+		}
+		const sourceKey = requestSourceKey(
+			context,
+			admissionConfig.trustedProxyHops,
+		);
+		if (sourceKey === null) {
+			return apiError(context, 403, "INVALID_EVENT", false);
+		}
+		if (!admission.allowSocket(sourceKey)) {
+			return apiError(context, 429, "CAPACITY_EXCEEDED", true);
 		}
 		const id = context.req.param("id");
 		if (!EntityIdSchema.safeParse(id).success) {
@@ -192,29 +262,48 @@ async function normalizeWsData(
 	return null;
 }
 
-function validRequiredOrigin(context: Context, expected: string): boolean {
+function validRequiredOrigin(
+	context: Context<ServerAppEnv>,
+	expected: string,
+): boolean {
 	return context.req.header("origin") === expected;
 }
 
+function requestSourceKey(
+	context: Context<ServerAppEnv>,
+	trustedProxyHops: number,
+): string | null {
+	const directAddress = context.env?.remoteAddress;
+	return resolveRequestSourceKey({
+		headers: context.req.raw.headers,
+		...(directAddress === undefined ? {} : { directAddress }),
+		trustedProxyHops,
+	});
+}
+
 async function readBoundedJson(
-	context: Context,
+	context: Context<ServerAppEnv>,
 	maximumBytes: number,
-): Promise<{ ok: true; value: unknown } | { ok: false }> {
+): Promise<
+	{ ok: true; value: unknown } | { ok: false; reason: "invalid" | "too_large" }
+> {
 	const type = context.req.header("content-type")?.toLowerCase() ?? "";
-	if (!type.startsWith("application/json")) return { ok: false };
+	if (!type.startsWith("application/json")) {
+		return { ok: false, reason: "invalid" };
+	}
 	const declared = context.req.header("content-length");
-	if (declared && Number(declared) > maximumBytes) return { ok: false };
+	if (declared && Number(declared) > maximumBytes) {
+		return { ok: false, reason: "too_large" };
+	}
 	try {
 		const text = await context.req.text();
-		if (
-			text.length === 0 ||
-			new TextEncoder().encode(text).byteLength > maximumBytes
-		) {
-			return { ok: false };
+		if (text.length === 0) return { ok: false, reason: "invalid" };
+		if (new TextEncoder().encode(text).byteLength > maximumBytes) {
+			return { ok: false, reason: "too_large" };
 		}
 		return { ok: true, value: JSON.parse(text) };
 	} catch {
-		return { ok: false };
+		return { ok: false, reason: "invalid" };
 	}
 }
 
@@ -230,8 +319,8 @@ function validConsent(value: unknown): boolean {
 }
 
 function apiError(
-	context: Context,
-	status: 400 | 403 | 404 | 500 | 503,
+	context: Context<ServerAppEnv>,
+	status: 400 | 403 | 404 | 413 | 429 | 500 | 503,
 	code: SafeErrorCode,
 	retryable: boolean,
 ): Response {

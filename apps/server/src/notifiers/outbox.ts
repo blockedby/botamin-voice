@@ -160,3 +160,118 @@ export class NotificationOutboxWorker {
 		);
 	}
 }
+
+export interface PollingNotificationWorkerOptions {
+	pollIntervalMs?: number;
+	batchLimit?: number;
+	drainTimeoutMs?: number;
+	schedule?: (callback: () => void, delayMs: number) => unknown;
+	cancel?: (handle: unknown) => void;
+	workerOptions?: NotificationOutboxWorkerOptions;
+}
+
+/** Continuously drains persisted outbox rows without overlapping poll cycles. */
+export class PollingNotificationWorker {
+	readonly #worker: NotificationOutboxWorker;
+	readonly #notifier: NamedLeadNotifier;
+	readonly #pollIntervalMs: number;
+	readonly #batchLimit: number;
+	readonly #drainTimeoutMs: number;
+	readonly #schedule: (callback: () => void, delayMs: number) => unknown;
+	readonly #cancel: (handle: unknown) => void;
+	#timer: unknown = null;
+	#inFlight: Promise<void> | null = null;
+	#running = false;
+	#healthy = true;
+
+	constructor(
+		database: DomainDatabase,
+		notifier: NamedLeadNotifier,
+		options: PollingNotificationWorkerOptions = {},
+	) {
+		this.#worker = new NotificationOutboxWorker(
+			database,
+			notifier,
+			options.workerOptions,
+		);
+		this.#notifier = notifier;
+		this.#pollIntervalMs = options.pollIntervalMs ?? 1_000;
+		this.#batchLimit = options.batchLimit ?? 20;
+		this.#drainTimeoutMs = options.drainTimeoutMs ?? 6_000;
+		this.#schedule =
+			options.schedule ?? ((callback, delay) => setTimeout(callback, delay));
+		this.#cancel =
+			options.cancel ??
+			((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+	}
+
+	start(): void {
+		if (this.#running) return;
+		this.#running = true;
+		this.#arm(0);
+	}
+
+	async stop(): Promise<void> {
+		if (!this.#running && !this.#inFlight) return;
+		this.#running = false;
+		if (this.#timer !== null) this.#cancel(this.#timer);
+		this.#timer = null;
+		await Promise.resolve(this.#notifier.close?.()).catch(() => undefined);
+		const inFlight = this.#inFlight;
+		if (inFlight) await settleWithin(inFlight, this.#drainTimeoutMs);
+	}
+
+	get ready(): boolean {
+		return this.#running && this.#healthy;
+	}
+
+	#arm(delayMs: number): void {
+		if (!this.#running || this.#timer !== null || this.#inFlight) return;
+		this.#timer = this.#schedule(() => {
+			this.#timer = null;
+			if (!this.#running) return;
+			const cycle = this.#runCycle();
+			this.#inFlight = cycle;
+			void cycle.finally(() => {
+				if (this.#inFlight === cycle) this.#inFlight = null;
+				this.#arm(this.#pollIntervalMs);
+			});
+		}, delayMs);
+		(this.#timer as { unref?: () => void } | null)?.unref?.();
+	}
+
+	async #runCycle(): Promise<void> {
+		try {
+			for (
+				let index = 0;
+				index < this.#batchLimit && this.#running;
+				index += 1
+			) {
+				const result = await this.#worker.processDue(1);
+				if (result.length === 0) break;
+			}
+			this.#healthy = true;
+		} catch {
+			this.#healthy = false;
+		}
+	}
+}
+
+async function settleWithin(
+	promise: Promise<unknown>,
+	timeoutMs: number,
+): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	await Promise.race([
+		promise.then(
+			() => undefined,
+			() => undefined,
+		),
+		new Promise<void>((resolve) => {
+			timer = setTimeout(resolve, timeoutMs);
+			timer.unref?.();
+		}),
+	]).finally(() => {
+		if (timer) clearTimeout(timer);
+	});
+}

@@ -16,6 +16,7 @@ import {
 import { SqliteBookingService } from "../booking/service";
 import { LeadDataDeletionService } from "./deletion";
 import { redactForLog } from "./redaction";
+import { TranscriptRetentionWorker } from "./retention";
 
 const directories: string[] = [];
 const at = "2026-07-30T20:22:00.000Z";
@@ -45,6 +46,86 @@ describe("PII privacy services", () => {
 		expect(redacted).not.toContain("secret_handle");
 		expect(redacted).not.toContain("raw transcript");
 		expect(redacted).toContain("[REDACTED]");
+	});
+
+	test("startup and scheduled retention purge bounded turn PII without deleting bookings", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "botamin-retention-"));
+		directories.push(directory);
+		const database = openDomainDatabase({
+			filename: join(directory, "domain.db"),
+		});
+		const conversationId = Bun.randomUUIDv7();
+		const store = new ConversationStore(database);
+		store.create({
+			id: conversationId,
+			stage: "COLLECT_BOOKING",
+			promptVersion: "a".repeat(64),
+			source: "landing",
+			locale: "ru-RU",
+			qualificationEnabled: true,
+			consentAt: "2026-07-01T00:00:00.000Z",
+			startedAt: "2026-07-01T00:00:00.000Z",
+		});
+		for (const text of ["old secret one", "old secret two"]) {
+			store.appendTurn({
+				id: Bun.randomUUIDv7(),
+				conversationId,
+				userText: text,
+				assistantText: "old assistant PII",
+				stateBefore: "COLLECT_BOOKING",
+				stateAfter: "COLLECT_BOOKING",
+				completedAt: "2026-07-02T00:00:00.000Z",
+			});
+		}
+		store.appendTurn({
+			id: Bun.randomUUIDv7(),
+			conversationId,
+			userText: "recent text",
+			assistantText: "recent assistant",
+			stateBefore: "COLLECT_BOOKING",
+			stateAfter: "COLLECT_BOOKING",
+			completedAt: "2026-08-20T00:00:00.000Z",
+		});
+		await new SqliteBookingService(database, {
+			now: () => new Date("2026-07-03T00:00:00.000Z"),
+		}).createBooking({
+			conversationId,
+			idempotencyKey: "retention-booking-0001",
+			name: "Александр",
+			contacts: [{ channel: "telegram", value: "@alex" }],
+			consentConfirmed: true,
+		});
+
+		let scheduled: (() => void) | undefined;
+		const worker = new TranscriptRetentionWorker(database, {
+			retentionDays: 30,
+			now: () => new Date("2026-08-30T00:00:00.000Z"),
+			batchSize: 1,
+			maxBatchesPerRun: 1,
+			intervalMs: 1_000,
+			schedule: (callback) => {
+				scheduled = callback;
+				return 1;
+			},
+			cancel: () => undefined,
+		});
+		expect(worker.start()).toBe(1);
+		expect(database.select({ value: count() }).from(turns).get()?.value).toBe(
+			2,
+		);
+		scheduled?.();
+		expect(database.select({ value: count() }).from(turns).get()?.value).toBe(
+			1,
+		);
+		expect(
+			database.select({ value: count() }).from(bookings).get()?.value,
+		).toBe(1);
+		expect(
+			database.select({ value: count() }).from(conversations).get()?.value,
+		).toBe(1);
+		expect(database.select().from(turns).get()?.userText).toBe("recent text");
+		worker.stop();
+		closeDomainDatabase(database);
 	});
 
 	test("deletes lead PII and raw outbox while preserving redacted audit", async () => {

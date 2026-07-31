@@ -11,7 +11,7 @@ import { closeDomainDatabase, openDomainDatabase } from "../db/database";
 import { notificationOutbox } from "../db/schema";
 import { SqliteBookingService } from "../domain/booking/service";
 import { ConsoleLeadNotifier, type NamedLeadNotifier } from "./notifier";
-import { NotificationOutboxWorker } from "./outbox";
+import { NotificationOutboxWorker, PollingNotificationWorker } from "./outbox";
 import { SignedWebhookNotifier, signWebhookPayload } from "./webhook";
 
 const directories: string[] = [];
@@ -75,6 +75,21 @@ describe("lead notifiers and outbox", () => {
 		expect(capturedHeaders.get("x-botamin-signature")).toBe(
 			`sha256=${signWebhookPayload(timestamp, capturedBody, "local-test-secret")}`,
 		);
+	});
+
+	test("webhook close aborts an in-flight delivery even when fetch ignores its signal", async () => {
+		const notifier = new SignedWebhookNotifier({
+			url: "https://receiver.invalid/leads",
+			signingSecret: "local-test-secret",
+			timeoutMs: 1_000,
+			fetch: async () => new Promise<Response>(() => undefined),
+		});
+		const pending = notifier.publish(event());
+		await Bun.sleep(0);
+		notifier.close();
+		await expect(pending).rejects.toMatchObject({
+			name: "WebhookDeliveryError",
+		});
 	});
 
 	test("leases one outbox row so concurrent workers publish it once", async () => {
@@ -231,6 +246,84 @@ describe("lead notifiers and outbox", () => {
 			nextAttemptAt: "2026-07-30T20:22:04.000Z",
 			sentAt: null,
 		});
+		closeDomainDatabase(database);
+	});
+
+	test("polling worker retries persisted failures and drains on shutdown", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "botamin-outbox-poll-"));
+		directories.push(directory);
+		const database = openDomainDatabase({
+			filename: join(directory, "domain.db"),
+		});
+		const conversationId = Bun.randomUUIDv7();
+		new ConversationStore(database).create({
+			id: conversationId,
+			stage: "COLLECT_BOOKING",
+			promptVersion: "b".repeat(64),
+			source: "landing",
+			locale: "ru-RU",
+			qualificationEnabled: true,
+			consentAt: at,
+			startedAt: at,
+		});
+		await new SqliteBookingService(database, {
+			notifierKind: "webhook",
+			now: () => new Date(at),
+		}).createBooking({
+			conversationId,
+			idempotencyKey: "polling-worker-booking-01",
+			name: "Александр",
+			contacts: [{ channel: "telegram", value: "@alex" }],
+			consentConfirmed: true,
+		});
+		let current = new Date(at);
+		let calls = 0;
+		let closed = 0;
+		const notifier: NamedLeadNotifier = {
+			kind: "webhook",
+			async publish() {
+				calls += 1;
+				if (calls === 1) throw new Error("temporary outage with PII");
+			},
+			close() {
+				closed += 1;
+			},
+		};
+		const jobs: Array<() => void> = [];
+		const worker = new PollingNotificationWorker(database, notifier, {
+			pollIntervalMs: 1_000,
+			batchLimit: 1,
+			workerOptions: { now: () => current },
+			schedule: (callback) => {
+				jobs.push(callback);
+				return callback;
+			},
+			cancel: (handle) => {
+				const index = jobs.indexOf(handle as () => void);
+				if (index >= 0) jobs.splice(index, 1);
+			},
+		});
+		worker.start();
+		expect(worker.ready).toBe(true);
+		jobs.shift()?.();
+		await Bun.sleep(0);
+		expect(database.select().from(notificationOutbox).get()).toMatchObject({
+			status: "failed",
+			attemptCount: 1,
+			lastError: "NOTIFIER_FAILED",
+		});
+		current = new Date("2026-07-30T20:22:02.000Z");
+		jobs.shift()?.();
+		await Bun.sleep(0);
+		expect(database.select().from(notificationOutbox).get()).toMatchObject({
+			status: "sent",
+			attemptCount: 2,
+			lastError: null,
+		});
+		await worker.stop();
+		expect(worker.ready).toBe(false);
+		expect(closed).toBe(1);
+		expect(calls).toBe(2);
 		closeDomainDatabase(database);
 	});
 

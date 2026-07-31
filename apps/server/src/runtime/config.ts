@@ -1,4 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
+import { CANONICAL_PCM_100MS_BYTES, WAV_HEADER_BYTES } from "../gateway/wav";
 import {
 	loadOpenRouterVoiceConfig,
 	type OpenRouterVoiceConfig,
@@ -12,9 +13,30 @@ export interface RuntimeConfig {
 	readonly promptRuntimeDir: string;
 	readonly maxActiveConversations: number;
 	readonly maxConcurrentBrainTurns: number;
+	readonly maxPendingBrainTurns: number;
+	readonly brainQueueTimeoutMs: number;
 	readonly sessionMaxMs: number;
+	readonly sessionStopDrainMs: number;
 	readonly turnTimeoutMs: number;
+	readonly transcriptRetentionDays: number;
 	readonly qualificationEnabled: boolean;
+	readonly notifier:
+		| { readonly kind: "console" }
+		| {
+				readonly kind: "webhook";
+				readonly url: string;
+				readonly signingSecret: string;
+				readonly timeoutMs: number;
+		  };
+	readonly admission: {
+		readonly trustedProxyHops: number;
+		readonly windowMs: number;
+		readonly maxCreatesPerSource: number;
+		readonly maxSocketConnectionsPerSource: number;
+		readonly maxActivePerSource: number;
+		readonly clientHelloTimeoutMs: number;
+		readonly abandonedSessionMs: number;
+	};
 	readonly brain: {
 		readonly provider: "codex-subscription";
 		readonly model: "gpt-5.6-luna";
@@ -101,6 +123,45 @@ function appOrigin(env: Environment): string {
 	return url.origin;
 }
 
+function notifierConfig(env: Environment): RuntimeConfig["notifier"] {
+	const kind = env.NOTIFIER?.trim() || "console";
+	if (kind === "console") return { kind };
+	if (kind !== "webhook") throw new RuntimeConfigError("NOTIFIER");
+
+	const rawUrl = env.WEBHOOK_URL?.trim();
+	const signingSecret = env.WEBHOOK_SIGNING_SECRET?.trim();
+	if (!rawUrl) throw new RuntimeConfigError("WEBHOOK_URL");
+	if (
+		!signingSecret ||
+		signingSecret.length < 16 ||
+		signingSecret.length > 512 ||
+		/[\r\n]/u.test(signingSecret)
+	) {
+		throw new RuntimeConfigError("WEBHOOK_SIGNING_SECRET");
+	}
+	let url: URL;
+	try {
+		url = new URL(rawUrl);
+	} catch {
+		throw new RuntimeConfigError("WEBHOOK_URL");
+	}
+	const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+	if (
+		(url.protocol !== "https:" && !(loopback && url.protocol === "http:")) ||
+		url.username !== "" ||
+		url.password !== "" ||
+		url.hash !== ""
+	) {
+		throw new RuntimeConfigError("WEBHOOK_URL");
+	}
+	return {
+		kind,
+		url: url.toString(),
+		signingSecret,
+		timeoutMs: integer(env, "WEBHOOK_TIMEOUT_MS", 5_000, 100, 30_000),
+	};
+}
+
 /** Validates all production wiring without reading or logging secret values. */
 export function createRuntimeConfig(env: Environment = Bun.env): RuntimeConfig {
 	exact(env, "BRAIN_PROVIDER", "codex-subscription");
@@ -141,6 +202,41 @@ export function createRuntimeConfig(env: Environment = Bun.env): RuntimeConfig {
 	}
 
 	const voice = loadOpenRouterVoiceConfig(env);
+	if (
+		voice.stt.maxUtteranceMs < 100 ||
+		voice.stt.maxAudioBytes < WAV_HEADER_BYTES + CANONICAL_PCM_100MS_BYTES
+	) {
+		throw new RuntimeConfigError("STT_MAX_AUDIO_BYTES");
+	}
+	const turnTimeoutMs = integer(env, "TURN_TIMEOUT_MS", 45_000, 1_000, 300_000);
+	const maxActivePerSource = integer(
+		env,
+		"MAX_ACTIVE_CONVERSATIONS_PER_SOURCE",
+		Math.min(2, maxActiveConversations),
+		1,
+		100,
+	);
+	if (maxActivePerSource > maxActiveConversations) {
+		throw new RuntimeConfigError("MAX_ACTIVE_CONVERSATIONS_PER_SOURCE");
+	}
+	const clientHelloTimeoutMs = integer(
+		env,
+		"CLIENT_HELLO_TIMEOUT_MS",
+		2_000,
+		250,
+		5_000,
+	);
+	const abandonedSessionMs = integer(
+		env,
+		"ABANDONED_SESSION_TIMEOUT_MS",
+		10_000,
+		1_000,
+		60_000,
+	);
+	if (abandonedSessionMs < clientHelloTimeoutMs) {
+		throw new RuntimeConfigError("ABANDONED_SESSION_TIMEOUT_MS");
+	}
+
 	return {
 		appOrigin: appOrigin(env),
 		port: integer(env, "PORT", 3000, 1, 65_535),
@@ -151,13 +247,57 @@ export function createRuntimeConfig(env: Environment = Bun.env): RuntimeConfig {
 		),
 		maxActiveConversations,
 		maxConcurrentBrainTurns,
+		maxPendingBrainTurns: integer(env, "MAX_PENDING_BRAIN_TURNS", 6, 0, 256),
+		brainQueueTimeoutMs: integer(
+			env,
+			"BRAIN_QUEUE_TIMEOUT_MS",
+			turnTimeoutMs,
+			250,
+			300_000,
+		),
 		sessionMaxMs: integer(env, "SESSION_MAX_MINUTES", 20, 1, 120) * 60_000,
-		turnTimeoutMs: integer(env, "TURN_TIMEOUT_MS", 45_000, 1_000, 300_000),
+		sessionStopDrainMs: integer(
+			env,
+			"SESSION_STOP_DRAIN_MS",
+			5_000,
+			100,
+			30_000,
+		),
+		turnTimeoutMs,
+		transcriptRetentionDays: integer(
+			env,
+			"TRANSCRIPT_RETENTION_DAYS",
+			30,
+			1,
+			3_650,
+		),
 		qualificationEnabled: boolean(
 			env,
 			"POST_BOOKING_QUALIFICATION_ENABLED",
 			true,
 		),
+		notifier: notifierConfig(env),
+		admission: {
+			trustedProxyHops: integer(env, "TRUSTED_PROXY_HOPS", 0, 0, 3),
+			windowMs: integer(env, "ADMISSION_WINDOW_MS", 60_000, 1_000, 600_000),
+			maxCreatesPerSource: integer(
+				env,
+				"MAX_CONVERSATION_CREATES_PER_SOURCE",
+				5,
+				1,
+				1_000,
+			),
+			maxSocketConnectionsPerSource: integer(
+				env,
+				"MAX_SESSION_CONNECTIONS_PER_SOURCE",
+				20,
+				1,
+				2_000,
+			),
+			maxActivePerSource,
+			clientHelloTimeoutMs,
+			abandonedSessionMs,
+		},
 		brain: {
 			provider: "codex-subscription",
 			model: "gpt-5.6-luna",

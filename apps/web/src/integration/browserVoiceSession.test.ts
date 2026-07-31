@@ -163,6 +163,7 @@ function response() {
 	return {
 		conversationId,
 		wsUrl: `/ws/v1/conversations/${conversationId}`,
+		clientToken: "initial-client-token-00000000000000000000",
 		expiresAt: "2026-07-30T21:30:00.000Z",
 		clientConfig: {
 			inputSampleRate: 16_000,
@@ -361,6 +362,7 @@ describe("production browser voice integration", () => {
 		expect(sentJson(value.socket)[0]).toMatchObject({
 			type: "client.hello",
 			payload: {
+				resumeToken: "initial-client-token-00000000000000000000",
 				audio: {
 					encoding: "pcm16le",
 					sampleRate: 16_000,
@@ -591,6 +593,58 @@ describe("production browser voice integration", () => {
 		);
 		await flush();
 		expect(value.socket.closed).toBe(true);
+	});
+
+	test("terminal provider ERROR stops capture/reconnect but retains safe fallback text", async () => {
+		const value = await readySession();
+		value.socket.server(
+			event("state.changed", 2, {
+				from: "GREETING",
+				to: "ERROR",
+				reason: "provider_failed",
+			}),
+		);
+		expect(value.capture.active).toBe(false);
+		expect(value.capture.stopCalls).toBeGreaterThan(0);
+		expect(value.session.getSnapshot().state.kind).toBe("error");
+		value.socket.server(
+			event("error", 3, {
+				code: "BRAIN_PROTOCOL_ERROR",
+				message: "Разговор сейчас недоступен. Попробуйте позже.",
+				retryable: true,
+			}),
+		);
+		value.socket.server(
+			event("assistant.text.delta", 4, {
+				generationId,
+				text: "Данные ещё не были сохранены.",
+			}),
+		);
+		value.socket.server(
+			event("assistant.text.done", 5, {
+				generationId,
+				fullText: "Данные ещё не были сохранены.",
+			}),
+		);
+		await flush();
+		expect(value.session.getSnapshot().transcript).toEqual([
+			{
+				id: generationId,
+				speaker: "agent",
+				text: "Данные ещё не были сохранены.",
+			},
+		]);
+		expect(value.socket.closed).toBe(true);
+		expect(value.scheduler.jobs).toHaveLength(0);
+		value.session.reconnect();
+		expect(value.sockets).toHaveLength(1);
+		value.capture.emit();
+		expect(await value.session.commit()).toBe(false);
+		expect(
+			sentJson(value.socket).filter(
+				(message) => message.type === "audio.commit",
+			),
+		).toHaveLength(0);
 	});
 
 	test("REST startup failure releases capture and localizes network details", async () => {

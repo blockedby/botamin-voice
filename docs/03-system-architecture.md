@@ -376,10 +376,19 @@ AUTO_MIGRATE=true
 DATABASE_URL=file:./data/app.db
 LOG_LEVEL=info
 MAX_ACTIVE_CONVERSATIONS=3
+MAX_ACTIVE_CONVERSATIONS_PER_SOURCE=2
 MAX_CONCURRENT_BRAIN_TURNS=3
 MAX_PENDING_BRAIN_TURNS=6
+BRAIN_QUEUE_TIMEOUT_MS=45000
 SESSION_MAX_MINUTES=20
+SESSION_STOP_DRAIN_MS=5000
 TURN_TIMEOUT_MS=45000
+TRUSTED_PROXY_HOPS=0
+ADMISSION_WINDOW_MS=60000
+MAX_CONVERSATION_CREATES_PER_SOURCE=5
+MAX_SESSION_CONNECTIONS_PER_SOURCE=20
+CLIENT_HELLO_TIMEOUT_MS=2000
+ABANDONED_SESSION_TIMEOUT_MS=10000
 
 # Codex subscription brain
 # Authentication is performed separately with `codex login --device-auth`.
@@ -388,7 +397,7 @@ BRAIN_PROVIDER=codex-subscription
 CODEX_MODEL=gpt-5.6-luna
 CODEX_EFFORT=low
 CODEX_HOME=/home/your-user/.local/share/botamin-voice/codex-home
-# Safe without an injected backend executor; the orchestrator may explicitly select dynamic.
+# Production runtime is fixed to the server-validated envelope mode.
 CODEX_TOOL_MODE=envelope
 CODEX_CWD=.runtime/brain
 CODEX_MAX_CONCURRENT_TURNS=3
@@ -452,10 +461,11 @@ POST_BOOKING_QUALIFICATION_ENABLED=true
 NOTIFIER=console
 WEBHOOK_URL=
 WEBHOOK_SIGNING_SECRET=
+WEBHOOK_TIMEOUT_MS=5000
 
 # Privacy and retention
 TRANSCRIPT_RETENTION_DAYS=30
 STORE_RAW_AUDIO=false
 ```
 
-Значение concurrency — initial guardrail, а не окончательная capacity claim; оно настраивается после load test и проверки лимитов конкретной подписки. `CODEX_MODEL` и `CODEX_EFFORT` конфигурируемы, но любое изменение release-профиля требует полного conversation eval gate.
+Значение concurrency — initial guardrail, а не окончательная capacity claim; оно настраивается после load test и проверки лимитов конкретной подписки. `MAX_PENDING_BRAIN_TURNS` ограничивает сохранённые в памяти committed WAV; booked sessions имеют отдельную приоритетную FIFO-очередь, а внутри каждой очереди сохраняется порядок поступления. `TRUSTED_PROXY_HOPS=0` безопасно игнорирует forwarding headers для прямого Bun-запуска; Compose явно задаёт `1`, потому что app доступен только через Caddy. `CODEX_MODEL` и `CODEX_EFFORT` конфигурируемы, но любое изменение release-профиля требует полного conversation eval gate.

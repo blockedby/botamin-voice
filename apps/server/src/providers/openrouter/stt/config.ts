@@ -233,6 +233,24 @@ export function loadOpenRouterVoiceConfig(
 	if (ttsResponseFormat !== "mp3") {
 		throw new OpenRouterVoiceConfigError("OPENROUTER_TTS_RESPONSE_FORMAT");
 	}
+	const maxUtteranceMs = readInteger(
+		env,
+		"STT_MAX_UTTERANCE_MS",
+		30_000,
+		100,
+		120_000,
+	);
+	const maxAudioBytes = readInteger(
+		env,
+		"STT_MAX_AUDIO_BYTES",
+		1_000_000,
+		45,
+		10_000_000,
+	);
+	// A canonical 100ms mono PCM16 frame is 3,200 bytes plus a 44-byte WAV header.
+	if (maxUtteranceMs < 100 || maxAudioBytes < 3_244) {
+		throw new OpenRouterVoiceConfigError("STT_MAX_AUDIO_BYTES");
+	}
 
 	const httpReferer = readReferer(env);
 	const appTitle = readOptionalHeader(env, "OPENROUTER_APP_TITLE");
@@ -284,20 +302,8 @@ export function loadOpenRouterVoiceConfig(
 			maxRetries: readRetryCount(env, "STT_MAX_RETRIES", 1),
 			retryBaseMs: sttRetryBaseMs,
 			maxRetryAfterMs: Math.max(2_000, sttRetryBaseMs * 5),
-			maxUtteranceMs: readInteger(
-				env,
-				"STT_MAX_UTTERANCE_MS",
-				30_000,
-				100,
-				120_000,
-			),
-			maxAudioBytes: readInteger(
-				env,
-				"STT_MAX_AUDIO_BYTES",
-				1_000_000,
-				44,
-				10_000_000,
-			),
+			maxUtteranceMs,
+			maxAudioBytes,
 			maxConcurrency: 2,
 			circuitFailureThreshold: 3,
 			circuitCooldownMs: 60_000,

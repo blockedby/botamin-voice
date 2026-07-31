@@ -18,6 +18,10 @@ Server code should validate plain data first, then construct the TypeScript-only
 
 A successful `TtsPort.synthesize` resolves once with one non-empty, structurally valid, final `audio/mpeg` `TtsAudioSegment`. It does not expose provider-specific types or network chunks.
 
+## Optional lifecycle cleanup
+
+Shared provider instances may implement `BrainPort.releaseConversation(conversationId)` and `TtsPort.resetSession(conversationId)`. Stop/expiry invokes these hooks after cancellation fencing so thread identity, provider-side thread data, per-turn maps, and TTS session budgets do not outlive the application session. Fakes and stateless adapters may omit them.
+
 ## Canonical binary audio frame
 
 Both browser microphone frames and server MP3 segment frames use the exported runtime-neutral `encodeBinaryAudioFrame` / `decodeBinaryAudioFrame` helpers and this fixed layout:

@@ -142,6 +142,7 @@ export class BrowserVoiceSession {
 	private sessionEstablished = false;
 	private disposed = false;
 	private playbackUnavailable = false;
+	private terminalFailurePending = false;
 
 	constructor(private readonly factories: BrowserVoiceFactories) {}
 
@@ -170,6 +171,7 @@ export class BrowserVoiceSession {
 		this.completedAssistantGenerations.clear();
 		this.captureArmed = false;
 		this.sessionEstablished = false;
+		this.terminalFailurePending = false;
 		this.setSnapshot({
 			state: { kind: "connecting" },
 			transcript: [],
@@ -243,6 +245,7 @@ export class BrowserVoiceSession {
 			this.transport = new VoiceTransport({
 				conversationId: created.conversationId,
 				url: socketUrl,
+				resumeToken: created.clientToken,
 				createWebSocket: this.factories.createSocket,
 				...(this.factories.reconnectScheduler
 					? { scheduler: this.factories.reconnectScheduler }
@@ -283,6 +286,7 @@ export class BrowserVoiceSession {
 	async commit(): Promise<boolean> {
 		if (
 			this.disposed ||
+			this.terminalFailurePending ||
 			this.committing ||
 			this.captureStarting ||
 			!this.capture?.isActive ||
@@ -332,7 +336,7 @@ export class BrowserVoiceSession {
 	}
 
 	reconnect(): void {
-		if (this.disposed) return;
+		if (this.disposed || this.terminalFailurePending) return;
 		if (this.transport) {
 			this.transport.connect();
 			return;
@@ -594,6 +598,9 @@ export class BrowserVoiceSession {
 						text: event.payload.fullText,
 					});
 				}
+				if (this.terminalFailurePending) {
+					void this.finishTerminalFailure(epoch);
+				}
 				break;
 			case "audio.segment":
 				if (this.controller.acceptEvent(event)) {
@@ -653,6 +660,9 @@ export class BrowserVoiceSession {
 					this.controller.setAudioError("Звук ответа сейчас недоступен");
 					this.setState(this.activeState("audio-error"));
 					void this.beginCapture(epoch);
+				} else if (event.payload.code === "STT_UNAVAILABLE") {
+					this.setState(this.activeState("error"));
+					void this.beginCapture(epoch);
 				} else {
 					this.setState(this.activeState("error"));
 				}
@@ -679,7 +689,7 @@ export class BrowserVoiceSession {
 				this.setState(this.activeState("disconnected"));
 				break;
 			case "ERROR":
-				this.setState(this.activeState("error"));
+				this.beginTerminalFailure();
 				break;
 			case "COMPLETE":
 			case "DECLINED":
@@ -754,6 +764,32 @@ export class BrowserVoiceSession {
 			...this.snapshot,
 			transcript: [...this.snapshot.transcript, entry],
 		});
+	}
+
+	private beginTerminalFailure(): void {
+		if (this.terminalFailurePending) return;
+		this.terminalFailurePending = true;
+		this.captureArmed = false;
+		this.captureAttempt += 1;
+		this.captureStarting = false;
+		this.transport?.disableReconnect();
+		const capture = this.capture;
+		const playback = this.playback;
+		this.capture = null;
+		this.playback = null;
+		const previousCleanup = this.captureCleanup;
+		this.captureCleanup = Promise.allSettled([
+			previousCleanup,
+			capture?.stop(),
+			playback?.dispose(),
+		]).then(() => undefined);
+		this.setState(this.activeState("error"));
+	}
+
+	private async finishTerminalFailure(epoch: number): Promise<void> {
+		await this.captureCleanup;
+		if (!this.isCurrent(epoch) || !this.terminalFailurePending) return;
+		await this.releaseResources("client_error", false);
 	}
 
 	private async releaseMediaOnly(): Promise<void> {

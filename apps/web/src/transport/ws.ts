@@ -78,6 +78,8 @@ export class VoiceTransport {
 	private reconnectAttempt = 0;
 	private connectionEpoch = 0;
 	private stopped = false;
+	private reconnectDisabled = false;
+	private outboundDisabled = false;
 	private sessionReady = false;
 	private utteranceHasAudio = false;
 	private utteranceCommitted = false;
@@ -91,7 +93,7 @@ export class VoiceTransport {
 	}
 
 	connect(): boolean {
-		if (this.stopped) return false;
+		if (this.stopped || this.reconnectDisabled) return false;
 		this.cancelReconnect();
 		this.sessionReady = false;
 		this.options.onStatus?.(
@@ -130,7 +132,7 @@ export class VoiceTransport {
 				this.utteranceHasAudio = false;
 				this.utteranceNeedsRestart = true;
 			}
-			if (this.stopped) {
+			if (this.stopped || this.reconnectDisabled) {
 				this.options.onStatus?.("closed");
 				return;
 			}
@@ -203,6 +205,15 @@ export class VoiceTransport {
 
 	setMuted(muted: boolean): void {
 		this.muted = muted;
+	}
+
+	/** Keep the current socket readable for a terminal fallback, but never reconnect/send. */
+	disableReconnect(): void {
+		if (this.stopped) return;
+		this.reconnectDisabled = true;
+		this.outboundDisabled = true;
+		this.sessionReady = false;
+		this.cancelReconnect();
 	}
 
 	stop(
@@ -350,7 +361,7 @@ export class VoiceTransport {
 		type: ClientWsEvent["type"],
 		payload: Record<string, unknown>,
 	): boolean {
-		if (!this.canSendSocket()) return false;
+		if (this.outboundDisabled || !this.canSendSocket()) return false;
 		const candidate = {
 			v: CONTRACT_VERSION,
 			conversationId: this.options.conversationId,
@@ -373,7 +384,7 @@ export class VoiceTransport {
 	}
 
 	private canSend(): boolean {
-		return this.sessionReady && this.canSendSocket();
+		return !this.outboundDisabled && this.sessionReady && this.canSendSocket();
 	}
 
 	private canSendSocket(): boolean {
@@ -389,7 +400,8 @@ export class VoiceTransport {
 	}
 
 	private scheduleReconnect(): void {
-		if (this.stopped || this.reconnectHandle !== null) return;
+		if (this.stopped || this.reconnectDisabled || this.reconnectHandle !== null)
+			return;
 		const maxAttempts = this.options.reconnect?.maxAttempts ?? 5;
 		if (this.reconnectAttempt >= maxAttempts) {
 			this.options.onStatus?.("error");
@@ -400,7 +412,7 @@ export class VoiceTransport {
 		const delay = Math.min(maxDelay, initialDelay * 2 ** this.reconnectAttempt);
 		this.reconnectAttempt += 1;
 		this.options.onStatus?.("reconnecting");
-		if (this.stopped) return;
+		if (this.stopped || this.reconnectDisabled) return;
 		this.reconnectHandle = this.scheduler.schedule(() => {
 			this.reconnectHandle = null;
 			this.connect();

@@ -18,6 +18,7 @@ import {
 } from "../db";
 import type { DomainDatabase } from "../db";
 import { SqliteBookingService } from "../domain/booking";
+import { TranscriptRetentionWorker } from "../domain/privacy";
 import {
 	ConversationOrchestrator,
 	createInitialConversationState,
@@ -28,11 +29,18 @@ import { OpenRouterCredentialHealth } from "../providers/openrouter/stt/credenti
 import { OpenRouterTtsAdapter } from "../providers/openrouter/tts";
 import { SessionRegistry } from "../gateway/registry";
 import { GatewaySession, type SessionPersistence } from "../gateway/session";
+import {
+	ConsoleLeadNotifier,
+	type NamedLeadNotifier,
+	PollingNotificationWorker,
+	SignedWebhookNotifier,
+} from "../notifiers";
 import { createRuntimeConfig, type RuntimeConfig } from "./config";
 
 export interface RuntimeGatewaySession {
 	readonly conversationId: string;
 	readonly expiresAt: Date;
+	takeClientToken(): string;
 	attach(socket: import("../gateway/session").GatewaySocket): void;
 	receive(
 		socket: import("../gateway/session").GatewaySocket,
@@ -42,9 +50,15 @@ export interface RuntimeGatewaySession {
 }
 
 export interface RuntimeSessionRegistry {
-	create(request: CreateConversationRequest): RuntimeGatewaySession | null;
+	create(
+		request: CreateConversationRequest,
+		sourceKey?: string,
+	): RuntimeGatewaySession | null;
 	get(conversationId: string): RuntimeGatewaySession | null;
-	stop(conversationId: string): Promise<void>;
+	stop(
+		conversationId: string,
+		reason?: "completed" | "disconnected",
+	): Promise<void>;
 }
 
 export interface ServerRuntime {
@@ -65,12 +79,19 @@ export interface ProductionRuntimeOverrides {
 	stt?: SttPort;
 	tts?: TtsPort;
 	bookings?: BookingService;
+	notifier?: NamedLeadNotifier;
+	now?: () => Date;
+	outboxPollIntervalMs?: number;
+	retentionIntervalMs?: number;
 }
 
-class SqliteSessionPersistence implements SessionPersistence {
+export class SqliteSessionPersistence implements SessionPersistence {
 	readonly #store: ConversationStore;
 
-	constructor(private readonly database: DomainDatabase) {
+	constructor(
+		private readonly database: DomainDatabase,
+		private readonly now: () => Date,
+	) {
 		this.#store = new ConversationStore(database);
 	}
 
@@ -88,22 +109,32 @@ class SqliteSessionPersistence implements SessionPersistence {
 
 	setConversationActive(id: string, stage: string): void {
 		this.update(
-			"UPDATE conversations SET status = 'active', stage = ?, ended_at = NULL WHERE id = ?",
+			"UPDATE conversations SET status = 'active', stage = ?, ended_at = NULL WHERE id = ? AND status IN ('active', 'disconnected')",
 			[stage, id],
 		);
 	}
 
 	updateConversationStage(id: string, stage: string): void {
-		this.update("UPDATE conversations SET stage = ? WHERE id = ?", [stage, id]);
+		this.update(
+			"UPDATE conversations SET stage = ? WHERE id = ? AND status = 'active'",
+			[stage, id],
+		);
+	}
+
+	failConversation(id: string, errorCode: string): void {
+		this.update(
+			"UPDATE conversations SET status = 'failed', stage = 'ERROR', ended_at = ?, last_error_code = ? WHERE id = ? AND status IN ('active', 'disconnected')",
+			[this.now().toISOString(), errorCode, id],
+		);
 	}
 
 	stopConversation(id: string, status: "completed" | "disconnected"): void {
 		this.update(
-			"UPDATE conversations SET status = ?, stage = ?, ended_at = ? WHERE id = ?",
+			"UPDATE conversations SET status = ?, stage = ?, ended_at = ? WHERE id = ? AND status IN ('active', 'disconnected')",
 			[
 				status,
 				status === "completed" ? "COMPLETE" : "DISCONNECTED",
-				new Date().toISOString(),
+				this.now().toISOString(),
 				id,
 			],
 		);
@@ -130,12 +161,31 @@ export async function createProductionRuntime(
 		applyMigrations: config.autoMigrate,
 		...(env.MIGRATIONS_DIR ? { migrationsFolder: env.MIGRATIONS_DIR } : {}),
 	});
-	const persistence = new SqliteSessionPersistence(database);
+	const now = overrides.now ?? (() => new Date());
+	const persistence = new SqliteSessionPersistence(database, now);
+	const notifier = overrides.notifier ?? createLeadNotifier(config, now);
+	if (notifier.kind !== config.notifier.kind) {
+		closeDomainDatabase(database);
+		throw new Error("Notifier override kind does not match runtime config");
+	}
 	const bookings =
 		overrides.bookings ??
 		new SqliteBookingService(database, {
-			notifierKind: env.NOTIFIER?.trim() || "console",
+			notifierKind: notifier.kind,
+			now,
 		});
+	const outboxWorker = new PollingNotificationWorker(database, notifier, {
+		pollIntervalMs: overrides.outboxPollIntervalMs ?? 1_000,
+		workerOptions: { now },
+	});
+	const retentionWorker = new TranscriptRetentionWorker(database, {
+		retentionDays: config.transcriptRetentionDays,
+		now,
+		...(overrides.retentionIntervalMs === undefined
+			? {}
+			: { intervalMs: overrides.retentionIntervalMs }),
+	});
+	retentionWorker.start();
 	const prompt = inspectPromptBundle(config.promptRuntimeDir);
 	const brainEnv = {
 		...env,
@@ -163,8 +213,13 @@ export async function createProductionRuntime(
 
 	const registry = new SessionRegistry({
 		maxActiveConversations: config.maxActiveConversations,
+		maxActiveConversationsPerSource: config.admission.maxActivePerSource,
 		maxConcurrentBrainTurns: config.maxConcurrentBrainTurns,
+		maxPendingBrainTurns: config.maxPendingBrainTurns,
+		brainQueueTimeoutMs: config.brainQueueTimeoutMs,
 		sessionMaxMs: config.sessionMaxMs,
+		abandonedSessionMs: config.admission.abandonedSessionMs,
+		now,
 		createSession: ({ conversationId, expiresAt, request, acquireTurn }) => {
 			const initialState = {
 				...createInitialConversationState({
@@ -204,8 +259,8 @@ export async function createProductionRuntime(
 				source: request.source,
 				locale: request.locale ?? "ru-RU",
 				qualificationEnabled: request.qualificationEnabled,
-				consentAt: new Date().toISOString(),
-				startedAt: new Date().toISOString(),
+				consentAt: now().toISOString(),
+				startedAt: now().toISOString(),
 			});
 			return new GatewaySession({
 				conversationId,
@@ -220,10 +275,14 @@ export async function createProductionRuntime(
 				maxJsonBytes: config.limits.wsJsonBytes,
 				maxHistoryEvents: config.limits.historyEvents,
 				maxHistoryBytes: config.limits.historyBytes,
+				clientHelloTimeoutMs: config.admission.clientHelloTimeoutMs,
+				stopDrainMs: config.sessionStopDrainMs,
 				acquireTurn,
+				now,
 			});
 		},
 	});
+	outboxWorker.start();
 
 	let disposed = false;
 	return {
@@ -284,9 +343,19 @@ export async function createProductionRuntime(
 					...(promptReady ? {} : { code: "PROMPT_BUNDLE_INVALID" }),
 				},
 				{
+					name: "notifier",
+					status: outboxWorker.ready ? "ready" : "unready",
+					...(outboxWorker.ready ? {} : { code: "OUTBOX_WORKER_UNAVAILABLE" }),
+				},
+				{
 					name: "capacity",
-					status: registry.hasCapacity ? "ready" : "unready",
-					...(registry.hasCapacity ? {} : { code: "CAPACITY_EXCEEDED" }),
+					status:
+						registry.hasCapacity && registry.hasTurnCapacity
+							? "ready"
+							: "unready",
+					...(registry.hasCapacity && registry.hasTurnCapacity
+						? {}
+						: { code: "CAPACITY_EXCEEDED" }),
 				},
 			];
 			return ReadyHealthResponseSchema.parse({
@@ -300,10 +369,25 @@ export async function createProductionRuntime(
 			if (disposed) return;
 			disposed = true;
 			await registry.dispose();
+			await outboxWorker.stop();
+			retentionWorker.stop();
 			await brain.close?.();
 			closeDomainDatabase(database);
 		},
 	};
+}
+
+function createLeadNotifier(
+	config: RuntimeConfig,
+	now: () => Date,
+): NamedLeadNotifier {
+	if (config.notifier.kind === "console") return new ConsoleLeadNotifier();
+	return new SignedWebhookNotifier({
+		url: config.notifier.url,
+		signingSecret: config.notifier.signingSecret,
+		timeoutMs: config.notifier.timeoutMs,
+		now,
+	});
 }
 
 function sqliteFilename(value: string): string {

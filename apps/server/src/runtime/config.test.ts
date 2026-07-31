@@ -33,12 +33,56 @@ describe("validated runtime configuration", () => {
 		});
 		expect(config.voice.stt.audioFormat).toBe("wav");
 		expect(config.voice.tts.responseFormat).toBe("mp3");
+		expect(config.transcriptRetentionDays).toBe(30);
+		expect(config.maxPendingBrainTurns).toBe(6);
+		expect(config.admission.trustedProxyHops).toBe(0);
+		expect(config.notifier).toEqual({ kind: "console" });
 	});
 
 	test("rejects dynamic tools because production has no injected awaited executor", () => {
 		expect(() =>
 			createRuntimeConfig({ ...validEnv, CODEX_TOOL_MODE: "dynamic" }),
 		).toThrow(RuntimeConfigError);
+	});
+
+	test("parses bounded retention, queue, proxy admission, and webhook wiring", () => {
+		const config = createRuntimeConfig({
+			...validEnv,
+			TRANSCRIPT_RETENTION_DAYS: "45",
+			MAX_PENDING_BRAIN_TURNS: "1",
+			TRUSTED_PROXY_HOPS: "1",
+			NOTIFIER: "webhook",
+			WEBHOOK_URL: "https://receiver.invalid/leads",
+			WEBHOOK_SIGNING_SECRET: "test-signing-material-0000000000",
+			WEBHOOK_TIMEOUT_MS: "1200",
+		});
+		expect(config.transcriptRetentionDays).toBe(45);
+		expect(config.maxPendingBrainTurns).toBe(1);
+		expect(config.admission.trustedProxyHops).toBe(1);
+		expect(config.notifier).toMatchObject({
+			kind: "webhook",
+			url: "https://receiver.invalid/leads",
+			timeoutMs: 1_200,
+		});
+	});
+
+	test("rejects impossible WAV, retention, queue, proxy, and notifier relations", () => {
+		for (const env of [
+			{ ...validEnv, STT_MAX_AUDIO_BYTES: "44" },
+			{ ...validEnv, STT_MAX_AUDIO_BYTES: "3243" },
+			{ ...validEnv, TRANSCRIPT_RETENTION_DAYS: "0" },
+			{ ...validEnv, TRANSCRIPT_RETENTION_DAYS: "3651" },
+			{ ...validEnv, MAX_PENDING_BRAIN_TURNS: "257" },
+			{ ...validEnv, TRUSTED_PROXY_HOPS: "4" },
+			{
+				...validEnv,
+				MAX_ACTIVE_CONVERSATIONS_PER_SOURCE: "4",
+			},
+			{ ...validEnv, NOTIFIER: "webhook" },
+			{ ...validEnv, NOTIFIER: "ordinary-log" },
+		]) {
+			expect(() => createRuntimeConfig(env)).toThrow();
+		}
 	});
 
 	test("rejects alternate providers, raw-audio storage, and mismatched capacity", () => {

@@ -3,7 +3,8 @@ const CHANNELS = 1;
 const BITS_PER_SAMPLE = 16;
 const BYTES_PER_SAMPLE = BITS_PER_SAMPLE / 8;
 const BYTE_RATE = SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE;
-const HEADER_BYTES = 44;
+export const WAV_HEADER_BYTES = 44 as const;
+export const CANONICAL_PCM_100MS_BYTES = 3_200 as const;
 
 export interface PcmUtteranceLimits {
 	readonly maxUtteranceMs: number;
@@ -37,14 +38,16 @@ export class PcmUtteranceAssembler {
 		const durationBytes = Math.floor(limits.maxUtteranceMs * 32);
 		this.#maximumPcmBytes = Math.min(
 			durationBytes,
-			Math.max(0, limits.maxAudioBytes - HEADER_BYTES),
+			Math.max(0, limits.maxAudioBytes - WAV_HEADER_BYTES),
 		);
 		this.#maximumFrameBytes = limits.maxFramePayloadBytes ?? 3_200;
 		if (
-			this.#maximumPcmBytes < BYTES_PER_SAMPLE ||
-			this.#maximumFrameBytes < BYTES_PER_SAMPLE
+			this.#maximumPcmBytes < CANONICAL_PCM_100MS_BYTES ||
+			this.#maximumFrameBytes < CANONICAL_PCM_100MS_BYTES
 		) {
-			throw new RangeError("PCM utterance limits cannot contain audio");
+			throw new RangeError(
+				"PCM utterance limits must contain one canonical 100ms frame",
+			);
 		}
 	}
 
@@ -109,7 +112,7 @@ export function encodeCanonicalPcm16Wav(pcm16le: Uint8Array): Uint8Array {
 	) {
 		throw new PcmUtteranceError("INVALID_PCM_FRAME");
 	}
-	const output = new Uint8Array(HEADER_BYTES + pcm16le.byteLength);
+	const output = new Uint8Array(WAV_HEADER_BYTES + pcm16le.byteLength);
 	const view = new DataView(output.buffer);
 	writeAscii(output, 0, "RIFF");
 	view.setUint32(4, output.byteLength - 8, true);
@@ -124,7 +127,7 @@ export function encodeCanonicalPcm16Wav(pcm16le: Uint8Array): Uint8Array {
 	view.setUint16(34, BITS_PER_SAMPLE, true);
 	writeAscii(output, 36, "data");
 	view.setUint32(40, pcm16le.byteLength, true);
-	output.set(pcm16le, HEADER_BYTES);
+	output.set(pcm16le, WAV_HEADER_BYTES);
 	return output;
 }
 

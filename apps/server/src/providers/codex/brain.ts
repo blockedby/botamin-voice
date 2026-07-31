@@ -335,6 +335,8 @@ interface ActiveTurn {
 export class CodexAppServerBrain implements BrainPort {
 	readonly protocolRevision = CODEX_PROTOCOL_SCHEMA_REVISION;
 	private readonly conversationThreads = new Map<string, string>();
+	private readonly threadCreations = new Map<string, Promise<string>>();
+	private readonly conversationReleases = new Map<string, Promise<void>>();
 	private readonly loadedThreads = new Set<string>();
 	private readonly activeByThread = new Map<string, ActiveTurn>();
 	private readonly providerTurnByExternal = new Map<string, string>();
@@ -372,32 +374,47 @@ export class CodexAppServerBrain implements BrainPort {
 	async createThread(conversationId: string): Promise<string> {
 		const existing = this.conversationThreads.get(conversationId);
 		if (existing) return existing;
-		const client = await this.getClient();
-		const agentsPath = await this.assertRuntimeIsolation();
-		const result = parseThreadStartResult(
-			await this.mutatingRequest(client, "thread/start", {
-				model: this.options.model,
-				modelProvider: REQUIRED_CODEX_MODEL_PROVIDER,
-				allowProviderModelFallback: false,
-				config: SAFE_THREAD_CONFIG,
-				cwd: this.options.runtimeCwd,
-				runtimeWorkspaceRoots: [this.options.runtimeCwd],
-				approvalPolicy: "never",
-				sandbox: "read-only",
-				serviceName: "botamin_voice",
-				...(this.options.toolMode === "dynamic"
-					? { dynamicTools: DYNAMIC_TOOLS }
-					: {}),
-			}),
-		);
-		this.verifyThreadSecurity(result, agentsPath);
-		this.conversationThreads.set(conversationId, result.thread.id);
-		this.loadedThreads.add(result.thread.id);
-		this.options.onProtocolEvidence?.({
-			type: "thread_verified",
-			threadId: result.thread.id,
-		});
-		return result.thread.id;
+		const creating = this.threadCreations.get(conversationId);
+		if (creating) return creating;
+		if (this.conversationThreads.size >= 256) {
+			throw new Error("Codex conversation state capacity exceeded");
+		}
+		const creation = (async (): Promise<string> => {
+			const client = await this.getClient();
+			const agentsPath = await this.assertRuntimeIsolation();
+			const result = parseThreadStartResult(
+				await this.mutatingRequest(client, "thread/start", {
+					model: this.options.model,
+					modelProvider: REQUIRED_CODEX_MODEL_PROVIDER,
+					allowProviderModelFallback: false,
+					config: SAFE_THREAD_CONFIG,
+					cwd: this.options.runtimeCwd,
+					runtimeWorkspaceRoots: [this.options.runtimeCwd],
+					approvalPolicy: "never",
+					sandbox: "read-only",
+					serviceName: "botamin_voice",
+					...(this.options.toolMode === "dynamic"
+						? { dynamicTools: DYNAMIC_TOOLS }
+						: {}),
+				}),
+			);
+			this.verifyThreadSecurity(result, agentsPath);
+			this.conversationThreads.set(conversationId, result.thread.id);
+			this.loadedThreads.add(result.thread.id);
+			this.options.onProtocolEvidence?.({
+				type: "thread_verified",
+				threadId: result.thread.id,
+			});
+			return result.thread.id;
+		})();
+		this.threadCreations.set(conversationId, creation);
+		try {
+			return await creation;
+		} finally {
+			if (this.threadCreations.get(conversationId) === creation) {
+				this.threadCreations.delete(conversationId);
+			}
+		}
 	}
 
 	async *runTurn(
@@ -548,6 +565,45 @@ export class CodexAppServerBrain implements BrainPort {
 		await this.interruptActive(active, await this.getClient());
 	}
 
+	releaseConversation(conversationId: string): Promise<void> {
+		const existing = this.conversationReleases.get(conversationId);
+		if (existing) return existing;
+		const release = this.#releaseConversation(conversationId).finally(() => {
+			if (this.conversationReleases.get(conversationId) === release) {
+				this.conversationReleases.delete(conversationId);
+			}
+		});
+		this.conversationReleases.set(conversationId, release);
+		return release;
+	}
+
+	async #releaseConversation(conversationId: string): Promise<void> {
+		const creating = this.threadCreations.get(conversationId);
+		if (creating) await creating.catch(() => undefined);
+		const threadId = this.conversationThreads.get(conversationId);
+		this.conversationThreads.delete(conversationId);
+		this.threadCreations.delete(conversationId);
+		if (!threadId) return;
+		this.loadedThreads.delete(threadId);
+		const active = this.activeByThread.get(threadId);
+		if (active) {
+			this.failDynamicTurn(active);
+			active.terminal = true;
+			active.queue.end();
+			this.providerTurnByExternal.delete(
+				turnKey(threadId, active.input.turnId),
+			);
+			this.activeByThread.delete(threadId);
+		}
+		try {
+			const client = await this.getClient();
+			await this.mutatingRequest(client, "thread/delete", { threadId });
+		} catch {
+			// Local identity and active queues are already released. Provider cleanup
+			// remains best effort when the supervised process is unavailable.
+		}
+	}
+
 	async health(): Promise<ProviderHealth> {
 		try {
 			await this.assertRuntimeIsolation();
@@ -607,6 +663,15 @@ export class CodexAppServerBrain implements BrainPort {
 	}
 
 	async close(): Promise<void> {
+		for (const conversationId of [...this.conversationThreads.keys()]) {
+			void this.releaseConversation(conversationId);
+		}
+		await Promise.allSettled([...this.conversationReleases.values()]);
+		this.threadCreations.clear();
+		this.conversationReleases.clear();
+		this.loadedThreads.clear();
+		this.activeByThread.clear();
+		this.providerTurnByExternal.clear();
 		await this.options.supervisor.stop();
 	}
 

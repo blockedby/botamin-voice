@@ -53,6 +53,7 @@ export const turns = sqliteTable(
 	},
 	(table) => [
 		index("turns_conversation_idx").on(table.conversationId, table.completedAt),
+		index("turns_completed_at_idx").on(table.completedAt),
 	],
 );
 

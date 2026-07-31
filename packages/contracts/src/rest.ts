@@ -36,6 +36,8 @@ export const CreateConversationResponseSchema = z
 	.object({
 		conversationId: EntityIdSchema,
 		wsUrl: z.string().startsWith("/ws/v1/conversations/"),
+		/** One-use bearer presented in the first client.hello, then rotated. */
+		clientToken: z.string().min(32).max(256),
 		expiresAt: Rfc3339UtcSchema,
 		clientConfig: AudioClientConfigSchema,
 	})
@@ -69,7 +71,14 @@ export const LiveHealthResponseSchema = z
 
 export const ReadinessCheckSchema = z
 	.object({
-		name: z.enum(["database", "brain", "voice", "prompts", "capacity"]),
+		name: z.enum([
+			"database",
+			"brain",
+			"voice",
+			"prompts",
+			"notifier",
+			"capacity",
+		]),
 		status: z.enum(["ready", "degraded", "unready"]),
 		code: z.string().min(1).max(100).optional(),
 	})

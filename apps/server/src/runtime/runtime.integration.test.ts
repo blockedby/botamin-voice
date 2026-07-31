@@ -8,7 +8,8 @@ import type {
 	SttPort,
 	TtsPort,
 } from "@botamin/contracts";
-import { createProductionRuntime } from "./runtime";
+import { closeDomainDatabase, openDomainDatabase } from "../db";
+import { createProductionRuntime, SqliteSessionPersistence } from "./runtime";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -40,6 +41,47 @@ const tts: TtsPort = {
 };
 
 describe("production runtime readiness with injected credential-free ports", () => {
+	test("terminal failure status is one guarded SQLite transition", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "botamin-runtime-status-"));
+		directories.push(directory);
+		const database = openDomainDatabase({
+			filename: join(directory, "domain.db"),
+		});
+		const persistence = new SqliteSessionPersistence(
+			database,
+			() => new Date("2026-07-30T20:22:00.000Z"),
+		);
+		const id = Bun.randomUUIDv7();
+		persistence.create({
+			id,
+			stage: "GREETING",
+			promptVersion: "a".repeat(64),
+			source: "landing",
+			locale: "ru-RU",
+			qualificationEnabled: true,
+			consentAt: "2026-07-30T20:20:00.000Z",
+			startedAt: "2026-07-30T20:20:00.000Z",
+		});
+		persistence.failConversation(id, "BRAIN_PROTOCOL_ERROR");
+		persistence.failConversation(id, "BRAIN_RATE_LIMITED");
+		persistence.stopConversation(id, "completed");
+		expect(
+			database.$client
+				.query<
+					{ status: string; stage: string; last_error_code: string },
+					[string]
+				>(
+					"SELECT status, stage, last_error_code FROM conversations WHERE id = ?",
+				)
+				.get(id),
+		).toEqual({
+			status: "failed",
+			stage: "ERROR",
+			last_error_code: "BRAIN_PROTOCOL_ERROR",
+		});
+		closeDomainDatabase(database);
+	});
+
 	test("checks actual migrated SQLite, prompt bundle, fakes, and capacity", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "botamin-runtime-test-"));
 		directories.push(directory);
@@ -85,6 +127,7 @@ describe("production runtime readiness with injected credential-free ports", () 
 				"brain",
 				"voice",
 				"prompts",
+				"notifier",
 				"capacity",
 			]);
 			const session = runtime.registry.create({

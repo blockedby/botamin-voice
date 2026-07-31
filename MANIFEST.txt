@@ -9,10 +9,12 @@ Dockerfile
 FULL_SPEC.md
 MANIFEST.txt
 README.md
+RUNTIME_REVIEW_CLOSURE.md
 VALIDATION.md
 apps/server/package.json
 apps/server/src/app.test.ts
 apps/server/src/app.ts
+apps/server/src/app.ws.test.ts
 apps/server/src/db/conversation-store.ts
 apps/server/src/db/database.test.ts
 apps/server/src/db/database.ts
@@ -28,6 +30,17 @@ apps/server/src/domain/privacy/deletion.ts
 apps/server/src/domain/privacy/index.ts
 apps/server/src/domain/privacy/privacy.test.ts
 apps/server/src/domain/privacy/redaction.ts
+apps/server/src/domain/privacy/retention.ts
+apps/server/src/gateway/admission.test.ts
+apps/server/src/gateway/admission.ts
+apps/server/src/gateway/registry.test.ts
+apps/server/src/gateway/registry.ts
+apps/server/src/gateway/session.integration.test.ts
+apps/server/src/gateway/session.ts
+apps/server/src/gateway/turn-queue.test.ts
+apps/server/src/gateway/turn-queue.ts
+apps/server/src/gateway/wav.test.ts
+apps/server/src/gateway/wav.ts
 apps/server/src/index.ts
 apps/server/src/notifiers/index.ts
 apps/server/src/notifiers/notifier.ts
@@ -37,6 +50,7 @@ apps/server/src/notifiers/webhook.ts
 apps/server/src/orchestrator/context.ts
 apps/server/src/orchestrator/generation.ts
 apps/server/src/orchestrator/index.ts
+apps/server/src/orchestrator/intent.test.ts
 apps/server/src/orchestrator/orchestrator.sqlite.test.ts
 apps/server/src/orchestrator/orchestrator.test.ts
 apps/server/src/orchestrator/orchestrator.ts
@@ -70,6 +84,10 @@ apps/server/src/providers/openrouter/tts/adapter.ts
 apps/server/src/providers/openrouter/tts/errors.ts
 apps/server/src/providers/openrouter/tts/index.ts
 apps/server/src/providers/openrouter/tts/mp3.ts
+apps/server/src/runtime/config.test.ts
+apps/server/src/runtime/config.ts
+apps/server/src/runtime/runtime.integration.test.ts
+apps/server/src/runtime/runtime.ts
 apps/server/tsconfig.json
 apps/web/index.html
 apps/web/package.json
@@ -132,6 +150,7 @@ docs/09-agent-task-plan.md
 docs/10-ai-library-evaluation.md
 drizzle/0000_booking_domain.sql
 drizzle/0001_subject_scopes_and_outbox_claim.sql
+drizzle/0002_transcript_retention_index.sql
 drizzle/meta/_journal.json
 infra/Caddyfile
 infra/README.md

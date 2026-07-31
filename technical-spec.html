@@ -2010,10 +2010,19 @@ AUTO_MIGRATE=true
 DATABASE_URL=file:./data/app.db
 LOG_LEVEL=info
 MAX_ACTIVE_CONVERSATIONS=3
+MAX_ACTIVE_CONVERSATIONS_PER_SOURCE=2
 MAX_CONCURRENT_BRAIN_TURNS=3
 MAX_PENDING_BRAIN_TURNS=6
+BRAIN_QUEUE_TIMEOUT_MS=45000
 SESSION_MAX_MINUTES=20
+SESSION_STOP_DRAIN_MS=5000
 TURN_TIMEOUT_MS=45000
+TRUSTED_PROXY_HOPS=0
+ADMISSION_WINDOW_MS=60000
+MAX_CONVERSATION_CREATES_PER_SOURCE=5
+MAX_SESSION_CONNECTIONS_PER_SOURCE=20
+CLIENT_HELLO_TIMEOUT_MS=2000
+ABANDONED_SESSION_TIMEOUT_MS=10000
 
 # Codex subscription brain
 # Authentication is performed separately with `codex login --device-auth`.
@@ -2022,7 +2031,7 @@ BRAIN_PROVIDER=codex-subscription
 CODEX_MODEL=gpt-5.6-luna
 CODEX_EFFORT=low
 CODEX_HOME=/home/your-user/.local/share/botamin-voice/codex-home
-# Safe without an injected backend executor; the orchestrator may explicitly select dynamic.
+# Production runtime is fixed to the server-validated envelope mode.
 CODEX_TOOL_MODE=envelope
 CODEX_CWD=.runtime/brain
 CODEX_MAX_CONCURRENT_TURNS=3
@@ -2086,15 +2095,21 @@ POST_BOOKING_QUALIFICATION_ENABLED=true
 NOTIFIER=console
 WEBHOOK_URL=
 WEBHOOK_SIGNING_SECRET=
+WEBHOOK_TIMEOUT_MS=5000
 
 # Privacy and retention
 TRANSCRIPT_RETENTION_DAYS=30
 STORE_RAW_AUDIO=false</code></pre>
 <p>Значение concurrency — initial guardrail, а не окончательная capacity
 claim; оно настраивается после load test и проверки лимитов конкретной
-подписки. <code>CODEX_MODEL</code> и <code>CODEX_EFFORT</code>
-конфигурируемы, но любое изменение release-профиля требует полного
-conversation eval gate.</p>
+подписки. <code>MAX_PENDING_BRAIN_TURNS</code> ограничивает сохранённые
+в памяти committed WAV; booked sessions имеют отдельную приоритетную
+FIFO-очередь, а внутри каждой очереди сохраняется порядок поступления.
+<code>TRUSTED_PROXY_HOPS=0</code> безопасно игнорирует forwarding
+headers для прямого Bun-запуска; Compose явно задаёт <code>1</code>,
+потому что app доступен только через Caddy. <code>CODEX_MODEL</code> и
+<code>CODEX_EFFORT</code> конфигурируемы, но любое изменение
+release-профиля требует полного conversation eval gate.</p>
 <div class="page-break">
 
 </div>
@@ -2435,17 +2450,23 @@ server MP3 phrase payload; arbitrary provider network chunks никогда не
 <div class="sourceCode" id="cb15"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;conversationId&quot;</span><span class="fu">:</span> <span class="st">&quot;01J...&quot;</span><span class="fu">,</span></span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;wsUrl&quot;</span><span class="fu">:</span> <span class="st">&quot;/ws/v1/conversations/01J...&quot;</span><span class="fu">,</span></span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;expiresAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-07-30T21:30:00Z&quot;</span><span class="fu">,</span></span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;clientConfig&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;inputSampleRate&quot;</span><span class="fu">:</span> <span class="dv">16000</span><span class="fu">,</span></span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;inputEncoding&quot;</span><span class="fu">:</span> <span class="st">&quot;pcm16le&quot;</span><span class="fu">,</span></span>
-<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;chunkMs&quot;</span><span class="fu">:</span> <span class="dv">100</span><span class="fu">,</span></span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;outputContentType&quot;</span><span class="fu">:</span> <span class="st">&quot;audio/mpeg&quot;</span><span class="fu">,</span></span>
-<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;outputMode&quot;</span><span class="fu">:</span> <span class="st">&quot;complete-phrase-segments&quot;</span></span>
-<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
-<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;clientToken&quot;</span><span class="fu">:</span> <span class="st">&quot;opaque-one-use-client-token-32-bytes&quot;</span><span class="fu">,</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;expiresAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-07-30T21:30:00Z&quot;</span><span class="fu">,</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;clientConfig&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;inputSampleRate&quot;</span><span class="fu">:</span> <span class="dv">16000</span><span class="fu">,</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;inputEncoding&quot;</span><span class="fu">:</span> <span class="st">&quot;pcm16le&quot;</span><span class="fu">,</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;chunkMs&quot;</span><span class="fu">:</span> <span class="dv">100</span><span class="fu">,</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;outputContentType&quot;</span><span class="fu">:</span> <span class="st">&quot;audio/mpeg&quot;</span><span class="fu">,</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;outputMode&quot;</span><span class="fu">:</span> <span class="st">&quot;complete-phrase-segments&quot;</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p>Errors: <code>CONSENT_REQUIRED</code>,
-<code>CAPACITY_EXCEEDED</code>, <code>BRAIN_NOT_READY</code>.</p>
+<code>CAPACITY_EXCEEDED</code>, <code>BRAIN_NOT_READY</code>.
+Application JSON over 8192 bytes returns the same structured error
+envelope with HTTP <code>413</code>; Bun’s transport hard cap is
+deliberately higher so this contract is not replaced by an unstructured
+runtime response. Per-source create admission returns structured HTTP
+<code>429</code>.</p>
 <h3 id="post-apiv1conversationsidstop"><code>POST /api/v1/conversations/:id/stop</code></h3>
 <p>Идемпотентно завершает сессию. Основной stop идёт по WS; endpoint
 нужен для unload/fallback.</p>
@@ -2467,7 +2488,11 @@ session;</li>
 model/voice/<code>mp3</code>, доступность queue/circuit state и
 разрешённый text-only output startup policy;</li>
 <li>prompt bundle checksum;</li>
-<li>возможность принять новую conversation по concurrency guard.</li>
+<li>запущенный persisted notification-outbox worker (provider delivery
+failure itself remains retryable and does not make booking
+uncommitted);</li>
+<li>возможность принять новую conversation по active/queued concurrency
+guards.</li>
 </ul>
 <h3 id="dev-only">Dev-only</h3>
 <p><code>GET /api/dev/conversations/:id</code> — transcript/events для
@@ -2482,7 +2507,7 @@ model/voice/<code>mp3</code>, доступность queue/circuit state и
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;v&quot;</span><span class="fu">:</span> <span class="dv">1</span><span class="fu">,</span></span>
 <span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;type&quot;</span><span class="fu">:</span> <span class="st">&quot;client.hello&quot;</span><span class="fu">,</span></span>
 <span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;payload&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;resumeToken&quot;</span><span class="fu">:</span> <span class="kw">null</span><span class="fu">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;resumeToken&quot;</span><span class="fu">:</span> <span class="st">&quot;opaque-one-use-client-token-32-bytes&quot;</span><span class="fu">,</span></span>
 <span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;audio&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
 <span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;encoding&quot;</span><span class="fu">:</span> <span class="st">&quot;pcm16le&quot;</span><span class="fu">,</span></span>
 <span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;sampleRate&quot;</span><span class="fu">:</span> <span class="dv">16000</span><span class="fu">,</span></span>
@@ -2558,6 +2583,12 @@ final-transcription request</td>
 </tr>
 </tbody>
 </table>
+<p>Первый <code>client.hello</code> обязан предъявить одноразовый
+<code>clientToken</code> из REST response; <code>session.ready</code>
+сразу заменяет его новым resume token. На session допускается один
+pending hello-кандидат с коротким deadline и один bound socket.
+Reconnect заменяет bound socket только после полной проверки
+hello/token; неподтверждённый кандидат его не вытесняет.</p>
 <p>После handshake PCM16 audio идёт binary frames без base64.
 Gateway/utterance assembler ограничивает accumulated duration/bytes и
 после <code>audio.commit</code> кодирует ровно один validated mono PCM16
@@ -3224,11 +3255,15 @@ COMMIT</code></pre>
 <h2 id="retention">11. Retention</h2>
 <ul>
 <li>raw audio: не хранить;</li>
-<li>transcript: configurable retention, default 30 дней для MVP;</li>
-<li>bookings: до ручного удаления/экспорта;</li>
+<li>transcript: <code>TRANSCRIPT_RETENTION_DAYS</code>, default 30 дней;
+startup и hourly runner удаляют bounded batches из <code>turns</code> по
+durable timestamp, не удаляя conversation/booking;</li>
+<li>bookings: до ручного удаления/экспорта и никогда не каскадно из
+transcript purge;</li>
 <li>events: минимум срок отладки и аудита, configurable;</li>
-<li>Codex thread logs: lifecycle и deletion должны быть согласованы с
-transcript retention;</li>
+<li>Codex thread state: stop/expiry прерывает turn, вызывает
+<code>thread/delete</code>, очищает process-local maps; TTS session
+budgets также reset;</li>
 <li>backups наследуют срок хранения и шифруются.</li>
 </ul>
 <div class="page-break">
@@ -3530,8 +3565,14 @@ auth backup шифруется;</li>
 </ul>
 <p>Механизм:</p>
 <pre class="text"><code>MAX_ACTIVE_CONVERSATIONS
+MAX_ACTIVE_CONVERSATIONS_PER_SOURCE
 MAX_CONCURRENT_BRAIN_TURNS
 MAX_PENDING_BRAIN_TURNS
+BRAIN_QUEUE_TIMEOUT_MS
+MAX_CONVERSATION_CREATES_PER_SOURCE
+MAX_SESSION_CONNECTIONS_PER_SOURCE
+CLIENT_HELLO_TIMEOUT_MS
+ABANDONED_SESSION_TIMEOUT_MS
 STT_MAX_UTTERANCE_MS
 STT_MAX_AUDIO_BYTES
 STT_TOTAL_TIMEOUT_MS
@@ -3541,9 +3582,19 @@ TTS_MAX_CHARS_PER_TURN
 TTS_MAX_CHARS_PER_SESSION
 SESSION_MAX_MINUTES
 TURN_TIMEOUT_MS</code></pre>
-<p>При переполнении новая сессия получает
-<code>CAPACITY_EXCEEDED</code>; уже созданные booking updates имеют
-приоритет над новыми discovery turns.</p>
+<p>При переполнении новая сессия/turn получает structured
+<code>CAPACITY_EXCEEDED</code>. Committed WAV остаётся bounded in-memory
+до admission или timeout. Очередь разделена на booked и standard FIFO
+lanes: booked lane выбирается первой, порядок внутри lane не меняется.
+Stop/expiry отменяет queued work и является bounded cancellation barrier
+для STT/brain/TTS/tool events.</p>
+<p>Source key берётся из direct peer address. Forwarded IP игнорируется
+при безопасном default <code>TRUSTED_PROXY_HOPS=0</code>; Compose задаёт
+ровно один trusted Caddy hop. Malformed forwarding chains fail closed.
+Create/WS attempt windows и active sessions per source дополняют global
+limits; Origin остаётся дополнительной, но не единственной защитой. REST
+выдаёт одноразовый first-hello token, pending socket ограничен одним и
+abandoned REST-created session освобождается раньше общего TTL.</p>
 <h2 id="failure-and-degraded-modes">11. Failure and degraded modes</h2>
 <table>
 <colgroup>

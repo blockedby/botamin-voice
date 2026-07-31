@@ -1,5 +1,5 @@
 import { websocket } from "hono/bun";
-import { createServerApp } from "./app";
+import { bunRequestBodyHardLimit, createServerApp } from "./app";
 import { createProductionRuntime } from "./runtime/runtime";
 
 export { createServerApp } from "./app";
@@ -12,7 +12,10 @@ if (import.meta.main) {
 		const app = createServerApp(runtime);
 		const server = Bun.serve({
 			port: runtime.config.port,
-			fetch: app.fetch,
+			fetch: (request, bunServer) =>
+				app.fetch(request, {
+					remoteAddress: bunServer.requestIP(request)?.address,
+				}),
 			websocket: {
 				...websocket,
 				maxPayloadLength: Math.max(
@@ -20,7 +23,7 @@ if (import.meta.main) {
 					runtime.config.limits.wsFrameBytes,
 				),
 			},
-			maxRequestBodySize: runtime.config.limits.httpBodyBytes,
+			maxRequestBodySize: bunRequestBodyHardLimit(runtime.config),
 			idleTimeout: 30,
 		});
 		console.info(

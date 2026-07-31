@@ -6,7 +6,7 @@ import {
 	ReadyHealthResponseSchema,
 	StopConversationResponseSchema,
 } from "@botamin/contracts";
-import { createServerApp } from "./app";
+import { bunRequestBodyHardLimit, createServerApp } from "./app";
 import type { RuntimeConfig } from "./runtime/config";
 import type { RuntimeGatewaySession, ServerRuntime } from "./runtime/runtime";
 
@@ -35,6 +35,7 @@ function runtime(
 				const session: RuntimeGatewaySession = {
 					conversationId,
 					expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+					takeClientToken: () => "t".repeat(43),
 					attach: () => undefined,
 					receive: async () => undefined,
 					detach: () => undefined,
@@ -114,6 +115,28 @@ describe("production server REST contracts", () => {
 		);
 		expect(created.conversationId).toBe(conversationId);
 		expect(created.wsUrl).toBe(`/ws/v1/conversations/${conversationId}`);
+		expect(created.clientToken).toHaveLength(43);
+	});
+
+	test("rate-limits valid conversation creates per direct source", async () => {
+		const app = createServerApp(runtime());
+		for (let attempt = 0; attempt < 5; attempt += 1) {
+			const response = await app.request("/api/v1/conversations", {
+				method: "POST",
+				headers: { "content-type": "application/json", origin },
+				body: JSON.stringify(validRequest),
+			});
+			expect(response.status).toBe(201);
+		}
+		const limited = await app.request("/api/v1/conversations", {
+			method: "POST",
+			headers: { "content-type": "application/json", origin },
+			body: JSON.stringify(validRequest),
+		});
+		expect(limited.status).toBe(429);
+		expect(ApiErrorResponseSchema.parse(await limited.json()).error.code).toBe(
+			"CAPACITY_EXCEEDED",
+		);
 	});
 
 	test("rejects unavailable capacity before creating a session", async () => {
@@ -138,6 +161,34 @@ describe("production server REST contracts", () => {
 		expect(response.headers.get("content-type") ?? "").not.toContain(
 			"text/html",
 		);
+	});
+
+	test("Bun passes a 9KB body to Hono for the structured application 413", async () => {
+		const fake = runtime();
+		const app = createServerApp(fake);
+		const server = Bun.serve({
+			port: 0,
+			fetch: app.fetch,
+			maxRequestBodySize: bunRequestBodyHardLimit(fake.config),
+		});
+		try {
+			const response = await fetch(
+				`http://127.0.0.1:${server.port}/api/v1/conversations`,
+				{
+					method: "POST",
+					headers: { "content-type": "application/json", origin },
+					body: JSON.stringify({ padding: "x".repeat(9_000) }),
+				},
+			);
+			expect(response.status).toBe(413);
+			expect(ApiErrorResponseSchema.parse(await response.json())).toMatchObject(
+				{
+					error: { code: "INVALID_EVENT", retryable: false },
+				},
+			);
+		} finally {
+			server.stop(true);
+		}
 	});
 
 	test("stops idempotently with the exact contract response", async () => {

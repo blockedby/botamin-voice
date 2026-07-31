@@ -225,8 +225,14 @@ Notifier failure не должен делать app unready, если outbox с�
 
 ```text
 MAX_ACTIVE_CONVERSATIONS
+MAX_ACTIVE_CONVERSATIONS_PER_SOURCE
 MAX_CONCURRENT_BRAIN_TURNS
 MAX_PENDING_BRAIN_TURNS
+BRAIN_QUEUE_TIMEOUT_MS
+MAX_CONVERSATION_CREATES_PER_SOURCE
+MAX_SESSION_CONNECTIONS_PER_SOURCE
+CLIENT_HELLO_TIMEOUT_MS
+ABANDONED_SESSION_TIMEOUT_MS
 STT_MAX_UTTERANCE_MS
 STT_MAX_AUDIO_BYTES
 STT_TOTAL_TIMEOUT_MS
@@ -238,7 +244,9 @@ SESSION_MAX_MINUTES
 TURN_TIMEOUT_MS
 ```
 
-При переполнении новая сессия получает `CAPACITY_EXCEEDED`; уже созданные booking updates имеют приоритет над новыми discovery turns.
+При переполнении новая сессия/turn получает structured `CAPACITY_EXCEEDED`. Committed WAV остаётся bounded in-memory до admission или timeout. Очередь разделена на booked и standard FIFO lanes: booked lane выбирается первой, порядок внутри lane не меняется. Stop/expiry отменяет queued work и является bounded cancellation barrier для STT/brain/TTS/tool events.
+
+Source key берётся из direct peer address. Forwarded IP игнорируется при безопасном default `TRUSTED_PROXY_HOPS=0`; Compose задаёт ровно один trusted Caddy hop. Malformed forwarding chains fail closed. Create/WS attempt windows и active sessions per source дополняют global limits; Origin остаётся дополнительной, но не единственной защитой. REST выдаёт одноразовый first-hello token, pending socket ограничен одним и abandoned REST-created session освобождается раньше общего TTL.
 
 ## 11. Failure and degraded modes
 

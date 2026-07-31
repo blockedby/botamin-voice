@@ -14,6 +14,7 @@ test("Bun localhost upgrades the exact conversation WebSocket route", async () =
 	const session: RuntimeGatewaySession = {
 		conversationId,
 		expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+		takeClientToken: () => "w".repeat(43),
 		attach: (socket) => {
 			attached = socket;
 		},

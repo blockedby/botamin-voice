@@ -181,6 +181,8 @@ export interface BrainPort {
 		signal: AbortSignal,
 	): AsyncIterable<BrainDelta>;
 	interrupt(threadId: string, turnId: string): Promise<void>;
+	/** Optional per-conversation lifecycle cleanup for shared brain adapters. */
+	releaseConversation?(conversationId: string): Promise<void>;
 	health(): Promise<ProviderHealth>;
 }
 
@@ -191,6 +193,8 @@ export interface SttPort {
 
 export interface TtsPort {
 	synthesize(request: TtsSynthesisRequest): Promise<TtsAudioSegment>;
+	/** Optional cleanup for per-session budgets and adapter bookkeeping. */
+	resetSession?(conversationId: string): void | Promise<void>;
 	health(): Promise<TtsHealth>;
 }
 

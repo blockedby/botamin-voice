@@ -1,54 +1,90 @@
 import type { CreateConversationRequest } from "@botamin/contracts";
 import type { GatewaySession } from "./session";
+import {
+	type BrainTurnAdmission,
+	BrainTurnQueue,
+	type BrainTurnPriority,
+} from "./turn-queue";
 
 export interface CreateSessionContext {
 	conversationId: string;
 	expiresAt: Date;
 	request: CreateConversationRequest;
-	acquireTurn(): (() => void) | null;
+	acquireTurn(input: {
+		priority: BrainTurnPriority;
+		signal: AbortSignal;
+	}): Promise<BrainTurnAdmission>;
 }
 
 export interface SessionRegistryOptions {
 	maxActiveConversations: number;
+	maxActiveConversationsPerSource?: number;
 	maxConcurrentBrainTurns: number;
+	maxPendingBrainTurns?: number;
+	brainQueueTimeoutMs?: number;
 	sessionMaxMs: number;
+	abandonedSessionMs?: number;
 	createSession(context: CreateSessionContext): GatewaySession;
 	now?: () => Date;
 	idFactory?: () => string;
 	cleanupIntervalMs?: number;
 }
 
+interface SessionRecord {
+	session: GatewaySession;
+	sourceKey: string;
+	createdAtMs: number;
+}
+
 /** Process-local bounded registry; durable booking data remains in SQLite. */
 export class SessionRegistry {
-	readonly #sessions = new Map<string, GatewaySession>();
+	readonly #sessions = new Map<string, SessionRecord>();
+	readonly #stops = new Map<string, Promise<void>>();
+	readonly #activeBySource = new Map<string, number>();
 	readonly #maxActive: number;
-	readonly #maxBrainTurns: number;
+	readonly #maxActivePerSource: number;
 	readonly #sessionMaxMs: number;
+	readonly #abandonedSessionMs: number;
 	readonly #createSession: SessionRegistryOptions["createSession"];
 	readonly #now: () => Date;
 	readonly #idFactory: () => string;
 	readonly #timer: ReturnType<typeof setInterval>;
-	#activeBrainTurns = 0;
+	readonly #turnQueue: BrainTurnQueue;
 	#disposed = false;
 
 	constructor(options: SessionRegistryOptions) {
 		this.#maxActive = options.maxActiveConversations;
-		this.#maxBrainTurns = options.maxConcurrentBrainTurns;
+		this.#maxActivePerSource =
+			options.maxActiveConversationsPerSource ?? options.maxActiveConversations;
 		this.#sessionMaxMs = options.sessionMaxMs;
+		this.#abandonedSessionMs = options.abandonedSessionMs ?? 10_000;
 		this.#createSession = options.createSession;
 		this.#now = options.now ?? (() => new Date());
 		this.#idFactory = options.idFactory ?? (() => Bun.randomUUIDv7());
+		this.#turnQueue = new BrainTurnQueue({
+			maxActive: options.maxConcurrentBrainTurns,
+			maxPending: options.maxPendingBrainTurns ?? 0,
+			queueTimeoutMs: options.brainQueueTimeoutMs ?? 45_000,
+		});
 		this.#timer = setInterval(
-			() => void this.cleanupExpired(),
-			options.cleanupIntervalMs ?? 30_000,
+			() => this.cleanupExpired(),
+			options.cleanupIntervalMs ?? 1_000,
 		);
 		this.#timer.unref?.();
 	}
 
-	create(request: CreateConversationRequest): GatewaySession | null {
+	create(
+		request: CreateConversationRequest,
+		sourceKey = "ip:unknown",
+	): GatewaySession | null {
 		if (this.#disposed) return null;
 		this.cleanupExpired();
-		if (!this.hasCapacity) return null;
+		if (
+			!this.hasCapacity ||
+			(this.#activeBySource.get(sourceKey) ?? 0) >= this.#maxActivePerSource
+		) {
+			return null;
+		}
 		const now = this.#now();
 		const conversationId = this.#idFactory();
 		const expiresAt = new Date(now.getTime() + this.#sessionMaxMs);
@@ -56,36 +92,57 @@ export class SessionRegistry {
 			conversationId,
 			expiresAt,
 			request,
-			acquireTurn: () => this.acquireTurn(),
+			acquireTurn: (input) => this.#turnQueue.acquire(input),
 		});
-		this.#sessions.set(conversationId, session);
+		this.#sessions.set(conversationId, {
+			session,
+			sourceKey,
+			createdAtMs: now.getTime(),
+		});
+		this.#activeBySource.set(
+			sourceKey,
+			(this.#activeBySource.get(sourceKey) ?? 0) + 1,
+		);
 		return session;
 	}
 
 	get(conversationId: string): GatewaySession | null {
-		const session = this.#sessions.get(conversationId);
-		if (!session) return null;
-		if (session.stopped || session.isExpired()) {
-			this.#sessions.delete(conversationId);
-			void session.stop("disconnected");
+		const record = this.#sessions.get(conversationId);
+		if (!record) return null;
+		if (record.session.stopped || record.session.isExpired()) {
+			this.#remove(conversationId);
+			void this.#trackStop(conversationId, record.session, "disconnected");
 			return null;
 		}
-		return session;
+		return record.session;
 	}
 
-	async stop(conversationId: string): Promise<void> {
-		const session = this.#sessions.get(conversationId);
-		if (!session) return;
-		this.#sessions.delete(conversationId);
-		await session.stop("completed");
+	async stop(
+		conversationId: string,
+		reason: "completed" | "disconnected" = "completed",
+	): Promise<void> {
+		const existing = this.#stops.get(conversationId);
+		if (existing) return existing;
+		const record = this.#remove(conversationId);
+		if (!record) return;
+		return this.#trackStop(conversationId, record.session, reason);
 	}
 
 	cleanupExpired(): void {
 		const now = this.#now();
-		for (const [id, session] of this.#sessions) {
-			if (!session.stopped && !session.isExpired(now)) continue;
-			this.#sessions.delete(id);
-			void session.stop("disconnected");
+		for (const [id, record] of this.#sessions) {
+			const abandoned =
+				!record.session.established &&
+				now.getTime() - record.createdAtMs >= this.#abandonedSessionMs;
+			if (
+				!record.session.stopped &&
+				!record.session.isExpired(now) &&
+				!abandoned
+			) {
+				continue;
+			}
+			this.#remove(id);
+			void this.#trackStop(id, record.session, "disconnected");
 		}
 	}
 
@@ -93,19 +150,20 @@ export class SessionRegistry {
 		if (this.#disposed) return;
 		this.#disposed = true;
 		clearInterval(this.#timer);
-		const sessions = [...this.#sessions.values()];
-		this.#sessions.clear();
-		await Promise.allSettled(
-			sessions.map((session) => session.stop("disconnected")),
-		);
+		this.#turnQueue.close();
+		for (const [id, record] of [...this.#sessions]) {
+			this.#remove(id);
+			void this.#trackStop(id, record.session, "disconnected");
+		}
+		await Promise.allSettled([...this.#stops.values()]);
 	}
 
 	get hasCapacity(): boolean {
-		return (
-			!this.#disposed &&
-			this.#sessions.size < this.#maxActive &&
-			this.#activeBrainTurns < this.#maxBrainTurns
-		);
+		return !this.#disposed && this.#sessions.size < this.#maxActive;
+	}
+
+	get hasTurnCapacity(): boolean {
+		return !this.#disposed && this.#turnQueue.hasAdmissionCapacity;
 	}
 
 	get activeCount(): number {
@@ -113,19 +171,36 @@ export class SessionRegistry {
 	}
 
 	get activeBrainTurns(): number {
-		return this.#activeBrainTurns;
+		return this.#turnQueue.activeCount;
 	}
 
-	private acquireTurn(): (() => void) | null {
-		if (this.#disposed || this.#activeBrainTurns >= this.#maxBrainTurns) {
-			return null;
-		}
-		this.#activeBrainTurns += 1;
-		let released = false;
-		return () => {
-			if (released) return;
-			released = true;
-			this.#activeBrainTurns = Math.max(0, this.#activeBrainTurns - 1);
-		};
+	get pendingBrainTurns(): number {
+		return this.#turnQueue.pendingCount;
+	}
+
+	#remove(conversationId: string): SessionRecord | null {
+		const record = this.#sessions.get(conversationId);
+		if (!record) return null;
+		this.#sessions.delete(conversationId);
+		const next = (this.#activeBySource.get(record.sourceKey) ?? 1) - 1;
+		if (next <= 0) this.#activeBySource.delete(record.sourceKey);
+		else this.#activeBySource.set(record.sourceKey, next);
+		return record;
+	}
+
+	#trackStop(
+		conversationId: string,
+		session: GatewaySession,
+		reason: "completed" | "disconnected",
+	): Promise<void> {
+		const existing = this.#stops.get(conversationId);
+		if (existing) return existing;
+		const stopping = session.stop(reason).finally(() => {
+			if (this.#stops.get(conversationId) === stopping) {
+				this.#stops.delete(conversationId);
+			}
+		});
+		this.#stops.set(conversationId, stopping);
+		return stopping;
 	}
 }

@@ -173,7 +173,9 @@ export function transition(
 				`provider_failed is not allowed from ${state.stage}`,
 			);
 		}
-		return withStage(state, state.booking ? "COMPLETE" : "ERROR");
+		// Provider failure is observably terminal ERROR even when a previously
+		// committed booking remains authoritative and untouched.
+		return withStage(state, "ERROR");
 	}
 
 	if (event.type === "contact_consent_confirmed") {

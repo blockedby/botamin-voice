@@ -266,6 +266,10 @@ async function standardResponse(
 		});
 		return true;
 	}
+	if (message.method === "thread/delete") {
+		await process.send({ id: message.id, result: {} });
+		return true;
+	}
 	if (message.method === "thread/start" || message.method === "thread/resume") {
 		await process.send({
 			id: message.id,
@@ -404,6 +408,14 @@ describe("Codex app-server brain with deterministic fake process", () => {
 			sandboxPolicy: { type: "readOnly", networkAccess: false },
 			environments: [],
 		});
+		await brain.releaseConversation(CONVERSATION_ID);
+		expect(
+			processRef?.messages.filter(
+				(message) => message.method === "thread/delete",
+			),
+		).toEqual([
+			expect.objectContaining({ params: { threadId: PROVIDER_THREAD_ID } }),
+		]);
 	});
 
 	test("interrupt maps external identity to provider turn and drops late deltas", async () => {

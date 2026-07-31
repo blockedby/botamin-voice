@@ -8,6 +8,10 @@ import {
 } from "@botamin/contracts";
 import { type CircuitState, OpenRouterCircuitBreaker } from "./circuit";
 import {
+	type OpenRouterCredentialHealth,
+	resolveOpenRouterCredentialHealth,
+} from "./credential-health";
+import {
 	createOpenRouterHeaders,
 	loadOpenRouterVoiceConfig,
 	type OpenRouterVoiceConfig,
@@ -57,6 +61,8 @@ export interface OpenRouterSttAdapterOptions {
 	now?: () => number;
 	telemetry?: (event: OpenRouterSttTelemetryEvent) => void;
 	isTurnCurrent?: (conversationId: string, turnId: string) => boolean;
+	/** Inject the same instance into STT and TTS for one-key health. */
+	credentialHealth?: OpenRouterCredentialHealth;
 }
 
 interface ValidatedWav {
@@ -74,6 +80,7 @@ export class OpenRouterSttAdapter implements SttPort {
 		| ((conversationId: string, turnId: string) => boolean)
 		| undefined;
 	readonly #circuit: OpenRouterCircuitBreaker;
+	readonly #credentialHealth: OpenRouterCredentialHealth;
 	readonly #obsoleteTurns = new Set<string>();
 	readonly #activeTurns = new Set<string>();
 	#activeCount = 0;
@@ -81,6 +88,12 @@ export class OpenRouterSttAdapter implements SttPort {
 	constructor(options: OpenRouterSttAdapterOptions = {}) {
 		this.#config = options.config ?? loadOpenRouterVoiceConfig();
 		this.#fetch = options.fetch ?? fetch;
+		this.#credentialHealth =
+			options.credentialHealth ??
+			resolveOpenRouterCredentialHealth(
+				this.#config,
+				options.config === undefined,
+			);
 		this.#now = options.now ?? Date.now;
 		this.#telemetry = options.telemetry;
 		this.#isTurnCurrent = options.isTurnCurrent;
@@ -104,7 +117,9 @@ export class OpenRouterSttAdapter implements SttPort {
 
 	async health(): Promise<SttHealth> {
 		if (this.#config.apiKey === null) return "unavailable";
-		return this.#circuit.state === "closed" ? "ready" : "degraded";
+		return this.#credentialHealth.ready && this.#circuit.state === "closed"
+			? "ready"
+			: "degraded";
 	}
 
 	async transcribe(
@@ -137,6 +152,7 @@ export class OpenRouterSttAdapter implements SttPort {
 			}
 			circuitAcquired = true;
 			const result = await this.#transcribeWithRetry(request, wav);
+			this.#credentialHealth.recordSuccess();
 			this.#circuit.recordSuccess();
 			this.#ensureCurrent(request);
 			return result;
@@ -146,9 +162,12 @@ export class OpenRouterSttAdapter implements SttPort {
 				throw createAbortError("STT transcription aborted or turn obsolete");
 			}
 			if (circuitAcquired && error instanceof OpenRouterSttError) {
+				if (error.status === 401 || error.status === 402) {
+					this.#credentialHealth.recordFailure(error.status);
+				}
 				this.#circuit.recordFailure({
 					retryable: error.retryable,
-					forceOpen: [401, 402, 404].includes(error.status ?? -1),
+					forceOpen: error.status === 404,
 				});
 			}
 			throw error;
@@ -254,7 +273,7 @@ export class OpenRouterSttAdapter implements SttPort {
 			);
 			telemetryStatus = response.status;
 			providerRequestId = safeProviderRequestId(response);
-			if (!response.ok) {
+			if (response.status !== 200) {
 				await discardBoundedErrorBody(response, signal);
 				throw mapHttpStatus(
 					response.status,
@@ -271,7 +290,10 @@ export class OpenRouterSttAdapter implements SttPort {
 				MAX_TRANSCRIPTION_RESPONSE_BYTES,
 				signal,
 			);
-			const text = decodeTranscriptResponse(bytes);
+			const text = decodeTranscriptResponse(
+				bytes,
+				response.headers.get("Retry-After"),
+			);
 			this.#ensureCurrent(request, signal);
 			return SttTranscriptionResultSchema.parse({
 				conversationId: request.conversationId,
@@ -413,25 +435,72 @@ function isCancellation(error: unknown): boolean {
 	return error instanceof Error && error.name === "AbortError";
 }
 
-function decodeTranscriptResponse(bytes: Uint8Array): string {
+function decodeTranscriptResponse(
+	bytes: Uint8Array,
+	retryAfter: string | null,
+): string {
 	try {
 		const jsonText = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 		const value: unknown = JSON.parse(jsonText);
-		if (typeof value !== "object" || value === null) throw new Error("object");
-		const choices = Reflect.get(value, "choices");
+		if (!isRecord(value)) throw new Error("object");
+
+		// OpenRouter documents provider failures that begin after request
+		// processing as HTTP 200 JSON envelopes. They must never become text.
+		if (hasOwn(value, "error")) {
+			throw decodeEmbeddedProviderError(value.error, retryAfter);
+		}
+		const choices = value.choices;
 		if (!Array.isArray(choices) || choices.length !== 1) {
 			throw new Error("choices");
 		}
-		const choice = choices[0];
-		if (typeof choice !== "object" || choice === null)
-			throw new Error("choice");
-		const message = Reflect.get(choice, "message");
-		if (typeof message !== "object" || message === null) {
+		const choice: unknown = choices[0];
+		if (!isRecord(choice)) throw new Error("choice");
+		if (hasOwn(choice, "error")) {
+			throw decodeEmbeddedProviderError(choice.error, retryAfter);
+		}
+
+		if (
+			!isBoundedString(value.id, 512) ||
+			typeof value.created !== "number" ||
+			!Number.isSafeInteger(value.created) ||
+			value.created < 0 ||
+			!isBoundedString(value.model, 512) ||
+			value.object !== "chat.completion"
+		) {
+			throw new Error("chat result");
+		}
+		if (choice.index !== 0) throw new Error("choice index");
+		if (choice.finish_reason !== "stop") {
+			throw new OpenRouterSttError("STT_PROVIDER_REJECTED", false);
+		}
+		if (
+			!hasOwn(choice, "native_finish_reason") ||
+			(choice.native_finish_reason !== null &&
+				typeof choice.native_finish_reason !== "string")
+		) {
+			throw new Error("native finish reason");
+		}
+		const message = choice.message;
+		if (!isRecord(message) || message.role !== "assistant") {
 			throw new Error("message");
 		}
-		const content = Reflect.get(message, "content");
-		if (typeof content !== "string") throw new Error("content");
-		const transcript = content.trim();
+		if (hasOwn(message, "refusal")) {
+			if (message.refusal === null) {
+				// OpenAI-compatible responses may explicitly report no refusal.
+			} else if (
+				typeof message.refusal === "string" &&
+				message.refusal.trim().length > 0
+			) {
+				throw new OpenRouterSttError("STT_PROVIDER_REJECTED", false);
+			} else {
+				throw new Error("refusal");
+			}
+		}
+		if (hasOwn(message, "tool_calls")) {
+			throw new OpenRouterSttError("STT_PROVIDER_REJECTED", false);
+		}
+		if (typeof message.content !== "string") throw new Error("content");
+		const transcript = message.content.trim();
 		if (transcript.length === 0 || transcript.length > 20_000) {
 			throw new Error("transcript");
 		}
@@ -440,6 +509,42 @@ function decodeTranscriptResponse(bytes: Uint8Array): string {
 		if (error instanceof OpenRouterSttError) throw error;
 		throw new OpenRouterSttError("STT_INVALID_RESPONSE", false);
 	}
+}
+
+function decodeEmbeddedProviderError(
+	value: unknown,
+	retryAfter: string | null,
+): SttHttpError {
+	if (
+		!isRecord(value) ||
+		typeof value.code !== "number" ||
+		!Number.isSafeInteger(value.code) ||
+		value.code < 400 ||
+		value.code > 599 ||
+		!isBoundedString(value.message, 4_000) ||
+		(hasOwn(value, "metadata") &&
+			value.metadata !== undefined &&
+			!isRecord(value.metadata))
+	) {
+		throw new Error("provider error");
+	}
+	return mapHttpStatus(value.code, retryAfter);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOwn(value: object, key: string): boolean {
+	return Object.hasOwn(value, key);
+}
+
+function isBoundedString(value: unknown, maximum: number): value is string {
+	return (
+		typeof value === "string" &&
+		value.trim().length > 0 &&
+		value.length <= maximum
+	);
 }
 
 /** Strict canonical 44-byte-header RIFF/WAVE parser; deliberately not an encoder. */

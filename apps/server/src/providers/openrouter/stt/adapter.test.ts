@@ -47,14 +47,52 @@ function request(
 	};
 }
 
+function transcriptResult(
+	text = "Запишите меня на демонстрацию завтра",
+): Record<string, unknown> {
+	return {
+		id: "gen_stt_1",
+		object: "chat.completion",
+		created: 1_722_000_000,
+		model: "openai/gpt-audio-mini",
+		choices: [
+			{
+				index: 0,
+				finish_reason: "stop",
+				native_finish_reason: "stop",
+				message: { role: "assistant", content: text },
+			},
+		],
+		usage: {
+			prompt_tokens: 12,
+			completion_tokens: 7,
+			total_tokens: 19,
+		},
+	};
+}
+
+function firstChoice(result: Record<string, unknown>): Record<string, unknown> {
+	const choices = result.choices;
+	const choice = Array.isArray(choices) ? choices[0] : undefined;
+	if (typeof choice !== "object" || choice === null || Array.isArray(choice)) {
+		throw new Error("Invalid test ChatResult fixture");
+	}
+	return choice as Record<string, unknown>;
+}
+
+function jsonResponse(value: unknown, init: ResponseInit = {}): Response {
+	const headers = new Headers(init.headers);
+	if (!headers.has("X-Generation-Id")) {
+		headers.set("X-Generation-Id", "gen_stt_1");
+	}
+	return Response.json(value, { ...init, headers });
+}
+
 function transcriptResponse(
 	text = "Запишите меня на демонстрацию завтра",
 	init: ResponseInit = {},
 ): Response {
-	return Response.json(
-		{ choices: [{ message: { content: text } }] },
-		{ headers: { "x-request-id": "req_stt_1" }, ...init },
-	);
+	return jsonResponse(transcriptResult(text), init);
 }
 
 async function captureError(
@@ -204,7 +242,7 @@ describe("OpenRouterSttAdapter protocol", () => {
 			audioBytes: wav.byteLength,
 			durationMs: 100,
 			status: 200,
-			providerRequestId: "req_stt_1",
+			providerRequestId: "gen_stt_1",
 		});
 	});
 });
@@ -286,6 +324,21 @@ describe("OpenRouterSttAdapter validation and failures", () => {
 		}
 	});
 
+	test("rejects non-200 success statuses instead of decoding a transcript", async () => {
+		const adapter = new OpenRouterSttAdapter({
+			config: config({ maxRetries: 0 }),
+			fetch: queuedFetch([
+				jsonResponse(transcriptResult("must not be emitted"), { status: 206 }),
+			]),
+		});
+		const error = await captureError(adapter.transcribe(request()));
+		expect(error).toMatchObject({
+			code: "STT_PROVIDER_REJECTED",
+			status: 206,
+			retryable: false,
+		});
+	});
+
 	test("retries 429 and retryable upstream statuses only once", async () => {
 		for (const status of [429, 500, 502, 503, 524, 529]) {
 			const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -323,6 +376,108 @@ describe("OpenRouterSttAdapter validation and failures", () => {
 			retryable: true,
 		});
 		expect(calls).toHaveLength(2);
+	});
+
+	test("maps the documented HTTP-200 embedded provider error envelope without emitting partial text", async () => {
+		// https://openrouter.ai/docs/api_reference/errors-and-debugging.md#chat-completions-api-v1-chat-completions
+		const documentedEnvelope = {
+			choices: [
+				{
+					message: {
+						role: "assistant",
+						content: "partial output must not become a transcript",
+					},
+					finish_reason: "error",
+					error: {
+						code: 502,
+						message: "Provider disconnected mid-stream",
+						metadata: { error_type: "provider_unavailable" },
+					},
+				},
+			],
+		};
+		const adapter = new OpenRouterSttAdapter({
+			config: config({ maxRetries: 0 }),
+			fetch: queuedFetch([jsonResponse(documentedEnvelope)]),
+		});
+
+		const error = await captureError(adapter.transcribe(request()));
+		expect(error).toMatchObject({
+			code: "STT_PROVIDER_UPSTREAM",
+			status: 502,
+			retryable: true,
+		});
+		expect(error.message).not.toContain("partial output");
+	});
+
+	test("rejects every incomplete finish reason and refusal as a typed provider failure", async () => {
+		for (const finishReason of [
+			"error",
+			"length",
+			"content_filter",
+			"tool_calls",
+			null,
+		]) {
+			const result = transcriptResult();
+			firstChoice(result).finish_reason = finishReason;
+			const adapter = new OpenRouterSttAdapter({
+				config: config({ maxRetries: 0 }),
+				fetch: queuedFetch([jsonResponse(result)]),
+			});
+			const error = await captureError(adapter.transcribe(request()));
+			expect(error.code).toBe("STT_PROVIDER_REJECTED");
+		}
+
+		const refusal = transcriptResult();
+		const refusalChoice = firstChoice(refusal);
+		(refusalChoice.message as Record<string, unknown>).refusal =
+			"I cannot transcribe this audio";
+		const refusalAdapter = new OpenRouterSttAdapter({
+			config: config({ maxRetries: 0 }),
+			fetch: queuedFetch([jsonResponse(refusal)]),
+		});
+		const refusalError = await captureError(
+			refusalAdapter.transcribe(request()),
+		);
+		expect(refusalError.code).toBe("STT_PROVIDER_REJECTED");
+	});
+
+	test("rejects wrong ChatResult/ChatChoice role, index and schema", async () => {
+		const wrongRole = transcriptResult();
+		const wrongRoleChoice = firstChoice(wrongRole);
+		(wrongRoleChoice.message as Record<string, unknown>).role = "user";
+
+		const wrongIndex = transcriptResult();
+		firstChoice(wrongIndex).index = 1;
+
+		const wrongObject = transcriptResult();
+		wrongObject.object = "chat.completion.chunk";
+
+		const missingResultId = transcriptResult();
+		delete missingResultId.id;
+
+		const missingNativeFinish = transcriptResult();
+		delete firstChoice(missingNativeFinish).native_finish_reason;
+
+		const nullContent = transcriptResult();
+		const nullContentChoice = firstChoice(nullContent);
+		(nullContentChoice.message as Record<string, unknown>).content = null;
+
+		for (const result of [
+			wrongRole,
+			wrongIndex,
+			wrongObject,
+			missingResultId,
+			missingNativeFinish,
+			nullContent,
+		]) {
+			const adapter = new OpenRouterSttAdapter({
+				config: config({ maxRetries: 0 }),
+				fetch: queuedFetch([jsonResponse(result)]),
+			});
+			const error = await captureError(adapter.transcribe(request()));
+			expect(error.code).toBe("STT_INVALID_RESPONSE");
+		}
 	});
 
 	test("rejects malformed, empty and non-JSON final transcript responses", async () => {

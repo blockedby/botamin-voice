@@ -203,11 +203,15 @@ export function sleepWithSignal(
 }
 
 export function safeProviderRequestId(response: Response): string | undefined {
-	const value =
-		response.headers.get("x-openrouter-generation-id") ??
-		response.headers.get("x-request-id");
-	if (value === null || !/^[A-Za-z0-9._:-]{1,256}$/.test(value)) {
-		return undefined;
+	for (const name of [
+		"x-generation-id",
+		"x-openrouter-generation-id",
+		"x-request-id",
+	]) {
+		const value = response.headers.get(name);
+		if (value !== null && /^[A-Za-z0-9._:-]{1,256}$/.test(value)) {
+			return value;
+		}
 	}
-	return value;
+	return undefined;
 }

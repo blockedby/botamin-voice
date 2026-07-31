@@ -9,6 +9,10 @@ import {
 } from "@botamin/contracts";
 import { type CircuitState, OpenRouterCircuitBreaker } from "../stt/circuit";
 import {
+	type OpenRouterCredentialHealth,
+	resolveOpenRouterCredentialHealth,
+} from "../stt/credential-health";
+import {
 	createOpenRouterHeaders,
 	loadOpenRouterVoiceConfig,
 	type OpenRouterVoiceConfig,
@@ -62,6 +66,8 @@ export interface OpenRouterTtsAdapterOptions {
 		conversationId: string,
 		generationId: string,
 	) => boolean;
+	/** Inject the same instance into STT and TTS for one-key health. */
+	credentialHealth?: OpenRouterCredentialHealth;
 }
 
 export interface OpenRouterTtsUsage {
@@ -80,6 +86,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 		| ((conversationId: string, generationId: string) => boolean)
 		| undefined;
 	readonly #circuit: OpenRouterCircuitBreaker;
+	readonly #credentialHealth: OpenRouterCredentialHealth;
 	readonly #obsoleteGenerations = new Set<string>();
 	readonly #activeSegments = new Set<string>();
 	readonly #sessionCharacters = new Map<string, number>();
@@ -89,6 +96,12 @@ export class OpenRouterTtsAdapter implements TtsPort {
 	constructor(options: OpenRouterTtsAdapterOptions = {}) {
 		this.#config = options.config ?? loadOpenRouterVoiceConfig();
 		this.#fetch = options.fetch ?? fetch;
+		this.#credentialHealth =
+			options.credentialHealth ??
+			resolveOpenRouterCredentialHealth(
+				this.#config,
+				options.config === undefined,
+			);
 		this.#now = options.now ?? Date.now;
 		this.#telemetry = options.telemetry;
 		this.#isGenerationCurrent = options.isGenerationCurrent;
@@ -128,7 +141,9 @@ export class OpenRouterTtsAdapter implements TtsPort {
 
 	async health(): Promise<TtsHealth> {
 		if (this.#config.apiKey === null) return "unavailable";
-		if (this.#circuit.state === "closed") return "ready";
+		if (this.#credentialHealth.ready && this.#circuit.state === "closed") {
+			return "ready";
+		}
 		return this.#config.tts.textOnlyFallback ? "degraded" : "unavailable";
 	}
 
@@ -170,6 +185,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 			circuitAcquired = true;
 			this.#reserveBudget(request, characters);
 			const result = await this.#synthesizeWithRetry(request, characters);
+			this.#credentialHealth.recordSuccess();
 			this.#circuit.recordSuccess();
 			this.#ensureCurrent(request);
 			return result;
@@ -179,9 +195,12 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				throw createAbortError("TTS synthesis aborted or generation obsolete");
 			}
 			if (circuitAcquired && error instanceof OpenRouterTtsError) {
+				if (error.status === 401 || error.status === 402) {
+					this.#credentialHealth.recordFailure(error.status);
+				}
 				this.#circuit.recordFailure({
 					retryable: error.retryable,
-					forceOpen: [401, 402, 404].includes(error.status ?? -1),
+					forceOpen: error.status === 404,
 				});
 			}
 			throw error;

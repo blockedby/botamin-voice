@@ -111,7 +111,7 @@ describe("OpenRouterTtsAdapter protocol", () => {
 					{
 						headers: {
 							"Content-Type": "audio/mpeg",
-							"x-openrouter-generation-id": "gen_provider_1",
+							"X-Generation-Id": "gen_provider_1",
 						},
 					},
 				);

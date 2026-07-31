@@ -185,7 +185,7 @@ PII не включается в generic logs.
 - Codex auth age/status;
 - SQLite file/WAL size.
 
-Для дешёвой VPS P0 может писать metrics JSON в log. P1 — Prometheus endpoint или lightweight collector.
+P0 держит bounded process-local aggregates и отдаёт safe JSON через `GET /metrics` только прямому loopback peer; отсутствие peer evidence закрывает доступ, а Caddy/public/forwarded requests получают отказ. Snapshot не содержит IDs, model/voice names, text, contact, audio/base64, auth или provider error bodies. Точные milestone, p50/p95 и missing-sample semantics зафиксированы в `apps/server/src/observability/README.md`. Сохранённый operator snapshot можно проверить и агрегированно вывести через `bun run scripts/observability-report.ts SAFE_SNAPSHOT.json`; скрипт не читает production memory.
 
 ## 8. Health model
 

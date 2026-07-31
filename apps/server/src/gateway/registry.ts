@@ -1,4 +1,5 @@
 import type { CreateConversationRequest } from "@botamin/contracts";
+import type { ObservabilityMetrics } from "../observability";
 import type { GatewaySession } from "./session";
 import {
 	type BrainTurnAdmission,
@@ -31,6 +32,7 @@ export interface SessionRegistryOptions {
 	now?: () => Date;
 	idFactory?: () => string;
 	cleanupIntervalMs?: number;
+	metrics?: ObservabilityMetrics;
 }
 
 interface SessionRecord {
@@ -50,6 +52,8 @@ export class SessionRegistry {
 	readonly #activeBySource = new Map<string, number>();
 	readonly #maxActive: number;
 	readonly #maxActivePerSource: number;
+	readonly #maxConcurrentBrainTurns: number;
+	readonly #maxPendingBrainTurns: number;
 	readonly #sessionMaxMs: number;
 	readonly #abandonedSessionMs: number;
 	readonly #terminalErrorCleanupMs: number;
@@ -58,23 +62,28 @@ export class SessionRegistry {
 	readonly #idFactory: () => string;
 	readonly #timer: ReturnType<typeof setInterval>;
 	readonly #turnQueue: BrainTurnQueue;
+	readonly #metrics: ObservabilityMetrics | undefined;
 	#disposed = false;
 
 	constructor(options: SessionRegistryOptions) {
 		this.#maxActive = options.maxActiveConversations;
 		this.#maxActivePerSource =
 			options.maxActiveConversationsPerSource ?? options.maxActiveConversations;
+		this.#maxConcurrentBrainTurns = options.maxConcurrentBrainTurns;
+		this.#maxPendingBrainTurns = options.maxPendingBrainTurns ?? 0;
 		this.#sessionMaxMs = options.sessionMaxMs;
 		this.#abandonedSessionMs = options.abandonedSessionMs ?? 10_000;
 		this.#terminalErrorCleanupMs = options.terminalErrorCleanupMs ?? 5_000;
 		this.#createSession = options.createSession;
 		this.#now = options.now ?? (() => new Date());
 		this.#idFactory = options.idFactory ?? (() => Bun.randomUUIDv7());
+		this.#metrics = options.metrics;
 		this.#turnQueue = new BrainTurnQueue({
-			maxActive: options.maxConcurrentBrainTurns,
-			maxPending: options.maxPendingBrainTurns ?? 0,
+			maxActive: this.#maxConcurrentBrainTurns,
+			maxPending: this.#maxPendingBrainTurns,
 			queueTimeoutMs: options.brainQueueTimeoutMs ?? 45_000,
 		});
+		this.#updateCapacity();
 		this.#timer = setInterval(
 			() => this.cleanupExpired(),
 			options.cleanupIntervalMs ?? 1_000,
@@ -92,6 +101,7 @@ export class SessionRegistry {
 			!this.hasCapacity ||
 			(this.#activeBySource.get(sourceKey) ?? 0) >= this.#maxActivePerSource
 		) {
+			this.#metrics?.recordQueue("session_capacity");
 			return null;
 		}
 		const now = this.#now();
@@ -101,7 +111,25 @@ export class SessionRegistry {
 			conversationId,
 			expiresAt,
 			request,
-			acquireTurn: (input) => this.#turnQueue.acquire(input),
+			acquireTurn: async (input) => {
+				const startedAt = this.#now().getTime();
+				const pending = this.#turnQueue.acquire(input);
+				this.#updateCapacity();
+				const result = await pending;
+				this.#metrics?.recordQueue(
+					result.ok ? "granted" : result.reason,
+					Math.max(0, this.#now().getTime() - startedAt),
+				);
+				this.#updateCapacity();
+				if (!result.ok) return result;
+				return {
+					ok: true,
+					release: () => {
+						result.release();
+						this.#updateCapacity();
+					},
+				};
+			},
 			onTerminalError: () => this.#scheduleTerminalErrorCleanup(conversationId),
 		});
 		this.#sessions.set(conversationId, {
@@ -113,6 +141,7 @@ export class SessionRegistry {
 			sourceKey,
 			(this.#activeBySource.get(sourceKey) ?? 0) + 1,
 		);
+		this.#updateCapacity();
 		return session;
 	}
 
@@ -200,7 +229,19 @@ export class SessionRegistry {
 		const next = (this.#activeBySource.get(record.sourceKey) ?? 1) - 1;
 		if (next <= 0) this.#activeBySource.delete(record.sourceKey);
 		else this.#activeBySource.set(record.sourceKey, next);
+		this.#updateCapacity();
 		return record;
+	}
+
+	#updateCapacity(): void {
+		this.#metrics?.setCapacity({
+			activeSessions: this.#sessions.size,
+			maxActiveSessions: this.#maxActive,
+			activeBrainTurns: this.#turnQueue.activeCount,
+			maxActiveBrainTurns: this.#maxConcurrentBrainTurns,
+			pendingBrainTurns: this.#turnQueue.pendingCount,
+			maxPendingBrainTurns: this.#maxPendingBrainTurns,
+		});
 	}
 
 	#scheduleTerminalErrorCleanup(conversationId: string): void {

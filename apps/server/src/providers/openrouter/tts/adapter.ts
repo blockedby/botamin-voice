@@ -45,10 +45,6 @@ export interface OpenRouterTtsTelemetryEvent {
 	model: string;
 	voice: string;
 	format: "mp3";
-	conversationId: string;
-	turnId: string;
-	generationId: string;
-	segmentId: string;
 	characters: number;
 	attempt: number;
 	retry: boolean;
@@ -56,7 +52,7 @@ export interface OpenRouterTtsTelemetryEvent {
 	latencyMs: number;
 	bytes: number;
 	circuit: CircuitState;
-	providerRequestId?: string;
+	outcome: "success" | "failure" | "stale";
 }
 
 export interface OpenRouterTtsAdapterOptions {
@@ -64,6 +60,12 @@ export interface OpenRouterTtsAdapterOptions {
 	fetch?: OpenRouterFetch;
 	now?: () => number;
 	telemetry?: (event: OpenRouterTtsTelemetryEvent) => void;
+	circuitTelemetry?: (state: CircuitState) => void;
+	capacityTelemetry?: (event: {
+		active: number;
+		limit: number;
+		rejected: boolean;
+	}) => void;
 	isGenerationCurrent?: (
 		conversationId: string,
 		generationId: string,
@@ -83,6 +85,10 @@ export class OpenRouterTtsAdapter implements TtsPort {
 	readonly #now: () => number;
 	readonly #telemetry:
 		| ((event: OpenRouterTtsTelemetryEvent) => void)
+		| undefined;
+	readonly #circuitTelemetry: ((state: CircuitState) => void) | undefined;
+	readonly #capacityTelemetry:
+		| ((event: { active: number; limit: number; rejected: boolean }) => void)
 		| undefined;
 	readonly #isGenerationCurrent:
 		| ((conversationId: string, generationId: string) => boolean)
@@ -106,12 +112,16 @@ export class OpenRouterTtsAdapter implements TtsPort {
 			);
 		this.#now = options.now ?? Date.now;
 		this.#telemetry = options.telemetry;
+		this.#circuitTelemetry = options.circuitTelemetry;
+		this.#capacityTelemetry = options.capacityTelemetry;
 		this.#isGenerationCurrent = options.isGenerationCurrent;
 		this.#circuit = new OpenRouterCircuitBreaker({
 			failureThreshold: this.#config.tts.circuitFailureThreshold,
 			cooldownMs: this.#config.tts.circuitCooldownMs,
 			now: this.#now,
 		});
+		this.#emitCircuitState();
+		this.#emitCapacity(false);
 	}
 
 	markGenerationObsolete(generationId: string): void {
@@ -170,6 +180,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 			throw new OpenRouterTtsError("TTS_INVALID_REQUEST", false, false);
 		}
 		if (this.#activeCount >= this.#config.tts.maxConcurrency) {
+			this.#emitCapacity(true);
 			throw new OpenRouterTtsError(
 				"TTS_CONCURRENCY_LIMIT",
 				true,
@@ -179,9 +190,11 @@ export class OpenRouterTtsAdapter implements TtsPort {
 
 		this.#activeSegments.add(segmentKey);
 		this.#activeCount += 1;
+		this.#emitCapacity(false);
 		let circuitAcquired = false;
 		try {
 			if (!this.#circuit.tryAcquire()) {
+				this.#emitCircuitState();
 				throw new OpenRouterTtsError(
 					"TTS_CIRCUIT_OPEN",
 					true,
@@ -193,11 +206,13 @@ export class OpenRouterTtsAdapter implements TtsPort {
 			const result = await this.#synthesizeWithRetry(request, characters);
 			this.#credentialHealth.recordSuccess();
 			this.#circuit.recordSuccess();
+			this.#emitCircuitState();
 			this.#ensureCurrent(request);
 			return result;
 		} catch (error) {
 			if (isCancellation(error) || !this.#isCurrent(request)) {
 				if (circuitAcquired) this.#circuit.cancelProbe();
+				this.#emitCircuitState();
 				throw createAbortError("TTS synthesis aborted or generation obsolete");
 			}
 			if (circuitAcquired && error instanceof OpenRouterTtsError) {
@@ -208,11 +223,13 @@ export class OpenRouterTtsAdapter implements TtsPort {
 					retryable: error.retryable,
 					forceOpen: [401, 402, 404].includes(error.status ?? -1),
 				});
+				this.#emitCircuitState();
 			}
 			throw error;
 		} finally {
 			this.#activeSegments.delete(segmentKey);
 			this.#activeCount -= 1;
+			this.#emitCapacity(false);
 		}
 	}
 
@@ -278,6 +295,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 		let telemetryStatus: number | "network" = "network";
 		let responseBytes = 0;
 		let providerRequestId: string | undefined;
+		let outcome: OpenRouterTtsTelemetryEvent["outcome"] = "failure";
 		try {
 			const response = await fetchWithConnectTimeout(
 				this.#fetch,
@@ -334,6 +352,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				);
 			}
 			this.#ensureCurrent(request, signal);
+			outcome = "success";
 			return TtsAudioSegmentSchema.parse({
 				generationId: request.generationId,
 				segmentId: request.segmentId,
@@ -345,16 +364,13 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				final: true,
 			});
 		} finally {
+			if (!this.#isCurrent(request)) outcome = "stale";
 			const event: OpenRouterTtsTelemetryEvent = {
 				provider: "openrouter",
 				operation: "tts",
 				model: this.#config.tts.model,
 				voice: this.#config.tts.voice,
 				format: "mp3",
-				conversationId: request.conversationId,
-				turnId: request.turnId,
-				generationId: request.generationId,
-				segmentId: request.segmentId,
 				characters,
 				attempt,
 				retry: attempt > 1,
@@ -362,13 +378,33 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				latencyMs: Math.max(0, this.#now() - startedAt),
 				bytes: responseBytes,
 				circuit: this.#circuit.state,
-				...(providerRequestId === undefined ? {} : { providerRequestId }),
+				outcome,
 			};
 			try {
 				this.#telemetry?.(event);
 			} catch {
 				// Observability must never change provider request semantics.
 			}
+		}
+	}
+
+	#emitCapacity(rejected: boolean): void {
+		try {
+			this.#capacityTelemetry?.({
+				active: this.#activeCount,
+				limit: this.#config.tts.maxConcurrency,
+				rejected,
+			});
+		} catch {
+			// Observability must never change provider admission semantics.
+		}
+	}
+
+	#emitCircuitState(): void {
+		try {
+			this.#circuitTelemetry?.(this.#circuit.state);
+		} catch {
+			// Observability must never change provider circuit semantics.
 		}
 	}
 

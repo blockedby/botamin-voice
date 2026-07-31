@@ -8,6 +8,7 @@ import type {
 	SttPort,
 	TtsPort,
 } from "@botamin/contracts";
+import { createServerApp } from "../app";
 import { closeDomainDatabase, openDomainDatabase } from "../db";
 import { createProductionRuntime, SqliteSessionPersistence } from "./runtime";
 
@@ -80,6 +81,67 @@ describe("production runtime readiness with injected credential-free ports", () 
 			last_error_code: "BRAIN_PROTOCOL_ERROR",
 		});
 		closeDomainDatabase(database);
+	});
+
+	test("Codex subscription auth loss fails readiness without exposing auth detail", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "botamin-auth-loss-"));
+		directories.push(directory);
+		const promptDir = join(directory, "brain");
+		const codexHome = join(directory, "codex-home");
+		await mkdir(promptDir, { recursive: true });
+		await mkdir(codexHome, { recursive: true });
+		const agents = join(promptDir, "AGENTS.md");
+		await writeFile(agents, "# auth-loss fake prompt\n", { mode: 0o444 });
+		await chmod(agents, 0o444);
+		const authLostBrain: BrainPort & { close(): Promise<void> } = {
+			...brain,
+			health: async () => ({
+				status: "unavailable",
+				code: "CODEX_SUBSCRIPTION_AUTH_REQUIRED",
+			}),
+		};
+		const runtime = await createProductionRuntime(
+			{
+				APP_ORIGIN: "http://localhost:5173",
+				AUTO_MIGRATE: "true",
+				DATABASE_URL: `file:${join(directory, "data", "app.db")}`,
+				MIGRATIONS_DIR: resolve("drizzle"),
+				BRAIN_PROVIDER: "codex-subscription",
+				CODEX_MODEL: "gpt-5.6-luna",
+				CODEX_HOME: codexHome,
+				CODEX_CWD: promptDir,
+				PROMPT_RUNTIME_DIR: promptDir,
+				CODEX_TOOL_MODE: "envelope",
+				CODEX_MAX_CONCURRENT_TURNS: "1",
+				MAX_ACTIVE_CONVERSATIONS: "1",
+				MAX_CONCURRENT_BRAIN_TURNS: "1",
+				STT_PROVIDER: "openrouter",
+				TTS_PROVIDER: "openrouter",
+				OPENROUTER_API_KEY: "test-placeholder-not-a-secret",
+				OPENROUTER_STT_AUDIO_FORMAT: "wav",
+				OPENROUTER_STT_LANGUAGE: "ru",
+				OPENROUTER_TTS_RESPONSE_FORMAT: "mp3",
+				STT_TEXT_ONLY_INPUT_FALLBACK: "false",
+				STORE_RAW_AUDIO: "false",
+			},
+			{ brain: authLostBrain, stt, tts },
+		);
+		try {
+			const ready = await runtime.readiness();
+			expect(ready.status).toBe("unready");
+			expect(ready.checks.find((check) => check.name === "brain")).toEqual({
+				name: "brain",
+				status: "unready",
+				code: "CODEX_SUBSCRIPTION_AUTH_REQUIRED",
+			});
+			const response = await createServerApp(runtime).request("/health/ready");
+			expect(response.status).toBe(503);
+			const body = JSON.stringify(await response.json());
+			expect(body).not.toContain("auth.json");
+			expect(body).not.toContain("refresh_token");
+		} finally {
+			await runtime.dispose();
+		}
 	});
 
 	test("checks actual migrated SQLite, prompt bundle, fakes, and capacity", async () => {

@@ -27,7 +27,6 @@ import {
 	OpenRouterResponseLimitError,
 	OpenRouterTimeoutError,
 	readBoundedResponseBytes,
-	safeProviderRequestId,
 	sleepWithSignal,
 	throwIfAborted,
 } from "./http";
@@ -43,8 +42,6 @@ export interface OpenRouterSttTelemetryEvent {
 	operation: "stt";
 	model: string;
 	format: "wav";
-	conversationId: string;
-	turnId: string;
 	audioBytes: number;
 	durationMs: number;
 	attempt: number;
@@ -52,7 +49,7 @@ export interface OpenRouterSttTelemetryEvent {
 	status: number | "network";
 	latencyMs: number;
 	circuit: CircuitState;
-	providerRequestId?: string;
+	outcome: "success" | "failure" | "stale";
 }
 
 export interface OpenRouterSttAdapterOptions {
@@ -60,6 +57,12 @@ export interface OpenRouterSttAdapterOptions {
 	fetch?: OpenRouterFetch;
 	now?: () => number;
 	telemetry?: (event: OpenRouterSttTelemetryEvent) => void;
+	circuitTelemetry?: (state: CircuitState) => void;
+	capacityTelemetry?: (event: {
+		active: number;
+		limit: number;
+		rejected: boolean;
+	}) => void;
 	isTurnCurrent?: (conversationId: string, turnId: string) => boolean;
 	/** Inject the same instance into STT and TTS for one-key health. */
 	credentialHealth?: OpenRouterCredentialHealth;
@@ -75,6 +78,10 @@ export class OpenRouterSttAdapter implements SttPort {
 	readonly #now: () => number;
 	readonly #telemetry:
 		| ((event: OpenRouterSttTelemetryEvent) => void)
+		| undefined;
+	readonly #circuitTelemetry: ((state: CircuitState) => void) | undefined;
+	readonly #capacityTelemetry:
+		| ((event: { active: number; limit: number; rejected: boolean }) => void)
 		| undefined;
 	readonly #isTurnCurrent:
 		| ((conversationId: string, turnId: string) => boolean)
@@ -96,12 +103,16 @@ export class OpenRouterSttAdapter implements SttPort {
 			);
 		this.#now = options.now ?? Date.now;
 		this.#telemetry = options.telemetry;
+		this.#circuitTelemetry = options.circuitTelemetry;
+		this.#capacityTelemetry = options.capacityTelemetry;
 		this.#isTurnCurrent = options.isTurnCurrent;
 		this.#circuit = new OpenRouterCircuitBreaker({
 			failureThreshold: this.#config.stt.circuitFailureThreshold,
 			cooldownMs: this.#config.stt.circuitCooldownMs,
 			now: this.#now,
 		});
+		this.#emitCircuitState();
+		this.#emitCapacity(false);
 	}
 
 	markTurnObsolete(turnId: string): void {
@@ -140,25 +151,30 @@ export class OpenRouterSttAdapter implements SttPort {
 			throw new OpenRouterSttError("STT_INVALID_REQUEST", false);
 		}
 		if (this.#activeCount >= this.#config.stt.maxConcurrency) {
+			this.#emitCapacity(true);
 			throw new OpenRouterSttError("STT_CONCURRENCY_LIMIT", true);
 		}
 
 		this.#activeTurns.add(turnKey);
 		this.#activeCount += 1;
+		this.#emitCapacity(false);
 		let circuitAcquired = false;
 		try {
 			if (!this.#circuit.tryAcquire()) {
+				this.#emitCircuitState();
 				throw new OpenRouterSttError("STT_CIRCUIT_OPEN", true);
 			}
 			circuitAcquired = true;
 			const result = await this.#transcribeWithRetry(request, wav);
 			this.#credentialHealth.recordSuccess();
 			this.#circuit.recordSuccess();
+			this.#emitCircuitState();
 			this.#ensureCurrent(request);
 			return result;
 		} catch (error) {
 			if (isCancellation(error) || !this.#isCurrent(request)) {
 				if (circuitAcquired) this.#circuit.cancelProbe();
+				this.#emitCircuitState();
 				throw createAbortError("STT transcription aborted or turn obsolete");
 			}
 			if (circuitAcquired && error instanceof OpenRouterSttError) {
@@ -169,11 +185,13 @@ export class OpenRouterSttAdapter implements SttPort {
 					retryable: error.retryable,
 					forceOpen: [401, 402, 404].includes(error.status ?? -1),
 				});
+				this.#emitCircuitState();
 			}
 			throw error;
 		} finally {
 			this.#activeTurns.delete(turnKey);
 			this.#activeCount -= 1;
+			this.#emitCapacity(false);
 		}
 	}
 
@@ -232,7 +250,7 @@ export class OpenRouterSttAdapter implements SttPort {
 	): Promise<SttTranscriptionResult> {
 		const startedAt = this.#now();
 		let telemetryStatus: number | "network" = "network";
-		let providerRequestId: string | undefined;
+		let outcome: OpenRouterSttTelemetryEvent["outcome"] = "failure";
 		try {
 			const response = await fetchWithConnectTimeout(
 				this.#fetch,
@@ -272,7 +290,6 @@ export class OpenRouterSttAdapter implements SttPort {
 				this.#config.stt.connectTimeoutMs,
 			);
 			telemetryStatus = response.status;
-			providerRequestId = safeProviderRequestId(response);
 			if (response.status !== 200) {
 				await discardBoundedErrorBody(response, signal);
 				throw mapHttpStatus(
@@ -295,6 +312,7 @@ export class OpenRouterSttAdapter implements SttPort {
 				response.headers.get("Retry-After"),
 			);
 			this.#ensureCurrent(request, signal);
+			outcome = "success";
 			return SttTranscriptionResultSchema.parse({
 				conversationId: request.conversationId,
 				turnId: request.turnId,
@@ -302,13 +320,12 @@ export class OpenRouterSttAdapter implements SttPort {
 				final: true,
 			});
 		} finally {
+			if (!this.#isCurrent(request)) outcome = "stale";
 			const event: OpenRouterSttTelemetryEvent = {
 				provider: "openrouter",
 				operation: "stt",
 				model: this.#config.stt.model,
 				format: "wav",
-				conversationId: request.conversationId,
-				turnId: request.turnId,
 				audioBytes: request.audio.byteLength,
 				durationMs: wav.durationMs,
 				attempt,
@@ -316,13 +333,33 @@ export class OpenRouterSttAdapter implements SttPort {
 				status: telemetryStatus,
 				latencyMs: Math.max(0, this.#now() - startedAt),
 				circuit: this.#circuit.state,
-				...(providerRequestId === undefined ? {} : { providerRequestId }),
+				outcome,
 			};
 			try {
 				this.#telemetry?.(event);
 			} catch {
 				// Observability must never change provider request semantics.
 			}
+		}
+	}
+
+	#emitCapacity(rejected: boolean): void {
+		try {
+			this.#capacityTelemetry?.({
+				active: this.#activeCount,
+				limit: this.#config.stt.maxConcurrency,
+				rejected,
+			});
+		} catch {
+			// Observability must never change provider admission semantics.
+		}
+	}
+
+	#emitCircuitState(): void {
+		try {
+			this.#circuitTelemetry?.(this.#circuit.state);
+		} catch {
+			// Observability must never change provider circuit semantics.
 		}
 	}
 

@@ -47,6 +47,11 @@ apps/server/src/notifiers/notifier.ts
 apps/server/src/notifiers/notifiers.test.ts
 apps/server/src/notifiers/outbox.ts
 apps/server/src/notifiers/webhook.ts
+apps/server/src/observability/README.md
+apps/server/src/observability/index.ts
+apps/server/src/observability/metrics.test.ts
+apps/server/src/observability/metrics.ts
+apps/server/src/observability/pipeline.integration.test.ts
 apps/server/src/orchestrator/context.ts
 apps/server/src/orchestrator/generation.ts
 apps/server/src/orchestrator/index.ts
@@ -248,6 +253,7 @@ scripts/codex-sdk-spike.ts
 scripts/deploy-local.sh
 scripts/deploy-production.sh
 scripts/device-auth.sh
+scripts/observability-report.ts
 scripts/openrouter-stt-smoke.ts
 scripts/openrouter-tts-smoke.ts
 scripts/restore.sh
@@ -290,6 +296,9 @@ tests/contracts/openrouter-provider-harness.test.ts
 tests/contracts/typecheck-negative-control.ts
 tests/contracts/voice-data-leakage.test.ts
 tests/fixtures/reference-gateway-utterance-assembler.ts
+tests/security/failure-drills.test.ts
+tests/security/leakage-and-bundle.test.ts
+tests/security/observability-report.test.ts
 tests/tsconfig.json
 tsconfig.base.json
 tsconfig.json

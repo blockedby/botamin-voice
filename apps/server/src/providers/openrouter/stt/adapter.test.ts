@@ -277,8 +277,10 @@ describe("OpenRouterSttAdapter protocol", () => {
 			audioBytes: wav.byteLength,
 			durationMs: 100,
 			status: 200,
-			providerRequestId: "gen_stt_1",
 		});
+		expect(snapshot).not.toContain(CONVERSATION_ID);
+		expect(snapshot).not.toContain(TURN_ID);
+		expect(snapshot).not.toContain("gen_stt_1");
 	});
 });
 

@@ -186,8 +186,12 @@ describe("OpenRouterTtsAdapter protocol", () => {
 			format: "mp3",
 			status: 200,
 			bytes: mp3.byteLength,
-			providerRequestId: "req_tts_1",
 		});
+		expect(snapshot).not.toContain(CONVERSATION_ID);
+		expect(snapshot).not.toContain(TURN_ID);
+		expect(snapshot).not.toContain(GENERATION_ID);
+		expect(snapshot).not.toContain(SEGMENT_ID);
+		expect(snapshot).not.toContain("req_tts_1");
 	});
 });
 

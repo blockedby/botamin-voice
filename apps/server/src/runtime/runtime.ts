@@ -27,6 +27,7 @@ import {
 	PollingNotificationWorker,
 	SignedWebhookNotifier,
 } from "../notifiers";
+import { ObservabilityMetrics } from "../observability";
 import {
 	ConversationOrchestrator,
 	createInitialConversationState,
@@ -64,6 +65,7 @@ export interface RuntimeSessionRegistry {
 export interface ServerRuntime {
 	readonly config: RuntimeConfig;
 	readonly registry: RuntimeSessionRegistry;
+	readonly metrics?: ObservabilityMetrics;
 	readiness(): Promise<ReadyHealthResponse>;
 	dispose(): Promise<void>;
 }
@@ -162,6 +164,7 @@ export async function createProductionRuntime(
 		...(env.MIGRATIONS_DIR ? { migrationsFolder: env.MIGRATIONS_DIR } : {}),
 	});
 	const now = overrides.now ?? (() => new Date());
+	const metrics = new ObservabilityMetrics({ now: () => now().getTime() });
 	const persistence = new SqliteSessionPersistence(database, now);
 	const notifier = overrides.notifier ?? createLeadNotifier(config, now);
 	if (notifier.kind !== config.notifier.kind) {
@@ -176,7 +179,7 @@ export async function createProductionRuntime(
 		});
 	const outboxWorker = new PollingNotificationWorker(database, notifier, {
 		pollIntervalMs: overrides.outboxPollIntervalMs ?? 1_000,
-		workerOptions: { now },
+		workerOptions: { now, metrics },
 	});
 	const retentionWorker = new TranscriptRetentionWorker(database, {
 		retentionDays: config.transcriptRetentionDays,
@@ -203,12 +206,20 @@ export async function createProductionRuntime(
 		new OpenRouterSttAdapter({
 			config: config.voice,
 			credentialHealth: sharedCredential,
+			telemetry: (event) => metrics.recordStt(event),
+			circuitTelemetry: (state) => metrics.recordCircuitState("stt", state),
+			capacityTelemetry: (event) =>
+				metrics.recordProviderCapacity("stt", event),
 		});
 	const tts =
 		overrides.tts ??
 		new OpenRouterTtsAdapter({
 			config: config.voice,
 			credentialHealth: sharedCredential,
+			telemetry: (event) => metrics.recordTts(event),
+			circuitTelemetry: (state) => metrics.recordCircuitState("tts", state),
+			capacityTelemetry: (event) =>
+				metrics.recordProviderCapacity("tts", event),
 		});
 
 	const registry = new SessionRegistry({
@@ -217,6 +228,7 @@ export async function createProductionRuntime(
 		maxConcurrentBrainTurns: config.maxConcurrentBrainTurns,
 		maxPendingBrainTurns: config.maxPendingBrainTurns,
 		brainQueueTimeoutMs: config.brainQueueTimeoutMs,
+		metrics,
 		sessionMaxMs: config.sessionMaxMs,
 		abandonedSessionMs: config.admission.abandonedSessionMs,
 		now,
@@ -256,6 +268,7 @@ export async function createProductionRuntime(
 					maxCharsPerTurn: config.voice.tts.maxCharsPerTurn,
 					maxCharsPerSession: config.voice.tts.maxCharsPerSession,
 				},
+				metrics,
 			});
 			persistence.create({
 				id: conversationId,
@@ -286,6 +299,7 @@ export async function createProductionRuntime(
 				onTerminalError,
 				acquireTurn,
 				now,
+				metrics,
 			});
 		},
 	});
@@ -295,6 +309,7 @@ export async function createProductionRuntime(
 	return {
 		config,
 		registry,
+		metrics,
 		async readiness(): Promise<ReadyHealthResponse> {
 			const [databaseReady, brainHealth, sttHealth, ttsHealth] =
 				await Promise.all([

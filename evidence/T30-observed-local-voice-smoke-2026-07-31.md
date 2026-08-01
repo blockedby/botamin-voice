@@ -58,10 +58,14 @@ The observed run followed the server-owned envelope identity fix from [PR 18](ht
 
 The deterministic remediation after `749fb4f` did **not** repeat an external provider run. It hardens the owner-operated smoke and adds credential-free loopback evidence for:
 
-- strict whole-file MP3 validation before any `playback.started` acknowledgement, including one-byte/non-MP3 rejection and a valid two-segment generation;
+- structural whole-file MP3 prefiltering plus decoder-backed acceptance before any `playback.started` acknowledgement, including one-byte/non-MP3/header-valid-random-body rejection and a known-valid two-segment generation;
 - one-final-per-commit and one-generation-per-turn state binding, with zero/double/stale/mismatched negative controls;
 - one overall create/body/WS/turn/WS-stop/REST-stop deadline, validated stop response, and no passing output before successful cleanup;
 - honest deterministic timeline boundaries for provider STT/TTS request and completion, first actual Brain delta, client metadata/binary receipt, pairing, and playback start/completion.
+
+### Local decoder requirement
+
+Bun/non-browser execution of `scripts/local-voice-e2e-smoke.ts` requires `ffmpeg` on `PATH`. The smoke passes each structurally valid MP3 to a bounded, argument-array subprocess with error-on-decode and null output. Decoder absence, nonzero exit/crash, or timeout fails the smoke before acknowledgement; decoder stdout/stderr are never forwarded. Browser execution remains gated on successful Web Audio `decodeAudioData` and buffer-source `start`.
 
 ## Remaining release gates — REV-005 follow-up
 

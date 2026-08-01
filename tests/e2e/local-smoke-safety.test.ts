@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	BINARY_AUDIO_FRAME_KIND,
 	encodeBinaryAudioFrame,
+	isCompleteMp3File,
 } from "../../packages/contracts/src";
 import { createDeterministicMp3Fixture } from "../../packages/test-fixtures/src";
 
@@ -17,6 +19,7 @@ type LoopbackMode =
 	| "valid-two-segment"
 	| "one-byte"
 	| "non-mp3"
+	| "header-valid-random"
 	| "zero-final"
 	| "double-final"
 	| "stale-final"
@@ -34,7 +37,7 @@ async function run(
 	env: Record<string, string | undefined>,
 	args: string[] = [],
 ) {
-	const child = Bun.spawn(["bun", "run", script, ...args], {
+	const child = Bun.spawn([process.execPath, "run", script, ...args], {
 		cwd: root,
 		env: { ...Bun.env, ...env },
 		stdout: "pipe",
@@ -63,7 +66,37 @@ function jsonEvent(
 	});
 }
 
-async function runLoopback(mode: LoopbackMode, fixtureTurns = 1) {
+function createHeaderValidRandomBody(): Uint8Array {
+	const frameLength = 24;
+	const bytes = new Uint8Array(frameLength * 10);
+	for (let frame = 0; frame < 10; frame += 1) {
+		const offset = frame * frameLength;
+		bytes.set([0xff, 0xf3, 0x14, 0], offset);
+		for (let index = 4; index < frameLength; index += 1) {
+			bytes[offset + index] = (frame * 31 + index * 17) & 0xff;
+		}
+	}
+	return bytes;
+}
+
+async function createFakeDecoder(source: string): Promise<string> {
+	const directory = await mkdtemp(join(tmpdir(), "botamin-t30-decoder-"));
+	await writeFile(
+		join(directory, "ffmpeg"),
+		`#!${process.execPath}\n${source}\n`,
+		{ mode: 0o700 },
+	);
+	return directory;
+}
+
+async function runLoopback(
+	mode: LoopbackMode,
+	fixtureTurns = 1,
+	options: {
+		timeoutMs?: number;
+		env?: Record<string, string | undefined>;
+	} = {},
+) {
 	let createRequests = 0;
 	let stopRequests = 0;
 	let stopWsMessages = 0;
@@ -198,7 +231,9 @@ async function runLoopback(mode: LoopbackMode, fixtureTurns = 1) {
 							? new Uint8Array([0xff])
 							: mode === "non-mp3"
 								? new TextEncoder().encode("not-an-mp3")
-								: mp3;
+								: mode === "header-valid-random"
+									? createHeaderValidRandomBody()
+									: mp3;
 					ws.send(
 						jsonEvent(++sequence, "audio.segment", {
 							generationId: metadataGeneration,
@@ -223,6 +258,7 @@ async function runLoopback(mode: LoopbackMode, fixtureTurns = 1) {
 				if (
 					mode !== "one-byte" &&
 					mode !== "non-mp3" &&
+					mode !== "header-valid-random" &&
 					mode !== "mismatched-generation"
 				) {
 					ws.send(
@@ -237,7 +273,8 @@ async function runLoopback(mode: LoopbackMode, fixtureTurns = 1) {
 		const result = await run(
 			{
 				BOTAMIN_EXTERNAL_VOICE_E2E: "1",
-				BOTAMIN_VOICE_E2E_TIMEOUT_MS: "300",
+				BOTAMIN_VOICE_E2E_TIMEOUT_MS: String(options.timeoutMs ?? 300),
+				...options.env,
 			},
 			[
 				"--server-url",
@@ -307,10 +344,14 @@ describe("T30 opt-in local voice smoke safety", () => {
 		expect(source).toContain("BOTAMIN_EXTERNAL_VOICE_E2E");
 		expect(source).toContain("--pcm");
 		expect(source).toContain("--fixture");
+		expect(source).toContain("context.decodeAudioData(exact.buffer)");
+		expect(source).toContain("source.start(0)");
 	});
 
-	test("one turn with two adjacent complete MP3 segments is validated, started, acknowledged, and cleaned up", async () => {
-		const result = await runLoopback("valid-two-segment");
+	test("a known-valid fixture is decoder-accepted before two playback acknowledgements", async () => {
+		const result = await runLoopback("valid-two-segment", 1, {
+			timeoutMs: 3_000,
+		});
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("");
 		expect(result.output.status).toBe("passed");
@@ -321,6 +362,7 @@ describe("T30 opt-in local voice smoke safety", () => {
 			audioSegments: 2,
 			audioDone: 1,
 			playbackReady: 2,
+			localDecoderAccepts: 2,
 			playbackStarted: 2,
 		});
 		expect(result.playbackAcks).toBe(2);
@@ -332,9 +374,88 @@ describe("T30 opt-in local voice smoke safety", () => {
 		for (const mode of ["one-byte", "non-mp3"] as const) {
 			const result = await runLoopback(mode);
 			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toBe("");
 			expect(result.output.status).toBe("failed");
 			expect(result.output.counts.playbackStarted).toBe(0);
 			expect(result.playbackAcks).toBe(0);
+		}
+	});
+
+	test("a structurally valid MP3 with random frame bodies is decoder-rejected without acknowledgement", async () => {
+		expect(isCompleteMp3File(createHeaderValidRandomBody())).toBe(true);
+		const result = await runLoopback("header-valid-random", 1, {
+			timeoutMs: 2_000,
+		});
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toBe("");
+		expect(result.output).toMatchObject({
+			status: "failed",
+			reason: "decoder_failed",
+		});
+		expect(result.output.counts.playbackReady).toBe(0);
+		expect(result.output.counts.playbackStarted).toBe(0);
+		expect(result.playbackAcks).toBe(0);
+	});
+
+	test("decoder crash output is suppressed and cannot acknowledge or pass", async () => {
+		const directory = await createFakeDecoder(
+			'console.error("private audio transcript must stay suppressed"); process.exit(23);',
+		);
+		try {
+			const result = await runLoopback("valid-two-segment", 1, {
+				timeoutMs: 1_000,
+				env: { PATH: directory },
+			});
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toBe("");
+			expect(result.stdout).not.toContain("private audio transcript");
+			expect(result.output).toMatchObject({
+				status: "failed",
+				reason: "decoder_failed",
+			});
+			expect(result.playbackAcks).toBe(0);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("decoder timeout is killed by the overall deadline without acknowledgement", async () => {
+		const directory = await createFakeDecoder("await Bun.sleep(10_000);");
+		try {
+			const result = await runLoopback("valid-two-segment", 1, {
+				timeoutMs: 300,
+				env: { PATH: directory },
+			});
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toBe("");
+			expect(result.output).toMatchObject({
+				status: "failed",
+				reason: "deadline_exceeded",
+			});
+			expect(result.elapsedMs).toBeLessThan(2_000);
+			expect(result.playbackAcks).toBe(0);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("an unavailable decoder fails the smoke safely without acknowledgement", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "botamin-t30-no-decoder-"));
+		try {
+			const result = await runLoopback("valid-two-segment", 1, {
+				timeoutMs: 1_000,
+				env: { PATH: directory },
+			});
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toBe("");
+			expect(result.output).toMatchObject({
+				status: "failed",
+				reason: "decoder_unavailable",
+			});
+			expect(result.output.counts.playbackReady).toBe(0);
+			expect(result.playbackAcks).toBe(0);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
 		}
 	});
 

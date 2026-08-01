@@ -7,6 +7,7 @@
  *
  * Use --fixture or --fixture-turns N only for synthetic canonical PCM. The
  * script never synthesizes provider speech input and emits aggregate evidence.
+ * Bun/non-browser runs require ffmpeg on PATH for decoder-backed MP3 checks.
  */
 import {
 	AtomicServerAudioSegmentFrameSchema,
@@ -34,8 +35,8 @@ const counts = {
 	audioDone: 0,
 	responseMp3Bytes: 0,
 	playbackReady: 0,
-	browserNeutralDecodeStarts: 0,
-	strictPlaybackReadyValidations: 0,
+	browserDecodeStarts: 0,
+	localDecoderAccepts: 0,
 	playbackStarted: 0,
 };
 let booking = false;
@@ -200,7 +201,12 @@ class OverallDeadline {
 	}
 
 	async wait<T>(promise: Promise<T>): Promise<T> {
-		if (this.signal.aborted) throw this.signal.reason;
+		if (this.signal.aborted) {
+			// The operation may already have started before this guard. Observe any
+			// later rejection so deadline cleanup never leaks runtime diagnostics.
+			void promise.catch(() => undefined);
+			throw this.signal.reason;
+		}
 		return new Promise<T>((resolve, reject) => {
 			const aborted = () => reject(this.signal.reason);
 			this.signal.addEventListener("abort", aborted, { once: true });
@@ -252,7 +258,82 @@ interface DecodeContext {
 	close?(): Promise<void>;
 }
 
-async function validatePlaybackReadyMp3(bytes: Uint8Array): Promise<void> {
+class DecoderUnavailableError extends Error {}
+class DecoderFailedError extends Error {}
+
+const MAX_LOCAL_DECODE_BYTES = 5_000_000;
+
+async function decodeWithLocalFfmpeg(
+	bytes: Uint8Array,
+	deadline: OverallDeadline,
+): Promise<void> {
+	if (bytes.byteLength > MAX_LOCAL_DECODE_BYTES) {
+		throw new DecoderFailedError();
+	}
+	let child: ReturnType<typeof Bun.spawn>;
+	try {
+		child = Bun.spawn(
+			[
+				"ffmpeg",
+				"-nostdin",
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-xerror",
+				"-f",
+				"mp3",
+				"-threads",
+				"1",
+				"-i",
+				"pipe:0",
+				"-map",
+				"0:a:0",
+				"-f",
+				"null",
+				"-",
+			],
+			{
+				env: { PATH: Bun.env.PATH ?? "" },
+				stdin: "pipe",
+				stdout: "ignore",
+				stderr: "ignore",
+			},
+		);
+	} catch {
+		throw new DecoderUnavailableError();
+	}
+
+	const abortDecoder = (): void => {
+		try {
+			child.kill(9);
+		} catch {
+			// The decoder can exit before the deadline abort listener runs.
+		}
+	};
+	deadline.signal.addEventListener("abort", abortDecoder, { once: true });
+	try {
+		const stdin = child.stdin;
+		if (!stdin || typeof stdin === "number") throw new DecoderFailedError();
+		stdin.write(bytes);
+		stdin.end();
+		const exitCode = await deadline.wait(child.exited);
+		if (exitCode !== 0) throw new DecoderFailedError();
+	} catch (error) {
+		if (deadline.signal.aborted) throw deadline.signal.reason;
+		if (error instanceof DecoderFailedError) throw error;
+		throw new DecoderFailedError();
+	} finally {
+		deadline.signal.removeEventListener("abort", abortDecoder);
+		if (child.exitCode === null) abortDecoder();
+	}
+}
+
+async function validatePlaybackReadyMp3(
+	bytes: Uint8Array,
+	deadline: OverallDeadline,
+): Promise<void> {
+	// Structural validation is only a cheap prefilter; it cannot prove that
+	// arbitrary frame bodies are decodable audio.
 	if (!isCompleteMp3File(bytes)) throw new Error("incomplete MP3 file");
 	const scope = globalThis as unknown as {
 		AudioContext?: new () => DecodeContext;
@@ -260,27 +341,28 @@ async function validatePlaybackReadyMp3(bytes: Uint8Array): Promise<void> {
 	};
 	const Context = scope.AudioContext ?? scope.webkitAudioContext;
 	if (!Context) {
-		counts.strictPlaybackReadyValidations += 1;
+		await decodeWithLocalFfmpeg(bytes, deadline);
+		counts.localDecoderAccepts += 1;
 		counts.playbackReady += 1;
-		pushTiming("playback.ready.strict-complete-mp3");
+		pushTiming("playback.ready.local-decode");
 		return;
 	}
 	const context = new Context();
 	try {
 		const exact = bytes.slice();
-		const decoded = await context.decodeAudioData(exact.buffer);
-		await context.resume?.();
+		const decoded = await deadline.wait(context.decodeAudioData(exact.buffer));
+		if (context.resume) await deadline.wait(context.resume());
 		const source = context.createBufferSource();
 		source.buffer = decoded;
 		source.connect(context.destination);
 		source.start(0);
 		source.stop?.(0);
 		source.disconnect?.();
-		counts.browserNeutralDecodeStarts += 1;
+		counts.browserDecodeStarts += 1;
 		counts.playbackReady += 1;
 		pushTiming("playback.ready.decode-start");
 	} finally {
-		await context.close?.();
+		if (context.close) await deadline.wait(context.close());
 	}
 }
 
@@ -369,7 +451,8 @@ async function processServerMessage(data: unknown): Promise<void> {
 		});
 		const frame = decodeBinaryAudioFrame(atomic.rawFrame);
 		if (!isCompleteMp3File(frame.payload)) throw new Error("incomplete MP3");
-		await validatePlaybackReadyMp3(frame.payload);
+		if (!deadline) throw new Error("missing overall deadline");
+		await validatePlaybackReadyMp3(frame.payload, deadline);
 		if (activeTurn !== turn || turn.pendingAudio !== pending) {
 			throw new Error("stale audio decode");
 		}
@@ -671,10 +754,14 @@ try {
 		throw new Error("incomplete journey");
 	}
 	candidatePassed = true;
-} catch {
+} catch (error) {
 	failureReason = deadline?.signal.aborted
 		? "deadline_exceeded"
-		: `${phase}_failed`;
+		: error instanceof DecoderUnavailableError
+			? "decoder_unavailable"
+			: error instanceof DecoderFailedError
+				? "decoder_failed"
+				: `${phase}_failed`;
 } finally {
 	try {
 		await cleanup();

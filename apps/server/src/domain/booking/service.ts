@@ -16,8 +16,8 @@ import {
 	CreateBookingResultSchema,
 	type MeetingSlot,
 	MeetingSlotSchema,
+	PersistedQualificationPatchSchema,
 	type QualificationPatch,
-	QualificationPatchSchema,
 } from "@botamin/contracts";
 import { and, eq, inArray } from "drizzle-orm";
 import type { DomainDatabase } from "../../db/database";
@@ -78,6 +78,10 @@ interface CommittedOperation<T> {
 	eventId?: string;
 }
 
+function persistedQualification(qualificationJson: string): QualificationPatch {
+	return PersistedQualificationPatchSchema.parse(JSON.parse(qualificationJson));
+}
+
 function bookingSnapshot(row: BookingRow): BookingSnapshot {
 	if (
 		row.company === null ||
@@ -103,9 +107,7 @@ function bookingSnapshot(row: BookingRow): BookingSnapshot {
 			timeZone: row.meetingTimeZone,
 			durationMinutes: 20,
 		}),
-		qualification: QualificationPatchSchema.parse(
-			JSON.parse(row.qualificationJson),
-		),
+		qualification: persistedQualification(row.qualificationJson),
 		qualificationStatus: row.qualificationStatus,
 		createdAt: row.createdAt,
 		updatedAt: row.updatedAt,
@@ -335,10 +337,7 @@ export class SqliteBookingService implements BookingService {
 						"Qualification requires an existing booked booking",
 					);
 				}
-				bookingSnapshot(existing);
-				const current = QualificationPatchSchema.parse(
-					JSON.parse(existing.qualificationJson),
-				);
+				const current = bookingSnapshot(existing).qualification ?? {};
 				const merged: QualificationPatch = { ...current, ...parsed.patch };
 				const updatedFields = Object.keys(parsed.patch).sort();
 				const timestamp = this.now().toISOString();

@@ -155,6 +155,30 @@ export const QualificationPatchSchema = z
 	})
 	.strict();
 
+export const PersistedQualificationPatchSchema =
+	QualificationPatchSchema.extend({
+		role: z.string().trim().min(1).max(200).optional(),
+		industry: z.string().trim().min(1).max(200).optional(),
+		companySize: z.string().trim().min(1).max(100).optional(),
+		currentChannels: z
+			.array(z.string().trim().min(1).max(80))
+			.max(10)
+			.optional(),
+		crm: z.string().trim().min(1).max(120).optional(),
+		currentProcess: z.string().trim().min(1).max(1000).optional(),
+		pains: z.array(z.string().trim().min(1).max(300)).max(10).optional(),
+		desiredUseCase: z.string().trim().min(1).max(500).optional(),
+		timeline: z.string().trim().min(1).max(200).optional(),
+		notes: z.string().trim().min(1).max(1500).optional(),
+	})
+		.strict()
+		.transform(({ monthlyLeadVolume, salesManagerCount }) =>
+			QualificationPatchSchema.parse({
+				...(monthlyLeadVolume === undefined ? {} : { monthlyLeadVolume }),
+				...(salesManagerCount === undefined ? {} : { salesManagerCount }),
+			}),
+		);
+
 export const KnownFactsSchema = z
 	.object({
 		company: z.string().max(200).optional(),

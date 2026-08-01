@@ -29,6 +29,7 @@ import {
 	isCompleteMp3File,
 	MeetingSlotSchema,
 	MpegAudioBytesSchema,
+	PersistedQualificationPatchSchema,
 	QualificationPatchSchema,
 	ServerWsEventSchema,
 	STT_CONTRACT_MAX_AUDIO_BYTES,
@@ -260,6 +261,26 @@ describe("shared contracts", () => {
 				}).success,
 			).toBe(false);
 		}
+	});
+
+	test("normalizes prior persisted qualification fields without relaxing writes", () => {
+		expect(
+			PersistedQualificationPatchSchema.parse({
+				role: " Head of Sales ",
+				crm: " amoCRM ",
+				monthlyLeadVolume: " около 240 ",
+			}),
+		).toEqual({ monthlyLeadVolume: "около 240" });
+		expect(
+			PersistedQualificationPatchSchema.safeParse({ role: 42 }).success,
+		).toBe(false);
+		expect(
+			PersistedQualificationPatchSchema.safeParse({ unknownLegacyField: true })
+				.success,
+		).toBe(false);
+		expect(
+			QualificationPatchSchema.safeParse({ role: "Head of Sales" }).success,
+		).toBe(false);
 	});
 
 	test("allows one or both qualification fields for partial and complete input", () => {

@@ -425,6 +425,122 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("reads and normalizes a populated legacy qualification row on append", async () => {
+		const { database, input, conversationId } = fixture();
+		const service = new SqliteBookingService(database);
+		const created = await service.createBooking(input);
+		database
+			.update(bookings)
+			.set({
+				qualificationJson: JSON.stringify({
+					role: "Head of Sales",
+					crm: "amoCRM",
+					monthlyLeadVolume: "около 700",
+				}),
+				qualificationStatus: "partial",
+			})
+			.where(eq(bookings.id, created.bookingId))
+			.run();
+
+		const legacySnapshot = await service.findById(created.bookingId);
+		expect(legacySnapshot).toMatchObject({
+			id: created.bookingId,
+			conversationId,
+			qualificationStatus: "partial",
+			qualification: { monthlyLeadVolume: "около 700" },
+		});
+		expect(legacySnapshot?.qualification).toEqual({
+			monthlyLeadVolume: "около 700",
+		});
+
+		const appendInput = {
+			bookingId: created.bookingId,
+			idempotencyKey: "qualification-legacy-append-01",
+			patch: { salesManagerCount: 6 },
+			completion: "complete" as const,
+		};
+		const appended = await service.appendQualification(appendInput);
+		expect(await service.appendQualification(appendInput)).toEqual(appended);
+		expect(appended).toMatchObject({
+			bookingId: created.bookingId,
+			qualificationStatus: "complete",
+			updatedFields: ["salesManagerCount"],
+		});
+
+		const stored = database
+			.select({
+				id: bookings.id,
+				conversationId: bookings.conversationId,
+				qualificationJson: bookings.qualificationJson,
+				qualificationStatus: bookings.qualificationStatus,
+			})
+			.from(bookings)
+			.where(eq(bookings.id, created.bookingId))
+			.get();
+		expect(stored).toEqual({
+			id: created.bookingId,
+			conversationId,
+			qualificationJson:
+				'{"monthlyLeadVolume":"около 700","salesManagerCount":6}',
+			qualificationStatus: "complete",
+		});
+		const normalizedSnapshot = await service.findById(created.bookingId);
+		expect(normalizedSnapshot).toMatchObject({
+			id: created.bookingId,
+			conversationId,
+			qualificationStatus: "complete",
+		});
+		expect(normalizedSnapshot?.qualification).toEqual({
+			monthlyLeadVolume: "около 700",
+			salesManagerCount: 6,
+		});
+		expect(
+			database.select({ value: count() }).from(bookings).get()?.value,
+		).toBe(1);
+		expect(
+			database.select({ value: count() }).from(domainEvents).get()?.value,
+		).toBe(2);
+		closeDomainDatabase(database);
+	});
+
+	test("fails closed on malformed persisted qualification JSON", async () => {
+		const { database, input } = fixture();
+		const service = new SqliteBookingService(database);
+		const created = await service.createBooking(input);
+		database
+			.update(bookings)
+			.set({ qualificationJson: "{" })
+			.where(eq(bookings.id, created.bookingId))
+			.run();
+
+		await expect(service.findById(created.bookingId)).rejects.toThrow();
+		await expect(
+			service.appendQualification({
+				bookingId: created.bookingId,
+				idempotencyKey: "qualification-malformed-row-01",
+				patch: { salesManagerCount: 6 },
+				completion: "partial",
+			}),
+		).rejects.toThrow();
+		expect(
+			database
+				.select({
+					qualificationJson: bookings.qualificationJson,
+					qualificationStatus: bookings.qualificationStatus,
+				})
+				.from(bookings)
+				.where(eq(bookings.id, created.bookingId))
+				.get(),
+		).toEqual({ qualificationJson: "{", qualificationStatus: "none" });
+		expect(
+			database.select({ value: count() }).from(domainEvents).get()?.value,
+		).toBe(1);
+		expect(
+			database.select({ value: count() }).from(idempotencyKeys).get()?.value,
+		).toBe(1);
+		closeDomainDatabase(database);
+	});
+
 	test("accepts an empty skipped patch", async () => {
 		const { database, input } = fixture();
 		const service = new SqliteBookingService(database);

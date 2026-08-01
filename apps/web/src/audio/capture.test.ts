@@ -5,6 +5,7 @@ import {
 	parseMonoPcm16Wav,
 } from "../../../../packages/test-fixtures/src";
 import {
+	AUDIO_WORKLET_MODULE_URL,
 	AudioWorkletCapture,
 	type CaptureAudioContextLike,
 	type CaptureSourceLike,
@@ -49,10 +50,17 @@ function createCaptureHarness(sampleRate = 48_000, hasWorklet = true) {
 		},
 	};
 	let contextClosed = false;
+	const moduleUrls: string[] = [];
 	const context: CaptureAudioContextLike = {
 		sampleRate,
 		...(hasWorklet
-			? { audioWorklet: { addModule: async () => undefined } }
+			? {
+					audioWorklet: {
+						addModule: async (url: string) => {
+							moduleUrls.push(url);
+						},
+					},
+				}
 			: {}),
 		createMediaStreamSource: () => source,
 		resume: async () => undefined,
@@ -60,22 +68,20 @@ function createCaptureHarness(sampleRate = 48_000, hasWorklet = true) {
 			contextClosed = true;
 		},
 	};
-	const revoked: string[] = [];
 	return {
 		track,
 		stream,
 		node,
 		source,
+		moduleUrls,
 		get contextClosed() {
 			return contextClosed;
 		},
-		revoked,
 		apis: {
 			getUserMedia: async () => stream,
 			createAudioContext: () => context,
 			createWorkletNode: () => node,
-			createWorkletModuleUrl: () => "blob:worklet",
-			revokeWorkletModuleUrl: (url: string) => revoked.push(url),
+			workletModuleUrl: AUDIO_WORKLET_MODULE_URL,
 		},
 	};
 }
@@ -138,7 +144,7 @@ describe("PCM capture and resampling", () => {
 			onFrame: (frame) => frames.push(frame),
 		});
 		await capture.start();
-		expect(harness.revoked).toEqual(["blob:worklet"]);
+		expect(harness.moduleUrls).toEqual([AUDIO_WORKLET_MODULE_URL]);
 
 		capture.setMuted(true);
 		expect(harness.track.enabled).toBe(false);

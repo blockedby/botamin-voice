@@ -1,13 +1,19 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App";
+import { z } from "zod";
 import "./styles.css";
+
+// The production CSP intentionally forbids eval. Configure Zod before loading
+// App and its shared schemas so the optional JIT probe is never attempted.
+z.config({ jitless: true });
 
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("Root element is missing");
 
-createRoot(rootElement).render(
-	<StrictMode>
-		<App />
-	</StrictMode>,
-);
+void import("./App").then(({ App }) => {
+	createRoot(rootElement).render(
+		<StrictMode>
+			<App />
+		</StrictMode>,
+	);
+});

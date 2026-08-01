@@ -99,6 +99,7 @@ apps/server/src/runtime/runtime.ts
 apps/server/tsconfig.json
 apps/web/index.html
 apps/web/package.json
+apps/web/public/assets/botamin-pcm-capture-worklet.js
 apps/web/src/App.tsx
 apps/web/src/audio/capture.test.ts
 apps/web/src/audio/capture.ts

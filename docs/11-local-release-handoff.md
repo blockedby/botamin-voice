@@ -12,7 +12,7 @@
 
 - [x] Integrated implementation baseline is current through PRs #6–#21.
 - [x] Fresh deterministic release-commit suite passed 433 tests across 54 files with 0 failures and 3,788 assertions before and after `bun run build`.
-- [x] Typecheck, lint/format, build, deterministic spec generation, validator, and the current 316-file checksum set passed.
+- [x] Typecheck, lint/format, build, deterministic spec generation, validator, and the current 317-file checksum set passed.
 - [x] The committed [T30 owner-observed artifact](../evidence/T30-observed-local-voice-smoke-2026-07-31.md) records a real local OpenRouter/Luna one-turn path and a five-turn path with exactly one booked row and one sent outbox event.
 - [x] `scripts/deploy-local.sh` was observed succeeding with mode-`0600` materialized files mounted read-only; app and Caddy were healthy and dependency readiness reported all checks ready.
 - [x] Chrome desktop/mobile acceptance was observed for landing, consent, microphone-permission denial, safe denied state, no fetch/WebSocket before microphone permission, and no horizontal overflow.

@@ -4,6 +4,7 @@ import type {
 	BrainPort,
 	BrainTurnInput,
 	KnownFacts,
+	MeetingSlot,
 	SafeErrorCode,
 	SttPort,
 	SttTranscriptionResult,
@@ -91,7 +92,13 @@ export type OrchestratorEvent =
 	| {
 			type: "ignored";
 			generationId: string;
-			source: "audio.commit" | "stt" | "brain" | "tts" | "generation";
+			source:
+				| "audio.commit"
+				| "visitor.text.submit"
+				| "stt"
+				| "brain"
+				| "tts"
+				| "generation";
 	  };
 
 export interface ConversationOrchestratorOptions {
@@ -108,6 +115,8 @@ export interface ConversationOrchestratorOptions {
 	speechBudgets?: SpeechBudgetOptions;
 	createId?: () => string;
 	metrics?: ObservabilityMetrics;
+	/** Server wall clock shared with production booking candidate generation. */
+	now?: () => Date;
 }
 
 export interface AudioCommitInput {
@@ -116,6 +125,13 @@ export interface AudioCommitInput {
 	audio: Uint8Array;
 	contentType: "audio/wav";
 	language?: string;
+	knownFacts: KnownFacts;
+}
+
+export interface TextSubmitInput {
+	turnId: string;
+	generationId: string;
+	text: string;
 	knownFacts: KnownFacts;
 }
 
@@ -210,6 +226,9 @@ export type ConservativeNegativeIntent =
 	| "qualification_decline"
 	| null;
 
+const PRE_BOOKING_REFUSAL_PATTERN =
+	/^(?:нет спасибо|нет(?: спасибо)? (?:мне |нам )?не интересно|нет(?: спасибо)? я не заинтересован(?:а|ы)?|спасибо (?:мне |нам )?не интересно|(?:мне |нам )?не интересно|(?:я )?не заинтересован(?:а|ы)?|(?:меня|нас) (?:это )?не интересует|(?:это|мне это|нам это) не актуально(?: до свидания)?|не нужно|не надо|отказываюсь|я отказываюсь|не хочу (?:продолжать|общаться|разговаривать|оставлять контакты|бронировать)|давайте (?:закончим|завершим)(?: разговор)?|прекратим разговор|до свидания)(?: пожалуйста)?$/u;
+
 /** High-precision refusal detection; objections and uncertain language stay put. */
 export function classifyConservativeNegativeIntent(
 	userText: string,
@@ -219,14 +238,13 @@ export function classifyConservativeNegativeIntent(
 	if (
 		!normalized ||
 		normalized.length > 160 ||
+		/[?？]/u.test(userText) ||
 		/(?:^|\s)(?:но|может|пока)(?:\s|$)/u.test(normalized)
 	) {
 		return null;
 	}
 	if (state.booking === null) {
-		return /^(?:нет спасибо|нет спасибо (?:мне )?не интересно|спасибо не интересно|мне не интересно|не нужно|не надо|отказываюсь|я отказываюсь|не хочу (?:продолжать|общаться|разговаривать|оставлять контакты|бронировать)|давайте (?:закончим|завершим)(?: разговор)?|прекратим разговор)(?: пожалуйста)?$/u.test(
-			normalized,
-		)
+		return PRE_BOOKING_REFUSAL_PATTERN.test(normalized)
 			? "pre_booking_refusal"
 			: null;
 	}
@@ -257,6 +275,7 @@ export class ConversationOrchestrator {
 	readonly #stt: SttPort;
 	readonly #brain: BrainPort;
 	readonly #tts: TtsPort | null;
+	readonly #bookings: BookingService;
 	readonly #tools: BookingToolExecutor;
 	readonly #sttTurns = new AtomicSttTurnGate();
 	readonly #generations = new GenerationCoordinator();
@@ -265,6 +284,11 @@ export class ConversationOrchestrator {
 	readonly #chunkerOptions: SpeechChunkerOptions;
 	readonly #createId: () => string;
 	readonly #metrics: ObservabilityMetrics | undefined;
+	readonly #now: () => Date;
+	readonly #activeCandidateMeetingSlots = new Map<
+		string,
+		{ turnId: string; candidates: [MeetingSlot, MeetingSlot] }
+	>();
 	readonly #pendingDynamicEvents = new Map<string, OrchestratorEvent[]>();
 	readonly #deferredDomainEvents: Array<
 		Extract<
@@ -292,6 +316,7 @@ export class ConversationOrchestrator {
 		this.#stt = options.stt;
 		this.#brain = options.brain;
 		this.#tts = options.tts ?? null;
+		this.#bookings = options.bookings;
 		this.#tools = new BookingToolExecutor(options.bookings);
 		this.#threadId = options.threadId;
 		this.#state =
@@ -305,6 +330,7 @@ export class ConversationOrchestrator {
 		this.#budgets = new SpeechBudgetGuard(options.speechBudgets);
 		this.#createId = options.createId ?? (() => Bun.randomUUIDv7());
 		this.#metrics = options.metrics;
+		this.#now = options.now ?? (() => new Date());
 		if (this.#state.stage === "DISCONNECTED") this.#sttTurns.suspend();
 		else if (isTerminalStage(this.#state.stage)) this.#sttTurns.close();
 	}
@@ -344,10 +370,14 @@ export class ConversationOrchestrator {
 		request: ToolRequest,
 		input: BrainTurnInput,
 	): Promise<{ ok: boolean }> => {
+		const activeCandidates = this.#activeCandidateMeetingSlots.get(
+			input.generationId,
+		);
 		if (
 			input.conversationId !== this.conversationId ||
 			!this.#canProcessTurns() ||
-			!this.#generations.accept(input.generationId, input.turnId)
+			!this.#generations.accept(input.generationId, input.turnId) ||
+			activeCandidates?.turnId !== input.turnId
 		) {
 			return { ok: false };
 		}
@@ -355,6 +385,7 @@ export class ConversationOrchestrator {
 			input.generationId,
 			input.turnId,
 			request,
+			activeCandidates.candidates,
 		);
 		if (outcome.publishable) {
 			this.#pendingDynamicEvents.set(input.generationId, [
@@ -448,60 +479,44 @@ export class ConversationOrchestrator {
 		const userText = final.text.trim();
 		this.#metrics?.markFinalTranscript(input.turnId);
 		this.#sttTurns.finish(accepted.turn);
-		const negativeIntent = classifyConservativeNegativeIntent(
+		yield* this.#acceptFinalTurn({
+			turnId: input.turnId,
+			generationId: input.generationId,
 			userText,
-			this.#state,
-		);
-		if (negativeIntent) {
-			const from = this.#state.stage;
-			const declined = this.apply(
-				negativeIntent === "qualification_decline" && from === "BOOKED"
-					? { type: "qualification_consent_declined" }
-					: { type: "clear_refusal" },
-			);
-			if (declined.ok) {
-				const text = this.#state.booking
-					? QUALIFICATION_DECLINE
-					: PRE_BOOKING_DECLINE;
-				yield {
-					type: "transcript.final",
-					turnId: input.turnId,
-					text: userText,
-				};
-				yield { type: "text.delta", generationId: input.generationId, text };
-				yield { type: "text.done", generationId: input.generationId, text };
-				yield {
-					type: "state.changed",
-					generationId: input.generationId,
-					from,
-					to: this.#state.stage,
-					reason: "explicit_user_refusal",
-				};
-				return;
-			}
-		}
-		let active: ReturnType<GenerationCoordinator["start"]>["active"];
-		try {
-			// Final acceptance and current-generation ownership are one synchronous
-			// fence. A newer commit can only resume after both have happened.
-			active = this.#generations.start(input.generationId, input.turnId).active;
-		} catch {
+			knownFacts: input.knownFacts,
+		});
+	}
+
+	/** Bypasses STT while entering the exact same final-turn brain/policy path. */
+	async *acceptTextSubmit(
+		input: TextSubmitInput,
+	): AsyncGenerator<OrchestratorEvent> {
+		if (!this.canAcceptVisitorTurn) {
 			yield {
 				type: "ignored",
 				generationId: input.generationId,
-				source: "generation",
+				source: "visitor.text.submit",
 			};
 			return;
 		}
-		yield { type: "transcript.final", turnId: input.turnId, text: userText };
-		yield* this.#runBrainTurn(
-			{
-				turnId: input.turnId,
+		const userText = input.text.trim();
+		if (!userText) {
+			yield {
+				type: "ignored",
 				generationId: input.generationId,
-				userText,
-				knownFacts: input.knownFacts,
-			},
-			active,
+				source: "visitor.text.submit",
+			};
+			return;
+		}
+		this.#metrics?.markFinalTranscript(input.turnId);
+		yield* this.#acceptFinalTurn({ ...input, userText });
+	}
+
+	get canAcceptVisitorTurn(): boolean {
+		return (
+			this.#canProcessTurns() &&
+			this.#state.stage !== "IDLE" &&
+			this.#state.stage !== "CONNECTING"
 		);
 	}
 
@@ -537,6 +552,7 @@ export class ConversationOrchestrator {
 					() => undefined,
 				)
 			: Promise.resolve();
+		this.#activeCandidateMeetingSlots.clear();
 		this.#pendingDynamicEvents.clear();
 		this.#pendingDynamicResponses.clear();
 		this.#deferredDomainEvents.length = 0;
@@ -549,6 +565,63 @@ export class ConversationOrchestrator {
 			settleWithin(resetTts, timeoutMs),
 		]).then(() => undefined);
 		return this.#closePromise;
+	}
+
+	async *#acceptFinalTurn(input: {
+		turnId: string;
+		generationId: string;
+		userText: string;
+		knownFacts: KnownFacts;
+	}): AsyncGenerator<OrchestratorEvent> {
+		const negativeIntent = classifyConservativeNegativeIntent(
+			input.userText,
+			this.#state,
+		);
+		if (negativeIntent) {
+			const from = this.#state.stage;
+			const declined = this.apply(
+				negativeIntent === "qualification_decline" && from === "BOOKED"
+					? { type: "qualification_consent_declined" }
+					: { type: "clear_refusal" },
+			);
+			if (declined.ok) {
+				const text = this.#state.booking
+					? QUALIFICATION_DECLINE
+					: PRE_BOOKING_DECLINE;
+				yield {
+					type: "transcript.final",
+					turnId: input.turnId,
+					text: input.userText,
+				};
+				yield { type: "text.delta", generationId: input.generationId, text };
+				yield { type: "text.done", generationId: input.generationId, text };
+				yield {
+					type: "state.changed",
+					generationId: input.generationId,
+					from,
+					to: this.#state.stage,
+					reason: "explicit_user_refusal",
+				};
+				return;
+			}
+		}
+		let active: ReturnType<GenerationCoordinator["start"]>["active"];
+		try {
+			active = this.#generations.start(input.generationId, input.turnId).active;
+		} catch {
+			yield {
+				type: "ignored",
+				generationId: input.generationId,
+				source: "generation",
+			};
+			return;
+		}
+		yield {
+			type: "transcript.final",
+			turnId: input.turnId,
+			text: input.userText,
+		};
+		yield* this.#runBrainTurn(input, active);
 	}
 
 	async *#runBrainTurn(
@@ -608,12 +681,15 @@ export class ConversationOrchestrator {
 		let suppressModelSpeech = false;
 		let toolSettledThisTurn = false;
 		let brainFailure: Extract<BrainDelta, { type: "error" }> | undefined;
+		let schedulingReady = false;
 		try {
-			this.#threadId ??= await this.#brain.createThread(this.conversationId);
+			const now = this.#now();
+			const candidateMeetingSlots =
+				await this.#bookings.candidateMeetingSlots();
 			if (!this.#generations.accept(input.generationId, input.turnId)) return;
 			const context = buildBrainContext({
 				conversationId: this.conversationId,
-				threadId: this.#threadId,
+				...(this.#threadId ? { threadId: this.#threadId } : {}),
 				turnId: input.turnId,
 				generationId: input.generationId,
 				userText: input.userText,
@@ -622,7 +698,16 @@ export class ConversationOrchestrator {
 				booking: this.#state.booking,
 				allowedActions: allowedActions(this.#state),
 				promptVersion: this.#promptVersion,
+				now,
+				candidateMeetingSlots,
 			});
+			schedulingReady = true;
+			this.#activeCandidateMeetingSlots.set(input.generationId, {
+				turnId: input.turnId,
+				candidates: candidateMeetingSlots,
+			});
+			this.#threadId ??= await this.#brain.createThread(this.conversationId);
+			if (!this.#generations.accept(input.generationId, input.turnId)) return;
 
 			// Exactly one BrainPort.runTurn call per accepted final transcript.
 			for await (const delta of this.#brain.runTurn(context, active.signal)) {
@@ -697,6 +782,9 @@ export class ConversationOrchestrator {
 						input.generationId,
 						input.turnId,
 						delta.tool,
+						context.schedulingContext.candidateMeetingSlots.map(
+							(candidate) => candidate.meetingSlot,
+						) as [MeetingSlot, MeetingSlot],
 					);
 					toolSettledThisTurn = true;
 					for (const event of outcome.events) yield event;
@@ -802,8 +890,10 @@ export class ConversationOrchestrator {
 				turnId: input.turnId,
 				generationId: input.generationId,
 				error: {
-					code: "BRAIN_PROTOCOL_ERROR",
-					message: "Brain turn failed",
+					code: schedulingReady ? "BRAIN_PROTOCOL_ERROR" : "DB_UNAVAILABLE",
+					message: schedulingReady
+						? "Brain turn failed"
+						: "Scheduling context is unavailable",
 					retryable: true,
 				},
 			};
@@ -917,6 +1007,7 @@ export class ConversationOrchestrator {
 		generationId: string,
 		turnId: string,
 		request: ToolRequest,
+		candidateMeetingSlots: [MeetingSlot, MeetingSlot],
 	): Promise<ToolOutcome> {
 		if (
 			!this.#canProcessTurns() ||
@@ -939,6 +1030,7 @@ export class ConversationOrchestrator {
 			execution = await this.#tools.execute(
 				this.#state,
 				this.conversationId,
+				candidateMeetingSlots,
 				request,
 			);
 		} catch (error) {
@@ -1266,6 +1358,7 @@ export class ConversationOrchestrator {
 		};
 		if (audioProduced)
 			yield { type: "audio.done", generationId: permit.generationId };
+		this.#activeCandidateMeetingSlots.delete(permit.generationId);
 		this.#pendingDynamicEvents.delete(permit.generationId);
 		this.#pendingDynamicResponses.delete(permit.generationId);
 	}
@@ -1282,6 +1375,7 @@ export class ConversationOrchestrator {
 			text: visible.join(" ").trim(),
 		};
 		if (audioProduced) yield { type: "audio.done", generationId };
+		this.#activeCandidateMeetingSlots.delete(generationId);
 		this.#pendingDynamicEvents.delete(generationId);
 		this.#pendingDynamicResponses.delete(generationId);
 		this.#generations.finish(generationId);
@@ -1317,6 +1411,7 @@ export class ConversationOrchestrator {
 		const interrupted = this.#generations.interrupt(active.generationId);
 		if (!interrupted) return Promise.resolve();
 		this.#prefetch.abortAll();
+		this.#activeCandidateMeetingSlots.delete(active.generationId);
 		this.#pendingDynamicEvents.delete(active.generationId);
 		this.#pendingDynamicResponses.delete(active.generationId);
 		const threadId = this.#threadId;

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { BrainDelta, CreateBookingInput } from "@botamin/contracts";
 import { count } from "drizzle-orm";
 import {
+	createTestBookingContacts,
 	FakeBrain,
 	FakeStt,
 	FakeTts,
@@ -13,6 +14,7 @@ import { ConversationStore } from "../db/conversation-store";
 import { closeDomainDatabase, openDomainDatabase } from "../db/database";
 import { bookings, domainEvents, notificationOutbox } from "../db/schema";
 import { SqliteBookingService } from "../domain/booking";
+import { generateCandidateMeetingSlots } from "../domain/booking/support";
 import type { NamedLeadNotifier } from "../notifiers/notifier";
 import {
 	ConversationOrchestrator,
@@ -71,7 +73,9 @@ describe("orchestrator with durable SQLite booking service", () => {
 			conversationId,
 			idempotencyKey: "sqlite-orchestrator-create-01",
 			name: "Мария",
-			contacts: [{ channel: "telegram", value: "@private_maria" }],
+			contacts: createTestBookingContacts(),
+			company: "Private Example LLC",
+			meetingSlot: generateCandidateMeetingSlots(new Date(timestamp))[0],
 			consentConfirmed: true,
 		};
 		const script: BrainDelta[] = [

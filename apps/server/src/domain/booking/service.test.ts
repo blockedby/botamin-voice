@@ -2,7 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { CreateBookingInput } from "@botamin/contracts";
+import type {
+	AppendQualificationInput,
+	CreateBookingInput,
+} from "@botamin/contracts";
 import { count, eq } from "drizzle-orm";
 import { ConversationStore } from "../../db/conversation-store";
 import {
@@ -18,9 +21,13 @@ import {
 } from "../../db/schema";
 import type { NamedLeadNotifier } from "../../notifiers/notifier";
 import { BookingDomainError, SqliteBookingService } from "./service";
+import { generateCandidateMeetingSlots } from "./support";
 
 const directories: string[] = [];
 const timestamp = "2026-07-30T20:22:00.000Z";
+const [meetingSlot, secondMeetingSlot] = generateCandidateMeetingSlots(
+	new Date("2099-01-01T00:00:00.000Z"),
+);
 const promptVersion = "a".repeat(64);
 
 function fixture(): {
@@ -54,9 +61,12 @@ function fixture(): {
 			conversationId,
 			idempotencyKey: "booking-attempt-0001",
 			name: "Александр",
-			contacts: [{ channel: "telegram", value: "@alex_private" }],
+			contacts: [
+				{ channel: "email", value: "alex@example.com" },
+				{ channel: "telegram", value: "@alex_private" },
+			],
 			company: "Private Example LLC",
-			preferredTimeText: "завтра после 15:00",
+			meetingSlot,
 			consentConfirmed: true,
 		},
 	};
@@ -95,6 +105,66 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("generates exactly two closest candidates for 2025-01-09 Thursday and skips committed slots", async () => {
+		const { database, input } = fixture();
+		const now = new Date("2025-01-09T09:00:00.000Z");
+		const expected = generateCandidateMeetingSlots(now);
+		const service = new SqliteBookingService(database, { now: () => now });
+
+		expect(await service.candidateMeetingSlots()).toEqual(expected);
+		await service.createBooking({ ...input, meetingSlot: expected[0] });
+		const afterCommit = await service.candidateMeetingSlots();
+
+		expect(afterCommit).toHaveLength(2);
+		expect(afterCommit[0]).toEqual(expected[1]);
+		expect(
+			afterCommit.every((slot) => slot.startAt !== expected[0].startAt),
+		).toBe(true);
+		expect(expected).toEqual(generateCandidateMeetingSlots(now));
+		expect(expected.map((slot) => slot.startAt)).toEqual([
+			"2025-01-10T06:00:00.000Z",
+			"2025-01-10T06:20:00.000Z",
+		]);
+		expect(
+			generateCandidateMeetingSlots(new Date("2025-01-10T20:00:00.000Z")).map(
+				(slot) => slot.startAt,
+			),
+		).toEqual(["2025-01-13T06:00:00.000Z", "2025-01-13T06:20:00.000Z"]);
+		expect(expected[0].timeZone).toBe("Europe/Moscow");
+		expect(
+			new Date(expected[0].startAt).getTime() - now.getTime(),
+		).toBeGreaterThan(0);
+		closeDomainDatabase(database);
+	});
+
+	test("rejects incomplete leads and clock-invalid slots without creating a booking", async () => {
+		const { database, input } = fixture();
+		const now = new Date(timestamp);
+		const service = new SqliteBookingService(database, { now: () => now });
+		const todayInMoscow = {
+			startAt: "2026-07-30T06:00:00.000Z",
+			endAt: "2026-07-30T06:20:00.000Z",
+			timeZone: "Europe/Moscow" as const,
+			durationMinutes: 20 as const,
+		};
+
+		for (const invalid of [
+			{ ...input, company: undefined },
+			{ ...input, contacts: [{ channel: "email", value: "alex@example.com" }] },
+			{ ...input, meetingSlot: todayInMoscow },
+		]) {
+			await expect(
+				service.createBooking(invalid as CreateBookingInput),
+			).rejects.toMatchObject({
+				code: "BOOKING_VALIDATION_FAILED",
+			});
+		}
+		expect(
+			database.select({ value: count() }).from(bookings).get()?.value,
+		).toBe(0);
+		closeDomainDatabase(database);
+	});
+
 	test("returns the stable booking for key and conversation replays", async () => {
 		const { database, input, conversationId } = fixture();
 		const service = new SqliteBookingService(database);
@@ -115,9 +185,11 @@ describe("SQLite booking transaction", () => {
 			bookingId: created.bookingId,
 			created: false,
 		});
-		expect((await service.findByConversationId(conversationId))?.name).toBe(
-			"Александр",
-		);
+		expect(await service.findByConversationId(conversationId)).toMatchObject({
+			name: "Александр",
+			company: input.company,
+			meetingSlot: input.meetingSlot,
+		});
 		expect(
 			database.select({ value: count() }).from(bookings).get()?.value,
 		).toBe(1);
@@ -164,6 +236,7 @@ describe("SQLite booking transaction", () => {
 			...input,
 			conversationId: secondConversationId,
 			name: "Мария",
+			meetingSlot: secondMeetingSlot,
 		};
 		const second = await service.createBooking(secondInput);
 
@@ -182,13 +255,13 @@ describe("SQLite booking transaction", () => {
 		const firstQualification = {
 			bookingId: first.bookingId,
 			idempotencyKey: qualificationKey,
-			patch: { role: "CEO" },
+			patch: { monthlyLeadVolume: "около 100" },
 			completion: "partial" as const,
 		};
 		const secondQualification = {
 			bookingId: second.bookingId,
 			idempotencyKey: qualificationKey,
-			patch: { role: "CMO" },
+			patch: { monthlyLeadVolume: "около 200" },
 			completion: "partial" as const,
 		};
 		await service.appendQualification(firstQualification);
@@ -196,21 +269,52 @@ describe("SQLite booking transaction", () => {
 		expect(await service.appendQualification(firstQualification)).toMatchObject(
 			{
 				bookingId: first.bookingId,
-				updatedFields: ["role"],
+				updatedFields: ["monthlyLeadVolume"],
 			},
 		);
 		await expect(
 			service.appendQualification({
 				...firstQualification,
-				patch: { role: "CFO" },
+				patch: { monthlyLeadVolume: "около 300" },
 			}),
 		).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
-		expect((await service.findById(first.bookingId))?.qualification?.role).toBe(
-			"CEO",
-		);
 		expect(
-			(await service.findById(second.bookingId))?.qualification?.role,
-		).toBe("CMO");
+			(await service.findById(first.bookingId))?.qualification
+				?.monthlyLeadVolume,
+		).toBe("около 100");
+		expect(
+			(await service.findById(second.bookingId))?.qualification
+				?.monthlyLeadVolume,
+		).toBe("около 200");
+		closeDomainDatabase(database);
+	});
+
+	test("rejects a committed internal slot for a different conversation", async () => {
+		const { database, input } = fixture();
+		const secondConversationId = Bun.randomUUIDv7();
+		new ConversationStore(database).create({
+			id: secondConversationId,
+			stage: "COLLECT_BOOKING",
+			promptVersion,
+			source: "landing",
+			locale: "ru-RU",
+			qualificationEnabled: true,
+			consentAt: timestamp,
+			startedAt: timestamp,
+		});
+		const service = new SqliteBookingService(database);
+		await service.createBooking(input);
+
+		await expect(
+			service.createBooking({
+				...input,
+				conversationId: secondConversationId,
+				idempotencyKey: "booking-slot-conflict-02",
+			}),
+		).rejects.toMatchObject({ code: "BOOKING_VALIDATION_FAILED" });
+		expect(
+			database.select({ value: count() }).from(bookings).get()?.value,
+		).toBe(1);
 		closeDomainDatabase(database);
 	});
 
@@ -222,9 +326,9 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 
 		const restarted = openDomainDatabase({ filename });
-		const replay = await new SqliteBookingService(restarted).createBooking(
-			input,
-		);
+		const replay = await new SqliteBookingService(restarted, {
+			now: () => new Date("2100-01-01T00:00:00.000Z"),
+		}).createBooking(input);
 		expect(replay).toMatchObject({
 			bookingId: created.bookingId,
 			created: false,
@@ -284,49 +388,183 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(reopened);
 	});
 
-	test("merges partial qualification and accepts an empty skipped patch", async () => {
+	test("persists and merges the two optional qualification fields", async () => {
 		const { database, input } = fixture();
 		const service = new SqliteBookingService(database);
 		const created = await service.createBooking(input);
-		await service.appendQualification({
+		const first = await service.appendQualification({
 			bookingId: created.bookingId,
 			idempotencyKey: "qualification-partial-01",
-			patch: { role: "Head of Sales", crm: "amoCRM" },
+			patch: { monthlyLeadVolume: "около 2000" },
 			completion: "partial",
 		});
 		const second = await service.appendQualification({
 			bookingId: created.bookingId,
-			idempotencyKey: "qualification-partial-02",
-			patch: { monthlyLeadVolume: "около 2000" },
-			completion: "partial",
+			idempotencyKey: "qualification-complete-01",
+			patch: { salesManagerCount: 12 },
+			completion: "complete",
 		});
+		const snapshot = await service.findById(created.bookingId);
+
+		expect(first).toMatchObject({
+			qualificationStatus: "partial",
+			updatedFields: ["monthlyLeadVolume"],
+		});
+		expect(second).toMatchObject({
+			qualificationStatus: "complete",
+			updatedFields: ["salesManagerCount"],
+		});
+		expect(snapshot).toMatchObject({
+			status: "booked",
+			qualificationStatus: "complete",
+			qualification: {
+				monthlyLeadVolume: "около 2000",
+				salesManagerCount: 12,
+			},
+		});
+		closeDomainDatabase(database);
+	});
+
+	test("reads and normalizes a populated legacy qualification row on append", async () => {
+		const { database, input, conversationId } = fixture();
+		const service = new SqliteBookingService(database);
+		const created = await service.createBooking(input);
+		database
+			.update(bookings)
+			.set({
+				qualificationJson: JSON.stringify({
+					role: "Head of Sales",
+					crm: "amoCRM",
+					monthlyLeadVolume: "около 700",
+				}),
+				qualificationStatus: "partial",
+			})
+			.where(eq(bookings.id, created.bookingId))
+			.run();
+
+		const legacySnapshot = await service.findById(created.bookingId);
+		expect(legacySnapshot).toMatchObject({
+			id: created.bookingId,
+			conversationId,
+			qualificationStatus: "partial",
+			qualification: { monthlyLeadVolume: "около 700" },
+		});
+		expect(legacySnapshot?.qualification).toEqual({
+			monthlyLeadVolume: "около 700",
+		});
+
+		const appendInput = {
+			bookingId: created.bookingId,
+			idempotencyKey: "qualification-legacy-append-01",
+			patch: { salesManagerCount: 6 },
+			completion: "complete" as const,
+		};
+		const appended = await service.appendQualification(appendInput);
+		expect(await service.appendQualification(appendInput)).toEqual(appended);
+		expect(appended).toMatchObject({
+			bookingId: created.bookingId,
+			qualificationStatus: "complete",
+			updatedFields: ["salesManagerCount"],
+		});
+
+		const stored = database
+			.select({
+				id: bookings.id,
+				conversationId: bookings.conversationId,
+				qualificationJson: bookings.qualificationJson,
+				qualificationStatus: bookings.qualificationStatus,
+			})
+			.from(bookings)
+			.where(eq(bookings.id, created.bookingId))
+			.get();
+		expect(stored).toEqual({
+			id: created.bookingId,
+			conversationId,
+			qualificationJson:
+				'{"monthlyLeadVolume":"около 700","salesManagerCount":6}',
+			qualificationStatus: "complete",
+		});
+		const normalizedSnapshot = await service.findById(created.bookingId);
+		expect(normalizedSnapshot).toMatchObject({
+			id: created.bookingId,
+			conversationId,
+			qualificationStatus: "complete",
+		});
+		expect(normalizedSnapshot?.qualification).toEqual({
+			monthlyLeadVolume: "около 700",
+			salesManagerCount: 6,
+		});
+		expect(
+			database.select({ value: count() }).from(bookings).get()?.value,
+		).toBe(1);
+		expect(
+			database.select({ value: count() }).from(domainEvents).get()?.value,
+		).toBe(2);
+		closeDomainDatabase(database);
+	});
+
+	test("fails closed on malformed persisted qualification JSON", async () => {
+		const { database, input } = fixture();
+		const service = new SqliteBookingService(database);
+		const created = await service.createBooking(input);
+		database
+			.update(bookings)
+			.set({ qualificationJson: "{" })
+			.where(eq(bookings.id, created.bookingId))
+			.run();
+
+		await expect(service.findById(created.bookingId)).rejects.toThrow();
+		await expect(
+			service.appendQualification({
+				bookingId: created.bookingId,
+				idempotencyKey: "qualification-malformed-row-01",
+				patch: { salesManagerCount: 6 },
+				completion: "partial",
+			}),
+		).rejects.toThrow();
+		expect(
+			database
+				.select({
+					qualificationJson: bookings.qualificationJson,
+					qualificationStatus: bookings.qualificationStatus,
+				})
+				.from(bookings)
+				.where(eq(bookings.id, created.bookingId))
+				.get(),
+		).toEqual({ qualificationJson: "{", qualificationStatus: "none" });
+		expect(
+			database.select({ value: count() }).from(domainEvents).get()?.value,
+		).toBe(1);
+		expect(
+			database.select({ value: count() }).from(idempotencyKeys).get()?.value,
+		).toBe(1);
+		closeDomainDatabase(database);
+	});
+
+	test("accepts an empty skipped patch", async () => {
+		const { database, input } = fixture();
+		const service = new SqliteBookingService(database);
+		const created = await service.createBooking(input);
 		const skipped = await service.appendQualification({
 			bookingId: created.bookingId,
 			idempotencyKey: "qualification-skipped-01",
 			patch: {},
 			completion: "skipped",
 		});
-		const snapshot = await service.findById(created.bookingId);
 
-		expect(second.updatedFields).toEqual(["monthlyLeadVolume"]);
 		expect(skipped).toMatchObject({
 			bookingId: created.bookingId,
 			qualificationStatus: "skipped",
 			updatedFields: [],
 		});
-		expect(snapshot).toMatchObject({
-			status: "booked",
+		expect(await service.findById(created.bookingId)).toMatchObject({
 			qualificationStatus: "skipped",
-			qualification: {
-				role: "Head of Sales",
-				crm: "amoCRM",
-				monthlyLeadVolume: "около 2000",
-			},
+			qualification: {},
 		});
 		closeDomainDatabase(database);
 	});
 
-	test("rejects empty partial qualification and qualification key conflicts", async () => {
+	test("rejects empty or legacy qualification and key conflicts", async () => {
 		const { database, input } = fixture();
 		const service = new SqliteBookingService(database);
 		const created = await service.createBooking(input);
@@ -338,17 +576,37 @@ describe("SQLite booking transaction", () => {
 				completion: "partial",
 			}),
 		).rejects.toMatchObject({ code: "BOOKING_VALIDATION_FAILED" });
+		for (const [field, value] of [
+			["role", "Head of Sales"],
+			["crm", "amoCRM"],
+		] as const) {
+			const legacyInput = {
+				bookingId: created.bookingId,
+				idempotencyKey: `qualification-legacy-${field}`,
+				patch: { [field]: value },
+				completion: "partial",
+			} as unknown as AppendQualificationInput;
+			await expect(
+				service.appendQualification(legacyInput),
+			).rejects.toMatchObject({
+				code: "BOOKING_VALIDATION_FAILED",
+			});
+		}
+		expect(await service.findById(created.bookingId)).toMatchObject({
+			qualificationStatus: "none",
+			qualification: {},
+		});
 		await service.appendQualification({
 			bookingId: created.bookingId,
 			idempotencyKey: "qualification-conflict-01",
-			patch: { role: "CEO" },
+			patch: { salesManagerCount: 3 },
 			completion: "partial",
 		});
 		await expect(
 			service.appendQualification({
 				bookingId: created.bookingId,
 				idempotencyKey: "qualification-conflict-01",
-				patch: { role: "CMO" },
+				patch: { salesManagerCount: 4 },
 				completion: "partial",
 			}),
 		).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
@@ -409,17 +667,27 @@ describe("SQLite booking transaction", () => {
 
 		expect(() =>
 			database.$client.run(
-				"INSERT INTO bookings (id, conversation_id, name, contacts_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+				"INSERT INTO bookings (id, conversation_id, name, contacts_json, company, meeting_start_at, meeting_end_at, meeting_timezone, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				[
 					Bun.randomUUIDv7(),
 					input.conversationId,
 					"Duplicate",
-					'[{"channel":"telegram","value":"@duplicate"}]',
+					'[{"channel":"email","value":"duplicate@example.com"},{"channel":"telegram","value":"@duplicate"}]',
+					"Duplicate LLC",
+					secondMeetingSlot.startAt,
+					secondMeetingSlot.endAt,
+					secondMeetingSlot.timeZone,
 					created.createdAt,
 					created.createdAt,
 				],
 			),
 		).toThrow("UNIQUE constraint failed");
+		expect(() =>
+			database.$client.run(
+				"UPDATE bookings SET meeting_start_at = '2099-01-05 06:00:00' WHERE id = ?",
+				[created.bookingId],
+			),
+		).toThrow("booking requires a valid internal meeting slot");
 		expect(() =>
 			database.$client.run(
 				"UPDATE bookings SET status = 'cancelled' WHERE id = ?",

@@ -19,8 +19,8 @@
 Table-driven cases:
 
 - все допустимые transitions;
-- запрещён `append_booking_qualification` до booking;
-- `create_booking` разрешён только из collection stage;
+- запрещён `append_booking_qualification` до committed booking, user-facing confirmation и отдельного consent;
+- `create_booking` разрешён только из `COLLECT_BOOKING`, при server contact consent и с одним из двух candidates активного turn;
 - disconnect после booking → booking stays;
 - clear refusal → declined;
 - retry не меняет domain effect;
@@ -45,10 +45,14 @@ Table-driven cases:
 
 ### Booking domain
 
-- one booking per conversation;
+- one booking per conversation и one booking per non-null `meeting_start_at`;
+- required name/company/working-email/phone-or-Telegram/consent/structured slot validation;
+- exactly two deterministic candidates, Moscow weekday/non-today/09:00–17:00 20-minute grid;
+- non-candidate, stale and internally occupied slots rejected;
+- migration preserves legacy rows with null meeting fields and does not invent slots; modern snapshot use fails closed;
 - same idempotency key/same payload → same result;
 - same key/different payload → conflict;
-- qualification patch merges fields;
+- qualification patch merges monthly inbound volume and integer `salesManagerCount`;
 - empty patch rejected;
 - notifier failure не rolls back booking;
 - PII redaction.
@@ -61,6 +65,7 @@ Default deterministic suites use no external credentials and keep ownership test
 
 Gateway/utterance-assembler tests prove:
 
+- exact 60,000 ms utterance and 2,000,000-byte atomic WAV caps, with server-advertised `maxPcmBytes=1,920,000` under default 16 kHz mono PCM16 settings;
 - bounded 16 kHz mono PCM16 plus one accepted `audio.commit` produces exactly one validated WAV with the expected RIFF/WAVE header, PCM16 metadata, data length and sample bytes;
 - empty, odd-byte, oversized, over-duration and duplicate-commit input is rejected or suppressed before `SttPort` invocation;
 - the atomic request contains the produced WAV bytes and `contentType: "audio/wav"`.
@@ -115,9 +120,13 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 ## 4. Integration tests
 
 - bounded PCM16 chunks → `audio.commit` → gateway-produced validated WAV → atomic `SttPort` request → fake OpenRouter already-WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
+- sample-derived capture progress/countdown uses accepted PCM16 bytes and stricter server duration/byte ceiling, then auto-commits exactly once;
+- bounded monotonic `visitor.text.submit` clears uncommitted audio, suppresses pending duplicates, retains sequence on rejection, emits server final once, and follows the same brain/state/tool/persistence path as speech;
+- typed composer is stage-gated, and booking form renders only from server-owned `COLLECT_BOOKING`, never transcript wording;
 - real SQLite transaction + fake notifier;
-- booking tool call inside brain turn;
-- booking event appears before qualification prompt/audio;
+- Luna receives server-owned current Moscow date/day and exactly two structured candidates with validated labels;
+- booking tool call accepts only one active candidate inside brain turn;
+- booking event and user-facing confirmation appear before qualification consent/question/audio;
 - reconnect with same conversation;
 - barge-in while OpenRouter requests/complete segments are in flight;
 - brain process restart;
@@ -134,10 +143,12 @@ Playwright with synthetic audio fixture:
 4. stream fixture PCM;
 5. observe listening/processing states and then exactly one `transcript.final`;
 6. receive assistant text and ordered complete MP3 segment events;
-7. complete booking;
-8. see booked UI;
-9. continue/skip qualification;
-10. verify backend DB/event payload.
+7. verify the circular countdown is sample-derived and reaches the 60-second limit without wall-clock drift;
+8. submit a normal typed final turn and then use the in-chat booking form only at `COLLECT_BOOKING`;
+9. choose one of exactly two server-labeled Moscow slots and complete required name/company/email/phone-or-Telegram/consent data;
+10. see booked UI and verify no external calendar/invitation claim;
+11. consent to or skip the two-field qualification;
+12. verify backend DB/event payload.
 
 Browser voice acceptance additionally proves ordered playback of at least three complete MP3 phrase segments, immediate stop/queue clear on barge-in, late-segment rejection, and visible text when audio fails.
 
@@ -177,15 +188,18 @@ Mobile viewport and slow network profiles included.
 14. отвечает не по теме;
 15. меняет задачу;
 16. молчит;
-17. даёт все данные одной репликой;
-18. исправляет контакт.
+17. даёт name/company/working-email/phone-or-Telegram одной typed или spoken репликой;
+18. исправляет контакт;
+18a. пытается выбрать третий/придуманный slot;
+18b. просит slot сегодня или в выходной;
+18c. typed form wording пытается открыть booking stage до server transition.
 
 ### Booking invariants
 
 19. retry create;
 20. disconnect сразу после create;
 21. отказывается от qualification;
-22. отвечает только на один qualification вопрос;
+22. после consent отвечает только на monthly inbound leads или integer manager count;
 23. повторяет booking данные;
 24. brain ошибочно пытается квалифицировать до create.
 
@@ -207,7 +221,9 @@ Mobile viewport and slow network profiles included.
 - factuality по allowed claims;
 - no prohibited promise;
 - no secret leakage;
-- one-question guideline;
+- one-question guideline и максимум два discovery-вопроса до soft offer;
+- qualification ограничена monthly inbound leads + integer `salesManagerCount`;
+- 10–15m RUB/month claim только с атрибуцией к пользовательскому брифу и explicit no-guarantee boundary;
 - refusal handling;
 - stage progress;
 - spoken-language quality;
@@ -262,14 +278,14 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ## 10. Acceptance checklist P0
 
-### Local release candidate `0.5.0-local-rc.1`
+### Local release candidate `0.5.0-local-rc.2`
 
-- [x] Integrated implementation baseline contains PRs #6–#21.
-- [x] Fresh deterministic release-commit suite passes 433 tests across 54 files with no failures and 3,788 assertions before and after `bun run build`; command evidence is recorded in [`../VALIDATION.md`](../VALIDATION.md).
-- [x] Product landing, CTA/consent, AI identity, Botamin use cases, refusal behavior, booking order/idempotency, safe provider failures, barge-in, prompt loading, envelope mode, and sandbox boundaries have deterministic coverage.
-- [x] Chrome desktop/mobile local acceptance covers landing, consent, permission-denied safe state, no fetch/WebSocket before mic permission, and no horizontal overflow.
-- [x] Owner-observed real local OpenRouter/Luna evidence records one complete turn and a five-turn journey with exactly one booking and one sent outbox event; see [`../evidence/T30-observed-local-voice-smoke-2026-07-31.md`](../evidence/T30-observed-local-voice-smoke-2026-07-31.md).
-- [x] `scripts/deploy-local.sh` was observed completing with read-only file secrets, healthy app/Caddy, and all dependency readiness checks ready at `http://localhost:5173`.
+- [x] The candidate extends the merged PR #24 baseline with the 60-second capture, typed conversation, scheduled booking, qualification, prompt, migration-compatibility, and refusal slices.
+- [x] Fresh deterministic release-candidate suite passes 484 tests across 56 files with no failures and 4,104 assertions; command evidence is recorded in [`../VALIDATION.md`](../VALIDATION.md).
+- [x] Product landing, CTA/consent, AI identity, 60-second sample-derived countdown, typed and spoken turns, strict supplied-slot booking, explicit refusal behavior, booking order/idempotency, safe provider failures, barge-in, prompt loading, envelope mode, and sandbox boundaries have deterministic coverage.
+- [x] Chrome local acceptance covers the strict-CSP worklet, visible countdown, typed refusal, permission-denied recovery, terminal behavior, and no horizontal overflow at 780 px and 390 px; Firefox headless rendered the 390 px page without CSP/runtime errors.
+- [x] A fresh bounded real local smoke completed one OpenRouter STT → Luna → OpenRouter TTS turn with one final transcript, one final answer, two decoder-accepted MP3 segments, and no booking. Earlier five-turn booking evidence remains in [`../evidence/T30-observed-local-voice-smoke-2026-07-31.md`](../evidence/T30-observed-local-voice-smoke-2026-07-31.md).
+- [x] `scripts/deploy-local.sh` completed from the candidate tree with read-only file secrets, migration, healthy app/Caddy, 60-second/2 MB runtime limits, and all dependency readiness checks ready at `http://localhost:5173`.
 - [x] Compose contains only app and Caddy in the P0 application path; the OpenRouter key stays backend-only, and text-only TTS degradation is environment-configurable without rebuilding.
 - [x] Backup/restore/rollback scripts, permission/checksum/integrity guards, readiness loops, and key-remount ordering pass credential-free deterministic validation and are documented for the owner.
 

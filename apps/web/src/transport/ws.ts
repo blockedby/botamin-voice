@@ -71,6 +71,8 @@ export class VoiceTransport {
 	private socket: WebSocketLike | null = null;
 	private resumeToken: string | null;
 	private clientSequence = 0;
+	private textSequence = 0;
+	private textSubmissionPending = false;
 	private lastServerSequence = 0;
 	private pendingSegment: PendingServerSegment | null = null;
 	private readonly incompleteAudioSequences = new Set<number>();
@@ -176,11 +178,39 @@ export class VoiceTransport {
 
 	/** One commit is accepted only for a ready, non-empty open utterance. */
 	commit(): boolean {
-		if (!this.canSend() || !this.utteranceHasAudio || this.utteranceCommitted) {
+		if (
+			!this.canSend() ||
+			!this.utteranceHasAudio ||
+			this.utteranceCommitted ||
+			this.textSubmissionPending
+		) {
 			return false;
 		}
 		if (!this.sendClientEvent("audio.commit", {})) return false;
 		this.utteranceCommitted = true;
+		return true;
+	}
+
+	/** Submit one final typed turn; the server remains the only booking authority. */
+	submitText(text: string): boolean {
+		if (
+			!this.canSend() ||
+			this.utteranceCommitted ||
+			this.textSubmissionPending
+		) {
+			return false;
+		}
+		if (
+			!this.sendClientEvent("visitor.text.submit", {
+				sequence: this.textSequence,
+				text,
+			})
+		) {
+			return false;
+		}
+		this.textSubmissionPending = true;
+		this.utteranceHasAudio = false;
+		this.utteranceNeedsRestart = false;
 		return true;
 	}
 
@@ -319,6 +349,14 @@ export class VoiceTransport {
 			this.utteranceCommitted = false;
 			this.utteranceHasAudio = false;
 			this.utteranceNeedsRestart = false;
+			if (this.textSubmissionPending) {
+				this.textSubmissionPending = false;
+				this.textSequence += 1;
+			}
+		}
+		if (event.type === "error" && this.textSubmissionPending) {
+			// A rejected sequence is retried with the same number.
+			this.textSubmissionPending = false;
 		}
 		this.options.onEvent?.(event);
 	}

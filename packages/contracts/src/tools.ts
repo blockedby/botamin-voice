@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { EntityIdSchema, Rfc3339UtcSchema } from "./common";
 import {
+	BookingContactsSchema,
 	BookingSnapshotSchema,
-	ContactSchema,
 	ConversationStageSchema,
+	MeetingSlotSchema,
 	QualificationPatchSchema,
 } from "./domain";
 
@@ -14,9 +15,9 @@ export const CreateBookingInputSchema = z
 		conversationId: EntityIdSchema,
 		idempotencyKey: IdempotencyKeySchema,
 		name: z.string().trim().min(1).max(120),
-		contacts: z.array(ContactSchema).min(1).max(3),
-		company: z.string().trim().min(1).max(200).optional(),
-		preferredTimeText: z.string().trim().min(1).max(500).optional(),
+		contacts: BookingContactsSchema,
+		company: z.string().trim().min(1).max(200),
+		meetingSlot: MeetingSlotSchema,
 		consentConfirmed: z.literal(true),
 	})
 	.strict();
@@ -57,7 +58,7 @@ export const AppendQualificationResultSchema = z
 		ok: z.literal(true),
 		bookingId: EntityIdSchema,
 		qualificationStatus: z.enum(["partial", "complete", "skipped"]),
-		updatedFields: z.array(z.string().min(1)).max(11),
+		updatedFields: z.array(z.string().min(1)).max(12),
 		updatedAt: Rfc3339UtcSchema,
 	})
 	.strict();
@@ -120,6 +121,7 @@ export const BookingToolExecutionSchema = z
 				stage: z.literal("COLLECT_BOOKING"),
 				sessionConversationId: EntityIdSchema,
 				currentBooking: BookingSnapshotSchema.nullable(),
+				candidateMeetingSlots: z.tuple([MeetingSlotSchema, MeetingSlotSchema]),
 				input: CreateBookingInputSchema,
 			})
 			.strict(),
@@ -135,6 +137,31 @@ export const BookingToolExecutionSchema = z
 	])
 	.superRefine((command, context) => {
 		if (command.type === "create_booking") {
+			const candidateStarts = command.candidateMeetingSlots.map(
+				(slot) => slot.startAt,
+			);
+			if (new Set(candidateStarts).size !== 2) {
+				context.addIssue({
+					code: "custom",
+					message: "Candidate meeting slots must be unique",
+					path: ["candidateMeetingSlots"],
+				});
+			}
+			if (
+				!command.candidateMeetingSlots.some(
+					(slot) =>
+						slot.startAt === command.input.meetingSlot.startAt &&
+						slot.endAt === command.input.meetingSlot.endAt &&
+						slot.timeZone === command.input.meetingSlot.timeZone &&
+						slot.durationMinutes === command.input.meetingSlot.durationMinutes,
+				)
+			) {
+				context.addIssue({
+					code: "custom",
+					message: "Booking must use a supplied candidate meeting slot",
+					path: ["input", "meetingSlot"],
+				});
+			}
 			if (command.input.conversationId !== command.sessionConversationId) {
 				context.addIssue({
 					code: "custom",

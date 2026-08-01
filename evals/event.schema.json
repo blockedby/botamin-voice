@@ -30,6 +30,7 @@
 			"items": {
 				"enum": [
 					"booking_offer",
+					"discovery_context",
 					"booking_accepted",
 					"contact_consent_granted",
 					"booking_confirmation",
@@ -53,7 +54,139 @@
 		"bookingId": { "type": "string" },
 		"status": { "type": "string" },
 		"service": { "type": "string" },
-		"payload": {}
+		"payload": {},
+		"inputMode": { "enum": ["typed", "spoken"] }
+	},
+	"$defs": {
+		"entityId": {
+			"type": "string",
+			"anyOf": [
+				{ "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+				{
+					"pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+				}
+			]
+		},
+		"meetingSlot": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["startAt", "endAt", "timeZone", "durationMinutes"],
+			"properties": {
+				"startAt": {
+					"type": "string",
+					"format": "date-time",
+					"pattern": "Z$"
+				},
+				"endAt": {
+					"type": "string",
+					"format": "date-time",
+					"pattern": "Z$"
+				},
+				"timeZone": { "const": "Europe/Moscow" },
+				"durationMinutes": { "const": 20 }
+			}
+		},
+		"contact": {
+			"oneOf": [
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["channel", "value"],
+					"properties": {
+						"channel": { "const": "email" },
+						"value": {
+							"type": "string",
+							"format": "email",
+							"maxLength": 254
+						}
+					}
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["channel", "value"],
+					"properties": {
+						"channel": { "const": "phone" },
+						"value": { "type": "string", "minLength": 5, "maxLength": 64 }
+					}
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["channel", "value"],
+					"properties": {
+						"channel": { "const": "telegram" },
+						"value": { "type": "string", "minLength": 2, "maxLength": 128 }
+					}
+				}
+			]
+		},
+		"createBookingInput": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"conversationId",
+				"idempotencyKey",
+				"name",
+				"contacts",
+				"company",
+				"meetingSlot",
+				"consentConfirmed"
+			],
+			"properties": {
+				"conversationId": { "$ref": "#/$defs/entityId" },
+				"idempotencyKey": {
+					"type": "string",
+					"minLength": 10,
+					"maxLength": 128
+				},
+				"name": { "type": "string", "minLength": 1, "maxLength": 120 },
+				"contacts": {
+					"type": "array",
+					"minItems": 2,
+					"maxItems": 3,
+					"items": { "$ref": "#/$defs/contact" },
+					"allOf": [
+						{
+							"contains": {
+								"properties": { "channel": { "const": "email" } },
+								"required": ["channel"]
+							},
+							"minContains": 1,
+							"maxContains": 1
+						},
+						{
+							"contains": {
+								"properties": {
+									"channel": { "enum": ["phone", "telegram"] }
+								},
+								"required": ["channel"]
+							},
+							"minContains": 1
+						},
+						{
+							"contains": {
+								"properties": { "channel": { "const": "phone" } },
+								"required": ["channel"]
+							},
+							"minContains": 0,
+							"maxContains": 1
+						},
+						{
+							"contains": {
+								"properties": { "channel": { "const": "telegram" } },
+								"required": ["channel"]
+							},
+							"minContains": 0,
+							"maxContains": 1
+						}
+					]
+				},
+				"company": { "type": "string", "minLength": 1, "maxLength": 200 },
+				"meetingSlot": { "$ref": "#/$defs/meetingSlot" },
+				"consentConfirmed": { "const": true }
+			}
+		}
 	},
 	"allOf": [
 		{
@@ -75,6 +208,21 @@
 		{
 			"if": { "properties": { "type": { "const": "tool_result" } } },
 			"then": { "required": ["name", "callId", "ok"] }
+		},
+		{
+			"if": {
+				"properties": {
+					"type": { "const": "tool_call" },
+					"name": { "const": "create_booking" }
+				},
+				"required": ["type", "name"]
+			},
+			"then": {
+				"required": ["payload"],
+				"properties": {
+					"payload": { "$ref": "#/$defs/createBookingInput" }
+				}
+			}
 		},
 		{
 			"if": {

@@ -14,6 +14,34 @@
 		}
 	},
 	"$defs": {
+		"meetingSlot": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["startAt", "endAt", "timeZone", "durationMinutes"],
+			"properties": {
+				"startAt": {
+					"type": "string",
+					"format": "date-time",
+					"pattern": "Z$"
+				},
+				"endAt": {
+					"type": "string",
+					"format": "date-time",
+					"pattern": "Z$"
+				},
+				"timeZone": { "const": "Europe/Moscow" },
+				"durationMinutes": { "const": 20 }
+			}
+		},
+		"slotCandidate": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["label", "meetingSlot"],
+			"properties": {
+				"label": { "type": "string", "minLength": 1 },
+				"meetingSlot": { "$ref": "#/$defs/meetingSlot" }
+			}
+		},
 		"scenario": {
 			"type": "object",
 			"additionalProperties": false,
@@ -40,6 +68,20 @@
 					"enum": ["inbound", "outbound", "reactivation", "system"]
 				},
 				"description": { "type": "string", "minLength": 1 },
+				"serverContext": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["slotCandidates"],
+					"properties": {
+						"slotCandidates": {
+							"type": "array",
+							"minItems": 2,
+							"maxItems": 2,
+							"uniqueItems": true,
+							"items": { "$ref": "#/$defs/slotCandidate" }
+						}
+					}
+				},
 				"expected": {
 					"type": "object",
 					"additionalProperties": false,

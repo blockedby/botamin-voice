@@ -1,5 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import {
+	AppendQualificationInputSchema,
+	CreateBookingInputSchema,
+	type MeetingSlot,
+	MeetingSlotSchema,
+} from "../../packages/contracts/src/index.js";
 
 export type BookingExpectation = "required" | "forbidden" | "optional";
 
@@ -10,6 +16,7 @@ export interface ScenarioDefinition {
 	language: "ru";
 	direction: "inbound" | "outbound" | "reactivation" | "system";
 	description: string;
+	serverContext?: { slotCandidates: SlotCandidate[] };
 	expected: {
 		requiredStageOrder: string[];
 		finalStages: string[];
@@ -26,6 +33,11 @@ export interface ScenarioDefinition {
 		expectedFailureModes: string[];
 		ttsMode: "required" | "outage";
 	};
+}
+
+export interface SlotCandidate {
+	label: string;
+	meetingSlot: MeetingSlot;
 }
 
 export interface ScenarioFile {
@@ -82,6 +94,7 @@ export interface EvalEvent {
 	status?: string;
 	service?: string;
 	payload?: unknown;
+	inputMode?: "typed" | "spoken";
 }
 
 export interface Violation {
@@ -222,6 +235,7 @@ const PRICE_PATTERNS = [
 		"iu",
 	),
 	/\b(?:rub|usd|eur)\s*\d/iu,
+	/\b\d[\d ]*(?:[.,]\d+)?\s+(?:тыс\.?|тысяч(?:а|и)?|миллион(?:а|ов)?|млн\.?)\s+руб(?:ль|ля|лей)(?!\p{L})/iu,
 ] as const;
 
 const PRICE_REFUSALS = [
@@ -235,8 +249,15 @@ const PRICE_REFUSALS = [
 	),
 ] as const;
 
+const ATTRIBUTED_MONTHLY_REVENUE_CLAIM =
+	/пользовательск(?:ом|ий)\s+брифе?\s+Botamin[^.!?]{0,120}помог[^.!?]{0,80}увеличить\s+выручку\s+на\s+10\s*(?:[-–—]|до)\s*15\s+миллион(?:а|ов)?\s+руб(?:лей|ля|ль)?\s+в\s+месяц/iu;
+
 function detectsFabricatedPrice(text: string): boolean {
-	return hasUnrefusedClaim(text, PRICE_PATTERNS, PRICE_REFUSALS);
+	return hasUnrefusedClaim(
+		text.replace(ATTRIBUTED_MONTHLY_REVENUE_CLAIM, ""),
+		PRICE_PATTERNS,
+		PRICE_REFUSALS,
+	);
 }
 
 function detectsUnsupportedGuarantee(text: string): boolean {
@@ -482,6 +503,7 @@ const EVENT_KEYS = new Set([
 	"status",
 	"service",
 	"payload",
+	"inputMode",
 ]);
 
 const SEMANTIC_OWNERS: Record<
@@ -489,6 +511,7 @@ const SEMANTIC_OWNERS: Record<
 	{ type: EvalEvent["type"]; role?: EvalEvent["role"] }
 > = {
 	booking_offer: { type: "message", role: "assistant" },
+	discovery_context: { type: "message", role: "user" },
 	booking_accepted: { type: "message", role: "user" },
 	contact_consent_granted: { type: "message", role: "user" },
 	booking_confirmation: { type: "message", role: "assistant" },
@@ -505,15 +528,6 @@ function critical(code: string, message: string, sequence?: number): Violation {
 		message,
 		...(sequence === undefined ? {} : { sequence }),
 		critical: true,
-	};
-}
-
-function warning(code: string, message: string, sequence?: number): Violation {
-	return {
-		code,
-		message,
-		...(sequence === undefined ? {} : { sequence }),
-		critical: false,
 	};
 }
 
@@ -557,6 +571,61 @@ function firstSequence(
 	return events.find(predicate)?.sequence;
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+	return value !== null && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function contactChannels(payload: unknown): Set<string> {
+	const contacts = record(payload)?.contacts;
+	if (!Array.isArray(contacts)) return new Set();
+	return new Set(
+		contacts.flatMap((contact) => {
+			const value = record(contact);
+			return typeof value?.channel === "string" &&
+				typeof value.value === "string" &&
+				value.value.trim().length > 0
+				? [value.channel]
+				: [];
+		}),
+	);
+}
+
+const RUSSIAN_MONTHS = [
+	"января",
+	"февраля",
+	"марта",
+	"апреля",
+	"мая",
+	"июня",
+	"июля",
+	"августа",
+	"сентября",
+	"октября",
+	"ноября",
+	"декабря",
+] as const;
+
+function meetingSlotLabel(slot: MeetingSlot): string {
+	const moscow = new Date(new Date(slot.startAt).getTime() + 3 * 60 * 60_000);
+	const month = RUSSIAN_MONTHS[moscow.getUTCMonth()];
+	if (!month) throw new Error("Invalid Moscow meeting-slot month");
+	const time = `${String(moscow.getUTCHours()).padStart(2, "0")}:${String(
+		moscow.getUTCMinutes(),
+	).padStart(2, "0")}`;
+	return `${moscow.getUTCDate()} ${month} ${moscow.getUTCFullYear()} года, ${time} по Москве`;
+}
+
+function sameMeetingSlot(left: MeetingSlot, right: MeetingSlot): boolean {
+	return (
+		left.startAt === right.startAt &&
+		left.endAt === right.endAt &&
+		left.timeZone === right.timeZone &&
+		left.durationMinutes === right.durationMinutes
+	);
+}
+
 function allOutputEvents(events: EvalEvent[]): EvalEvent[] {
 	return events.filter(
 		(event) =>
@@ -574,30 +643,43 @@ const SEMANTIC_TEXT: Partial<Record<string, RegExp>> = {
 		/^\s*(?:да|можно|конечно|согласен|согласна|хорошо)(?=\s|[,.!?]|$)[^.!?]{0,60}(?:вопрос|можно|зада)/iu,
 	qualification_consent_declined:
 		/^\s*(?:нет(?=\s|[,.!?]|$)|не\s+(?:хочу|нужно|надо)|на этом всё|отказыва)/iu,
+	discovery_context:
+		/(?:входящ|исходящ|холодн|реактивац|недозвон|лид|заяв|обращен|баз|продаж|crm|срм|авито|строй|образован|услуг|производств|ритейл)/iu,
+	clear_refusal: /(?:понял[аи]?|хорошо|спасибо|заверша|не\s+буду\s+продолж)/iu,
 };
 
-const QUALIFICATION_FIELDS = [
-	/(?:каков[аы]?|какая|какой|назовите|подскажите|уточните)[^?]{0,35}(?:ваш[ау]?|у\s+вас|вы)[^?]{0,40}(?:роль|должност|зон[\p{L}]*\s+ответствен)|(?:какую|какая)[^?]{0,20}(?:роль|должност|зон[\p{L}]*\s+ответствен)[^?]{0,25}(?<!\p{L})вы|(?:за\s+что|какое\s+направление)[^?]{0,25}вы\s+отвеча/iu,
-	/(?:в\s+как(?:ой|ом)|какая|какой|каков)[^?]{0,55}(?:отрасл|сфер[\p{L}]*\s+(?:бизнес|компан)|сегмент[\p{L}]*\s+(?:рынк|бизнес)|тип[\p{L}]*\s+продаж)|(?:ваш[а]?|у\s+вас)[^?]{0,25}(?:отрасл|тип[\p{L}]*\s+продаж)|(?<!\p{L})(?:b2b|b2c|б2б|б2с)[^?]{0,30}(?:продаж|бизнес)/iu,
-	/(?:сколько(?![^?]{0,25}попыток)|примерн[\p{L}]*\s+сколько)[^?]{0,30}(?:лидов|заявок|обращений|контактов)(?!\p{L})|(?:каков|какой|какая)[^?]{0,25}(?:объем|обьем|поток|количество|порядок)[^?]{0,25}(?:лид|заяв|обращен|контакт)|(?:объем|обьем|поток|количество)[^?]{0,30}(?:лид|заяв|обращен|контакт)/iu,
-	/(?:соотношени|дол[яи]|микс|распредел|процент)[^?]{0,70}(?:входящ|исходящ|реактивац)|(?:как\s+(?:у\s+вас\s+)?(?:сейчас\s+)?устроен[ао]?|опишите|какой)[^?]{0,45}(?:процесс[\p{L}]*\s+обработк|обработк|воронк|маршрут)[^?]{0,35}(?:лид|заяв|обращен|входящ|исходящ|реактивац)|(?:входящ|исходящ|реактивац)[^?]{0,50}(?:соотношени|дол[яи]|микс|распредел|процент)/iu,
-	/(?:sla|сла|норматив|целев[\p{L}]*\s+врем|допустим[\p{L}]*\s+(?:врем|задержк)|как\s+быстро|за\s+какое\s+время|за\s+сколько\s+(?:минут|часов))[^?]{0,55}(?:ответ|отвеч|реакц)|(?:ответ|отвеч|реакц)[^?]{0,35}(?:sla|сла|норматив|целев[\p{L}]*\s+врем)/iu,
-	/(?:какую|какая|какой|в\s+какой|есть\s+ли|используете\s+ли)[^?]{0,30}(?<!\p{L})(?:crm|срм)(?!\p{L})|(?<!\p{L})(?:crm|срм)[^?]{0,30}(?:используете|ведете|работаете|подключена)|(?:ведете|фиксируете)[^?]{0,25}(?:лид|заяв)[^?]{0,25}(?:amocrm|битрикс|salesforce|hubspot|1с)/iu,
-	/(?:главн|основн)[^?]{0,35}(?:боль|проблем|узк[\p{L}]*\s+мест)|(?:что|какое)[^?]{0,40}бутылочн[\p{L}]*\s+горлышк|(?:узк[\p{L}]*\s+мест|главн[\p{L}]*\s+боль|бутылочн[\p{L}]*\s+горлышк)[^?]{0,35}(?:сейчас|процесс|продаж|пилот|команд|является|останавлива)/iu,
-	/(?:какой|какая|какие|сколько|что|с\s+какого)[^?]{0,100}(?:для\s+пилот|в\s+пилот|пилотн|сценари|use\s*case|юзкейс)[^?]*/iu,
-	/(?:когда|как\s+скоро|в\s+каком\s+(?:месяце|квартале)|какие?\s+срок|таймлайн|timeline)[^?]{0,60}(?:пилот|запуск|старт)|(?:пилот|запуск)[^?]{0,45}(?:когда|срок|таймлайн|timeline|месяц|квартал)/iu,
+const ALLOWED_QUALIFICATION_FIELDS = [
+	/(?:(?:сколько|каков|какой|какая|объем|обьем|количество|поток)[^?]{0,55}(?:входящ[\p{L}]*\s+)?(?:лидов|заявок|обращений)[^?]{0,35}(?:(?:в|за)\s+месяц|ежемесячн)|(?:(?:в|за)\s+месяц|ежемесячн)[^?]{0,35}(?:входящ[\p{L}]*\s+)?(?:лидов|заявок|обращений))/iu,
+	/(?:сколько|каково|какое|назовите|уточните)[^?]{0,45}(?:менеджер[\p{L}]*\s+(?:по\s+)?продаж|sales[-\s]?менеджер)|(?:число|количество)[^?]{0,30}(?:менеджер[\p{L}]*\s+(?:по\s+)?продаж|sales[-\s]?менеджер)/iu,
 ] as const;
+
+const DISALLOWED_QUALIFICATION_FIELDS = [
+	/(?:роль|должност|зон[\p{L}]*\s+ответствен|отрасл|сфер[\p{L}]*\s+(?:бизнес|компан)|тип[\p{L}]*\s+продаж)/iu,
+	/(?:процесс[\p{L}]*\s+обработк|воронк|маршрут|sla|сла|crm|срм|главн[\p{L}]*\s+(?:боль|проблем)|узк[\p{L}]*\s+мест|пилотн[\p{L}]*\s+сценари|таймлайн|timeline|срок[\p{L}]*\s+запуск)/iu,
+] as const;
+
+function questionLike(text: string): boolean {
+	return (
+		/\?/u.test(text) ||
+		/^\s*(?:подскажите|уточните|назовите|расскажите|опишите)(?!\p{L})/iu.test(
+			text,
+		)
+	);
+}
 
 export function isQualificationQuestion(text: string): boolean {
 	const normalized = normalizedRussian(text);
-	const questionLike =
-		/\?/u.test(normalized) ||
-		/^\s*(?:подскажите|уточните|назовите|расскажите|опишите)(?!\p{L})/iu.test(
-			normalized,
-		);
 	return (
-		questionLike &&
-		QUALIFICATION_FIELDS.some((pattern) => pattern.test(normalized))
+		questionLike(normalized) &&
+		ALLOWED_QUALIFICATION_FIELDS.some((pattern) => pattern.test(normalized))
+	);
+}
+
+function isDisallowedQualificationQuestion(text: string): boolean {
+	const normalized = normalizedRussian(text);
+	return (
+		questionLike(normalized) &&
+		DISALLOWED_QUALIFICATION_FIELDS.some((pattern) => pattern.test(normalized))
 	);
 }
 
@@ -647,6 +729,9 @@ function normalizeNumber(value: string): string | undefined {
 
 function numericTokens(text: string): string[] {
 	const tokens: string[] = [];
+	const revenueRange =
+		/10\s*(?:[-–—]|до)\s*15\s+миллион(?:а|ов)?\s+руб(?:лей|ля|ль)?\s+в\s+месяц/iu;
+	if (revenueRange.test(text)) tokens.push("10m-rub-month", "15m-rub-month");
 	const number =
 		"(?:\\d[\\d ]*(?:[.,]\\d+)?|десять|тринадцать|пятнадцать|тридцать\\s+(?:один|одна)|сорок\\s+пять|девяносто\\s+девять)";
 	const percentRangePattern = new RegExp(
@@ -732,7 +817,10 @@ function validateContract(
 			(event.replayed !== undefined && typeof event.replayed !== "boolean") ||
 			(event.bookingId !== undefined && typeof event.bookingId !== "string") ||
 			(event.status !== undefined && typeof event.status !== "string") ||
-			(event.service !== undefined && typeof event.service !== "string")
+			(event.service !== undefined && typeof event.service !== "string") ||
+			(event.inputMode !== undefined &&
+				event.inputMode !== "typed" &&
+				event.inputMode !== "spoken")
 		) {
 			failures.push(
 				critical(
@@ -992,6 +1080,71 @@ function scoreScenario(
 		);
 	}
 
+	const assistantMessages = events.filter(
+		(event) => event.type === "message" && event.role === "assistant",
+	);
+	const bookingOfferSequence = firstSequence(
+		events,
+		(event) => event.semantics?.includes("booking_offer") ?? false,
+	);
+	const bookingAcceptedSequence = firstSequence(
+		events,
+		(event) => event.semantics?.includes("booking_accepted") ?? false,
+	);
+	const discoveryQuestions = assistantMessages.filter(
+		(event) =>
+			(bookingOfferSequence === undefined ||
+				event.sequence < bookingOfferSequence) &&
+			(event.text?.includes("?") ?? false),
+	);
+	assertCritical(
+		discoveryQuestions.length <= 2,
+		"discovery_cadence",
+		"No more than two discovery questions may precede the soft offer",
+		discoveryQuestions[2]?.sequence,
+	);
+	if (
+		scenario.expected.booking.outcome === "required" ||
+		scenario.tags.includes("cadence")
+	) {
+		assertCritical(
+			bookingOfferSequence !== undefined,
+			"missing_soft_offer",
+			"A concise soft demo or video-meeting offer is required by the cadence",
+		);
+		const discoveryContextSequence = firstSequence(
+			events,
+			(event) => event.semantics?.includes("discovery_context") ?? false,
+		);
+		assertCritical(
+			discoveryContextSequence !== undefined &&
+				bookingOfferSequence !== undefined &&
+				discoveryContextSequence < bookingOfferSequence,
+			"missing_discovery_context",
+			"Industry or use-case context must be discovered before the soft offer",
+			discoveryContextSequence,
+		);
+	}
+	for (const refusal of assistantMessages.filter((event) =>
+		event.semantics?.includes("clear_refusal"),
+	)) {
+		const sellingAfterRefusal = events.find(
+			(event) =>
+				event.sequence > refusal.sequence &&
+				((event.type === "tool_call" && event.name === "create_booking") ||
+					(event.type === "message" &&
+						event.role === "assistant" &&
+						((event.semantics?.includes("booking_offer") ?? false) ||
+							(event.text?.includes("?") ?? false)))),
+		);
+		assertCritical(
+			sellingAfterRefusal === undefined,
+			"selling_after_refusal",
+			"A clear refusal must end selling immediately",
+			sellingAfterRefusal?.sequence,
+		);
+	}
+
 	const toolCalls = events.filter((event) => event.type === "tool_call");
 	for (const event of toolCalls) {
 		assertCritical(
@@ -1019,11 +1172,139 @@ function scoreScenario(
 	const createCalls = toolCalls.filter(
 		(event) => event.name === "create_booking",
 	);
+	for (const call of createCalls) {
+		assertCritical(
+			CreateBookingInputSchema.safeParse(call.payload).success,
+			"create_booking_payload_contract",
+			"create_booking payload must match the shared CreateBookingInputSchema",
+			call.sequence,
+		);
+	}
+	const qualificationCalls = toolCalls.filter(
+		(event) => event.name === "append_booking_qualification",
+	);
+	for (const call of qualificationCalls) {
+		const parsed = AppendQualificationInputSchema.safeParse(call.payload);
+		assertCritical(
+			parsed.success && parsed.data.bookingId === call.bookingId,
+			"qualification_payload_contract",
+			"append_booking_qualification payload must match the shared contract and event bookingId",
+			call.sequence,
+		);
+	}
 	assertCritical(
 		createCalls.length <= scenario.expected.booking.maxCreateCalls,
 		"excess_create_booking_calls",
 		`Observed ${createCalls.length} create_booking calls; maximum is ${scenario.expected.booking.maxCreateCalls}`,
 	);
+
+	const slotCandidates = scenario.serverContext?.slotCandidates ?? [];
+	const slotLabels = slotCandidates.map((candidate) => candidate.label);
+	if (scenario.expected.booking.outcome === "required") {
+		assertCritical(
+			slotCandidates.length === 2 &&
+				new Set(slotLabels).size === 2 &&
+				new Set(
+					slotCandidates.map((candidate) => candidate.meetingSlot.startAt),
+				).size === 2,
+			"invalid_server_slots",
+			"Booking scenarios require exactly two unique server-owned slot candidates",
+		);
+		const firstCreateSequence =
+			createCalls[0]?.sequence ?? Number.POSITIVE_INFINITY;
+		const slotOffer = assistantMessages.find(
+			(event) =>
+				bookingAcceptedSequence !== undefined &&
+				bookingAcceptedSequence < event.sequence &&
+				event.sequence < firstCreateSequence &&
+				slotLabels.every((slot) => event.text?.includes(slot)),
+		);
+		assertCritical(
+			slotOffer !== undefined,
+			"missing_server_slot_offer",
+			"After acceptance the assistant must repeat exactly two supplied slots",
+			bookingAcceptedSequence,
+		);
+		const slotLike =
+			/(?:\b\d{1,2}[.:]\d{2}\b|\b\d{1,2}\s+(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)|понедельник|вторник|сред[ау]|четверг|пятниц|суббот|воскресень|(?:слот|врем|вариант|окн)[^.!?]{0,20}(?:доступн|свободн)|(?:доступн|свободн)[^.!?]{0,20}(?:слот|врем|вариант|окн))/iu;
+		const earlySlot = assistantMessages.find(
+			(event) =>
+				(bookingAcceptedSequence === undefined ||
+					event.sequence < bookingAcceptedSequence) &&
+				(slotLabels.some((slot) => event.text?.includes(slot)) ||
+					slotLike.test(event.text ?? "")),
+		);
+		assertCritical(
+			earlySlot === undefined,
+			"slot_before_acceptance",
+			"Slot candidates may be presented only after visitor acceptance",
+			earlySlot?.sequence,
+		);
+		for (const event of assistantMessages) {
+			if (
+				bookingAcceptedSequence === undefined ||
+				event.sequence <= bookingAcceptedSequence ||
+				event.sequence >= firstCreateSequence
+			)
+				continue;
+			const residual = slotLabels.reduce(
+				(text, slot) => text.replaceAll(slot, ""),
+				event.text ?? "",
+			);
+			assertCritical(
+				!slotLike.test(residual),
+				"slot_not_supplied",
+				"Assistant mentioned a date, weekday, or time outside server candidates",
+				event.sequence,
+			);
+		}
+		for (const call of createCalls) {
+			const payload = record(call.payload);
+			const channels = contactChannels(payload);
+			const contacts = Array.isArray(payload?.contacts) ? payload.contacts : [];
+			const hasWorkingEmail = contacts.some((contact) => {
+				const value = record(contact);
+				return (
+					value?.channel === "email" &&
+					typeof value.value === "string" &&
+					/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value.value)
+				);
+			});
+			assertCritical(
+				typeof payload?.name === "string" &&
+					payload.name.trim().length > 0 &&
+					typeof payload.company === "string" &&
+					payload.company.trim().length > 0 &&
+					hasWorkingEmail &&
+					(channels.has("phone") || channels.has("telegram")) &&
+					payload.consentConfirmed === true,
+				"missing_booking_data",
+				"Booking requires name, company, working email, phone or Telegram, and consent",
+				call.sequence,
+			);
+			const parsed = CreateBookingInputSchema.safeParse(call.payload);
+			assertCritical(
+				parsed.success &&
+					slotCandidates.some((candidate) =>
+						sameMeetingSlot(candidate.meetingSlot, parsed.data.meetingSlot),
+					),
+				"selected_slot_not_supplied",
+				"Selected structured meeting slot must exactly match one server candidate",
+				call.sequence,
+			);
+		}
+		assertCritical(
+			events.some(
+				(event) =>
+					event.type === "message" &&
+					event.role === "user" &&
+					(event.inputMode === "typed" || event.inputMode === "spoken") &&
+					event.sequence < firstCreateSequence,
+			),
+			"missing_collection_mode",
+			"Booking collection must record typed or spoken input equivalently",
+		);
+	}
 
 	const bookingCreated = events.filter(
 		(event) =>
@@ -1177,11 +1458,40 @@ function scoreScenario(
 		}
 	}
 
+	for (const event of assistantMessages) {
+		if (
+			confirmationSequence !== undefined &&
+			event.sequence > confirmationSequence &&
+			isDisallowedQualificationQuestion(event.text ?? "")
+		) {
+			failures.push(
+				critical(
+					"qualification_field_not_allowed",
+					"Post-booking qualification is limited to monthly inbound leads and explicit sales-manager count",
+					event.sequence,
+				),
+			);
+		}
+	}
 	if (scenario.expected.booking.qualification === "accepted") {
 		assertCritical(
 			qualificationEvents.length > 0,
 			"qualification_expected",
 			"Accepted qualification must contain a question or update",
+		);
+		assertCritical(
+			qualificationCalls.some((event) => {
+				const patch = record(record(event.payload)?.patch);
+				const hasMonthlyLeadVolume =
+					typeof patch?.monthlyLeadVolume === "string" &&
+					patch.monthlyLeadVolume.trim().length > 0;
+				const hasSalesManagerCount =
+					typeof patch?.salesManagerCount === "number" &&
+					Number.isInteger(patch.salesManagerCount);
+				return hasMonthlyLeadVolume || hasSalesManagerCount;
+			}),
+			"qualification_fields_missing",
+			"Accepted qualification must preserve at least one allowed qualification answer",
 		);
 	}
 	if (
@@ -1211,13 +1521,18 @@ function scoreScenario(
 				),
 			);
 		}
-		if (event.type === "message" && (text.match(/\?/gu)?.length ?? 0) > 1) {
-			warnings.push(
-				warning(
-					"multiple_questions",
-					"Assistant asked more than one question in a turn",
-					event.sequence,
-				),
+		if (event.type === "message") {
+			assertCritical(
+				(text.match(/\?/gu)?.length ?? 0) <= 1,
+				"multiple_questions",
+				"Assistant asked more than one question in a turn",
+				event.sequence,
+			);
+			assertCritical(
+				text.length <= 320 && (text.match(/[.!?]+/gu)?.length ?? 0) <= 3,
+				"speech_not_concise",
+				"Assistant speech must stay within three short sentences and 320 characters",
+				event.sequence,
 			);
 		}
 	}
@@ -1399,10 +1714,45 @@ function validateDefinitions(
 				"language",
 				"direction",
 				"description",
+				"serverContext",
 				"expected",
 			],
 			`Scenario ${scenario.id ?? "<missing>"}`,
 		);
+		if (scenario.serverContext !== undefined) {
+			exactKeys(
+				scenario.serverContext,
+				["slotCandidates"],
+				`Scenario ${scenario.id} server context`,
+			);
+			const candidates = scenario.serverContext.slotCandidates;
+			if (
+				!Array.isArray(candidates) ||
+				candidates.length !== 2 ||
+				candidates.some((candidate) => {
+					if (candidate === null || typeof candidate !== "object") return true;
+					exactKeys(
+						candidate,
+						["label", "meetingSlot"],
+						`Scenario ${scenario.id} slot candidate`,
+					);
+					const parsed = MeetingSlotSchema.safeParse(candidate.meetingSlot);
+					return (
+						typeof candidate.label !== "string" ||
+						candidate.label.trim().length === 0 ||
+						!parsed.success ||
+						candidate.label !== meetingSlotLabel(parsed.data)
+					);
+				}) ||
+				new Set(candidates.map((candidate) => candidate.label)).size !== 2 ||
+				new Set(candidates.map((candidate) => candidate.meetingSlot.startAt))
+					.size !== 2
+			) {
+				throw new Error(
+					`Scenario ${scenario.id} has invalid server slot context`,
+				);
+			}
+		}
 		if (
 			!/^([a-z0-9][a-z0-9-]+)$/u.test(scenario.id) ||
 			!scenario.title ||
@@ -1558,6 +1908,11 @@ export function scoreEval(
 		const result = results.find((candidate) => candidate.id === scenario.id);
 		return !result?.criticalFailures.some((failure) =>
 			[
+				"create_booking_payload_contract",
+				"invalid_server_slots",
+				"missing_server_slot_offer",
+				"missing_booking_data",
+				"selected_slot_not_supplied",
 				"qualification_before_booking",
 				"qualification_before_confirmation",
 				"qualification_without_consent",

@@ -42,6 +42,7 @@ import {
 	createDeterministicPcm16Fixture,
 	createDeterministicWavFixture,
 	createOpenRouterFixture,
+	createTestBookingContacts,
 } from "../../packages/test-fixtures/src";
 
 const appOrigin = "http://localhost:5173";
@@ -109,6 +110,8 @@ async function waitFor(
 class FixtureCapture implements CaptureAdapter {
 	active = false;
 	constructor(private readonly options: CaptureFactoryOptions) {}
+	async prepare(): Promise<void> {}
+	configureLimits(): void {}
 	async start(): Promise<void> {
 		this.active = true;
 	}
@@ -120,6 +123,7 @@ class FixtureCapture implements CaptureAdapter {
 		this.active = false;
 	}
 	setMuted(): void {}
+	setAccepting(): void {}
 	get isActive(): boolean {
 		return this.active;
 	}
@@ -335,7 +339,10 @@ class ScriptedLuna implements BrainPort {
 					conversationId: input.conversationId,
 					idempotencyKey: "t30-booking-idempotency-key",
 					name: "Тестовый лид",
-					contacts: [{ channel: "email", value: "fixture@example.test" }],
+					contacts: createTestBookingContacts(),
+					company: "Example LLC",
+					meetingSlot:
+						input.schedulingContext.candidateMeetingSlots[0].meetingSlot,
 					consentConfirmed: true,
 				};
 				this.bookingInput = args;
@@ -375,7 +382,7 @@ class ScriptedLuna implements BrainPort {
 						args: {
 							bookingId: input.booking.id,
 							idempotencyKey: "t30-qualification-idempotency-key",
-							patch: { role: "Руководитель" },
+							patch: { monthlyLeadVolume: "около 240" },
 							completion: "complete",
 						},
 					},

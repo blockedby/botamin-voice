@@ -18,10 +18,12 @@ import { basename, dirname, join, resolve } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+	ATTRIBUTED_REVENUE_CLAIM_LINES,
 	BOOKING_ORDER_SENTENCE,
 	compilePromptBundle,
 	MAX_FILE_BYTES,
 	PROMPT_ORDER,
+	REQUIRED_POLICY_SENTENCES,
 } from "../src/index.js";
 
 const testRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -177,7 +179,7 @@ test("enforces per-file and compiled-bundle size limits", async () => {
 
 	const oversizedBundle = await fixtureRoot(
 		(_relativePath, source) =>
-			`${source.toString("utf8")}\n${"x".repeat(9_000)}`,
+			`${source.toString("utf8")}\n${"x".repeat(6_500)}`,
 	);
 	await assert.rejects(
 		compilePromptBundle({
@@ -234,6 +236,7 @@ test("rejects invalid UTF-8, secret-like assignments, and numeric currency price
 	for (const priceClaim of [
 		"Price: $100",
 		"Стоимость пилота: 100 тысяч рублей",
+		"Botamin помог компаниям увеличить выручку на 10–15 миллионов рублей в месяц.",
 	]) {
 		const price = await fixtureRoot((relativePath, source) =>
 			relativePath === "prompts/product.md"
@@ -246,6 +249,42 @@ test("rejects invalid UTF-8, secret-like assignments, and numeric currency price
 				runtimeDir: await runtimeDirectory(),
 			}),
 			/numeric currency price/i,
+		);
+	}
+
+	const unsafeRevenue = await fixtureRoot((relativePath, source) =>
+		relativePath === "knowledge/cases.md"
+			? source
+					.toString("utf8")
+					.replace(
+						ATTRIBUTED_REVENUE_CLAIM_LINES[0],
+						"- **Source claim:** Botamin увеличит вашу выручку на 10–15 миллионов рублей в месяц.",
+					)
+			: source,
+	);
+	await assert.rejects(
+		compilePromptBundle({
+			sourceRoot: unsafeRevenue,
+			runtimeDir: await runtimeDirectory(),
+		}),
+		/invalid attributed revenue claim lines/i,
+	);
+
+	for (const mutate of [
+		(source: string) => source.replace(ATTRIBUTED_REVENUE_CLAIM_LINES[0], ""),
+		(source: string) => `${source}\n${ATTRIBUTED_REVENUE_CLAIM_LINES[0]}\n`,
+	]) {
+		const invalidClaimLines = await fixtureRoot((relativePath, source) =>
+			relativePath === "knowledge/cases.md"
+				? mutate(source.toString("utf8"))
+				: source,
+		);
+		await assert.rejects(
+			compilePromptBundle({
+				sourceRoot: invalidClaimLines,
+				runtimeDir: await runtimeDirectory(),
+			}),
+			/invalid attributed revenue claim lines/i,
 		);
 	}
 
@@ -277,6 +316,30 @@ test("requires the booking-before-qualification rule in system and booking promp
 				"i",
 			),
 		);
+	}
+});
+
+test("requires proactive cadence, refusal, supplied-slot, contact, qualification, and concise-speech rules", async () => {
+	for (const [relativePath, sentences] of Object.entries(
+		REQUIRED_POLICY_SENTENCES,
+	)) {
+		for (const sentence of sentences) {
+			const fixture = await fixtureRoot((path, source) =>
+				path === relativePath
+					? source.toString("utf8").replace(sentence, "")
+					: source,
+			);
+			await assert.rejects(
+				compilePromptBundle({
+					sourceRoot: fixture,
+					runtimeDir: await runtimeDirectory(),
+				}),
+				new RegExp(
+					`${relativePath.replace(/[./]/g, "\\$&")}.*required policy sentence`,
+					"i",
+				),
+			);
+		}
 	}
 });
 
@@ -387,10 +450,15 @@ test("every numeric published case claim has a named source context", async () =
 			/\*\*Source claim:\*\*[\s\S]*?(?:\d[\d ]*%|\d[\d ]{2,})/u.test(section),
 		);
 
-	assert.equal(numericClaimSections.length, 4);
+	assert.equal(numericClaimSections.length, 5);
 	for (const section of numericClaimSections) {
 		assert.match(section, /\*\*Named source context:\*\*[^\n]+/u);
 		assert.match(section, /\*\*Required attribution:\*\*[^\n]+/u);
-		assert.match(section, /опубликованн(?:ом|ый) кейс/u);
+		if (section.startsWith("Пользовательский бриф Botamin")) {
+			assert.match(section, /пользовательск(?:ом|ий) брифе? Botamin/iu);
+			assert.match(section, /не гарантия, прогноз или переносимый результат/iu);
+		} else {
+			assert.match(section, /опубликованн(?:ом|ый) кейс/u);
+		}
 	}
 });

@@ -4,7 +4,7 @@
 
 Продемонстрировать работающий вертикальный срез AI-продавца Botamin:
 
-> посетитель открывает лендинг, начинает голосовой разговор, получает релевантную презентацию продукта, отвечает на уточняющие вопросы, соглашается на встречу, передаёт минимальный контакт, после чего backend фиксирует бронь и опционально обогащает её квалификацией.
+> посетитель открывает лендинг, начинает голосовой или печатный разговор, получает релевантную презентацию продукта, отвечает максимум на два discovery-вопроса до мягкого предложения следующего шага, выбирает один из двух внутренних слотов и передаёт обязательные booking-данные, после чего backend фиксирует бронь и опционально обогащает её ограниченной квалификацией.
 
 MVP должен выглядеть как небольшой реальный продукт, а не как набор несвязанных API-примеров.
 
@@ -22,14 +22,16 @@ MVP должен выглядеть как небольшой реальный �
 
 - адаптивный лендинг Botamin;
 - браузерный доступ к микрофону;
-- phrase-level STT на русском: chunked PCM16 до backend, bounded WAV request после `audio.commit`, final transcript only;
+- phrase-level STT на русском: chunked PCM16 до backend, максимум 60 секунд на реплику и 2,000,000 bytes на WAV request после `audio.commit`, final transcript only;
+- provider-neutral final typed turns через `visitor.text.submit`, семантически равнозначные spoken turns;
+- sample-derived circular countdown для активной записи;
 - текстовое рассуждение и ответ через GPT-5.6 Luna в Codex;
 - phrase-level TTS через полные MP3-сегменты, запускаемый до завершения полного ответа;
 - interruption/barge-in на базовом уровне;
 - управляемая state machine разговора;
 - product knowledge из Botamin-сайта и Telegram-кейсов;
-- создание внутренней брони;
-- необязательная квалификация после брони;
+- создание внутренней брони на одном из двух server-supplied structured 20-minute Moscow slots;
+- необязательная квалификация после брони и отдельного согласия, только по monthly inbound leads и integer sales-manager count;
 - SQLite persistence;
 - console notifier и интерфейс для webhook/push;
 - transcript/event audit;
@@ -41,7 +43,7 @@ MVP должен выглядеть как небольшой реальный �
 - визуальный conversation builder;
 - prompt CMS, роли и авторизация редакторов;
 - реальный Google Calendar, Calendly или CRM;
-- проверка свободных слотов;
+- внешняя проверка календарной доступности; внутренний scheduler только исключает уже committed start times;
 - телефония, SIP, PSTN, Twilio;
 - исходящие звонки;
 - полноценный call-center dashboard;
@@ -69,12 +71,15 @@ MVP должен выглядеть как небольшой реальный �
 | Prompts | Markdown в Git |
 | Deployment | local-first Compose project on one trusted machine; app + Caddy only. One target VPS with TLS/WSS is the later production-shaped gate |
 | Raw audio retention | выключено |
-| Qualification | включаемая опция, только после booking |
+| Utterance bounds | 60 секунд; WAV cap 2,000,000 bytes; countdown по принятым PCM16 samples и stricter server ceiling |
+| Typed input | финальный `visitor.text.submit`, тот же semantic turn pipeline, что и speech |
+| Booking | имя, компания, рабочий email, телефон или Telegram, consent и один из ровно двух server-supplied 20-minute `Europe/Moscow` slots |
+| Qualification | включаемая опция, только после committed booking, confirmation и consent; monthly inbound leads + integer `salesManagerCount` |
 
 ## 6. Допущения, которые агенты не должны превращать в блокеры
 
-- Как минимум один контактный канал обязателен: телефон, email или Telegram.
-- Предпочтительное время хранится свободным текстом; календарного slot resolution нет.
+- Для новой брони обязательны имя, компания, рабочий email, телефон или Telegram, consent и выбранный server-supplied slot.
+- Backend владеет текущей московской датой/днём и выдаёт ровно два структурированных кандидата: будни, не сегодня, 20 минут, старты по сетке с 09:00 до 17:00 `Europe/Moscow`. Это внутреннее резервирование без внешнего календаря или availability API.
 - Логотипы, точная типографика и brand book могут быть заменены аккуратным нейтральным стилем.
 - Console output является достаточным handoff для P0.
 - Если subscription auth временно недоступен, сервис показывает понятный degraded state; автоматический переход на платный API не включается без конфигурации.
@@ -82,8 +87,8 @@ MVP должен выглядеть как небольшой реальный �
 
 ## 7. Термины
 
-- **Conversation** — одна пользовательская голосовая сессия.
-- **Turn** — одна завершённая реплика пользователя и следующий ответ агента.
+- **Conversation** — одна пользовательская voice/typed сессия.
+- **Turn** — одна завершённая spoken или typed реплика пользователя и следующий ответ агента.
 - **Booking** — внутренняя запись о согласованном следующем шаге, не календарное событие.
 - **Qualification** — необязательные сведения, добавляемые к уже существующей брони.
 - **BrainPort** — внутренний интерфейс текстового LLM-мозга.

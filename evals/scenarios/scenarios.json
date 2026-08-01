@@ -31,6 +31,7 @@
 					"tool_result:append_booking_qualification:ok"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_granted",
 					"qualification_question"
@@ -45,6 +46,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -71,6 +94,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -84,6 +108,28 @@
 				"allowedCaseClaimIds": ["maintrassy-qualified-15"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -110,6 +156,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -123,6 +170,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -198,6 +267,43 @@
 			}
 		},
 		{
+			"id": "user-brief-revenue-claim",
+			"title": "Атрибутированный claim из пользовательского брифа",
+			"tags": ["case-claim", "cadence", "booking-refused", "named-source"],
+			"language": "ru",
+			"direction": "inbound",
+			"description": "Проверяет точную атрибуцию роста выручки из пользовательского брифа без гарантии, прогноза или переноса.",
+			"expected": {
+				"requiredStageOrder": [
+					"GREETING",
+					"DISCOVERY",
+					"VALUE",
+					"BOOKING_OFFER",
+					"DECLINED"
+				],
+				"finalStages": ["DECLINED"],
+				"requiredEventOrder": [
+					"semantic:booking_offer",
+					"semantic:clear_refusal"
+				],
+				"requiredSemantics": [
+					"discovery_context",
+					"booking_offer",
+					"clear_refusal"
+				],
+				"forbiddenSemantics": ["qualification_question"],
+				"allowedTools": [],
+				"booking": {
+					"outcome": "forbidden",
+					"maxCreateCalls": 0,
+					"qualification": "none"
+				},
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
+				"expectedFailureModes": [],
+				"ttsMode": "required"
+			}
+		},
+		{
 			"id": "pricing-direct",
 			"title": "Прямой вопрос о цене",
 			"tags": ["pricing", "booking", "telegram"],
@@ -221,6 +327,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -234,6 +341,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -260,6 +389,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -273,6 +403,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -395,6 +547,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -408,6 +561,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -437,15 +612,27 @@
 		{
 			"id": "unclear-pain",
 			"title": "Неясная формулировка боли",
-			"tags": ["unclear", "discovery", "one-question"],
+			"tags": ["unclear", "discovery", "one-question", "cadence"],
 			"language": "ru",
 			"direction": "inbound",
-			"description": "Один простой уточняющий вопрос вместо анкеты.",
+			"description": "После двух discovery-вопросов следует обязательное мягкое предложение; ясный отказ завершает продажу.",
 			"expected": {
-				"requiredStageOrder": ["GREETING", "DISCOVERY", "COMPLETE"],
-				"finalStages": ["COMPLETE"],
-				"requiredEventOrder": [],
-				"requiredSemantics": [],
+				"requiredStageOrder": [
+					"GREETING",
+					"DISCOVERY",
+					"BOOKING_OFFER",
+					"DECLINED"
+				],
+				"finalStages": ["DECLINED"],
+				"requiredEventOrder": [
+					"semantic:booking_offer",
+					"semantic:clear_refusal"
+				],
+				"requiredSemantics": [
+					"discovery_context",
+					"booking_offer",
+					"clear_refusal"
+				],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": [],
 				"booking": {
@@ -576,6 +763,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -589,6 +777,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -613,6 +823,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -626,6 +837,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -652,6 +885,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -665,6 +899,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -695,6 +951,7 @@
 					"transport:reconnected"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -711,6 +968,28 @@
 					"transport:reconnected"
 				],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -761,6 +1040,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -774,6 +1054,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -806,6 +1108,7 @@
 					"tool_result:append_booking_qualification:ok"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_granted",
 					"qualification_question"
@@ -820,6 +1123,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -918,6 +1243,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -931,6 +1257,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": ["provider:tts:unavailable"],
 				"ttsMode": "outage"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -957,6 +1305,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -970,6 +1319,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": ["provider:notifier:unavailable"],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -996,6 +1367,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -1009,6 +1381,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{
@@ -1033,6 +1427,7 @@
 					"semantic:booking_confirmation"
 				],
 				"requiredSemantics": [
+					"discovery_context",
 					"booking_confirmation",
 					"qualification_consent_declined"
 				],
@@ -1046,6 +1441,28 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		},
 		{

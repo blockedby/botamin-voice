@@ -6,7 +6,10 @@ import type {
 	SttPort,
 	TtsPort,
 } from "@botamin/contracts";
-import { createDeterministicMp3Fixture } from "../../../../packages/test-fixtures/src";
+import {
+	createDeterministicMp3Fixture,
+	createTestMeetingSlot,
+} from "../../../../packages/test-fixtures/src";
 import { ConversationOrchestrator } from "../orchestrator/orchestrator";
 import { ObservabilityMetrics } from "./metrics";
 
@@ -65,6 +68,10 @@ describe("observability pipeline wiring", () => {
 			health: async () => "ready",
 		};
 		const bookings: BookingService = {
+			candidateMeetingSlots: async () => [
+				createTestMeetingSlot(),
+				createTestMeetingSlot(1),
+			],
 			createBooking: async () => {
 				throw new Error("not expected");
 			},
@@ -174,6 +181,10 @@ describe("observability pipeline wiring", () => {
 			health: async () => "degraded",
 		};
 		const bookings: BookingService = {
+			candidateMeetingSlots: async () => [
+				createTestMeetingSlot(),
+				createTestMeetingSlot(1),
+			],
 			createBooking: async () => {
 				throw new Error("not expected");
 			},
@@ -282,6 +293,10 @@ describe("observability pipeline wiring", () => {
 			health: async () => "ready",
 		};
 		const bookings: BookingService = {
+			candidateMeetingSlots: async () => [
+				createTestMeetingSlot(),
+				createTestMeetingSlot(1),
+			],
 			createBooking: async () => {
 				throw new Error("not expected");
 			},

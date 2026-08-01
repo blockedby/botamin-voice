@@ -11,6 +11,7 @@ import {
 	type BrainTurnInput,
 	CreateBookingInputSchema,
 	type CreateBookingResult,
+	type MeetingSlot,
 	MpegAudioBytesSchema,
 	type Notifier,
 	type ProviderHealth,
@@ -24,6 +25,7 @@ import {
 	type TtsPort,
 	type TtsSynthesisRequest,
 } from "@botamin/contracts";
+import { createTestMeetingSlot } from "./booking";
 import { createDeterministicMp3Fixture } from "./mp3";
 
 const HEALTHY: ProviderHealth = { status: "healthy" };
@@ -223,6 +225,9 @@ export interface FakeBookingOptions {
 	bookingId?: () => string;
 	createdEventId?: () => string;
 	updatedEventId?: () => string;
+	candidateMeetingSlots?: () =>
+		| [MeetingSlot, MeetingSlot]
+		| Promise<[MeetingSlot, MeetingSlot]>;
 }
 
 export class FakeBookingService implements BookingService {
@@ -250,7 +255,14 @@ export class FakeBookingService implements BookingService {
 			bookingId: options.bookingId ?? nextEntityId,
 			createdEventId: options.createdEventId ?? nextEntityId,
 			updatedEventId: options.updatedEventId ?? nextEntityId,
+			candidateMeetingSlots:
+				options.candidateMeetingSlots ??
+				(() => [createTestMeetingSlot(), createTestMeetingSlot(1)]),
 		};
+	}
+
+	async candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]> {
+		return this.#options.candidateMeetingSlots();
 	}
 
 	async createBooking(input: unknown): Promise<CreateBookingResult> {
@@ -287,10 +299,8 @@ export class FakeBookingService implements BookingService {
 			status: "booked",
 			name: parsed.name,
 			contacts: parsed.contacts,
-			...(parsed.company === undefined ? {} : { company: parsed.company }),
-			...(parsed.preferredTimeText === undefined
-				? {}
-				: { preferredTimeText: parsed.preferredTimeText }),
+			company: parsed.company,
+			meetingSlot: parsed.meetingSlot,
 			qualificationStatus: "none",
 			createdAt: at,
 			updatedAt: at,
@@ -312,10 +322,8 @@ export class FakeBookingService implements BookingService {
 				conversationId: parsed.conversationId,
 				name: parsed.name,
 				contacts: parsed.contacts,
-				...(parsed.company === undefined ? {} : { company: parsed.company }),
-				...(parsed.preferredTimeText === undefined
-					? {}
-					: { preferredTimeText: parsed.preferredTimeText }),
+				company: parsed.company,
+				meetingSlot: parsed.meetingSlot,
 				status: "booked",
 				qualificationStatus: "none",
 			},

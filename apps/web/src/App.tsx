@@ -24,6 +24,10 @@ export function App({ createSession = createBrowserVoiceSession }: AppProps) {
 		state: { kind: "idle" },
 		transcript: [],
 		muted: false,
+		captureProgress: null,
+		conversationStage: null,
+		textInputAvailable: false,
+		textSubmission: { status: "idle" },
 	}));
 	const [consent, setConsent] = useState<VoiceConsent>(INITIAL_CONSENT);
 
@@ -47,6 +51,10 @@ export function App({ createSession = createBrowserVoiceSession }: AppProps) {
 				consent,
 				transcript: snapshot.transcript,
 				muted: snapshot.muted,
+				captureProgress: snapshot.captureProgress,
+				conversationStage: snapshot.conversationStage,
+				textInputAvailable: snapshot.textInputAvailable,
+				textSubmission: snapshot.textSubmission,
 				onConsentChange: setConsent,
 				onStart: () => {
 					void session?.start(consent);
@@ -63,6 +71,7 @@ export function App({ createSession = createBrowserVoiceSession }: AppProps) {
 				},
 				onInterrupt: () => session?.interrupt(),
 				onReconnect: () => session?.reconnect(),
+				onTextSubmit: (text) => session?.submitText(text) ?? false,
 				onRestart: () => {
 					if (snapshot.state.kind === "error") {
 						void session?.retry();

@@ -1,4 +1,5 @@
 import {
+	type AudioClientConfig,
 	type ConversationStage,
 	CreateConversationRequestSchema,
 	CreateConversationResponseSchema,
@@ -16,6 +17,8 @@ import {
 } from "../audio/playback";
 import type {
 	FinalTranscriptEntry,
+	TextSubmissionState,
+	VoiceCaptureProgress,
 	VoiceConsent,
 	VoiceUiState,
 } from "../components/voiceTypes";
@@ -38,18 +41,26 @@ export interface BrowserVoiceSnapshot {
 	state: VoiceUiState;
 	transcript: readonly FinalTranscriptEntry[];
 	muted: boolean;
+	captureProgress: VoiceCaptureProgress | null;
+	conversationStage: ConversationStage | null;
+	textInputAvailable: boolean;
+	textSubmission: TextSubmissionState;
 }
 
 export interface CaptureAdapter {
+	prepare(): Promise<void>;
+	configureLimits(maxDurationMs: number, maxBytes: number): void;
 	start(): Promise<void>;
 	finish(): Promise<CaptureStats>;
 	stop(): Promise<void>;
 	setMuted(muted: boolean): void;
+	setAccepting(accepting: boolean): void;
 	readonly isActive: boolean;
 }
 
 export interface CaptureFactoryOptions {
 	onFrame(frame: Uint8Array): void;
+	onProgress(stats: CaptureStats): void;
 	onLimit(): void;
 }
 
@@ -94,9 +105,19 @@ const INITIAL_SNAPSHOT: BrowserVoiceSnapshot = {
 	state: { kind: "idle" },
 	transcript: [],
 	muted: false,
+	captureProgress: null,
+	conversationStage: null,
+	textInputAvailable: false,
+	textSubmission: { status: "idle" },
 };
 
 /** Resolve a contract WS path without allowing the REST response to leave this origin. */
+export function effectiveCaptureDurationMs(
+	config: Pick<AudioClientConfig, "maxUtteranceMs" | "maxPcmBytes">,
+): number {
+	return Math.min(config.maxUtteranceMs, config.maxPcmBytes / 32);
+}
+
 export function resolveSameOriginWebSocketUrl(
 	wsPath: string,
 	baseUrl: string,
@@ -127,7 +148,10 @@ export class BrowserVoiceSession {
 	private playback: PlaybackAdapter | null = null;
 	private abortController: AbortController | null = null;
 	private conversationId: string | null = null;
+	private clientConfig: AudioClientConfig | null = null;
+	private conversationStage: ConversationStage | null = null;
 	private bookingId: string | null = null;
+	private pendingTypedText: string | null = null;
 	private qualificationStatus: "none" | "partial" | "complete" | "skipped" =
 		"none";
 	private readonly completedAssistantGenerations = new Set<string>();
@@ -168,16 +192,23 @@ export class BrowserVoiceSession {
 		this.consent = { ...consent };
 		const epoch = ++this.epoch;
 		this.bookingId = null;
+		this.conversationStage = null;
+		this.pendingTypedText = null;
 		this.qualificationStatus = "none";
 		this.completedAssistantGenerations.clear();
 		this.captureArmed = false;
 		this.sessionEstablished = false;
 		this.textOnlyGenerationPending = null;
 		this.terminalFailurePending = false;
+		this.clientConfig = null;
 		this.setSnapshot({
 			state: { kind: "connecting" },
 			transcript: [],
 			muted: false,
+			captureProgress: null,
+			conversationStage: null,
+			textInputAvailable: false,
+			textSubmission: { status: "idle" },
 		});
 		this.controller = new VoiceSessionController(initialVoiceState, (state) =>
 			this.projectControllerState(state),
@@ -189,13 +220,7 @@ export class BrowserVoiceSession {
 			const capture = this.createCapture(epoch, captureAttempt);
 			this.capture = capture;
 			this.captureStarting = true;
-			try {
-				await capture.start();
-			} finally {
-				if (captureAttempt === this.captureAttempt) {
-					this.captureStarting = false;
-				}
-			}
+			await capture.prepare();
 			if (
 				!this.isCurrent(epoch) ||
 				captureAttempt !== this.captureAttempt ||
@@ -204,7 +229,6 @@ export class BrowserVoiceSession {
 				await capture.stop();
 				return false;
 			}
-			capture.setMuted(this.snapshot.muted);
 
 			const request = CreateConversationRequestSchema.parse({
 				source: "landing",
@@ -236,9 +260,31 @@ export class BrowserVoiceSession {
 				return false;
 			}
 			this.conversationId = created.conversationId;
+			this.clientConfig = created.clientConfig;
 			if (new Date(created.expiresAt).getTime() <= this.now().getTime()) {
 				throw new Error("Conversation response is already expired");
 			}
+			capture.configureLimits(
+				created.clientConfig.maxUtteranceMs,
+				created.clientConfig.maxPcmBytes,
+			);
+			try {
+				await capture.start();
+			} finally {
+				if (captureAttempt === this.captureAttempt) {
+					this.captureStarting = false;
+				}
+			}
+			if (
+				!this.isCurrent(epoch) ||
+				captureAttempt !== this.captureAttempt ||
+				this.capture !== capture
+			) {
+				await capture.stop();
+				return false;
+			}
+			capture.setMuted(this.snapshot.muted);
+			capture.setAccepting(false);
 			const socketUrl = resolveSameOriginWebSocketUrl(
 				created.wsUrl,
 				this.factories.baseUrl,
@@ -301,19 +347,66 @@ export class BrowserVoiceSession {
 		const capture = this.capture;
 		this.capture = null;
 		this.captureArmed = false;
+		capture.setAccepting(false);
+		this.setCaptureProgress(null);
+		const epoch = this.epoch;
+		const finish = capture.finish();
+		const previousCleanup = this.captureCleanup;
+		this.captureCleanup = Promise.allSettled([previousCleanup, finish]).then(
+			() => undefined,
+		);
 		try {
-			await capture.finish();
-			const accepted = this.controller.commit(
-				() => this.transport?.commit() ?? false,
-			);
-			if (!accepted) void this.beginCapture(this.epoch);
+			await finish;
+			if (!this.isCurrent(epoch)) return false;
+			const controller = this.controller;
+			const transport = this.transport;
+			if (!controller || !transport) return false;
+			const accepted = controller.commit(() => transport.commit());
+			if (!accepted) void this.beginCapture(epoch);
 			return accepted;
 		} catch {
-			this.setState(this.activeState("error"));
+			if (this.isCurrent(epoch)) this.setState(this.activeState("error"));
 			return false;
 		} finally {
-			this.committing = false;
+			if (this.epoch === epoch) this.committing = false;
 		}
+	}
+
+	/** Submit one typed final turn without exposing provider or tool controls. */
+	submitText(text: string): boolean {
+		if (
+			this.disposed ||
+			this.terminalFailurePending ||
+			!this.snapshot.textInputAvailable ||
+			!this.controller ||
+			!this.transport ||
+			this.pendingTypedText !== null
+		) {
+			return false;
+		}
+		const capture = this.capture;
+		this.capture = null;
+		this.captureArmed = false;
+		if (capture) {
+			const previousCleanup = this.captureCleanup;
+			this.captureCleanup = Promise.allSettled([
+				previousCleanup,
+				capture.stop(),
+			]).then(() => undefined);
+		}
+		const accepted = this.controller.commit(
+			() => this.transport?.submitText(text) ?? false,
+		);
+		if (!accepted) {
+			void this.beginCapture(this.epoch);
+			return false;
+		}
+		this.pendingTypedText = text.trim();
+		this.setSnapshot({
+			...this.snapshot,
+			textSubmission: { status: "pending" },
+		});
+		return true;
 	}
 
 	toggleMute(): void {
@@ -380,6 +473,8 @@ export class BrowserVoiceSession {
 	async reset(): Promise<void> {
 		await this.releaseResources("user_requested", true);
 		this.consent = null;
+		this.conversationStage = null;
+		this.pendingTypedText = null;
 		this.setSnapshot({ ...INITIAL_SNAPSHOT });
 	}
 
@@ -399,6 +494,22 @@ export class BrowserVoiceSession {
 					this.captureArmed
 				) {
 					this.transport?.sendPcmFrame(frame);
+				}
+			},
+			onProgress: (stats) => {
+				if (
+					this.isCurrent(epoch) &&
+					attempt === this.captureAttempt &&
+					this.captureArmed
+				) {
+					const clientConfig = this.clientConfig;
+					this.setCaptureProgress({
+						acceptedPcmBytes: stats.bytes,
+						durationMs: stats.durationMs,
+						maxUtteranceMs: clientConfig
+							? effectiveCaptureDurationMs(clientConfig)
+							: 0,
+					});
 				}
 			},
 			onLimit: () => {
@@ -466,6 +577,13 @@ export class BrowserVoiceSession {
 			const capture = this.createCapture(epoch, attempt);
 			this.capture = capture;
 			try {
+				const clientConfig = this.clientConfig;
+				if (!clientConfig)
+					throw new Error("Audio client config is unavailable");
+				capture.configureLimits(
+					clientConfig.maxUtteranceMs,
+					clientConfig.maxPcmBytes,
+				);
 				await capture.start();
 				if (
 					!this.isCurrent(epoch) ||
@@ -477,7 +595,9 @@ export class BrowserVoiceSession {
 					return;
 				}
 				capture.setMuted(this.snapshot.muted);
+				capture.setAccepting(true);
 				this.captureArmed = true;
+				this.resetCaptureProgress();
 				this.controller?.beginListening();
 				this.setState(this.activeState("listening"));
 			} catch (error) {
@@ -509,6 +629,15 @@ export class BrowserVoiceSession {
 		await this.releaseResources("client_error", true);
 		if (!this.disposed && this.epoch === cleanupEpoch) {
 			this.setState({ kind: "error" });
+		}
+	}
+
+	private async failClientConfig(epoch: number): Promise<void> {
+		if (!this.isCurrent(epoch)) return;
+		const cleanupEpoch = epoch + 1;
+		await this.releaseResources("client_error", true);
+		if (!this.disposed && this.epoch === cleanupEpoch) {
+			this.setState(this.activeState("error"));
 		}
 	}
 
@@ -560,11 +689,20 @@ export class BrowserVoiceSession {
 		if (!this.isCurrent(epoch) || !this.controller) return;
 		switch (event.type) {
 			case "session.ready": {
+				if (
+					!sameAudioClientConfig(this.clientConfig, event.payload.clientConfig)
+				) {
+					void this.failClientConfig(epoch);
+					break;
+				}
 				this.sessionEstablished = true;
+				this.conversationStage = event.payload.state;
 				const capture = this.capture;
 				if (capture?.isActive && this.transport?.beginUtterance()) {
 					this.captureArmed = true;
 					capture.setMuted(this.snapshot.muted);
+					capture.setAccepting(true);
+					this.resetCaptureProgress();
 				} else if (capture) {
 					this.capture = null;
 					void capture.stop();
@@ -575,11 +713,22 @@ export class BrowserVoiceSession {
 			}
 			case "transcript.final":
 				if (this.controller.acceptEvent(event)) {
+					const acceptedTypedText = this.pendingTypedText;
+					this.pendingTypedText = null;
 					this.appendTranscript({
 						id: event.payload.turnId,
 						speaker: "visitor",
 						text: event.payload.text,
 					});
+					if (acceptedTypedText !== null) {
+						this.setSnapshot({
+							...this.snapshot,
+							textSubmission: {
+								status: "accepted",
+								turnId: event.payload.turnId,
+							},
+						});
+					}
 					this.setState(this.activeState("thinking"));
 				}
 				break;
@@ -647,6 +796,7 @@ export class BrowserVoiceSession {
 				if (this.controller.acceptEvent(event)) void this.beginCapture(epoch);
 				break;
 			case "state.changed":
+				this.conversationStage = event.payload.to;
 				this.applyServerStage(event.payload.to);
 				break;
 			case "booking.created":
@@ -671,7 +821,20 @@ export class BrowserVoiceSession {
 				}
 				break;
 			case "error":
-				if (event.payload.code === "TTS_UNAVAILABLE") {
+				if (this.pendingTypedText !== null) {
+					this.pendingTypedText = null;
+					this.controller.rejectCommit();
+					this.setSnapshot({
+						...this.snapshot,
+						textSubmission: {
+							status: "rejected",
+							message: event.payload.retryable
+								? "Сообщение не принято. Проверьте связь и отправьте его ещё раз."
+								: "Сообщение не принято в текущем состоянии разговора.",
+						},
+					});
+					void this.beginCapture(epoch);
+				} else if (event.payload.code === "TTS_UNAVAILABLE") {
 					this.textOnlyGenerationPending = this.controller.state.generationId;
 					this.controller.setAudioError("Звук ответа сейчас недоступен");
 					this.setState(this.activeState("audio-error"));
@@ -830,6 +993,7 @@ export class BrowserVoiceSession {
 		this.captureArmed = false;
 		this.sessionEstablished = false;
 		this.textOnlyGenerationPending = null;
+		this.pendingTypedText = null;
 		this.abortController?.abort();
 		this.abortController = null;
 		const transport = this.transport;
@@ -850,6 +1014,7 @@ export class BrowserVoiceSession {
 			this.notifyConversationStop(conversationId, reason);
 		}
 		this.conversationId = null;
+		this.clientConfig = null;
 	}
 
 	private notifyConversationStop(
@@ -887,13 +1052,64 @@ export class BrowserVoiceSession {
 	}
 
 	private setState(state: VoiceUiState): void {
-		this.setSnapshot({ ...this.snapshot, state });
+		this.setSnapshot({
+			...this.snapshot,
+			state,
+			captureProgress:
+				state.kind === "listening" || state.kind === "qualification"
+					? this.snapshot.captureProgress
+					: null,
+		});
+	}
+
+	private resetCaptureProgress(): void {
+		const clientConfig = this.clientConfig;
+		if (!clientConfig) return;
+		this.setCaptureProgress({
+			acceptedPcmBytes: 0,
+			durationMs: 0,
+			maxUtteranceMs: effectiveCaptureDurationMs(clientConfig),
+		});
+	}
+
+	private setCaptureProgress(progress: VoiceCaptureProgress | null): void {
+		if (progress === this.snapshot.captureProgress) return;
+		this.setSnapshot({ ...this.snapshot, captureProgress: progress });
 	}
 
 	private setSnapshot(snapshot: BrowserVoiceSnapshot): void {
 		if (this.disposed) return;
-		this.snapshot = snapshot;
+		this.snapshot = {
+			...snapshot,
+			conversationStage: this.conversationStage,
+			textInputAvailable: this.canSubmitTextIn(snapshot.state),
+		};
 		for (const listener of this.listeners) listener();
+	}
+
+	private canSubmitTextIn(state: VoiceUiState): boolean {
+		if (
+			!this.transport?.isReady ||
+			this.controller?.hasPendingCommit ||
+			this.pendingTypedText !== null ||
+			this.conversationStage === null ||
+			this.conversationStage === "IDLE" ||
+			this.conversationStage === "CONNECTING" ||
+			this.conversationStage === "COMPLETE" ||
+			this.conversationStage === "DECLINED" ||
+			this.conversationStage === "DISCONNECTED" ||
+			this.conversationStage === "ERROR"
+		) {
+			return false;
+		}
+		return (
+			this.controller?.state.status === "listening" &&
+			state.kind !== "permission-denied" &&
+			state.kind !== "disconnected" &&
+			state.kind !== "reconnecting" &&
+			state.kind !== "error" &&
+			state.kind !== "complete"
+		);
 	}
 
 	private isCurrent(epoch: number): boolean {
@@ -903,6 +1119,22 @@ export class BrowserVoiceSession {
 	private now(): Date {
 		return this.factories.now?.() ?? new Date();
 	}
+}
+
+function sameAudioClientConfig(
+	left: AudioClientConfig | null,
+	right: AudioClientConfig,
+): boolean {
+	return (
+		left !== null &&
+		left.inputSampleRate === right.inputSampleRate &&
+		left.inputEncoding === right.inputEncoding &&
+		left.chunkMs === right.chunkMs &&
+		left.maxUtteranceMs === right.maxUtteranceMs &&
+		left.maxPcmBytes === right.maxPcmBytes &&
+		left.outputContentType === right.outputContentType &&
+		left.outputMode === right.outputMode
+	);
 }
 
 function isPermissionDenied(error: unknown): boolean {
@@ -930,7 +1162,9 @@ export function createBrowserVoiceSession(): BrowserVoiceSession {
 		createCapture: (options) =>
 			new AudioWorkletCapture({
 				apis: createBrowserAudioCaptureApis(),
+				acceptingInitially: false,
 				onFrame: options.onFrame,
+				onProgress: options.onProgress,
 				onLimit: options.onLimit,
 			}),
 		createPlayback: (options) =>

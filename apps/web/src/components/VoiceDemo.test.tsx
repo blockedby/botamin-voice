@@ -10,6 +10,7 @@ import type {
 import {
 	activateVoiceStart,
 	completeVoiceSession,
+	getUtteranceCountdown,
 	handOffVoiceControlFocus,
 	stopVoiceSession,
 	VoiceDemo,
@@ -35,6 +36,10 @@ function renderVoice(
 			consent={{ voiceProcessing: true, contactProcessing: true }}
 			transcript={[]}
 			muted={false}
+			captureProgress={null}
+			conversationStage={null}
+			textInputAvailable={false}
+			textSubmission={{ status: "idle" }}
 			onConsentChange={noop}
 			onStart={noop}
 			onCommit={noop}
@@ -44,6 +49,7 @@ function renderVoice(
 			onInterrupt={noop}
 			onReconnect={noop}
 			onRestart={noop}
+			onTextSubmit={() => false}
 			{...overrides}
 		/>,
 	);
@@ -148,12 +154,70 @@ describe("VoiceDemo controls and transcript", () => {
 		expect(html).toContain("Управление разговором");
 	});
 
+	test("renders a stable, non-live circular countdown only for active capture states", () => {
+		const initial = {
+			acceptedPcmBytes: 0,
+			durationMs: 0,
+			maxUtteranceMs: 60_000,
+		};
+		const listening = renderVoice(
+			{ kind: "listening" },
+			{ captureProgress: initial },
+		);
+		expect(listening).toContain('role="timer"');
+		expect(listening).toContain("Осталось на реплику");
+		expect(listening).toContain(
+			'aria-label="Осталось времени на реплику: 60 секунд."',
+		);
+		expect(listening).toContain('aria-live="off"');
+		expect(liveRegionContent(listening)).not.toContain("Осталось");
+
+		const qualification = renderVoice(
+			{ kind: "qualification", bookingOutcome: "committed" },
+			{
+				captureProgress: {
+					acceptedPcmBytes: 1_600_000,
+					durationMs: 50_000,
+					maxUtteranceMs: 60_000,
+				},
+			},
+		);
+		expect(qualification).toContain('data-countdown-warning="true"');
+		expect(qualification).toContain(
+			'aria-label="Осталось времени на реплику: 10 секунд."',
+		);
+
+		const processing = renderVoice(
+			{ kind: "processing" },
+			{ captureProgress: initial },
+		);
+		expect(processing).not.toContain('role="timer"');
+		expect(processing).toContain("status-orbit");
+		expect(
+			getUtteranceCountdown({ ...initial, durationMs: 49_001 }),
+		).toMatchObject({ remainingSeconds: 11, warning: false });
+	});
+
 	test("mute exposes one stable name whose pressed state means muting is active", () => {
 		const unmuted = renderVoice({ kind: "listening" }, { muted: false });
 		const muted = renderVoice({ kind: "listening" }, { muted: true });
 		for (const html of [unmuted, muted]) {
 			expect(html.match(/aria-label="Отключение микрофона"/g)?.length).toBe(1);
 		}
+		const mutedWithTimer = renderVoice(
+			{ kind: "listening" },
+			{
+				muted: true,
+				captureProgress: {
+					acceptedPcmBytes: 320_000,
+					durationMs: 10_000,
+					maxUtteranceMs: 60_000,
+				},
+			},
+		);
+		expect(mutedWithTimer).toContain(
+			'aria-label="Осталось времени на реплику: 50 секунд."',
+		);
 		expect(unmuted).toContain('aria-pressed="false"');
 		expect(muted).toContain('aria-pressed="true"');
 	});
@@ -234,6 +298,34 @@ describe("VoiceDemo controls and transcript", () => {
 			},
 			transcript: fabricated,
 		});
+	});
+
+	test("derives booking form visibility from projected server stage, not transcript wording", () => {
+		const suggestiveTranscript = [
+			{
+				id: "agent-suggestion",
+				speaker: "agent" as const,
+				text: "Оставьте имя, компанию, email и телефон.",
+			},
+		];
+		expect(
+			renderVoice(
+				{ kind: "listening" },
+				{
+					transcript: suggestiveTranscript,
+					conversationStage: "BOOKING_OFFER",
+				},
+			),
+		).not.toContain("booking-details-title");
+		expect(
+			renderVoice(
+				{ kind: "thinking" },
+				{
+					transcript: [],
+					conversationStage: "COLLECT_BOOKING",
+				},
+			),
+		).toContain("booking-details-title");
 	});
 
 	test("booked confirms only the recorded lead and makes qualification optional", () => {

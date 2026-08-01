@@ -6,6 +6,10 @@ import {
 	BookingCreatedEventSchema,
 	type BookingDomainEvent,
 } from "@botamin/contracts";
+import {
+	createTestBookingContacts,
+	createTestMeetingSlot,
+} from "../../../../packages/test-fixtures/src";
 import { ConversationStore } from "../db/conversation-store";
 import { closeDomainDatabase, openDomainDatabase } from "../db/database";
 import { notificationOutbox } from "../db/schema";
@@ -27,7 +31,9 @@ function event(): BookingDomainEvent {
 			bookingId: Bun.randomUUIDv7(),
 			conversationId: Bun.randomUUIDv7(),
 			name: "Александр",
-			contacts: [{ channel: "telegram", value: "@alex" }],
+			contacts: createTestBookingContacts(),
+			company: "Example LLC",
+			meetingSlot: createTestMeetingSlot(),
 			status: "booked",
 			qualificationStatus: "none",
 		},
@@ -116,7 +122,9 @@ describe("lead notifiers and outbox", () => {
 			conversationId,
 			idempotencyKey: "outbox-lease-booking-01",
 			name: "Александр",
-			contacts: [{ channel: "telegram", value: "@alex" }],
+			contacts: createTestBookingContacts(),
+			company: "Example LLC",
+			meetingSlot: createTestMeetingSlot(),
 			consentConfirmed: true,
 		});
 		const eventId = database.select().from(notificationOutbox).get()?.eventId;
@@ -183,7 +191,9 @@ describe("lead notifiers and outbox", () => {
 			conversationId,
 			idempotencyKey: "outbox-race-booking-01",
 			name: "Александр",
-			contacts: [{ channel: "telegram", value: "@alex" }],
+			contacts: createTestBookingContacts(),
+			company: "Example LLC",
+			meetingSlot: createTestMeetingSlot(),
 			consentConfirmed: true,
 		});
 		const eventId = database.select().from(notificationOutbox).get()?.eventId;
@@ -273,7 +283,9 @@ describe("lead notifiers and outbox", () => {
 			conversationId,
 			idempotencyKey: "polling-worker-booking-01",
 			name: "Александр",
-			contacts: [{ channel: "telegram", value: "@alex" }],
+			contacts: createTestBookingContacts(),
+			company: "Example LLC",
+			meetingSlot: createTestMeetingSlot(),
 			consentConfirmed: true,
 		});
 		let current = new Date(at);
@@ -360,7 +372,9 @@ describe("lead notifiers and outbox", () => {
 			conversationId,
 			idempotencyKey: "outbox-booking-0001",
 			name: "Александр",
-			contacts: [{ channel: "telegram", value: "@alex" }],
+			contacts: createTestBookingContacts(),
+			company: "Example LLC",
+			meetingSlot: createTestMeetingSlot(),
 			consentConfirmed: true,
 		});
 		expect(result.created).toBe(true);

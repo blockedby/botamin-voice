@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { CreateBookingInput } from "@botamin/contracts";
-import { FakeBookingService } from "../../../../packages/test-fixtures/src";
+import {
+	createTestBookingContacts,
+	createTestMeetingSlot,
+	FakeBookingService,
+} from "../../../../packages/test-fixtures/src";
 import { allowedActions, authorizeTool, BookingToolExecutor } from "./policy";
 import {
 	type ConversationState,
@@ -8,11 +12,17 @@ import {
 } from "./state";
 
 const conversationId = "01J00000000000000000000000";
+const candidateMeetingSlots = [
+	createTestMeetingSlot(),
+	createTestMeetingSlot(1),
+] as const;
 const input: CreateBookingInput = {
 	conversationId,
 	idempotencyKey: "booking-policy-0001",
 	name: "Анна",
-	contacts: [{ channel: "email", value: "anna@example.com" }],
+	contacts: createTestBookingContacts(),
+	company: "Example LLC",
+	meetingSlot: createTestMeetingSlot(),
 	consentConfirmed: true,
 };
 const request = {
@@ -34,10 +44,20 @@ describe("allowed action and tool authorization policy", () => {
 		expect(allowedActions(collectionState(false))).toEqual([]);
 		expect(allowedActions(collectionState(true))).toEqual(["create_booking"]);
 		expect(
-			authorizeTool(collectionState(false), conversationId, request),
+			authorizeTool(
+				collectionState(false),
+				conversationId,
+				candidateMeetingSlots,
+				request,
+			),
 		).toMatchObject({ ok: false, code: "ACTION_NOT_ALLOWED_IN_STATE" });
 		expect(
-			authorizeTool(collectionState(true), conversationId, request),
+			authorizeTool(
+				collectionState(true),
+				conversationId,
+				candidateMeetingSlots,
+				request,
+			),
 		).toMatchObject({ ok: true });
 	});
 
@@ -50,23 +70,57 @@ describe("allowed action and tool authorization policy", () => {
 			},
 		};
 		expect(
-			authorizeTool(collectionState(), conversationId, mismatch),
+			authorizeTool(
+				collectionState(),
+				conversationId,
+				candidateMeetingSlots,
+				mismatch,
+			),
 		).toMatchObject({ ok: false, code: "ACTION_NOT_ALLOWED_IN_STATE" });
 
-		const beforeBooking = authorizeTool(collectionState(), conversationId, {
-			name: "append_booking_qualification",
-			callId: "call-qualification-1",
-			args: {
-				bookingId: "01J00000000000000000000001",
-				idempotencyKey: "qualification-0001",
-				patch: { role: "РОП" },
-				completion: "partial",
+		const beforeBooking = authorizeTool(
+			collectionState(),
+			conversationId,
+			candidateMeetingSlots,
+			{
+				name: "append_booking_qualification",
+				callId: "call-qualification-1",
+				args: {
+					bookingId: "01J00000000000000000000001",
+					idempotencyKey: "qualification-0001",
+					patch: { salesManagerCount: 8 },
+					completion: "partial",
+				},
 			},
-		});
+		);
 		expect(beforeBooking).toMatchObject({
 			ok: false,
 			code: "ACTION_NOT_ALLOWED_IN_STATE",
 		});
+	});
+
+	test("rejects a structurally valid meeting slot not supplied for the active turn", () => {
+		const nonCandidate = {
+			...request,
+			args: {
+				...request.args,
+				meetingSlot: {
+					startAt: "2099-01-06T06:00:00.000Z",
+					endAt: "2099-01-06T06:20:00.000Z",
+					timeZone: "Europe/Moscow" as const,
+					durationMinutes: 20 as const,
+				},
+			},
+		};
+
+		expect(
+			authorizeTool(
+				collectionState(),
+				conversationId,
+				candidateMeetingSlots,
+				nonCandidate,
+			),
+		).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
 	});
 
 	test("qualification is allowed only after confirmation and explicit consent", async () => {
@@ -92,23 +146,79 @@ describe("allowed action and tool authorization policy", () => {
 		expect(created.status).toBe("booked");
 	});
 
+	test("server boundary rejects legacy role-only and CRM-only qualification patches", async () => {
+		const service = new FakeBookingService();
+		await service.createBooking(input);
+		const booking = await service.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const state: ConversationState = {
+			...createInitialConversationState(),
+			stage: "POST_BOOKING_QUALIFICATION",
+			booking,
+			contactConsentConfirmed: true,
+			bookingConfirmationDelivered: true,
+			qualificationEnabled: true,
+			qualificationConsent: "granted",
+		};
+		const executor = new BookingToolExecutor(service);
+		for (const [field, value] of [
+			["role", "РОП"],
+			["crm", "amoCRM"],
+		] as const) {
+			const request = {
+				name: "append_booking_qualification",
+				callId: `legacy-${field}`,
+				args: {
+					bookingId: booking.id,
+					idempotencyKey: `legacy-${field}-0001`,
+					patch: { [field]: value },
+					completion: "partial",
+				},
+			};
+			expect(
+				authorizeTool(state, conversationId, candidateMeetingSlots, request),
+			).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
+			expect(
+				await executor.execute(
+					state,
+					conversationId,
+					candidateMeetingSlots,
+					request,
+				),
+			).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
+		}
+		expect(service.domainEvents.map((event) => event.type)).toEqual([
+			"booking.created",
+		]);
+		expect(await service.findByConversationId(conversationId)).toMatchObject({
+			qualificationStatus: "none",
+		});
+	});
+
 	test("executor deduplicates identical callId and rejects changed replay", async () => {
 		const service = new FakeBookingService();
 		const executor = new BookingToolExecutor(service);
 		const first = await executor.execute(
 			collectionState(),
 			conversationId,
+			candidateMeetingSlots,
 			request,
 		);
 		const replay = await executor.execute(
 			collectionState(),
 			conversationId,
+			candidateMeetingSlots,
 			request,
 		);
-		const conflict = await executor.execute(collectionState(), conversationId, {
-			...request,
-			args: { ...request.args, name: "Другое имя" },
-		});
+		const conflict = await executor.execute(
+			collectionState(),
+			conversationId,
+			candidateMeetingSlots,
+			{
+				...request,
+				args: { ...request.args, name: "Другое имя" },
+			},
+		);
 
 		expect(first).toMatchObject({
 			ok: true,

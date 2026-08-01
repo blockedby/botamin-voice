@@ -41,6 +41,28 @@ export const MAX_FILE_BYTES = 16 * 1024;
 export const MAX_BUNDLE_BYTES = 128 * 1024;
 export const BOOKING_ORDER_SENTENCE =
 	"Никогда не начинай квалификацию до успешного результата `create_booking`.";
+export const REQUIRED_POLICY_SENTENCES: Readonly<
+	Record<string, readonly string[]>
+> = {
+	"prompts/conversation-policy.md": [
+		"Считай вопрос в приветствии discovery-вопросом; всего до предложения допустимо не более двух.",
+		"не позднее ответа на второй discovery-вопрос сделай краткое мягкое предложение показать Botamin или согласовать видео-встречу.",
+		"Ясный отказ от предложения о следующем шаге сразу останавливает продажу.",
+	],
+	"prompts/booking.md": [
+		"Только после согласия пользователя используй ровно два кандидата из `schedulingContext.candidateMeetingSlots`.",
+		"известно имя и компания;",
+		"есть рабочий email и хотя бы один дополнительный контакт: телефон или Telegram;",
+	],
+	"prompts/qualification.md": [
+		"месячный объём входящих лидов — сохрани в `monthlyLeadVolume`;",
+		"явное число менеджеров продаж — сохрани целым числом в `salesManagerCount` без домысливания.",
+	],
+	"prompts/speech-style.md": [
+		"Выражай одну мысль и задавай не больше одного вопроса.",
+		"Ориентир — до двенадцати секунд речи без веской причины.",
+	],
+};
 
 const HEADINGS: Record<string, string[]> = {
 	"prompts/system.md": [
@@ -116,6 +138,7 @@ const HEADINGS: Record<string, string[]> = {
 		"Published Botamin case claims",
 		"Source and evidence policy",
 		"Numeric case claims",
+		"Пользовательский бриф Botamin — рост выручки компаний",
 		"Главтрассы — голосовой outbound",
 		"РоллПроф — входящий поток и follow-up",
 		"Продавец утеплительной пены на Авито — скорость ответа и фильтрация",
@@ -155,7 +178,7 @@ const HEADINGS: Record<string, string[]> = {
 };
 
 const HEADING_LEVELS: Partial<Record<string, readonly number[]>> = {
-	"knowledge/cases.md": [1, 2, 2, 3, 3, 3, 3, 2, 3, 2],
+	"knowledge/cases.md": [1, 2, 2, 3, 3, 3, 3, 3, 2, 3, 2],
 };
 
 const SECRET_PATTERNS = [
@@ -169,6 +192,10 @@ const CURRENCY_PRICE =
 	/(?:[$€£₽]\s*\d|\d\s*(?:₽|руб(?:\.?|лей)|USD|EUR|RUB)\b|\b(?:USD|EUR|RUB)\s*\d)/iu;
 const RUSSIAN_MAGNITUDE_PRICE =
 	/\b\d[\d ]*(?:[.,]\d+)?\s+(?:тыс\.?|тысяч(?:а|и)?|миллион(?:а|ов)?|млн\.?)\s+руб(?:ль|ля|лей)(?!\p{L})/iu;
+export const ATTRIBUTED_REVENUE_CLAIM_LINES = [
+	"- **Source claim:** в пользовательском брифе Botamin сообщается, что Botamin помог компаниям увеличить выручку на 10–15 миллионов рублей в месяц.",
+	"- **Required attribution:** «В пользовательском брифе Botamin сообщается, что Botamin помог компаниям увеличить выручку на 10–15 миллионов рублей в месяц; это сообщение источника о прошлых результатах, а не гарантия, прогноз или переносимый результат для вашей компании».",
+] as const;
 
 export interface CompileOptions {
 	sourceRoot: string;
@@ -292,9 +319,29 @@ function validateSource(relativePath: string, source: string): string {
 	}
 	if (SECRET_PATTERNS.some((pattern) => pattern.test(normalized)))
 		fail(`${relativePath} contains a secret-like pattern`);
+	const sourceLines = normalized.split("\n");
 	if (
-		CURRENCY_PRICE.test(normalized) ||
-		RUSSIAN_MAGNITUDE_PRICE.test(normalized)
+		relativePath === "knowledge/cases.md" &&
+		ATTRIBUTED_REVENUE_CLAIM_LINES.some(
+			(line) =>
+				sourceLines.filter((candidate) => candidate === line).length !== 1,
+		)
+	)
+		fail(`${relativePath} has invalid attributed revenue claim lines`);
+	const priceCheckedSource =
+		relativePath === "knowledge/cases.md"
+			? sourceLines
+					.filter(
+						(line) =>
+							!ATTRIBUTED_REVENUE_CLAIM_LINES.some(
+								(candidate) => candidate === line,
+							),
+					)
+					.join("\n")
+			: normalized;
+	if (
+		CURRENCY_PRICE.test(priceCheckedSource) ||
+		RUSSIAN_MAGNITUDE_PRICE.test(priceCheckedSource)
 	)
 		fail(`${relativePath} contains a hard-coded numeric currency price`);
 	if (
@@ -303,6 +350,10 @@ function validateSource(relativePath: string, source: string): string {
 	) {
 		if (!normalized.includes(BOOKING_ORDER_SENTENCE))
 			fail(`${relativePath} is missing the booking-order sentence`);
+	}
+	for (const sentence of REQUIRED_POLICY_SENTENCES[relativePath] ?? []) {
+		if (!normalized.includes(sentence))
+			fail(`${relativePath} is missing a required policy sentence`);
 	}
 	return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
 }

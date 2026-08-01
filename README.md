@@ -6,13 +6,17 @@
 
 **Spec version:** `0.5-demo`
 
-**Local release candidate:** `0.5.0-local-rc.1`
+**Local release candidate:** `0.5.0-local-rc.2`
 
 **Current release scope:** local hosting first; target VPS, public TLS/WSS, and WebKit acceptance are later gates.
 
 ## What this repository runs
 
-Botamin is a full-stack landing page with a browser voice AI seller. The browser sends bounded PCM16 chunks to the backend; after `audio.commit`, the gateway creates one validated WAV for an atomic OpenRouter STT request. One final transcript goes to Codex app-server with `gpt-5.6-luna`; OpenRouter TTS returns complete MP3 phrase segments. The backend creates an internal booking before optional qualification. It does **not** create a real calendar or CRM record.
+Botamin is a full-stack landing page with a browser voice AI seller. The browser sends bounded PCM16 chunks to the backend; after `audio.commit`, the gateway creates one validated WAV for an atomic OpenRouter STT request. A secure provider-neutral `visitor.text.submit` path also accepts a final typed turn and sends it through the same transcript, Luna, policy, tool, and persistence flow as speech. One final transcript goes to Codex app-server with `gpt-5.6-luna`; OpenRouter TTS returns complete MP3 phrase segments.
+
+Each voice utterance is capped at 60 seconds and the atomic WAV request at 2,000,000 bytes. The active circular countdown is derived from accepted 16 kHz PCM16 samples and the stricter server-advertised duration/byte ceiling, not a wall-clock timer.
+
+The backend offers exactly two structured internal 20-minute `Europe/Moscow` candidates and creates a booking only after name, company, working email, phone or Telegram, one candidate, and consent are present. It excludes already committed internal starts, but does **not** query or create a real calendar/CRM event or invitation. Optional qualification starts only after committed booking, user-facing confirmation, and consent, and is limited conversationally to monthly inbound leads and integer `salesManagerCount`.
 
 ## Local-first start
 
@@ -68,6 +72,8 @@ Never use `docker compose down -v` on a host with bookings or Codex auth. Restor
 6. The agent never claims that a calendar event was created.
 7. OpenRouter is the only STT/TTS gateway; Codex subscription + GPT-5.6 Luna is the brain.
 8. Phrase-level STT adds accepted end-of-turn latency; local synthetic timings are not a hosting benchmark.
+9. Typed and spoken final turns have the same semantic authority; neither exposes provider or tool controls.
+10. A booking uses exactly one of the two current server-supplied internal Moscow slots; a non-candidate slot is rejected.
 
 ## Documentation map
 

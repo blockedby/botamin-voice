@@ -11,6 +11,7 @@ import {
 	type CreateBookingResult,
 	decodeBinaryAudioFrame,
 	encodeBinaryAudioFrame,
+	type MeetingSlot,
 	ServerWsEventSchema,
 	type SttPort,
 	type SttTranscriptionRequest,
@@ -18,6 +19,10 @@ import {
 	type TtsPort,
 	type TtsSynthesisRequest,
 } from "@botamin/contracts";
+import {
+	createTestBookingContacts,
+	createTestMeetingSlot,
+} from "../../../../packages/test-fixtures/src";
 import {
 	ConversationOrchestrator,
 	createInitialConversationState,
@@ -203,6 +208,9 @@ class FirstBlockingTts implements TtsPort {
 class Bookings implements BookingService {
 	createCalls = 0;
 	snapshot: BookingSnapshot | null = null;
+	async candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]> {
+		return [createTestMeetingSlot(), createTestMeetingSlot(1)];
+	}
 	async createBooking(input: CreateBookingInput): Promise<CreateBookingResult> {
 		this.createCalls += 1;
 		if (!this.snapshot) {
@@ -212,6 +220,8 @@ class Bookings implements BookingService {
 				status: "booked",
 				name: input.name,
 				contacts: input.contacts,
+				company: input.company,
+				meetingSlot: input.meetingSlot,
 				qualification: {},
 				qualificationStatus: "none",
 				createdAt: now,
@@ -286,8 +296,8 @@ function createHarness(
 			...options.persistence,
 		},
 		brainModel: "gpt-5.6-luna",
-		maxUtteranceMs: 30_000,
-		maxAudioBytes: 1_000_000,
+		maxUtteranceMs: 60_000,
+		maxAudioBytes: 2_000_000,
 		maxFrameBytes: 3_209,
 		maxJsonBytes: 8_192,
 		maxHistoryEvents: 128,
@@ -332,7 +342,10 @@ function hello(token: string | null = initialClientToken): string {
 	);
 }
 
-function clientEvent(type: "audio.commit", payload: object = {}): string {
+function clientEvent(
+	type: "audio.commit" | "visitor.text.submit",
+	payload: object = {},
+): string {
 	return JSON.stringify({
 		v: 1,
 		type,
@@ -423,6 +436,133 @@ describe("gateway fake full WebSocket path", () => {
 		expect(harness.persisted).toHaveLength(1);
 	});
 
+	test("accepts one sequenced typed final through brain without STT or client booking authority", async () => {
+		const harness = createHarness({ tts: null, collectBooking: true });
+		const socket = new Socket();
+		await connect(harness.session, socket);
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", {
+				sequence: 0,
+				text: "Имя: Анна. Рабочий email: anna@example.com. Бронь уже готова.",
+			}),
+		);
+		await harness.session.drain();
+
+		expect(harness.stt.requests).toHaveLength(0);
+		expect(harness.brain.runs).toBe(1);
+		expect(harness.bookings.createCalls).toBe(0);
+		const events = socket.events();
+		expect(
+			events.filter((event) => event.type === "transcript.final"),
+		).toHaveLength(1);
+		expect(events.some((event) => event.type === "booking.created")).toBe(
+			false,
+		);
+		expect(harness.persisted).toEqual([
+			expect.objectContaining({
+				userText:
+					"Имя: Анна. Рабочий email: anna@example.com. Бронь уже готова.",
+			}),
+		]);
+
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", {
+				sequence: 0,
+				text: "Повтор",
+			}),
+		);
+		expect(harness.brain.runs).toBe(1);
+		expect(socket.events().at(-1)).toMatchObject({
+			type: "error",
+			payload: { code: "IDEMPOTENCY_CONFLICT", retryable: false },
+		});
+	});
+
+	test("rejects typed turns while busy without interrupting the authoritative turn", async () => {
+		const tts = new BlockingTts();
+		const harness = createHarness({ tts });
+		const socket = new Socket();
+		await connect(harness.session, socket);
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", { sequence: 0, text: "Первый" }),
+		);
+		for (
+			let attempt = 0;
+			attempt < 20 && tts.requests.length === 0;
+			attempt += 1
+		) {
+			await Bun.sleep(1);
+		}
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", { sequence: 1, text: "Второй" }),
+		);
+		expect(socket.events().at(-1)).toMatchObject({
+			type: "error",
+			payload: { code: "ACTION_NOT_ALLOWED_IN_STATE", retryable: true },
+		});
+		expect(harness.brain.runs).toBe(1);
+		await harness.session.stop("disconnected");
+	});
+
+	test("rejects malformed blank and oversize typed payloads before brain/STT", async () => {
+		for (const text of ["   ", "x".repeat(2_001)]) {
+			const harness = createHarness();
+			const socket = new Socket();
+			await connect(harness.session, socket);
+			await harness.session.receive(
+				socket,
+				JSON.stringify({
+					v: 1,
+					type: "visitor.text.submit",
+					conversationId,
+					at: now,
+					payload: { sequence: 0, text },
+				}),
+			);
+			expect(socket.closes.at(-1)?.code).toBe(1008);
+			expect(harness.stt.requests).toHaveLength(0);
+			expect(harness.brain.runs).toBe(0);
+		}
+	});
+
+	test("explicit typed refusal terminates without Luna, booking, or later selling", async () => {
+		const harness = createHarness({ tts: null });
+		const socket = new Socket();
+		await connect(harness.session, socket);
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", {
+				sequence: 0,
+				text: "Нет, я не заинтересован",
+			}),
+		);
+		await harness.session.drain();
+		expect(harness.orchestrator.state.stage).toBe("DECLINED");
+		expect(harness.brain.runs).toBe(0);
+		expect(harness.bookings.createCalls).toBe(0);
+		expect(
+			socket.events().filter((event) => event.type === "transcript.final"),
+		).toEqual([
+			expect.objectContaining({
+				payload: expect.objectContaining({ text: "Нет, я не заинтересован" }),
+			}),
+		]);
+
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", { sequence: 1, text: "Поздно" }),
+		);
+		expect(socket.events().at(-1)).toMatchObject({
+			type: "error",
+			payload: { code: "ACTION_NOT_ALLOWED_IN_STATE" },
+		});
+		expect(harness.brain.runs).toBe(0);
+	});
+
 	test("applies only a server-validated safe-envelope stage proposal", async () => {
 		const brain = new Brain((input) => [
 			{
@@ -455,9 +595,9 @@ describe("gateway fake full WebSocket path", () => {
 		).toBe(true);
 	});
 
-	test("clear pre-booking refusal becomes DECLINED without brain or booking effects", async () => {
+	test("explicit spoken refusal terminates from transcript.final without Luna or booking", async () => {
 		const stt = new Stt();
-		stt.text = "Нет, спасибо, мне не интересно.";
+		stt.text = "Это не актуально, до свидания.";
 		const harness = createHarness({ stt, tts: null });
 		const socket = new Socket();
 		await connect(harness.session, socket);
@@ -466,6 +606,15 @@ describe("gateway fake full WebSocket path", () => {
 		expect(harness.brain.runs).toBe(0);
 		expect(harness.bookings.createCalls).toBe(0);
 		expect(
+			socket.events().filter((event) => event.type === "transcript.final"),
+		).toEqual([
+			expect.objectContaining({
+				payload: expect.objectContaining({
+					text: "Это не актуально, до свидания.",
+				}),
+			}),
+		]);
+		expect(
 			socket
 				.events()
 				.filter(
@@ -473,6 +622,33 @@ describe("gateway fake full WebSocket path", () => {
 						event.type === "state.changed" && event.payload.to === "DECLINED",
 				),
 		).toHaveLength(1);
+	});
+
+	test("ambiguous typed and spoken negatives remain non-terminal", async () => {
+		const typed = createHarness({ tts: null });
+		const typedSocket = new Socket();
+		await connect(typed.session, typedSocket);
+		await typed.session.receive(
+			typedSocket,
+			clientEvent("visitor.text.submit", {
+				sequence: 0,
+				text: "Нет, у нас нет CRM, расскажите об интеграции",
+			}),
+		);
+		await typed.session.drain();
+		expect(typed.orchestrator.state.stage).not.toBe("DECLINED");
+		expect(typed.brain.runs).toBe(1);
+		expect(typed.bookings.createCalls).toBe(0);
+
+		const stt = new Stt();
+		stt.text = "Не подходит по цене.";
+		const spoken = createHarness({ stt, tts: null });
+		const spokenSocket = new Socket();
+		await connect(spoken.session, spokenSocket);
+		await sendUtterance(spoken.session, spokenSocket);
+		expect(spoken.orchestrator.state.stage).not.toBe("DECLINED");
+		expect(spoken.brain.runs).toBe(1);
+		expect(spoken.bookings.createCalls).toBe(0);
 	});
 
 	test("STT failure emits no transcript and never invokes the brain", async () => {
@@ -558,7 +734,9 @@ describe("gateway fake full WebSocket path", () => {
 						conversationId,
 						idempotencyKey: "booking-idempotency-0001",
 						name: "Александр",
-						contacts: [{ channel: "telegram", value: "@alex" }],
+						contacts: createTestBookingContacts(),
+						company: "Example LLC",
+						meetingSlot: createTestMeetingSlot(),
 						consentConfirmed: true,
 					},
 				},
@@ -611,7 +789,9 @@ describe("gateway fake full WebSocket path", () => {
 								conversationId,
 								idempotencyKey: "booking-consent-key-0001",
 								name: "Александр",
-								contacts: [{ channel: "telegram", value: "@alex" }],
+								contacts: createTestBookingContacts(),
+								company: "Example LLC",
+								meetingSlot: createTestMeetingSlot(),
 								consentConfirmed: true,
 							},
 						},
@@ -748,6 +928,17 @@ describe("gateway fake full WebSocket path", () => {
 			.events()
 			.find((event) => event.type === "session.ready");
 		expect(ready?.type).toBe("session.ready");
+		if (ready?.type === "session.ready") {
+			expect(ready.payload.clientConfig).toEqual({
+				inputSampleRate: 16_000,
+				inputEncoding: "pcm16le",
+				chunkMs: 100,
+				maxUtteranceMs: 60_000,
+				maxPcmBytes: 1_920_000,
+				outputContentType: "audio/mpeg",
+				outputMode: "complete-phrase-segments",
+			});
+		}
 		await sendUtterance(harness.session, first);
 		harness.session.detach(first);
 
@@ -823,6 +1014,59 @@ describe("gateway fake full WebSocket path", () => {
 		expect(harness.bookings.createCalls).toBe(0);
 	});
 
+	test("reconnect replays a typed rejection and permits the same sequence after queued state loss", async () => {
+		let admit: ((result: { ok: true; release(): void }) => void) | undefined;
+		let acquisitions = 0;
+		const harness = createHarness({
+			tts: null,
+			acquireTurn: async () => {
+				acquisitions += 1;
+				if (acquisitions > 1) {
+					return { ok: true, release: () => undefined };
+				}
+				return new Promise((resolve) => {
+					admit = resolve;
+				});
+			},
+		});
+		const first = new Socket();
+		await connect(harness.session, first);
+		const ready = first.events().find((item) => item.type === "session.ready");
+		if (ready?.type !== "session.ready") throw new Error("Expected ready");
+		await harness.session.receive(
+			first,
+			clientEvent("visitor.text.submit", { sequence: 0, text: "Сохранить" }),
+		);
+		await Bun.sleep(0);
+		harness.session.detach(first);
+		admit?.({ ok: true, release: () => undefined });
+		await harness.session.drain();
+		expect(harness.brain.runs).toBe(0);
+
+		const resumed = new Socket();
+		harness.session.attach(resumed);
+		await harness.session.receive(resumed, hello(ready.payload.resumeToken));
+		expect(
+			resumed
+				.events()
+				.some(
+					(item) =>
+						item.type === "error" &&
+						item.payload.code === "ACTION_NOT_ALLOWED_IN_STATE" &&
+						item.payload.retryable,
+				),
+		).toBe(true);
+		await harness.session.receive(
+			resumed,
+			clientEvent("visitor.text.submit", { sequence: 0, text: "Сохранить" }),
+		);
+		await harness.session.drain();
+		expect(harness.brain.runs).toBe(1);
+		expect(
+			resumed.events().filter((item) => item.type === "transcript.final"),
+		).toHaveLength(1);
+	});
+
 	test("retains committed WAV while queued and stop cancels a queued turn", async () => {
 		let admit: ((result: { ok: true; release(): void }) => void) | undefined;
 		const waiting = createHarness({
@@ -864,6 +1108,39 @@ describe("gateway fake full WebSocket path", () => {
 		await Bun.sleep(0);
 		await cancelled.session.stop("disconnected");
 		expect(cancelled.stt.requests).toHaveLength(0);
+	});
+
+	test("closed admission rejects typed input recoverably without consuming its sequence", async () => {
+		let acquisitions = 0;
+		const harness = createHarness({
+			tts: null,
+			acquireTurn: async () => {
+				acquisitions += 1;
+				return acquisitions === 1
+					? { ok: false, reason: "closed" as const }
+					: { ok: true, release: () => undefined };
+			},
+		});
+		const socket = new Socket();
+		await connect(harness.session, socket);
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", { sequence: 0, text: "Повторить" }),
+		);
+		await harness.session.drain();
+		expect(socket.events().at(-1)).toMatchObject({
+			type: "error",
+			payload: { code: "CAPACITY_EXCEEDED", retryable: true },
+		});
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", { sequence: 0, text: "Повторить" }),
+		);
+		await harness.session.drain();
+		expect(harness.brain.runs).toBe(1);
+		expect(
+			socket.events().filter((item) => item.type === "transcript.final"),
+		).toHaveLength(1);
 	});
 
 	test("queue overflow emits only a safe capacity error and never starts STT", async () => {

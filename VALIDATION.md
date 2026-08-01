@@ -1,72 +1,110 @@
 # Validation report — local release candidate
 
-**Date:** 1 August 2026
+**Date:** 2 August 2026
 
 **Spec version:** `0.5-demo`
 
-**Release label:** `0.5.0-local-rc.1`
+**Release label:** `0.5.0-local-rc.2`
 
-**Branch:** `release/local-0.5.0-rc1`
+**Candidate branch:** `feat/sales-booking-ux`
 
-**Integrated baseline:** `1b604b8bdf0ab51db4a2c4c3436d41f5c935fe9d` (PR #21)
+**Base:** `faa2441922dea78a93e0b1424909f7ce68b15e53` (merged PR #24)
 
-**Result:** local P0 evidence and handoff gates pass. This report does not claim a target-VPS, public TLS/WSS, or WebKit release.
+**Validated candidate:** `562d6b68266e37174f5be8608e71338d6c5b7459` plus this release-evidence update
 
-## Integrated baseline evidence
+**Result:** local release-candidate gates pass. This report does not claim a target-VPS, public TLS/WSS, WebKit, real calendar, or CRM release.
 
-- Current `main` implementation sequence PRs #6–#21 is present (16 squash commits from atomic MP3 contracts through the PR #21 production journey/local-smoke artifact).
-- Integrated PR #21 branch evidence supplied for T40 included passing typecheck, lint/format, build, deterministic spec checks, and a **315-file** checksum set. Its pre-canonical test count is superseded by the release-commit suite below, which excludes ignored generated `dist` output.
-- The committed [`evidence/T30-observed-local-voice-smoke-2026-07-31.md`](evidence/T30-observed-local-voice-smoke-2026-07-31.md) is owner-observed real local OpenRouter/Luna evidence: the one-turn path completed final transcript/text/audio events; the five-turn path produced five finals/text/audio completions, exactly one booked SQLite row, and exactly one sent outbox event at attempt 1.
-- T30 is local functional evidence only. It is not a target-host run or latency benchmark.
+## Candidate scope
 
-## Observed local runtime and browser evidence
+The candidate adds:
 
-The T40 handoff evidence records:
+- a server-authoritative 60-second/2,000,000-byte utterance ceiling with sample-derived accessible circular countdown and single auto-commit;
+- provider-neutral typed final turns and a server-stage-gated booking form;
+- required name, company, work email, phone or Telegram, consent, and one of exactly two server-supplied 20-minute Moscow slots;
+- backend candidate generation and validation for non-today weekdays with 09:00–17:00 starts;
+- moderately proactive sales cadence, sourced 10–15 million ₽/month brief claim without guarantee, and deterministic explicit-refusal termination;
+- post-booking qualification limited to monthly inbound lead volume and integer sales-manager count;
+- migration and read compatibility for legacy bookings and legacy qualification JSON without inventing new values.
 
-- `scripts/deploy-local.sh` completed with mode-`0600` materialized files mounted read-only;
-- app and Caddy were healthy; dependency readiness reported all checks ready;
-- the local endpoint was `http://localhost:5173`;
-- Chrome desktop and mobile covered landing, consent, microphone permission denial, the safe denied state, zero fetch/WebSocket activity before microphone permission, and no horizontal overflow.
+The booking remains an internal SQLite record plus notifier outbox event. No external calendar availability is checked and no calendar event, invitation, or CRM record is created.
 
-This documentation pass did not repeat a credentialed deploy, browser session, or paid provider request. The observations above are retained with that provenance rather than represented as fresh T40 automation.
-
-## Fresh credential-free T40 verification
-
-After `bun install --frozen-lockfile` restored the locked workspace dependencies:
+## Fresh deterministic verification
 
 ```text
-bun run test: 433 passed, 0 failed across 54 files (3,788 assertions), both before and after bun run build
-bun run typecheck: passed (contracts, prompt compiler, test fixtures, web, server)
-bun run lint:format: passed (141 files, no fixes)
-bun run build: passed (all five workspaces; production web bundle built)
-scripts/build-spec.sh + update-release-artifacts.py twice: byte-identical 14-artifact hash sets (7 SVG, 3 PNG, FULL_SPEC.md, technical-spec.html, MANIFEST.txt, CHECKSUMS.sha256)
-scripts/validate-spec.py: ALL VALIDATIONS PASSED
-active retired-provider/retired-STT scan: 0 matches; superseded correction excluded
-docker compose config --quiet: passed with safe /dev/null secret defaults
-shell syntax: all scripts/*.sh and infra/entrypoint.sh passed
-scripts/test-compose-file-secrets.sh: passed read-only rotated-inode remount engine smoke
-CHECKSUMS.sha256: 317 files verified after release artifact regeneration
+bun run lint:format: passed
+bun run typecheck: passed across all workspaces
+bun test --path-ignore-patterns '**/dist/**': 484 passed, 0 failed across 56 files (4,104 assertions)
+bun run build: passed for contracts, prompt compiler, test fixtures, server, and production web
+fixture eval: 35/35 scenarios passed; 16/16 booking-order cases passed; 19/19 negative controls passed; zero critical failures
+bun evals/src/generate-baseline.ts --check: deterministic artifact current
+scripts/build-spec.sh + scripts/validate-spec.py: ALL VALIDATIONS PASSED
 git diff --check: passed
 ```
 
-## Active contract and secret boundary
+The full suite includes direct regressions for typed/spoken parity, sample-derived timer progress, byte-vs-duration effective limits, stale capture fencing, exact candidate-slot authorization, double-booking prevention, populated legacy migration, legacy qualification normalization, strict two-field qualification, and explicit typed/spoken refusals.
 
-- OpenRouter remains the only STT/TTS gateway and uses one backend-only `OPENROUTER_API_KEY`.
-- Browser PCM16 is bounded and assembled into one validated WAV after `audio.commit`; provider STT is phrase-level and nonstreaming and emits one current `transcript.final`.
-- `scripts/deploy-local.sh` parses `.env` without shell evaluation, materializes private file sources, exports only `*_FILE` paths, and force-recreates app before readiness.
-- Codex device auth persists in the fixed `botamin-codex-home` volume and must be protected as a password-like secret.
-- Paid OpenRouter/Codex smokes are explicit owner opt-ins and were not called by T40 verification.
+Separate initial and closure reviewers closed all reported impact-3 migration, slot-context, qualification, refusal, and compatibility findings. The final closure review reported no residual findings.
 
-## Scope boundaries and remaining blockers
+## Local deployment and runtime evidence
 
-Local P0 checklist: **passed**; see [`docs/11-local-release-handoff.md`](docs/11-local-release-handoff.md).
+Before deployment, `scripts/backup.sh` created a protected SQLite backup with a SHA-256 sidecar. `scripts/deploy-local.sh` then completed from the candidate tree:
 
-Outstanding later gates:
+- file-backed secrets were materialized with directory mode `0700` and file mode `0600` and mounted read-only;
+- the image content/history assertions and forward migration passed;
+- app and Caddy containers became healthy;
+- `/health/live` returned `ok`;
+- `/health/ready` returned `ready` for database, brain, voice, prompts, notifier, and capacity;
+- the running container exposed `STT_MAX_UTTERANCE_MS=60000` and `STT_MAX_AUDIO_BYTES=2000000`;
+- the same-origin AudioWorklet returned JavaScript MIME under the unchanged strict CSP.
 
-- WebKit complete-MP3 playback and voice journey remain unobserved.
-- Target VPS resource behavior, clean deploy, DNS, public TLS/WSS, and target-host paid smokes remain unobserved.
-- Local synthetic timings are functional sequencing evidence, not benchmark/SLO evidence.
-- The app creates one internal SQLite booking and notifier outbox event; it does not create a real calendar/CRM record or meeting invitation.
-- OpenRouter model/voice availability and rates, Codex plan suitability/capacity, privacy copy, and public commercial operation require owner review at the later target-host gate.
+Local endpoint: <http://localhost:5173>.
 
-No Git tag was created. Exact recommendation after owner acceptance: `v0.5.0-local-rc.1`.
+## Browser evidence
+
+A disposable headless Chrome session observed the production bundle and runtime path:
+
+- no horizontal overflow at 780 px or 390 px;
+- microphone denial produced the safe retry state;
+- a controlled local silent MediaStream reached the real AudioWorklet/session path;
+- the visible circular timer showed the 60-second budget and decremented from accepted PCM samples;
+- the typed composer appeared during a visitor turn;
+- typed `Нет, я не заинтересован` terminated the session with `DECLINED`, no booking claim, and no later selling;
+- the only console/network error was the pre-existing missing `favicon.ico`; application scripts and worklet loaded with HTTP 200.
+
+Firefox headless rendered the 390×844 production page without CSP, eval, worklet, or runtime errors. WebKit remains unverified.
+
+## Fresh bounded provider smoke
+
+One explicit paid local smoke was run after deployment:
+
+```text
+OpenRouter STT: openai/gpt-audio-mini
+Brain: Codex subscription / gpt-5.6-luna
+OpenRouter TTS: x-ai/grok-voice-tts-1.0, eve, MP3
+Result: passed
+Input: 1 bounded PCM fixture / 1 commit
+Output: 1 transcript.final, 1 assistant.text.done, 2 complete MP3 segments
+Decoder: 2/2 MP3 segments accepted
+Booking: false
+Total observed functional duration: about 14.1 seconds
+```
+
+This is functional sequencing evidence, not a latency benchmark or SLO. The earlier committed five-turn artifact remains the evidence for exactly one durable booking and one sent outbox event.
+
+## Security and scope boundaries
+
+- OpenRouter remains the only STT/TTS gateway; the backend-only key was not printed or exposed to the browser.
+- Default tests/evals remain credential-free and provider-independent.
+- Logs and committed artifacts contain no provider bodies, audio/base64, real transcripts, contacts, credentials, or Codex auth.
+- Server policy owns stage transitions, candidates, consent, identities, idempotency, booking truth, and tool authorization.
+- Booking commits before confirmation or optional qualification.
+- A clear refusal ends selling; legacy stored qualification fields are normalized on read while new legacy writes remain rejected.
+
+## Remaining external gates
+
+- WebKit complete-MP3 playback and full journey acceptance.
+- Target-VPS resource behavior, clean deployment, DNS, public TLS/WSS, and target-host provider smoke.
+- Real calendar/CRM integration and external availability checks.
+- Owner review of current provider rates, model availability, Codex plan capacity, privacy copy, and public commercial operation.
+
+Recommended tag after merge and final checksum verification: `v0.5.0-local-rc.2`.

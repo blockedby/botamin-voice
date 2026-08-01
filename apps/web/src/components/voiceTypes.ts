@@ -1,3 +1,5 @@
+import type { ConversationStage } from "@botamin/contracts";
+
 type ActiveBookingMarker = { bookingOutcome?: "committed" };
 
 export type VoiceUiState =
@@ -29,6 +31,14 @@ export type VoiceUiState =
 	| ({ kind: "reconnecting"; attempt?: number } & ActiveBookingMarker)
 	| ({ kind: "error" } & ActiveBookingMarker);
 
+export interface VoiceCaptureProgress {
+	/** PCM16 bytes accepted by the capture budget for the current utterance. */
+	acceptedPcmBytes: number;
+	/** Sample-derived duration; wall-clock intervals are not the source of truth. */
+	durationMs: number;
+	maxUtteranceMs: number;
+}
+
 export interface FinalTranscriptEntry {
 	id: string;
 	speaker: "visitor" | "agent";
@@ -39,4 +49,17 @@ export interface FinalTranscriptEntry {
 export interface VoiceConsent {
 	voiceProcessing: boolean;
 	contactProcessing: boolean;
+}
+
+export type TextSubmissionState =
+	| { status: "idle" }
+	| { status: "pending" }
+	| { status: "accepted"; turnId: string }
+	| { status: "rejected"; message: string };
+
+export interface VoiceConversationProjection {
+	/** Exact server-owned stage; null before session.ready. */
+	conversationStage: ConversationStage | null;
+	textInputAvailable: boolean;
+	textSubmission: TextSubmissionState;
 }

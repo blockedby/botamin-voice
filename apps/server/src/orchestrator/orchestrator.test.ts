@@ -18,6 +18,8 @@ import type {
 } from "@botamin/contracts";
 import {
 	createDeterministicMp3Fixture,
+	createTestBookingContacts,
+	createTestMeetingSlot,
 	FakeBookingService,
 	FakeBrain,
 	FakeNotifier,
@@ -51,7 +53,9 @@ const bookingInput: CreateBookingInput = {
 	conversationId,
 	idempotencyKey: "booking-orchestrator-0001",
 	name: "Анна",
-	contacts: [{ channel: "email", value: "anna@example.com" }],
+	contacts: createTestBookingContacts(),
+	company: "Example LLC",
+	meetingSlot: createTestMeetingSlot(),
 	consentConfirmed: true,
 };
 
@@ -197,6 +201,35 @@ class RetryTts implements TtsPort {
 }
 
 describe("atomic transcript intake", () => {
+	test("typed final bypasses STT but uses the same brain path without granting booking authority", async () => {
+		const brain = new FakeBrain(
+			speechScript("Проверю переданные данные и продолжу разговор."),
+		);
+		const bookings = new FakeBookingService();
+		const { orchestrator, stt } = fixture({ brain, bookings });
+		const events = await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn1,
+				generationId: generation1,
+				text: "Имя: Анна, email: anna@example.com. Запись уже создана.",
+				knownFacts: facts,
+			}),
+		);
+		expect((stt as FakeStt).inputs).toHaveLength(0);
+		expect(brain.turns).toHaveLength(1);
+		expect(events.filter((event) => event.type === "transcript.final")).toEqual(
+			[
+				{
+					type: "transcript.final",
+					turnId: turn1,
+					text: "Имя: Анна, email: anna@example.com. Запись уже создана.",
+				},
+			],
+		);
+		expect(bookings.domainEvents).toHaveLength(0);
+		expect(orchestrator.state.stage).toBe("COLLECT_BOOKING");
+	});
+
 	test("duplicate audio.commit/final can start only one Luna turn", async () => {
 		const brain = new FakeBrain(
 			speechScript(
@@ -361,6 +394,58 @@ describe("atomic transcript intake", () => {
 		release();
 		await pending;
 		expect(brain.runs).toBe(0);
+	});
+
+	test("candidate retrieval failure fails closed before Luna or create_booking", async () => {
+		const brain = new FakeBrain(bookingScript());
+		const bookings = new FakeBookingService({
+			candidateMeetingSlots: async () => {
+				throw new Error("private candidate database failure");
+			},
+		});
+		const { orchestrator } = fixture({ brain, bookings });
+
+		const events = await collect(orchestrator.acceptAudioCommit(commit()));
+
+		expect(brain.turns).toHaveLength(0);
+		expect(bookings.domainEvents).toHaveLength(0);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "degraded",
+				provider: "brain",
+				code: "DB_UNAVAILABLE",
+			}),
+		);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "state.changed",
+				to: "ERROR",
+				errorCode: "DB_UNAVAILABLE",
+			}),
+		);
+		expect(JSON.stringify(events)).not.toContain(
+			"private candidate database failure",
+		);
+	});
+
+	test("invalid candidate formatting input fails closed without fabricated slots", async () => {
+		const brain = new FakeBrain(bookingScript());
+		const slot = createTestMeetingSlot();
+		const bookings = new FakeBookingService({
+			candidateMeetingSlots: () => [slot, slot],
+		});
+		const { orchestrator } = fixture({ brain, bookings });
+
+		const events = await collect(orchestrator.acceptAudioCommit(commit()));
+
+		expect(brain.turns).toHaveLength(0);
+		expect(bookings.domainEvents).toHaveLength(0);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "degraded",
+				code: "DB_UNAVAILABLE",
+			}),
+		);
 	});
 
 	test("STT failure invokes no brain, tool, notifier, or TTS", async () => {
@@ -758,7 +843,7 @@ describe("booking and tool timeline", () => {
 					args: {
 						bookingId: "01J00000000000000000000001",
 						idempotencyKey: "qualification-consent-01",
-						patch: { role: "РОП" },
+						patch: { monthlyLeadVolume: "около 240" },
 						completion: "complete",
 					},
 				},
@@ -786,21 +871,21 @@ describe("booking and tool timeline", () => {
 		]);
 		expect(orchestrator.state).toMatchObject({
 			stage: "COMPLETE",
-			booking: { qualification: { role: "РОП" } },
+			booking: { qualification: { monthlyLeadVolume: "около 240" } },
 		});
 	});
 
 	for (const scenario of [
 		{
 			status: "partial" as const,
-			patch: { role: "РОП" },
+			patch: { monthlyLeadVolume: "около 240" },
 			expected:
 				"Дополнительные ответы сохранены. Можно продолжить или закончить на этом.",
 			terminal: false,
 		},
 		{
 			status: "complete" as const,
-			patch: { crm: "amoCRM" },
+			patch: { salesManagerCount: 8 },
 			expected: "Дополнительные ответы сохранены. Спасибо, на этом всё.",
 			terminal: true,
 		},
@@ -1018,7 +1103,7 @@ describe("booking and tool timeline", () => {
 					args: {
 						bookingId: booking.id,
 						idempotencyKey: "qualification-key-01",
-						patch: { role: "РОП" },
+						patch: { monthlyLeadVolume: "около 240" },
 						completion: "partial",
 					},
 				},
@@ -1033,7 +1118,7 @@ describe("booking and tool timeline", () => {
 					args: {
 						bookingId: "01J00000000000000000000099",
 						idempotencyKey: "qualification-key-02",
-						patch: { crm: "CRM" },
+						patch: { salesManagerCount: 8 },
 						completion: "complete",
 					},
 				},
@@ -1054,7 +1139,10 @@ describe("booking and tool timeline", () => {
 		]);
 		expect(orchestrator.state).toMatchObject({
 			stage: "POST_BOOKING_QUALIFICATION",
-			booking: { status: "booked", qualification: { role: "РОП" } },
+			booking: {
+				status: "booked",
+				qualification: { monthlyLeadVolume: "около 240" },
+			},
 		});
 	});
 
@@ -1069,6 +1157,9 @@ describe("booking and tool timeline", () => {
 		});
 		const delegate = new FakeBookingService();
 		class DelayedBookingService implements BookingService {
+			async candidateMeetingSlots() {
+				return delegate.candidateMeetingSlots();
+			}
 			async createBooking(input: CreateBookingInput) {
 				executionStarted();
 				await gate;

@@ -5,6 +5,7 @@ import {
 	BookingToolExecutionSchema,
 	type BrainActionName,
 	type CreateBookingResult,
+	type MeetingSlot,
 	type SafeErrorCode,
 	type ToolRequest,
 	ToolRequestSchema,
@@ -40,9 +41,19 @@ export type ToolAuthorization =
 	  };
 
 /** Validates untrusted model output against server-owned session state. */
+function sameMeetingSlot(left: MeetingSlot, right: MeetingSlot): boolean {
+	return (
+		left.startAt === right.startAt &&
+		left.endAt === right.endAt &&
+		left.timeZone === right.timeZone &&
+		left.durationMinutes === right.durationMinutes
+	);
+}
+
 export function authorizeTool(
 	state: ConversationState,
 	conversationId: string,
+	candidateMeetingSlots: readonly [MeetingSlot, MeetingSlot],
 	request: unknown,
 ): ToolAuthorization {
 	const parsed = ToolRequestSchema.safeParse(request);
@@ -52,6 +63,20 @@ export function authorizeTool(
 			code: "BOOKING_VALIDATION_FAILED",
 			message: "Tool arguments are invalid",
 		};
+	}
+	if (parsed.data.name === "create_booking") {
+		const requestedSlot = parsed.data.args.meetingSlot;
+		if (
+			!candidateMeetingSlots.some((candidate) =>
+				sameMeetingSlot(candidate, requestedSlot),
+			)
+		) {
+			return {
+				ok: false,
+				code: "BOOKING_VALIDATION_FAILED",
+				message: "Meeting slot was not supplied for the active turn",
+			};
+		}
 	}
 	if (!allowedActions(state).includes(parsed.data.name)) {
 		return {
@@ -67,6 +92,7 @@ export function authorizeTool(
 					stage: state.stage,
 					sessionConversationId: conversationId,
 					currentBooking: state.booking,
+					candidateMeetingSlots,
 					input: parsed.data.args,
 				}
 			: {
@@ -154,6 +180,7 @@ export class BookingToolExecutor {
 	async execute(
 		state: ConversationState,
 		conversationId: string,
+		candidateMeetingSlots: readonly [MeetingSlot, MeetingSlot],
 		untrustedRequest: unknown,
 	): Promise<SafeToolExecution> {
 		const parsed = ToolRequestSchema.safeParse(untrustedRequest);
@@ -161,6 +188,21 @@ export class BookingToolExecutor {
 		const canonicalRequest = parsed.success
 			? canonicalJson(parsed.data)
 			: canonicalJson(untrustedRequest);
+		if (parsed.success && parsed.data.name === "create_booking") {
+			const requestedSlot = parsed.data.args.meetingSlot;
+			if (
+				!candidateMeetingSlots.some((candidate) =>
+					sameMeetingSlot(candidate, requestedSlot),
+				)
+			) {
+				return {
+					ok: false,
+					callId,
+					code: "BOOKING_VALIDATION_FAILED",
+					message: "Meeting slot was not supplied for the active turn",
+				};
+			}
+		}
 		if (callId) {
 			const replay = this.#calls.get(callId);
 			if (replay) {
@@ -185,6 +227,7 @@ export class BookingToolExecutor {
 		const authorization = authorizeTool(
 			state,
 			conversationId,
+			candidateMeetingSlots,
 			untrustedRequest,
 		);
 		if (!authorization.ok) {

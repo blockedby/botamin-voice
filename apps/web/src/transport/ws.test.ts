@@ -110,6 +110,8 @@ function sessionReady(seq = 1, resumeToken = "resume-token-0001") {
 				inputSampleRate: 16_000,
 				inputEncoding: "pcm16le",
 				chunkMs: 100,
+				maxUtteranceMs: 60_000,
+				maxPcmBytes: 1_920_000,
 				outputContentType: "audio/mpeg",
 				outputMode: "complete-phrase-segments",
 			},
@@ -217,6 +219,52 @@ describe("voice WebSocket transport", () => {
 		expect(transport.beginUtterance()).toBe(true);
 		expect(transport.sendPcmFrame(pcm)).toBe(true);
 		expect(transport.commit()).toBe(true);
+	});
+
+	test("sequences bounded typed turns and suppresses duplicates until final or rejection", () => {
+		const socket = new FakeSocket();
+		const transport = new VoiceTransport({
+			conversationId,
+			url: "ws://local",
+			createWebSocket: () => socket,
+			now: () => new Date(at),
+		});
+		transport.connect();
+		socket.open();
+		socket.serverJson(sessionReady());
+
+		expect(transport.submitText("   ")).toBe(false);
+		expect(transport.submitText("x".repeat(2_001))).toBe(false);
+		expect(transport.submitText("  Первая typed-реплика  ")).toBe(true);
+		expect(transport.submitText("Дубликат")).toBe(false);
+		expect(sentJson(socket).at(-1)).toMatchObject({
+			type: "visitor.text.submit",
+			payload: { sequence: 0, text: "Первая typed-реплика" },
+		});
+		socket.serverJson({
+			v: 1,
+			conversationId,
+			seq: 2,
+			at,
+			type: "error",
+			payload: {
+				code: "CAPACITY_EXCEEDED",
+				message: "Попробуйте ещё раз.",
+				retryable: true,
+			},
+		});
+		expect(transport.submitText("Повтор")).toBe(true);
+		expect(sentJson(socket).at(-1)).toMatchObject({
+			type: "visitor.text.submit",
+			payload: { sequence: 0, text: "Повтор" },
+		});
+		socket.serverJson(transcriptFinal(3));
+		expect(transport.submitText("Следующая")).toBe(true);
+		expect(sentJson(socket).at(-1)).toMatchObject({
+			type: "visitor.text.submit",
+			payload: { sequence: 1, text: "Следующая" },
+		});
+		expect(transport.submitText(" ")).toBe(false);
 	});
 
 	test("pairs complete MP3 metadata with exactly the next shared binary frame", () => {

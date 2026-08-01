@@ -218,6 +218,14 @@ export class VoiceSessionController {
 		}
 	}
 
+	/** Release a recoverably rejected audio or typed submit without accepting text. */
+	rejectCommit(): boolean {
+		if (this.stopped || !this.awaitingFinal) return false;
+		this.awaitingFinal = false;
+		this.apply({ type: "listening" });
+		return true;
+	}
+
 	bargeIn(
 		effects: BargeInEffects,
 		reason: "barge_in" | "user_stop" | "new_generation" = "barge_in",

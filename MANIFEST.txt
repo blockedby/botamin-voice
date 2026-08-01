@@ -53,6 +53,7 @@ apps/server/src/observability/index.ts
 apps/server/src/observability/metrics.test.ts
 apps/server/src/observability/metrics.ts
 apps/server/src/observability/pipeline.integration.test.ts
+apps/server/src/orchestrator/context.test.ts
 apps/server/src/orchestrator/context.ts
 apps/server/src/orchestrator/generation.ts
 apps/server/src/orchestrator/index.ts
@@ -107,6 +108,8 @@ apps/web/src/audio/pcm.ts
 apps/web/src/audio/playback.test.ts
 apps/web/src/audio/playback.ts
 apps/web/src/audio/resampler.ts
+apps/web/src/components/TextChat.test.tsx
+apps/web/src/components/TextChat.tsx
 apps/web/src/components/VoiceDemo.test.tsx
 apps/web/src/components/VoiceDemo.tsx
 apps/web/src/components/devVoiceDemoFixture.test.ts
@@ -162,6 +165,7 @@ docs/11-local-release-handoff.md
 drizzle/0000_booking_domain.sql
 drizzle/0001_subject_scopes_and_outbox_claim.sql
 drizzle/0002_transcript_retention_index.sql
+drizzle/0003_internal_meeting_slots.sql
 drizzle/meta/_journal.json
 evals/README.md
 evals/artifacts/baseline-fixture-summary.json
@@ -232,6 +236,7 @@ packages/prompt-compiler/src/index.ts
 packages/prompt-compiler/tests/compiler.test.ts
 packages/prompt-compiler/tsconfig.json
 packages/test-fixtures/package.json
+packages/test-fixtures/src/booking.ts
 packages/test-fixtures/src/fakes.ts
 packages/test-fixtures/src/full-turn.test.ts
 packages/test-fixtures/src/index.ts

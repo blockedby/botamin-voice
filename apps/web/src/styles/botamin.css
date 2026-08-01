@@ -36,7 +36,8 @@ html body {
 }
 
 button,
-input {
+input,
+textarea {
 	font: inherit;
 }
 
@@ -344,6 +345,75 @@ button {
 	background: currentColor;
 }
 
+.utterance-countdown {
+	display: grid;
+	grid-template-columns: 3.8rem;
+	place-items: center;
+	width: 4.6rem;
+	color: var(--accent-dark);
+}
+
+.utterance-countdown-ring,
+.utterance-countdown-value {
+	grid-area: 1 / 1;
+}
+
+.utterance-countdown-ring {
+	width: 3.8rem;
+	height: 3.8rem;
+	fill: none;
+	stroke-width: 3;
+	transform: rotate(-90deg);
+}
+
+.utterance-countdown-track {
+	stroke: var(--line);
+}
+
+.utterance-countdown-progress {
+	stroke: currentColor;
+	stroke-dasharray: 100;
+	stroke-linecap: square;
+	transition: stroke-dashoffset 120ms linear;
+}
+
+.utterance-countdown-value {
+	display: flex;
+	align-items: baseline;
+	justify-content: center;
+	font-variant-numeric: tabular-nums;
+	line-height: 1;
+}
+
+.utterance-countdown-value strong {
+	font-size: 1.05rem;
+}
+
+.utterance-countdown-value small {
+	margin-inline-start: 0.12rem;
+	font-size: 0.52rem;
+	font-weight: 800;
+	text-transform: uppercase;
+}
+
+.utterance-countdown-label {
+	margin-top: 0.18rem;
+	color: var(--ink-soft);
+	font-size: 0.56rem;
+	font-weight: 700;
+	line-height: 1.15;
+	text-align: center;
+}
+
+.utterance-countdown.is-warning {
+	color: var(--danger);
+}
+
+.utterance-countdown.is-warning .utterance-countdown-label {
+	color: currentColor;
+	font-weight: 850;
+}
+
 .tone-neutral {
 	color: var(--ink-soft);
 }
@@ -517,6 +587,181 @@ button {
 	font-size: 0.82rem;
 	line-height: 1.52;
 	overflow-wrap: anywhere;
+}
+
+.text-chat {
+	display: grid;
+	gap: 0.85rem;
+	margin-top: 0.85rem;
+}
+
+.text-composer {
+	padding: 0.8rem;
+	border: 1px solid var(--line);
+	background: #f0eadf;
+}
+
+.text-composer > label,
+.booking-details-form label > span,
+.contact-channel legend {
+	display: block;
+	margin-bottom: 0.35rem;
+	font-size: 0.7rem;
+	font-weight: 800;
+	letter-spacing: 0.055em;
+	text-transform: uppercase;
+}
+
+.composer-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 0.55rem;
+	align-items: stretch;
+}
+
+.text-composer textarea,
+.booking-details-form input {
+	width: 100%;
+	min-width: 0;
+	border: 1px solid var(--ink-soft);
+	border-radius: 0;
+	background: var(--paper-light);
+	color: var(--ink);
+}
+
+.text-composer textarea {
+	min-height: 3rem;
+	padding: 0.6rem;
+	line-height: 1.4;
+	resize: vertical;
+}
+
+.text-submit,
+.booking-details-submit {
+	min-height: 2.75rem;
+	border: 1px solid var(--ink);
+	background: var(--ink);
+	color: white;
+	font-size: 0.75rem;
+	font-weight: 800;
+	cursor: pointer;
+}
+
+.text-submit {
+	padding-inline: 0.8rem;
+}
+
+.text-submit:disabled,
+.booking-details-submit:disabled {
+	border-color: var(--line);
+	background: var(--paper-dark);
+	color: #756e64;
+	cursor: not-allowed;
+}
+
+.composer-hint,
+.field-error,
+.booking-details-form small {
+	font-size: 0.65rem;
+	line-height: 1.4;
+}
+
+.composer-hint {
+	margin: 0.4rem 0 0;
+	color: var(--ink-soft);
+}
+
+.field-error {
+	min-height: 0.9rem;
+	margin: 0.15rem 0 0;
+	color: var(--danger);
+}
+
+.booking-details {
+	padding: 0.9rem;
+	border: 1px solid var(--ink);
+	background: var(--paper-light);
+	box-shadow: 0.25rem 0.25rem 0 var(--signal);
+}
+
+.booking-details-heading .section-index {
+	margin-bottom: 0.3rem;
+	font-size: 0.61rem;
+}
+
+.booking-details-heading h3 {
+	margin: 0;
+	font-size: 1rem;
+	letter-spacing: -0.025em;
+}
+
+.booking-details-heading > p:last-child {
+	margin: 0.35rem 0 0;
+	color: var(--ink-soft);
+	font-size: 0.7rem;
+	line-height: 1.45;
+}
+
+.booking-details-form {
+	display: grid;
+	gap: 0.65rem;
+	margin-top: 0.85rem;
+}
+
+.booking-fields-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 0.65rem;
+}
+
+.booking-details-form input {
+	min-height: 2.65rem;
+	padding: 0.55rem 0.6rem;
+}
+
+.booking-details-form input[aria-invalid="true"] {
+	border-color: var(--danger);
+}
+
+.booking-details-form small {
+	display: block;
+	min-height: 0.9rem;
+	margin-top: 0.15rem;
+	color: var(--danger);
+}
+
+.contact-channel {
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.contact-channel > div {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem 1rem;
+	min-height: 2.65rem;
+	align-items: center;
+}
+
+.contact-channel label {
+	display: inline-flex;
+	gap: 0.4rem;
+	align-items: center;
+	font-size: 0.75rem;
+	font-weight: 700;
+}
+
+.contact-channel input {
+	width: 1rem;
+	min-height: 1rem;
+	margin: 0;
+	accent-color: var(--accent-dark);
+}
+
+.booking-details-submit {
+	width: 100%;
+	padding: 0.6rem 0.8rem;
 }
 
 .booking-confirmation {
@@ -879,7 +1124,7 @@ button {
 	justify-self: end;
 }
 
-:where(a, button, input):focus-visible {
+:where(a, button, input, textarea):focus-visible {
 	outline: 3px solid var(--accent-dark);
 	outline-offset: 3px;
 }
@@ -1050,8 +1295,12 @@ button {
 		order: 5;
 	}
 
-	.mic-note {
+	.text-chat {
 		order: 6;
+	}
+
+	.mic-note {
+		order: 7;
 	}
 
 	.voice-demo-header {
@@ -1089,6 +1338,15 @@ button {
 	.transcript-entry {
 		grid-template-columns: 3.35rem minmax(0, 1fr);
 		gap: 0.5rem;
+	}
+
+	.composer-row,
+	.booking-fields-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.text-submit {
+		min-height: 3rem;
 	}
 
 	.session-controls {
@@ -1213,6 +1471,10 @@ button {
 		scroll-behavior: auto;
 		transition-duration: 0.01ms;
 	}
+
+	.utterance-countdown-progress {
+		transition: none;
+	}
 }
 
 @media (forced-colors: active) {
@@ -1226,5 +1488,18 @@ button {
 	.status-orbit span,
 	.cadence span {
 		background: currentColor;
+	}
+
+	.utterance-countdown,
+	.utterance-countdown.is-warning {
+		color: CanvasText;
+	}
+
+	.utterance-countdown-track {
+		stroke: GrayText;
+	}
+
+	.utterance-countdown-progress {
+		stroke: CanvasText;
 	}
 }

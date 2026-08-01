@@ -1,14 +1,20 @@
 import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 import { useRef } from "react";
+import { TextChat } from "./TextChat";
 import type {
 	FinalTranscriptEntry,
+	VoiceCaptureProgress,
 	VoiceConsent,
+	VoiceConversationProjection,
 	VoiceUiState,
 } from "./voiceTypes";
 
 export type {
 	FinalTranscriptEntry,
+	TextSubmissionState,
+	VoiceCaptureProgress,
 	VoiceConsent,
+	VoiceConversationProjection,
 	VoiceUiState,
 } from "./voiceTypes";
 
@@ -22,13 +28,17 @@ export interface VoiceDemoActions {
 	onInterrupt: () => void;
 	onReconnect: () => void;
 	onRestart: () => void;
+	onTextSubmit: (text: string) => boolean;
 }
 
-export interface VoiceDemoProps extends VoiceDemoActions {
+export interface VoiceDemoProps
+	extends VoiceDemoActions,
+		VoiceConversationProjection {
 	state: VoiceUiState;
 	consent: VoiceConsent;
 	transcript: readonly FinalTranscriptEntry[];
 	muted: boolean;
+	captureProgress: VoiceCaptureProgress | null;
 }
 
 interface StatePresentation {
@@ -328,6 +338,61 @@ export function getLatestFinalTranscriptAnnouncement(
 	return `Финальная реплика, ${speaker}: ${latest.text}`;
 }
 
+export function getUtteranceCountdown(progress: VoiceCaptureProgress): {
+	remainingSeconds: number;
+	remainingRatio: number;
+	warning: boolean;
+} {
+	const remainingMs = Math.max(
+		0,
+		progress.maxUtteranceMs - progress.durationMs,
+	);
+	const remainingSeconds = Math.ceil(remainingMs / 1_000);
+	return {
+		remainingSeconds,
+		remainingRatio:
+			progress.maxUtteranceMs > 0
+				? Math.min(1, remainingMs / progress.maxUtteranceMs)
+				: 0,
+		warning: remainingSeconds <= 10,
+	};
+}
+
+function UtteranceCountdown({ progress }: { progress: VoiceCaptureProgress }) {
+	const countdown = getUtteranceCountdown(progress);
+	return (
+		<div
+			className={`utterance-countdown${countdown.warning ? " is-warning" : ""}`}
+			role="timer"
+			aria-label={`Осталось времени на реплику: ${countdown.remainingSeconds} секунд.`}
+			aria-live="off"
+			data-countdown-warning={countdown.warning ? "true" : "false"}
+		>
+			<svg
+				className="utterance-countdown-ring"
+				viewBox="0 0 44 44"
+				aria-hidden="true"
+				focusable="false"
+			>
+				<circle className="utterance-countdown-track" cx="22" cy="22" r="18" />
+				<circle
+					className="utterance-countdown-progress"
+					cx="22"
+					cy="22"
+					r="18"
+					pathLength="100"
+					style={{ strokeDashoffset: 100 - countdown.remainingRatio * 100 }}
+				/>
+			</svg>
+			<span className="utterance-countdown-value" aria-hidden="true">
+				<strong>{countdown.remainingSeconds}</strong>
+				<small>сек</small>
+			</span>
+			<span className="utterance-countdown-label">Осталось на реплику</span>
+		</div>
+	);
+}
+
 function Transcript({ entries }: { entries: readonly FinalTranscriptEntry[] }) {
 	return (
 		<section className="transcript" aria-labelledby="transcript-title">
@@ -430,6 +495,10 @@ export function VoiceDemo(props: VoiceDemoProps) {
 	const presentation = getVoiceStatePresentation(props.state, props.muted);
 	const isActive = ACTIVE_STATES.has(props.state.kind);
 	const bookingCommitted = hasCommittedBooking(props.state);
+	const showCountdown =
+		(props.state.kind === "listening" ||
+			props.state.kind === "qualification") &&
+		props.captureProgress !== null;
 	const showSessionControls =
 		isActive &&
 		props.state.kind !== "connecting" &&
@@ -498,9 +567,13 @@ export function VoiceDemo(props: VoiceDemoProps) {
 				ref={statusRef}
 				tabIndex={-1}
 			>
-				<div className="status-orbit" aria-hidden="true">
-					<span />
-				</div>
+				{showCountdown && props.captureProgress ? (
+					<UtteranceCountdown progress={props.captureProgress} />
+				) : (
+					<div className="status-orbit" aria-hidden="true">
+						<span />
+					</div>
+				)}
 				<div className="status-copy">
 					<strong>{presentation.label}</strong>
 					<p>{presentation.detail}</p>
@@ -533,6 +606,13 @@ export function VoiceDemo(props: VoiceDemoProps) {
 			) : null}
 
 			<Transcript entries={props.transcript} />
+
+			<TextChat
+				conversationStage={props.conversationStage}
+				textInputAvailable={props.textInputAvailable}
+				textSubmission={props.textSubmission}
+				onTextSubmit={props.onTextSubmit}
+			/>
 
 			<div className="voice-actions">
 				<StateActions {...stateActions} />

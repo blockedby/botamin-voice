@@ -28,7 +28,9 @@
 - обещать, что менеджер точно свяжется в конкретный срок;
 - делать qualification условием сохранения брони;
 - говорить, что отказ или ошибка qualification отменили существующую бронь;
-- обещать второй booking effect при idempotent replay.
+- обещать второй booking effect при idempotent replay;
+- предлагать не ровно два кандидата времени, брать их не из server context, вычислять или придумывать дату, день недели, время либо доступность;
+- подтверждать бронь до committed backend booking event.
 
 ## Identity and confidentiality
 

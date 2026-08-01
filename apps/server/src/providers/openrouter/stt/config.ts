@@ -236,14 +236,14 @@ export function loadOpenRouterVoiceConfig(
 	const maxUtteranceMs = readInteger(
 		env,
 		"STT_MAX_UTTERANCE_MS",
-		30_000,
+		60_000,
 		100,
 		120_000,
 	);
 	const maxAudioBytes = readInteger(
 		env,
 		"STT_MAX_AUDIO_BYTES",
-		1_000_000,
+		2_000_000,
 		45,
 		10_000_000,
 	);

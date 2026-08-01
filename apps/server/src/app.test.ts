@@ -22,6 +22,9 @@ function runtime(
 	return {
 		config: {
 			appOrigin: origin,
+			voice: {
+				stt: { maxUtteranceMs: 60_000, maxAudioBytes: 2_000_000 },
+			},
 			limits: {
 				httpBodyBytes: 8_192,
 				wsJsonBytes: 8_192,
@@ -146,6 +149,17 @@ describe("production server REST contracts", () => {
 		expect(created.conversationId).toBe(conversationId);
 		expect(created.wsUrl).toBe(`/ws/v1/conversations/${conversationId}`);
 		expect(created.clientToken).toHaveLength(43);
+		expect(created.clientConfig).toEqual({
+			inputSampleRate: 16_000,
+			inputEncoding: "pcm16le",
+			chunkMs: 100,
+			maxUtteranceMs: 60_000,
+			maxPcmBytes: 1_920_000,
+			outputContentType: "audio/mpeg",
+			outputMode: "complete-phrase-segments",
+		});
+		expect(created.clientConfig.maxPcmBytes + 44).toBe(1_920_044);
+		expect(JSON.stringify(created)).not.toContain("OPENROUTER");
 	});
 
 	test("rate-limits valid conversation creates per direct source", async () => {

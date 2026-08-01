@@ -15,6 +15,11 @@ import {
 	type TtsSynthesisRequest,
 } from "@botamin/contracts";
 import {
+	createTestBookingContacts,
+	createTestMeetingSlot,
+	createTestSchedulingContext,
+} from "./booking";
+import {
 	FakeBookingService,
 	FakeBrain,
 	FakeNotifier,
@@ -41,8 +46,9 @@ const bookingInput: CreateBookingInput = {
 	conversationId,
 	idempotencyKey: "booking-turn-0001",
 	name: "Александр",
-	contacts: [{ channel: "telegram", value: "@alex" }],
-	preferredTimeText: "завтра после 15:00",
+	contacts: createTestBookingContacts(),
+	company: "Example LLC",
+	meetingSlot: createTestMeetingSlot(),
 	consentConfirmed: true,
 };
 
@@ -106,6 +112,7 @@ describe("fake full turn", () => {
 			stage: "COLLECT_BOOKING",
 			knownFacts: { useCases: [], painPoints: [], objections: [] },
 			booking: null,
+			schedulingContext: createTestSchedulingContext(),
 			allowedActions: ["create_booking"],
 			promptVersion: "a".repeat(64),
 		};
@@ -121,6 +128,10 @@ describe("fake full turn", () => {
 						stage: turn.stage,
 						sessionConversationId: conversationId,
 						currentBooking: null,
+						candidateMeetingSlots:
+							turn.schedulingContext.candidateMeetingSlots.map(
+								(candidate) => candidate.meetingSlot,
+							),
 						input: delta.tool.args,
 					});
 					await bookings.createBooking(delta.tool.args);
@@ -152,6 +163,9 @@ describe("fake full turn", () => {
 			stage: "COLLECT_BOOKING",
 			sessionConversationId: conversationId,
 			currentBooking: committedBooking,
+			candidateMeetingSlots: turn.schedulingContext.candidateMeetingSlots.map(
+				(candidate) => candidate.meetingSlot,
+			),
 			input: bookingInput,
 		});
 		const exactReplay = await bookings.createBooking(bookingInput);
@@ -169,6 +183,9 @@ describe("fake full turn", () => {
 			stage: "COLLECT_BOOKING",
 			sessionConversationId: conversationId,
 			currentBooking: committedBooking,
+			candidateMeetingSlots: turn.schedulingContext.candidateMeetingSlots.map(
+				(candidate) => candidate.meetingSlot,
+			),
 			input: replayInput,
 		});
 		const replay = await bookings.createBooking(replayInput);
@@ -180,7 +197,7 @@ describe("fake full turn", () => {
 		const qualificationInput = {
 			bookingId: committedBooking.id,
 			idempotencyKey: "qualification-0001",
-			patch: { role: "Head of Sales" },
+			patch: { monthlyLeadVolume: "около 240" },
 			completion: "partial" as const,
 		};
 		BookingToolExecutionSchema.parse({
@@ -242,7 +259,7 @@ describe("fake full turn", () => {
 		await bookings.appendQualification({
 			bookingId: second.bookingId,
 			idempotencyKey: "qualification-second",
-			patch: { role: "Head of Sales" },
+			patch: { salesManagerCount: 8 },
 			completion: "complete",
 		});
 

@@ -3,6 +3,11 @@ import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+	AppendQualificationInputSchema,
+	CreateBookingInputSchema,
+	MeetingSlotSchema,
+} from "../../packages/contracts/src/index.js";
+import {
 	configuredCriticalDetectorCodes,
 	detectPolicyViolations,
 	type EvalPolicy,
@@ -31,7 +36,7 @@ test("credential-free fixture meets T31 critical thresholds", async () => {
 	);
 
 	assert.ok(summary.scenarioCount >= 24);
-	assert.equal(summary.scenarioCount, 34);
+	assert.equal(summary.scenarioCount, 35);
 	assert.equal(summary.passedScenarios, summary.scenarioCount);
 	assert.ok(summary.passRate >= 0.9);
 	assert.equal(summary.bookingOrder.passRate, 1);
@@ -70,6 +75,8 @@ test("scenario catalog covers required conversation and outage dimensions", asyn
 		"notifier-outage",
 		"reconnect",
 		"malicious-tool-payload",
+		"cadence",
+		"named-source",
 	]) {
 		assert.ok(
 			tags.has(requiredTag),
@@ -204,6 +211,89 @@ test("recorded JSONL mode is deterministic and provider-independent", async () =
 	const second = scoreEval(scenarios, events, policy, "recorded");
 	assert.deepEqual(second, first);
 	assert.equal(first.mode, "recorded");
+});
+
+test("booking fixtures and candidates match the shared scheduled-booking contracts", async () => {
+	const scenarios = await loadJson<ScenarioFile>(scenariosPath);
+	const policy = await loadJson<EvalPolicy>(policyPath);
+	const events = await loadJsonl(fixturePath);
+	for (const scenario of scenarios.scenarios.filter(
+		(candidate) => candidate.expected.booking.outcome === "required",
+	)) {
+		assert.equal(scenario.serverContext?.slotCandidates.length, 2);
+		for (const candidate of scenario.serverContext?.slotCandidates ?? []) {
+			assert.equal(
+				MeetingSlotSchema.safeParse(candidate.meetingSlot).success,
+				true,
+			);
+		}
+		const createCalls = events.filter(
+			(event) =>
+				event.scenarioId === scenario.id &&
+				event.type === "tool_call" &&
+				event.name === "create_booking",
+		);
+		assert.ok(
+			createCalls.length > 0,
+			`${scenario.id} has no create_booking call`,
+		);
+		for (const call of createCalls) {
+			assert.equal(
+				CreateBookingInputSchema.safeParse(call.payload).success,
+				true,
+				`${scenario.id} create_booking payload drifted from the shared contract`,
+			);
+		}
+	}
+	for (const call of events.filter(
+		(event) =>
+			event.type === "tool_call" &&
+			event.name === "append_booking_qualification",
+	)) {
+		assert.equal(
+			AppendQualificationInputSchema.safeParse(call.payload).success,
+			true,
+			`${call.scenarioId} qualification payload drifted from the shared contract`,
+		);
+	}
+
+	const malformedDefinition = structuredClone(
+		scenarios.scenarios.find(
+			(scenario) => scenario.expected.booking.outcome === "required",
+		),
+	);
+	assert.ok(malformedDefinition?.serverContext);
+	const malformedSlot = malformedDefinition.serverContext.slotCandidates[0];
+	assert.ok(malformedSlot);
+	malformedSlot.meetingSlot.startAt = "2030-09-15T07:00:00.000Z";
+	malformedSlot.meetingSlot.endAt = "2030-09-15T07:20:00.000Z";
+	assert.throws(
+		() =>
+			scoreEval(
+				{ schemaVersion: 1, scenarios: [malformedDefinition] },
+				events.filter((event) => event.scenarioId === malformedDefinition.id),
+				policy,
+				"recorded",
+			),
+		/invalid server slot context/u,
+	);
+
+	const driftedEvents = structuredClone(events);
+	const driftedCreate = driftedEvents.find(
+		(event) => event.type === "tool_call" && event.name === "create_booking",
+	);
+	assert.ok(
+		driftedCreate?.payload && typeof driftedCreate.payload === "object",
+	);
+	delete (driftedCreate.payload as Record<string, unknown>).meetingSlot;
+	const driftedSummary = scoreEval(
+		scenarios,
+		driftedEvents,
+		policy,
+		"recorded",
+	);
+	assert.equal(driftedSummary.aggregatePass, false);
+	assert.ok(driftedSummary.bookingOrder.passRate < 1);
 });
 
 test("exact reviewer Russian unsafe/refusal table is assertion- and negation-sensitive", async () => {
@@ -376,52 +466,39 @@ test("exact reviewer Russian unsafe/refusal table is assertion- and negation-sen
 	}
 });
 
-test("reviewer qualification phrase table covers every prompt field without discovery false positives", () => {
-	const qualificationQuestions = [
-		"Какова ваша роль и зона ответственности?",
-		"За что вы отвечаете в компании?",
-		"В какой отрасли работает ваша компания?",
-		"Какой у вас тип продаж: B2B или B2C?",
-		"Сколько лидов вы обрабатываете в месяц?",
-		"Какой у вас объём входящих заявок?",
-		"Как распределяются входящие, исходящие и реактивация?",
-		"Как устроен текущий процесс обработки лидов?",
-		"Какой у вас SLA ответа на новый лид?",
-		"Как быстро вы обычно отвечаете на входящий лид?",
-		"Какую CRM вы используете?",
-		"Что сейчас является главным узким местом?",
-		"Какая основная боль у команды продаж?",
-		"Какой сценарий важнее для пилота: входящие или реактивация?",
-		"Когда вы хотите запустить пилот?",
-	];
-	for (const text of qualificationQuestions) {
+test("qualification detection is limited to monthly inbound leads and explicit sales-manager count", () => {
+	for (const text of [
+		"Сколько входящих лидов приходит за месяц?",
+		"Каков ежемесячный объём входящих заявок?",
+		"Сколько менеджеров продаж работает с входящими лидами?",
+		"Каково количество sales-менеджеров?",
+	]) {
 		assert.equal(
 			isQualificationQuestion(text),
 			true,
-			`missed qualification field: ${text}`,
+			`missed allowed qualification field: ${text}`,
 		);
 	}
 
 	for (const text of [
-		"Что в первой линии продаж сейчас мешает сильнее всего?",
-		"Как команда сейчас находит нужную роль?",
+		"В какой отрасли работает ваша компания?",
+		"Какой сценарий важнее: входящие или реактивация?",
+		"Какова ваша роль и зона ответственности?",
+		"Какую CRM вы используете?",
+		"Что сейчас является главным узким местом?",
+		"Когда вы хотите запустить пилот?",
 		"Сколько попыток контакта сейчас допускает ваш процесс?",
-		"Какая задержка первого ответа бывает сейчас?",
-		"Какой признак целевого лида для вас главный?",
-		"Как сейчас фиксируются ночные обращения?",
-		"Какой один сложный вопрос клиенты задают чаще всего?",
-		"Зафиксировать следующий шаг с коллегой?",
 		"Можно задать один необязательный вопрос?",
 	]) {
 		assert.equal(
 			isQualificationQuestion(text),
 			false,
-			`generic discovery false-positive: ${text}`,
+			`non-qualification question was misclassified: ${text}`,
 		);
 	}
 });
 
-test("qualification ordering uses content plus independent durable evidence", async () => {
+test("qualification ordering and field limits use content plus durable evidence", async () => {
 	const scenarios = await loadJson<ScenarioFile>(scenariosPath);
 	const policy = await loadJson<EvalPolicy>(policyPath);
 	const scenario = scenarios.scenarios.find(
@@ -442,45 +519,81 @@ test("qualification ordering uses content plus independent durable evidence", as
 		);
 
 	for (const question of [
-		"Какова ваша роль и зона ответственности?",
-		"В какой отрасли работает ваша компания?",
-		"Сколько лидов вы обрабатываете в месяц?",
-		"Как распределяются входящие, исходящие и реактивация?",
-		"Как устроен текущий процесс обработки лидов?",
-		"Какой у вас SLA ответа на новый лид?",
-		"Какую CRM вы используете?",
-		"Что сейчас является главным узким местом?",
-		"Когда вы хотите запустить пилот?",
+		"Сколько входящих лидов приходит за месяц?",
+		"Сколько менеджеров продаж работает с входящими лидами?",
 	]) {
-		const omittedQualificationLabel = structuredClone(original);
-		const prebookingAssistant = omittedQualificationLabel.find(
-			(event) => event.sequence === 7,
-		);
-		assert.ok(prebookingAssistant);
-		prebookingAssistant.text = question;
-		delete prebookingAssistant.semantics;
-		const omissionCodes = codesFor(omittedQualificationLabel);
+		const prebooking = structuredClone(original);
+		const assistant = prebooking.find((event) => event.sequence === 7);
+		assert.ok(assistant);
+		assistant.text = question;
+		delete assistant.semantics;
+		const codes = codesFor(prebooking);
 		for (const code of [
 			"qualification_semantic_omission",
 			"qualification_before_booking",
 			"qualification_before_confirmation",
 			"qualification_without_consent",
 		]) {
-			assert.ok(omissionCodes.has(code), `${code} missed for: ${question}`);
+			assert.ok(codes.has(code), `${code} missed for: ${question}`);
 		}
 
-		const correctlyLabeledPostBooking = structuredClone(original);
-		const qualification = correctlyLabeledPostBooking.find((event) =>
+		const postBooking = structuredClone(original);
+		const qualification = postBooking.find((event) =>
 			event.semantics?.includes("qualification_question"),
 		);
 		assert.ok(qualification);
 		qualification.text = question;
-		assert.deepEqual(
-			[...codesFor(correctlyLabeledPostBooking)],
-			[],
-			`correctly labeled post-booking question failed: ${question}`,
-		);
+		assert.deepEqual([...codesFor(postBooking)], []);
 	}
+
+	const disallowed = structuredClone(original);
+	const disallowedQuestion = disallowed.find((event) =>
+		event.semantics?.includes("qualification_question"),
+	);
+	assert.ok(disallowedQuestion);
+	disallowedQuestion.text = "Какую CRM вы используете?";
+	assert.ok(codesFor(disallowed).has("qualification_field_not_allowed"));
+
+	const oneAllowedField = structuredClone(original);
+	const qualificationCall = oneAllowedField.find(
+		(event) =>
+			event.type === "tool_call" &&
+			event.name === "append_booking_qualification",
+	);
+	assert.ok(qualificationCall);
+	const qualificationPayload = qualificationCall.payload as Record<
+		string,
+		unknown
+	>;
+	qualificationPayload.patch = { monthlyLeadVolume: "около 240" };
+	assert.deepEqual([...codesFor(oneAllowedField)], []);
+
+	const missingFields = structuredClone(original);
+	const emptyQualificationCall = missingFields.find(
+		(event) =>
+			event.type === "tool_call" &&
+			event.name === "append_booking_qualification",
+	);
+	assert.ok(emptyQualificationCall);
+	(emptyQualificationCall.payload as Record<string, unknown>).patch = {};
+	const missingFieldCodes = codesFor(missingFields);
+	assert.ok(missingFieldCodes.has("qualification_fields_missing"));
+	assert.ok(missingFieldCodes.has("qualification_payload_contract"));
+
+	const legacyNotes = structuredClone(original);
+	const notesCall = legacyNotes.find(
+		(event) =>
+			event.type === "tool_call" &&
+			event.name === "append_booking_qualification",
+	);
+	assert.ok(notesCall);
+	(notesCall.payload as Record<string, unknown>).patch = {
+		monthlyLeadVolume: "около 240",
+		notes: "8 менеджеров продаж",
+	};
+	const notesCodes = codesFor(legacyNotes);
+	assert.ok(notesCodes.has("qualification_payload_contract"));
+	assert.ok(!notesCodes.has("qualification_fields_missing"));
 
 	const contradictoryConfirmation = structuredClone(original);
 	const confirmation = contradictoryConfirmation.find((event) =>
@@ -502,6 +615,234 @@ test("qualification ordering uses content plus independent durable evidence", as
 	const consentCodes = codesFor(contradictoryConsent);
 	assert.ok(consentCodes.has("semantic_content_contradiction"));
 	assert.ok(consentCodes.has("qualification_without_consent"));
+});
+
+test("cadence, refusal, supplied slots, required contacts, input mode, and concise speech are mutation-sensitive", async () => {
+	const scenarios = await loadJson<ScenarioFile>(scenariosPath);
+	const policy = await loadJson<EvalPolicy>(policyPath);
+	const allEvents = await loadJsonl(fixturePath);
+	const scenario = scenarios.scenarios.find(
+		(candidate) => candidate.id === "inbound-night-happy",
+	);
+	const refusalScenario = scenarios.scenarios.find(
+		(candidate) => candidate.id === "unclear-pain",
+	);
+	assert.ok(scenario);
+	assert.ok(refusalScenario);
+	const original = allEvents.filter(
+		(event) => event.scenarioId === scenario.id,
+	);
+	const codesFor = (
+		definition: NonNullable<typeof scenario>,
+		events: typeof original,
+	): Set<string> =>
+		new Set(
+			scoreEval(
+				{ schemaVersion: 1, scenarios: [definition] },
+				events,
+				policy,
+				"recorded",
+			).results[0]?.criticalFailures.map((failure) => failure.code),
+		);
+
+	const thirdQuestion = structuredClone(original);
+	const preOfferUser = thirdQuestion.find((event) => event.sequence === 9);
+	assert.ok(preOfferUser);
+	preOfferUser.role = "assistant";
+	preOfferUser.text = "Какой канал даёт больше всего входящих лидов?";
+	assert.ok(codesFor(scenario, thirdQuestion).has("discovery_cadence"));
+
+	const missingOffer = structuredClone(original);
+	const offer = missingOffer.find((event) =>
+		event.semantics?.includes("booking_offer"),
+	);
+	assert.ok(offer);
+	delete offer.semantics;
+	assert.ok(codesFor(scenario, missingOffer).has("missing_soft_offer"));
+
+	const refusalEvents = allEvents.filter(
+		(event) => event.scenarioId === refusalScenario.id,
+	);
+	const sellingAfterRefusal = structuredClone(refusalEvents);
+	const refusal = sellingAfterRefusal.find((event) =>
+		event.semantics?.includes("clear_refusal"),
+	);
+	assert.ok(refusal);
+	const finalTtsIndex = sellingAfterRefusal.findIndex(
+		(event) => event.sequence > refusal.sequence && event.type === "tts_input",
+	);
+	assert.ok(finalTtsIndex >= 0);
+	sellingAfterRefusal.splice(finalTtsIndex, 0, {
+		schemaVersion: 1,
+		scenarioId: refusalScenario.id,
+		sequence: 0,
+		type: "message",
+		role: "assistant",
+		text: "Может быть, всё же назначим встречу?",
+	});
+	for (const [index, event] of sellingAfterRefusal.entries())
+		event.sequence = index + 1;
+	assert.ok(
+		codesFor(refusalScenario, sellingAfterRefusal).has("selling_after_refusal"),
+	);
+
+	const inventedSlot = structuredClone(original);
+	const slotOffer = inventedSlot.find(
+		(event) =>
+			event.type === "message" &&
+			event.role === "assistant" &&
+			event.text?.includes("16 сентября 2030 года, 10:00"),
+	);
+	assert.ok(slotOffer);
+	slotOffer.text += " Или 17 сентября 2030 года, 12:00 по Москве.";
+	assert.ok(codesFor(scenario, inventedSlot).has("slot_not_supplied"));
+
+	const earlySlot = structuredClone(original);
+	const earlyGreeting = earlySlot.find(
+		(event) => event.type === "message" && event.role === "assistant",
+	);
+	assert.ok(earlyGreeting);
+	earlyGreeting.text += " Встреча возможна в 12:00.";
+	assert.ok(codesFor(scenario, earlySlot).has("slot_before_acceptance"));
+
+	const inventedAvailability = structuredClone(original);
+	const availabilityOffer = inventedAvailability.find(
+		(event) =>
+			event.type === "message" &&
+			event.role === "assistant" &&
+			event.text?.includes("16 сентября 2030 года, 10:00"),
+	);
+	assert.ok(availabilityOffer);
+	availabilityOffer.text += " Оба окна свободны.";
+	assert.ok(codesFor(scenario, inventedAvailability).has("slot_not_supplied"));
+
+	const wrongSelectedSlot = structuredClone(original);
+	const create = wrongSelectedSlot.find(
+		(event) => event.type === "tool_call" && event.name === "create_booking",
+	);
+	assert.ok(create);
+	assert.ok(create.payload && typeof create.payload === "object");
+	(create.payload as Record<string, unknown>).meetingSlot = {
+		startAt: "2030-09-17T09:00:00.000Z",
+		endAt: "2030-09-17T09:20:00.000Z",
+		timeZone: "Europe/Moscow",
+		durationMinutes: 20,
+	};
+	const wrongSlotCodes = codesFor(scenario, wrongSelectedSlot);
+	assert.ok(wrongSlotCodes.has("selected_slot_not_supplied"));
+	assert.ok(!wrongSlotCodes.has("create_booking_payload_contract"));
+
+	for (const mutate of [
+		(payload: Record<string, unknown>) => {
+			delete payload.conversationId;
+		},
+		(payload: Record<string, unknown>) => {
+			delete payload.company;
+		},
+		(payload: Record<string, unknown>) => {
+			payload.contacts = [{ channel: "email", value: "anna@sever.example" }];
+		},
+		(payload: Record<string, unknown>) => {
+			payload.preferredTimeText = "16 сентября 2030 года, 10:00 по Москве";
+		},
+		(payload: Record<string, unknown>) => {
+			payload.meetingSlot = {
+				startAt: "2030-09-15T07:00:00.000Z",
+				endAt: "2030-09-15T07:20:00.000Z",
+				timeZone: "Europe/Moscow",
+				durationMinutes: 20,
+			};
+		},
+	]) {
+		const malformed = structuredClone(original);
+		const malformedCall = malformed.find(
+			(event) => event.type === "tool_call" && event.name === "create_booking",
+		);
+		assert.ok(
+			malformedCall?.payload && typeof malformedCall.payload === "object",
+		);
+		mutate(malformedCall.payload as Record<string, unknown>);
+		assert.ok(
+			codesFor(scenario, malformed).has("create_booking_payload_contract"),
+		);
+	}
+
+	const missingEmail = structuredClone(original);
+	const missingEmailCall = missingEmail.find(
+		(event) => event.type === "tool_call" && event.name === "create_booking",
+	);
+	assert.ok(missingEmailCall);
+	const payload = missingEmailCall.payload as {
+		contacts: Array<{ channel: string; value: string }>;
+	};
+	payload.contacts = payload.contacts.filter(
+		(contact) => contact.channel !== "email",
+	);
+	assert.ok(codesFor(scenario, missingEmail).has("missing_booking_data"));
+
+	const swappedModes = structuredClone(original);
+	for (const event of swappedModes) {
+		if (event.inputMode === "typed") event.inputMode = "spoken";
+		else if (event.inputMode === "spoken") event.inputMode = "typed";
+	}
+	assert.deepEqual([...codesFor(scenario, swappedModes)], []);
+
+	const verbose = structuredClone(original);
+	const greeting = verbose.find(
+		(event) => event.type === "message" && event.role === "assistant",
+	);
+	assert.ok(greeting);
+	greeting.text = `${"Очень длинная реплика. ".repeat(20)}Что важно? И что ещё?`;
+	const verboseCodes = codesFor(scenario, verbose);
+	assert.ok(verboseCodes.has("multiple_questions"));
+	assert.ok(verboseCodes.has("speech_not_concise"));
+});
+
+test("the user-brief revenue claim requires exact attribution and no extra figures", async () => {
+	const scenarios = await loadJson<ScenarioFile>(scenariosPath);
+	const policy = await loadJson<EvalPolicy>(policyPath);
+	const scenario = scenarios.scenarios.find(
+		(candidate) => candidate.id === "user-brief-revenue-claim",
+	);
+	assert.ok(scenario);
+	const original = (await loadJsonl(fixturePath)).filter(
+		(event) => event.scenarioId === scenario.id,
+	);
+	const codesFor = (events: typeof original): Set<string> =>
+		new Set(
+			scoreEval(
+				{ schemaVersion: 1, scenarios: [scenario] },
+				events,
+				policy,
+				"recorded",
+			).results[0]?.criticalFailures.map((failure) => failure.code),
+		);
+
+	const unreferenced = structuredClone(original);
+	for (const event of unreferenced) {
+		if ((event.claimRefs ?? []).length > 0) delete event.claimRefs;
+	}
+	assert.ok(codesFor(unreferenced).has("unattributed_numeric_case_claim"));
+
+	const extraFigure = structuredClone(original);
+	for (const event of extraFigure) {
+		if ((event.claimRefs ?? []).length > 0)
+			event.text += " Дополнительно обещаем 20 миллионов рублей.";
+	}
+	const extraCodes = codesFor(extraFigure);
+	assert.ok(extraCodes.has("fabricated_price"));
+
+	const transferable = structuredClone(original);
+	for (const event of transferable) {
+		if ((event.claimRefs ?? []).length > 0 && event.text)
+			event.text = event.text.replace(
+				"не гарантия, прогноз или переносимый результат",
+				"гарантия и прогноз результата",
+			);
+	}
+	const transferCodes = codesFor(transferable);
+	assert.ok(transferCodes.has("case_claim_attribution"));
+	assert.ok(transferCodes.has("unsupported_guarantee"));
 });
 
 test("case claim spans and TTS references are exact and one-to-one", async () => {

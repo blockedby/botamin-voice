@@ -100,6 +100,8 @@ describe("final-only voice state", () => {
 							inputSampleRate: 16_000,
 							inputEncoding: "pcm16le",
 							chunkMs: 100,
+							maxUtteranceMs: 60_000,
+							maxPcmBytes: 1_920_000,
 							outputContentType: "audio/mpeg",
 							outputMode: "complete-phrase-segments",
 						},
@@ -126,6 +128,16 @@ describe("final-only voice state", () => {
 		expect(controller.acceptEvent(finalEvent)).toBe(true);
 		expect(controller.acceptEvent(finalEvent)).toBe(false);
 		expect(controller.hasPendingCommit).toBe(false);
+	});
+
+	test("recoverable rejection releases the pending final without accepting text", () => {
+		const controller = new VoiceSessionController();
+		controller.beginListening();
+		expect(controller.commit(() => true)).toBe(true);
+		expect(controller.rejectCommit()).toBe(true);
+		expect(controller.state.status).toBe("listening");
+		expect(controller.hasPendingCommit).toBe(false);
+		expect(controller.rejectCommit()).toBe(false);
 	});
 
 	test("does not enter processing when transport rejects commit", () => {

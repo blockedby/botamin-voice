@@ -13,10 +13,28 @@ export const AudioClientConfigSchema = z
 		inputSampleRate: z.literal(16_000),
 		inputEncoding: z.literal("pcm16le"),
 		chunkMs: z.literal(100),
+		maxUtteranceMs: z.number().int().min(100).max(120_000),
+		maxPcmBytes: z.number().int().min(3_200).max(3_840_000),
 		outputContentType: z.literal("audio/mpeg"),
 		outputMode: z.literal("complete-phrase-segments"),
 	})
-	.strict();
+	.strict()
+	.superRefine((config, context) => {
+		if (config.maxPcmBytes % 2 !== 0) {
+			context.addIssue({
+				code: "custom",
+				message: "maxPcmBytes must contain whole PCM16 samples",
+				path: ["maxPcmBytes"],
+			});
+		}
+		if (config.maxPcmBytes > Math.floor(config.maxUtteranceMs * 32)) {
+			context.addIssue({
+				code: "custom",
+				message: "maxPcmBytes cannot exceed the utterance duration limit",
+				path: ["maxPcmBytes"],
+			});
+		}
+	});
 
 export const CreateConversationRequestSchema = z
 	.object({

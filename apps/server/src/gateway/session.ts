@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { BookingService } from "@botamin/contracts";
 import {
+	type AudioClientConfig,
 	BINARY_AUDIO_FRAME_KIND,
 	ClientHelloEventSchema,
 	ClientWsEventSchema,
@@ -17,15 +18,32 @@ import type {
 	ConversationOrchestrator,
 	OrchestratorEvent,
 } from "../orchestrator/orchestrator";
-import { PcmUtteranceAssembler, PcmUtteranceError } from "./wav";
+import {
+	PcmUtteranceAssembler,
+	PcmUtteranceError,
+	WAV_HEADER_BYTES,
+} from "./wav";
 
-const CLIENT_CONFIG = Object.freeze({
-	inputSampleRate: 16_000 as const,
-	inputEncoding: "pcm16le" as const,
-	chunkMs: 100 as const,
-	outputContentType: "audio/mpeg" as const,
-	outputMode: "complete-phrase-segments" as const,
-});
+export function createAudioClientConfig(
+	maxUtteranceMs: number,
+	maxAudioBytes: number,
+): AudioClientConfig {
+	const durationPcmBytes = Math.floor(maxUtteranceMs * 32);
+	const audioPcmBytes = Math.max(0, maxAudioBytes - WAV_HEADER_BYTES);
+	const boundedPcmBytes = Math.min(durationPcmBytes, audioPcmBytes);
+	const maxPcmBytes = boundedPcmBytes - (boundedPcmBytes % 2);
+	return {
+		inputSampleRate: 16_000,
+		inputEncoding: "pcm16le",
+		chunkMs: 100,
+		maxUtteranceMs,
+		maxPcmBytes,
+		outputContentType: "audio/mpeg",
+		outputMode: "complete-phrase-segments",
+	};
+}
+
+const CLIENT_CONFIG = Object.freeze(createAudioClientConfig(60_000, 2_000_000));
 
 export interface GatewaySocket {
 	send(data: string | Uint8Array): void;
@@ -111,6 +129,7 @@ export class GatewaySession {
 	readonly #idFactory: () => string;
 	readonly #now: () => Date;
 	readonly #metrics: ObservabilityMetrics | undefined;
+	readonly #clientConfig: AudioClientConfig;
 	readonly #assemblerLimits: {
 		maxUtteranceMs: number;
 		maxAudioBytes: number;
@@ -118,6 +137,8 @@ export class GatewaySession {
 	};
 	#assembler: PcmUtteranceAssembler | null = null;
 	#expectedClientSequence = 0;
+	#expectedTextSequence = 0;
+	#activeTextSequence: number | null = null;
 	#serverSequence = 0;
 	#history: HistoryRecord[] = [];
 	#historyBytes = 0;
@@ -130,6 +151,7 @@ export class GatewaySession {
 	#stopped = false;
 	#stopPromise: Promise<void> | null = null;
 	#currentGenerationId: string | null = null;
+	#turnIntakePending = false;
 	#messageQueue: Promise<void> = Promise.resolve();
 	#pendingMessages = 0;
 	readonly #activeProcesses = new Set<Promise<void>>();
@@ -170,6 +192,10 @@ export class GatewaySession {
 			options.tokenFactory?.() ?? randomBytes(32).toString("base64url");
 		this.#initialClientToken = initialToken;
 		this.#resumeTokenHash = createHash("sha256").update(initialToken).digest();
+		this.#clientConfig = createAudioClientConfig(
+			options.maxUtteranceMs,
+			options.maxAudioBytes,
+		);
 		this.#assemblerLimits = {
 			maxUtteranceMs: options.maxUtteranceMs,
 			maxAudioBytes: options.maxAudioBytes,
@@ -378,7 +404,7 @@ export class GatewaySession {
 				{
 					state: this.#orchestrator.state.stage,
 					resumeToken: token,
-					clientConfig: CLIENT_CONFIG,
+					clientConfig: this.#clientConfig,
 				},
 				false,
 			);
@@ -397,6 +423,14 @@ export class GatewaySession {
 				break;
 			case "audio.commit":
 				this.#trackProcess(this.#commitAudio());
+				break;
+			case "visitor.text.submit":
+				this.#trackProcess(
+					this.#commitText(
+						parsed.data.payload.sequence,
+						parsed.data.payload.text,
+					),
+				);
 				break;
 			case "playback.interrupted": {
 				const event = await this.#orchestrator.interrupt(
@@ -471,10 +505,87 @@ export class GatewaySession {
 			return;
 		}
 		this.#assembler = null;
+		const turnId = this.#idFactory();
+		this.#metrics?.markAudioCommit(turnId);
+		this.#turnIntakePending = true;
+		try {
+			await this.#processFinalTurn({
+				turnId,
+				run: (generationId, knownFacts) =>
+					this.#orchestrator.acceptAudioCommit({
+						turnId,
+						generationId,
+						audio: wav,
+						contentType: "audio/wav",
+						language: "ru",
+						knownFacts,
+					}),
+			});
+		} finally {
+			this.#turnIntakePending = false;
+		}
+	}
+
+	async #commitText(sequence: number, text: string): Promise<void> {
+		if (
+			sequence < this.#expectedTextSequence ||
+			sequence === this.#activeTextSequence
+		) {
+			this.#sendSafeError("IDEMPOTENCY_CONFLICT", false);
+			return;
+		}
+		if (sequence !== this.#expectedTextSequence) {
+			this.#sendSafeError("INVALID_EVENT", false);
+			return;
+		}
+		if (
+			this.#currentGenerationId !== null ||
+			this.#turnIntakePending ||
+			this.#activeTextSequence !== null ||
+			!this.#orchestrator.canAcceptVisitorTurn
+		) {
+			this.#sendSafeError("ACTION_NOT_ALLOWED_IN_STATE", true);
+			return;
+		}
+
+		// Typed input intentionally supersedes uncommitted microphone bytes.
+		this.#assembler?.clear();
+		this.#assembler = null;
+		this.#activeTextSequence = sequence;
+		this.#turnIntakePending = true;
+		const turnId = this.#idFactory();
+		try {
+			await this.#processFinalTurn({
+				turnId,
+				requireFinal: true,
+				onFinalAccepted: () => {
+					this.#expectedTextSequence += 1;
+				},
+				run: (generationId, knownFacts) =>
+					this.#orchestrator.acceptTextSubmit({
+						turnId,
+						generationId,
+						text,
+						knownFacts,
+					}),
+			});
+		} finally {
+			this.#activeTextSequence = null;
+			this.#turnIntakePending = false;
+		}
+	}
+
+	async #processFinalTurn(input: {
+		turnId: string;
+		requireFinal?: boolean;
+		onFinalAccepted?: () => void;
+		run(
+			generationId: string,
+			knownFacts: KnownFacts,
+		): AsyncIterable<OrchestratorEvent>;
+	}): Promise<boolean> {
 		const queueController = new AbortController();
-		const queuedId = this.#idFactory();
-		this.#metrics?.markAudioCommit(queuedId);
-		this.#queuedTurnControllers.set(queuedId, queueController);
+		this.#queuedTurnControllers.set(input.turnId, queueController);
 		let admission: Awaited<ReturnType<GatewaySessionOptions["acquireTurn"]>>;
 		try {
 			admission = await this.#acquireTurn({
@@ -482,80 +593,89 @@ export class GatewaySession {
 				signal: queueController.signal,
 			});
 		} catch {
-			this.#metrics?.finishCorrelation(queuedId);
+			this.#metrics?.finishCorrelation(input.turnId);
 			if (!this.#stopped) this.#sendSafeError("CAPACITY_EXCEEDED", true);
-			return;
+			return false;
 		} finally {
-			this.#queuedTurnControllers.delete(queuedId);
+			this.#queuedTurnControllers.delete(input.turnId);
 		}
 		if (!admission.ok) {
-			this.#metrics?.finishCorrelation(queuedId);
-			if (
-				!this.#stopped &&
-				(admission.reason === "overflow" || admission.reason === "timeout")
-			) {
-				this.#sendSafeError("CAPACITY_EXCEEDED", true);
+			this.#metrics?.finishCorrelation(input.turnId);
+			if (!this.#stopped) {
+				this.#sendSafeError(
+					admission.reason === "cancelled"
+						? "ACTION_NOT_ALLOWED_IN_STATE"
+						: "CAPACITY_EXCEEDED",
+					true,
+				);
 			}
-			return;
+			return false;
 		}
 		const release = admission.release;
-		if (this.#stopped || this.isExpired()) {
+		if (this.#stopped) {
 			release();
-			this.#metrics?.finishCorrelation(queuedId);
-			return;
+			this.#metrics?.finishCorrelation(input.turnId);
+			return false;
 		}
-		const turnId = queuedId;
+		if (this.isExpired()) {
+			release();
+			this.#metrics?.finishCorrelation(input.turnId);
+			this.#sendSafeError("SESSION_EXPIRED", false);
+			void this.stop("disconnected");
+			return false;
+		}
 		const generationId = this.#idFactory();
 		this.#currentGenerationId = generationId;
-		this.#turnsById.set(turnId, {
-			id: turnId,
+		this.#turnsById.set(input.turnId, {
+			id: input.turnId,
 			generationId,
 			userText: "",
 			assistantText: "",
 			stateBefore: this.#orchestrator.state.stage,
 			stateAfter: this.#orchestrator.state.stage,
 		});
-		this.#turnIdsByGeneration.set(generationId, turnId);
+		this.#turnIdsByGeneration.set(generationId, input.turnId);
 		try {
 			const knownFacts: KnownFacts = {
 				useCases: [],
 				painPoints: [],
 				objections: [],
 			};
-			for await (const event of this.#orchestrator.acceptAudioCommit({
-				turnId,
-				generationId,
-				audio: wav,
-				contentType: "audio/wav",
-				language: "ru",
-				knownFacts,
-			})) {
+			let finalAccepted = false;
+			for await (const event of input.run(generationId, knownFacts)) {
 				if (this.#stopped) break;
+				if (event.type === "transcript.final" && !finalAccepted) {
+					finalAccepted = true;
+					input.onFinalAccepted?.();
+				}
 				await this.#mapEvent(event);
+			}
+			if (input.requireFinal && !finalAccepted && !this.#stopped) {
+				this.#sendSafeError("ACTION_NOT_ALLOWED_IN_STATE", true);
 			}
 		} finally {
 			try {
 				if (this.#currentGenerationId === generationId) {
-					const turn = this.#turnsById.get(turnId);
+					const turn = this.#turnsById.get(input.turnId);
 					if (turn) turn.stateAfter = this.#orchestrator.state.stage;
 					this.#currentGenerationId = null;
 				}
 				if (!this.#stopped) {
 					try {
-						this.#persistTurn(turnId);
+						this.#persistTurn(input.turnId);
 					} catch {
 						this.#sendSafeError("DB_UNAVAILABLE", true);
-						this.#discardTurn(turnId);
+						this.#discardTurn(input.turnId);
 					}
 				} else {
-					this.#discardTurn(turnId);
+					this.#discardTurn(input.turnId);
 				}
 			} finally {
-				// A persistence failure must never leak the global brain permit.
 				release();
-				this.#metrics?.finishCorrelation(turnId);
+				this.#metrics?.finishCorrelation(input.turnId);
 			}
 		}
+		return true;
 	}
 
 	async #mapEvent(event: OrchestratorEvent): Promise<void> {

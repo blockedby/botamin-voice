@@ -9,15 +9,15 @@
 	},
 	"providerCalls": 0,
 	"credentialsRequired": false,
-	"promptTuningClaimed": false,
+	"promptTuningClaimed": true,
 	"prompt": {
-		"changedByT31": false,
-		"sourceSha256": "068b1930670587c34ec1b832ede79e0cbcbbd244de14774f387f3dd6cf4d862e"
+		"sourceChangedByProactivePromptTask": true,
+		"sourceSha256": "4293e4db0c3a333e5563079056f48d604cd4887080d6b4f2f6984008ee745fc7"
 	},
-	"inputsSha256": "54b87a30670e9844356b223efaf480b26989f75e17df70320f1de3e58b1f01ed",
+	"inputsSha256": "228ea6ec7fc4524c2124cd14d70d0ea6bf257c17dad68fcb91cb914e2d1b4811",
 	"fixture": {
-		"scenarioCount": 34,
-		"passedScenarios": 34,
+		"scenarioCount": 35,
+		"passedScenarios": 35,
 		"passRate": 1,
 		"criticalFailureCount": 0,
 		"bookingOrder": {

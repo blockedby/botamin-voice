@@ -123,7 +123,15 @@ describe("PCM capture and resampling", () => {
 		expect([...first, ...second].every((value) => value === 0.25)).toBe(true);
 	});
 
-	test("enforces independent utterance duration and byte ceilings", () => {
+	test("enforces the exact 60-second default and independent duration/byte ceilings", () => {
+		const defaults = new PcmUtteranceBudget();
+		expect(defaults).toMatchObject({
+			maxDurationMs: 60_000,
+			maxBytes: 2_000_000,
+			capacityBytes: 1_920_000,
+			limitingReason: "duration",
+		});
+
 		const byDuration = new PcmUtteranceBudget(50, 1_000_000);
 		const durationResult = byDuration.accept(new Uint8Array(3_200));
 		expect(durationResult.accepted.byteLength).toBe(1_600);
@@ -139,9 +147,11 @@ describe("PCM capture and resampling", () => {
 	test("AudioWorklet adapter emits one canonical frame and cleans up mute/finish", async () => {
 		const harness = createCaptureHarness();
 		const frames: Uint8Array[] = [];
+		const progress: number[] = [];
 		const capture = new AudioWorkletCapture({
 			apis: harness.apis,
 			onFrame: (frame) => frames.push(frame),
+			onProgress: (stats) => progress.push(stats.bytes),
 		});
 		await capture.start();
 		expect(harness.moduleUrls).toEqual([AUDIO_WORKLET_MODULE_URL]);
@@ -154,6 +164,7 @@ describe("PCM capture and resampling", () => {
 			data: new Float32Array(4_800).fill(0.125),
 		});
 		expect(frames.map((frame) => frame.byteLength)).toEqual([3_200]);
+		expect(progress).toEqual([3_200]);
 
 		const stats = await capture.finish();
 		expect(stats).toMatchObject({ bytes: 3_200, durationMs: 100 });
@@ -214,6 +225,20 @@ describe("PCM capture and resampling", () => {
 		finishModule();
 		await expect(starting).rejects.toThrow("cancelled");
 		expect(capture.isActive).toBe(false);
+	});
+
+	test("can acquire permission before applying server-authoritative limits", async () => {
+		const harness = createCaptureHarness();
+		const capture = new AudioWorkletCapture({
+			apis: harness.apis,
+			acceptingInitially: false,
+			onFrame: () => undefined,
+		});
+		await capture.prepare();
+		capture.configureLimits(60_000, 1_920_000);
+		await capture.start();
+		harness.node.port.onmessage?.({ data: new Float32Array(4_800) });
+		expect((await capture.finish()).bytes).toBe(0);
 	});
 
 	test("stops before a byte limit and emits only the bounded final frame", async () => {

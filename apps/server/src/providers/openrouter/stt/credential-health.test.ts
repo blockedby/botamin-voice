@@ -93,7 +93,7 @@ describe("shared OpenRouter credential health", () => {
 			let sttFetches = 0;
 			const stt = new OpenRouterSttAdapter({
 				config: sharedConfig,
-				now: () => 0,
+				monotonicNow: () => 0,
 				fetch: async () => {
 					sttFetches += 1;
 					return new Response("provider error", { status });
@@ -101,7 +101,7 @@ describe("shared OpenRouter credential health", () => {
 			});
 			const tts = new OpenRouterTtsAdapter({
 				config: sharedConfig,
-				now: () => 0,
+				monotonicNow: () => 0,
 				fetch: async () => mp3Response(),
 			});
 
@@ -132,13 +132,13 @@ describe("shared OpenRouter credential health", () => {
 			const stt = new OpenRouterSttAdapter({
 				config: config(),
 				credentialHealth,
-				now: () => 0,
+				monotonicNow: () => 0,
 				fetch: async () => transcriptResponse(),
 			});
 			const tts = new OpenRouterTtsAdapter({
 				config: config(),
 				credentialHealth,
-				now: () => 0,
+				monotonicNow: () => 0,
 				fetch: async () => {
 					ttsFetches += 1;
 					return new Response("provider error", { status });

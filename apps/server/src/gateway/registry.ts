@@ -1,5 +1,5 @@
 import type { CreateConversationRequest } from "@botamin/contracts";
-import type { ObservabilityMetrics } from "../observability";
+import { monotonicNowMs, type ObservabilityMetrics } from "../observability";
 import type { GatewaySession } from "./session";
 import {
 	type BrainTurnAdmission,
@@ -30,6 +30,7 @@ export interface SessionRegistryOptions {
 	terminalErrorCleanupMs?: number;
 	createSession(context: CreateSessionContext): GatewaySession;
 	now?: () => Date;
+	monotonicNow?: () => number;
 	idFactory?: () => string;
 	cleanupIntervalMs?: number;
 	metrics?: ObservabilityMetrics;
@@ -38,7 +39,7 @@ export interface SessionRegistryOptions {
 interface SessionRecord {
 	session: GatewaySession;
 	sourceKey: string;
-	createdAtMs: number;
+	createdAtMonotonicMs: number;
 }
 
 /** Process-local bounded registry; durable booking data remains in SQLite. */
@@ -59,6 +60,7 @@ export class SessionRegistry {
 	readonly #terminalErrorCleanupMs: number;
 	readonly #createSession: SessionRegistryOptions["createSession"];
 	readonly #now: () => Date;
+	readonly #monotonicNow: () => number;
 	readonly #idFactory: () => string;
 	readonly #timer: ReturnType<typeof setInterval>;
 	readonly #turnQueue: BrainTurnQueue;
@@ -76,6 +78,7 @@ export class SessionRegistry {
 		this.#terminalErrorCleanupMs = options.terminalErrorCleanupMs ?? 5_000;
 		this.#createSession = options.createSession;
 		this.#now = options.now ?? (() => new Date());
+		this.#monotonicNow = options.monotonicNow ?? monotonicNowMs;
 		this.#idFactory = options.idFactory ?? (() => Bun.randomUUIDv7());
 		this.#metrics = options.metrics;
 		this.#turnQueue = new BrainTurnQueue({
@@ -105,6 +108,7 @@ export class SessionRegistry {
 			return null;
 		}
 		const now = this.#now();
+		const createdAtMonotonicMs = this.#monotonicNow();
 		const conversationId = this.#idFactory();
 		const expiresAt = new Date(now.getTime() + this.#sessionMaxMs);
 		const session = this.#createSession({
@@ -112,13 +116,13 @@ export class SessionRegistry {
 			expiresAt,
 			request,
 			acquireTurn: async (input) => {
-				const startedAt = this.#now().getTime();
+				const startedAt = this.#monotonicNow();
 				const pending = this.#turnQueue.acquire(input);
 				this.#updateCapacity();
 				const result = await pending;
 				this.#metrics?.recordQueue(
 					result.ok ? "granted" : result.reason,
-					Math.max(0, this.#now().getTime() - startedAt),
+					Math.max(0, this.#monotonicNow() - startedAt),
 				);
 				this.#updateCapacity();
 				if (!result.ok) return result;
@@ -135,7 +139,7 @@ export class SessionRegistry {
 		this.#sessions.set(conversationId, {
 			session,
 			sourceKey,
-			createdAtMs: now.getTime(),
+			createdAtMonotonicMs,
 		});
 		this.#activeBySource.set(
 			sourceKey,
@@ -169,10 +173,11 @@ export class SessionRegistry {
 
 	cleanupExpired(): void {
 		const now = this.#now();
+		const monotonicNow = this.#monotonicNow();
 		for (const [id, record] of this.#sessions) {
 			const abandoned =
 				!record.session.established &&
-				now.getTime() - record.createdAtMs >= this.#abandonedSessionMs;
+				monotonicNow - record.createdAtMonotonicMs >= this.#abandonedSessionMs;
 			if (
 				!record.session.stopped &&
 				!record.session.isExpired(now) &&

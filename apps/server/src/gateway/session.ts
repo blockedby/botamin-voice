@@ -473,7 +473,7 @@ export class GatewaySession {
 		this.#assembler = null;
 		const queueController = new AbortController();
 		const queuedId = this.#idFactory();
-		this.#metrics?.markAudioCommit(queuedId, this.#now().getTime());
+		this.#metrics?.markAudioCommit(queuedId);
 		this.#queuedTurnControllers.set(queuedId, queueController);
 		let admission: Awaited<ReturnType<GatewaySessionOptions["acquireTurn"]>>;
 		try {

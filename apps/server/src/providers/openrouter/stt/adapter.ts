@@ -6,6 +6,7 @@ import {
 	type SttTranscriptionResult,
 	SttTranscriptionResultSchema,
 } from "@botamin/contracts";
+import { monotonicNowMs } from "../../../observability/clock";
 import { type CircuitState, OpenRouterCircuitBreaker } from "./circuit";
 import {
 	createOpenRouterHeaders,
@@ -55,7 +56,8 @@ export interface OpenRouterSttTelemetryEvent {
 export interface OpenRouterSttAdapterOptions {
 	config?: OpenRouterVoiceConfig;
 	fetch?: OpenRouterFetch;
-	now?: () => number;
+	monotonicNow?: () => number;
+	wallNow?: () => number;
 	telemetry?: (event: OpenRouterSttTelemetryEvent) => void;
 	circuitTelemetry?: (state: CircuitState) => void;
 	capacityTelemetry?: (event: {
@@ -75,7 +77,8 @@ interface ValidatedWav {
 export class OpenRouterSttAdapter implements SttPort {
 	readonly #config: OpenRouterVoiceConfig;
 	readonly #fetch: OpenRouterFetch;
-	readonly #now: () => number;
+	readonly #monotonicNow: () => number;
+	readonly #wallNow: () => number;
 	readonly #telemetry:
 		| ((event: OpenRouterSttTelemetryEvent) => void)
 		| undefined;
@@ -101,7 +104,8 @@ export class OpenRouterSttAdapter implements SttPort {
 				this.#config,
 				options.config === undefined,
 			);
-		this.#now = options.now ?? Date.now;
+		this.#monotonicNow = options.monotonicNow ?? monotonicNowMs;
+		this.#wallNow = options.wallNow ?? Date.now;
 		this.#telemetry = options.telemetry;
 		this.#circuitTelemetry = options.circuitTelemetry;
 		this.#capacityTelemetry = options.capacityTelemetry;
@@ -109,7 +113,7 @@ export class OpenRouterSttAdapter implements SttPort {
 		this.#circuit = new OpenRouterCircuitBreaker({
 			failureThreshold: this.#config.stt.circuitFailureThreshold,
 			cooldownMs: this.#config.stt.circuitCooldownMs,
-			now: this.#now,
+			now: this.#monotonicNow,
 		});
 		this.#emitCircuitState();
 		this.#emitCapacity(false);
@@ -160,11 +164,17 @@ export class OpenRouterSttAdapter implements SttPort {
 		this.#emitCapacity(false);
 		let circuitAcquired = false;
 		try {
+			const circuitBeforeAcquire = this.#circuit.state;
 			if (!this.#circuit.tryAcquire()) {
 				this.#emitCircuitState();
 				throw new OpenRouterSttError("STT_CIRCUIT_OPEN", true);
 			}
 			circuitAcquired = true;
+			// tryAcquire owns the open -> half-open transition; emit that actual
+			// transition before the probe yields to provider I/O.
+			if (this.#circuit.state !== circuitBeforeAcquire) {
+				this.#emitCircuitState();
+			}
 			const result = await this.#transcribeWithRetry(request, wav);
 			this.#credentialHealth.recordSuccess();
 			this.#circuit.recordSuccess();
@@ -231,7 +241,7 @@ export class OpenRouterSttAdapter implements SttPort {
 						retryAfter,
 						this.#config.stt.retryBaseMs,
 						this.#config.stt.maxRetryAfterMs,
-						this.#now(),
+						this.#wallNow(),
 					);
 					await sleepWithSignal(delayMs, timed.signal);
 				}
@@ -248,7 +258,7 @@ export class OpenRouterSttAdapter implements SttPort {
 		attempt: number,
 		signal: AbortSignal,
 	): Promise<SttTranscriptionResult> {
-		const startedAt = this.#now();
+		const startedAt = this.#monotonicNow();
 		let telemetryStatus: number | "network" = "network";
 		let outcome: OpenRouterSttTelemetryEvent["outcome"] = "failure";
 		try {
@@ -331,7 +341,7 @@ export class OpenRouterSttAdapter implements SttPort {
 				attempt,
 				retry: attempt > 1,
 				status: telemetryStatus,
-				latencyMs: Math.max(0, this.#now() - startedAt),
+				latencyMs: Math.max(0, this.#monotonicNow() - startedAt),
 				circuit: this.#circuit.state,
 				outcome,
 			};

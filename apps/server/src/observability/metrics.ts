@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { monotonicNowMs, type MonotonicClock } from "./clock";
 
 /**
  * Privacy-safe, process-local operational aggregates.
@@ -63,7 +64,8 @@ export interface TtsMetricInput {
 }
 
 export interface ObservabilityMetricsOptions {
-	now?: () => number;
+	monotonicNow?: MonotonicClock;
+	wallNow?: () => Date;
 	sampleLimit?: number;
 	correlationLimit?: number;
 }
@@ -159,7 +161,8 @@ function providerAggregate(sampleLimit: number): ProviderAggregate {
 
 /** Bounded metrics sink shared by runtime, gateway, providers and workers. */
 export class ObservabilityMetrics {
-	readonly #now: () => number;
+	readonly #monotonicNow: MonotonicClock;
+	readonly #wallNow: () => Date;
 	readonly #sampleLimit: number;
 	readonly #correlationLimit: number;
 	readonly #correlations = new Map<string, Correlation>();
@@ -204,7 +207,8 @@ export class ObservabilityMetrics {
 	#correlationEvictions = 0;
 
 	constructor(options: ObservabilityMetricsOptions = {}) {
-		this.#now = options.now ?? Date.now;
+		this.#monotonicNow = options.monotonicNow ?? monotonicNowMs;
+		this.#wallNow = options.wallNow ?? (() => new Date());
 		this.#sampleLimit = boundedLimit(
 			options.sampleLimit,
 			METRIC_SAMPLE_LIMIT,
@@ -227,7 +231,7 @@ export class ObservabilityMetrics {
 		this.#tts = providerAggregate(this.#sampleLimit);
 	}
 
-	markAudioCommit(correlationId: string, at = this.#now()): void {
+	markAudioCommit(correlationId: string, at = this.#monotonicNow()): void {
 		const correlation = this.#correlation(correlationId);
 		if (correlation.commitAt !== undefined) return;
 		const timestamp = validTimestamp(at);
@@ -236,7 +240,7 @@ export class ObservabilityMetrics {
 		this.#milestones.audioCommits = increment(this.#milestones.audioCommits);
 	}
 
-	markSttRequest(correlationId: string, at = this.#now()): void {
+	markSttRequest(correlationId: string, at = this.#monotonicNow()): void {
 		const correlation = this.#correlation(correlationId);
 		if (correlation.sttRequestAt !== undefined) return;
 		const timestamp = validTimestamp(at);
@@ -250,7 +254,7 @@ export class ObservabilityMetrics {
 		);
 	}
 
-	markFinalTranscript(correlationId: string, at = this.#now()): void {
+	markFinalTranscript(correlationId: string, at = this.#monotonicNow()): void {
 		const correlation = this.#correlation(correlationId);
 		if (correlation.transcriptAt !== undefined) return;
 		const timestamp = validTimestamp(at);
@@ -266,7 +270,7 @@ export class ObservabilityMetrics {
 		);
 	}
 
-	markFirstLlmDelta(correlationId: string, at = this.#now()): void {
+	markFirstLlmDelta(correlationId: string, at = this.#monotonicNow()): void {
 		const correlation = this.#correlation(correlationId);
 		if (correlation.firstLlmDeltaObserved) return;
 		correlation.firstLlmDeltaObserved = true;
@@ -280,7 +284,10 @@ export class ObservabilityMetrics {
 		);
 	}
 
-	markFirstPlaybackReady(correlationId: string, at = this.#now()): void {
+	markFirstPlaybackReady(
+		correlationId: string,
+		at = this.#monotonicNow(),
+	): void {
 		const correlation = this.#correlation(correlationId);
 		if (correlation.firstPlaybackObserved) return;
 		correlation.firstPlaybackObserved = true;
@@ -296,14 +303,14 @@ export class ObservabilityMetrics {
 
 	markTtsRequest(): number {
 		this.#milestones.ttsRequests = increment(this.#milestones.ttsRequests);
-		return this.#now();
+		return this.#monotonicNow();
 	}
 
 	recordTtsCompletion(startedAt: number, outcome: ProviderOutcome): void {
 		this.#milestones.ttsCompletions = increment(
 			this.#milestones.ttsCompletions,
 		);
-		const completedAt = this.#now();
+		const completedAt = this.#monotonicNow();
 		if (outcome !== "stale" && completedAt >= startedAt) {
 			this.#ttsOperationLatency.observe(completedAt - startedAt);
 		}
@@ -391,7 +398,7 @@ export class ObservabilityMetrics {
 	snapshot(): Record<string, unknown> {
 		return {
 			schemaVersion: 1,
-			generatedAt: new Date(this.#now()).toISOString(),
+			generatedAt: this.#wallNow().toISOString(),
 			retention: {
 				sampleLimitPerHistogram: this.#sampleLimit,
 				correlationLimit: this.#correlationLimit,

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ObservabilityMetrics } from "./metrics";
 
 type Snapshot = {
+	generatedAt: string;
 	retention: {
 		sampleLimitPerHistogram: number;
 		correlationLimit: number;
@@ -31,7 +32,10 @@ function snapshot(metrics: ObservabilityMetrics): Snapshot {
 describe("bounded privacy-safe observability aggregates", () => {
 	test("reports separate completed milestone p50/p95 and null for missing samples", () => {
 		let now = 1_000;
-		const metrics = new ObservabilityMetrics({ now: () => now });
+		const metrics = new ObservabilityMetrics({
+			monotonicNow: () => now,
+			wallNow: () => new Date("2026-07-31T00:00:00.000Z"),
+		});
 		metrics.markAudioCommit("conversation-A:turn-A");
 		now += 10;
 		metrics.markSttRequest("conversation-A:turn-A");
@@ -72,7 +76,8 @@ describe("bounded privacy-safe observability aggregates", () => {
 	test("bounds samples and correlations while never snapshotting sensitive inputs", () => {
 		let now = Date.parse("2026-07-31T00:00:00.000Z");
 		const metrics = new ObservabilityMetrics({
-			now: () => now,
+			monotonicNow: () => now,
+			wallNow: () => new Date("2026-07-31T00:00:00.000Z"),
 			sampleLimit: 16,
 			correlationLimit: 16,
 		});
@@ -152,9 +157,39 @@ describe("bounded privacy-safe observability aggregates", () => {
 		});
 	});
 
+	test("uses monotonic samples independently of backward and forward wall-clock jumps", () => {
+		let monotonic = 100;
+		let wall = new Date("2026-07-31T00:00:00.000Z");
+		const metrics = new ObservabilityMetrics({
+			monotonicNow: () => monotonic,
+			wallNow: () => wall,
+		});
+		metrics.markAudioCommit("wall-jump-turn");
+		wall = new Date("2020-01-01T00:00:00.000Z");
+		monotonic = 125;
+		metrics.markSttRequest("wall-jump-turn");
+		wall = new Date("2040-01-01T00:00:00.000Z");
+		monotonic = 160;
+		metrics.markFinalTranscript("wall-jump-turn");
+
+		let value = snapshot(metrics);
+		expect(value.generatedAt).toBe("2040-01-01T00:00:00.000Z");
+		expect(value.latencyMs.audioCommitToSttRequest?.p50).toBe(25);
+		expect(value.latencyMs.audioCommitToFinalTranscript?.p50).toBe(60);
+
+		wall = new Date("2010-01-01T00:00:00.000Z");
+		value = snapshot(metrics);
+		expect(value.generatedAt).toBe("2010-01-01T00:00:00.000Z");
+		expect(value.latencyMs.audioCommitToSttRequest?.p50).toBe(25);
+		expect(value.latencyMs.audioCommitToFinalTranscript?.p50).toBe(60);
+	});
+
 	test("counts fixed business, notifier, queue and capacity outcomes", () => {
 		let now = 100;
-		const metrics = new ObservabilityMetrics({ now: () => now });
+		const metrics = new ObservabilityMetrics({
+			monotonicNow: () => now,
+			wallNow: () => new Date("2026-07-31T00:00:00.000Z"),
+		});
 		metrics.recordBooking("create", "success");
 		metrics.recordBooking("create", "replay");
 		metrics.recordBooking("update", "failure");

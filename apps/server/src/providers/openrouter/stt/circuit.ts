@@ -18,10 +18,11 @@ export class OpenRouterCircuitBreaker {
 		this.#options = options;
 	}
 
+	/**
+	 * Cooldown expiry alone does not transition the circuit. It remains open
+	 * while idle and enters half-open only when tryAcquire grants one probe.
+	 */
 	get state(): CircuitState {
-		if (this.#state === "open" && this.#options.now() >= this.#openUntil) {
-			return "half-open";
-		}
 		return this.#state;
 	}
 

@@ -7,6 +7,7 @@ import {
 	type TtsSynthesisRequest,
 	TtsSynthesisRequestDataSchema,
 } from "@botamin/contracts";
+import { monotonicNowMs } from "../../../observability/clock";
 import { type CircuitState, OpenRouterCircuitBreaker } from "../stt/circuit";
 import {
 	createOpenRouterHeaders,
@@ -58,7 +59,8 @@ export interface OpenRouterTtsTelemetryEvent {
 export interface OpenRouterTtsAdapterOptions {
 	config?: OpenRouterVoiceConfig;
 	fetch?: OpenRouterFetch;
-	now?: () => number;
+	monotonicNow?: () => number;
+	wallNow?: () => number;
 	telemetry?: (event: OpenRouterTtsTelemetryEvent) => void;
 	circuitTelemetry?: (state: CircuitState) => void;
 	capacityTelemetry?: (event: {
@@ -82,7 +84,8 @@ export interface OpenRouterTtsUsage {
 export class OpenRouterTtsAdapter implements TtsPort {
 	readonly #config: OpenRouterVoiceConfig;
 	readonly #fetch: OpenRouterFetch;
-	readonly #now: () => number;
+	readonly #monotonicNow: () => number;
+	readonly #wallNow: () => number;
 	readonly #telemetry:
 		| ((event: OpenRouterTtsTelemetryEvent) => void)
 		| undefined;
@@ -110,7 +113,8 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				this.#config,
 				options.config === undefined,
 			);
-		this.#now = options.now ?? Date.now;
+		this.#monotonicNow = options.monotonicNow ?? monotonicNowMs;
+		this.#wallNow = options.wallNow ?? Date.now;
 		this.#telemetry = options.telemetry;
 		this.#circuitTelemetry = options.circuitTelemetry;
 		this.#capacityTelemetry = options.capacityTelemetry;
@@ -118,7 +122,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 		this.#circuit = new OpenRouterCircuitBreaker({
 			failureThreshold: this.#config.tts.circuitFailureThreshold,
 			cooldownMs: this.#config.tts.circuitCooldownMs,
-			now: this.#now,
+			now: this.#monotonicNow,
 		});
 		this.#emitCircuitState();
 		this.#emitCapacity(false);
@@ -193,6 +197,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 		this.#emitCapacity(false);
 		let circuitAcquired = false;
 		try {
+			const circuitBeforeAcquire = this.#circuit.state;
 			if (!this.#circuit.tryAcquire()) {
 				this.#emitCircuitState();
 				throw new OpenRouterTtsError(
@@ -202,6 +207,11 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				);
 			}
 			circuitAcquired = true;
+			// tryAcquire owns the open -> half-open transition; emit that actual
+			// transition before the probe yields to provider I/O.
+			if (this.#circuit.state !== circuitBeforeAcquire) {
+				this.#emitCircuitState();
+			}
 			this.#reserveBudget(request, characters);
 			const result = await this.#synthesizeWithRetry(request, characters);
 			this.#credentialHealth.recordSuccess();
@@ -270,7 +280,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 						typed.retryAfter,
 						this.#config.tts.retryBaseMs,
 						this.#config.tts.maxRetryAfterMs,
-						this.#now(),
+						this.#wallNow(),
 					);
 					await sleepWithSignal(delayMs, timed.signal);
 				}
@@ -291,7 +301,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 		attempt: number,
 		signal: AbortSignal,
 	): Promise<TtsAudioSegment> {
-		const startedAt = this.#now();
+		const startedAt = this.#monotonicNow();
 		let telemetryStatus: number | "network" = "network";
 		let responseBytes = 0;
 		let providerRequestId: string | undefined;
@@ -375,7 +385,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				attempt,
 				retry: attempt > 1,
 				status: telemetryStatus,
-				latencyMs: Math.max(0, this.#now() - startedAt),
+				latencyMs: Math.max(0, this.#monotonicNow() - startedAt),
 				bytes: responseBytes,
 				circuit: this.#circuit.state,
 				outcome,

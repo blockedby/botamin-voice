@@ -48,6 +48,7 @@ apps/server/src/notifiers/notifiers.test.ts
 apps/server/src/notifiers/outbox.ts
 apps/server/src/notifiers/webhook.ts
 apps/server/src/observability/README.md
+apps/server/src/observability/clock.ts
 apps/server/src/observability/index.ts
 apps/server/src/observability/metrics.test.ts
 apps/server/src/observability/metrics.ts
@@ -77,6 +78,7 @@ apps/server/src/providers/codex/protocol.ts
 apps/server/src/providers/codex/supervisor.ts
 apps/server/src/providers/openrouter/stt/adapter.test.ts
 apps/server/src/providers/openrouter/stt/adapter.ts
+apps/server/src/providers/openrouter/stt/circuit.test.ts
 apps/server/src/providers/openrouter/stt/circuit.ts
 apps/server/src/providers/openrouter/stt/config.ts
 apps/server/src/providers/openrouter/stt/credential-health.test.ts

@@ -1178,7 +1178,12 @@ export class ConversationOrchestrator {
 			return { visibleText: visible, audioProduced: false };
 		}
 		const ttsStartedAt = this.#metrics?.markTtsRequest();
-		let ttsOutcome: "success" | "failure" | "stale" = "failure";
+		let ttsSettled = false;
+		const settleTts = (outcome: "success" | "failure" | "stale"): void => {
+			if (ttsSettled || ttsStartedAt === undefined) return;
+			ttsSettled = true;
+			this.#metrics?.recordTtsCompletion(ttsStartedAt, outcome);
+		};
 		try {
 			const result = TtsAudioSegmentSchema.parse(
 				await this.#tts.synthesize({
@@ -1195,7 +1200,7 @@ export class ConversationOrchestrator {
 				result.generationId !== turn.generationId ||
 				result.segmentId !== segmentId
 			) {
-				ttsOutcome = "stale";
+				settleTts("stale");
 				yield {
 					type: "ignored",
 					generationId: result.generationId,
@@ -1205,10 +1210,12 @@ export class ConversationOrchestrator {
 			}
 			const sequence = this.#generations.nextAudioSeq(turn.generationId);
 			if (sequence === null) {
-				ttsOutcome = "stale";
+				settleTts("stale");
 				return { visibleText: visible, audioProduced: false };
 			}
-			ttsOutcome = "success";
+			// Settlement belongs to the synth promise, not to downstream generator
+			// consumption. Record it before playback-ready publication can yield.
+			settleTts("success");
 			this.#metrics?.markFirstPlaybackReady(turn.turnId);
 			yield {
 				type: "audio.segment",
@@ -1221,7 +1228,9 @@ export class ConversationOrchestrator {
 			};
 			return { visibleText: visible, audioProduced: true };
 		} catch {
-			if (this.#generations.accept(turn.generationId, turn.turnId)) {
+			const current = this.#generations.accept(turn.generationId, turn.turnId);
+			settleTts(current ? "failure" : "stale");
+			if (current) {
 				yield {
 					type: "degraded",
 					generationId: turn.generationId,
@@ -1232,9 +1241,13 @@ export class ConversationOrchestrator {
 			}
 			return { visibleText: visible, audioProduced: false };
 		} finally {
-			if (ttsStartedAt !== undefined) {
-				this.#metrics?.recordTtsCompletion(ttsStartedAt, ttsOutcome);
-			}
+			// Covers unexpected synchronous failures before the explicit settlement
+			// sites while remaining idempotent after any yielded event.
+			settleTts(
+				this.#generations.accept(turn.generationId, turn.turnId)
+					? "failure"
+					: "stale",
+			);
 			this.#prefetch.finish(segmentId);
 		}
 	}

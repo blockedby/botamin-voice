@@ -16,8 +16,11 @@ saturate at `Number.MAX_SAFE_INTEGER`.
 
 ## Milestones and latency
 
-All timestamps are monotonic only to the injected process clock; production
-uses epoch milliseconds from `Date.now()`.
+Elapsed samples use one injected monotonic process clock. Production uses
+`Bun.nanoseconds()` converted to milliseconds, with `performance.now()` as the
+portable non-Bun fallback. Wall time is never subtracted: a separate wall clock
+is used only for the `generatedAt` ISO timestamp, so NTP/manual clock jumps do
+not alter latency, queue-wait, provider-request, or circuit-cooldown durations.
 
 - `audioCommitToSttRequest`: accepted non-empty `audio.commit` after WAV
   assembly to the call into the atomic `SttPort`. It includes bounded brain
@@ -31,9 +34,12 @@ uses epoch milliseconds from `Date.now()`.
 - `finalTranscriptToFirstPlaybackReadyMp3`: final transcript acceptance to the
   first current, complete, validated MP3 segment ready for gateway publication.
   It is server playback-ready, not proof that a browser audio device started.
-- `ttsRequestToCompletion`: one orchestrator TTS call to its settlement. Stale
-  completions are counted as completions but excluded from the latency
-  histogram; successful and safe degraded failures are completed samples.
+- `ttsRequestToCompletion`: one orchestrator TTS call to its promise settlement.
+  It is recorded synchronously after synth resolve/reject and before any
+  async-generator event is yielded, so a delayed or abandoned consumer adds no
+  time and cannot change success/failure/stale classification. Stale settlements
+  are counted as completions but excluded from the latency histogram;
+  successful and safe degraded failures are completed samples.
 - `brainQueueWait`: accepted WAV waiting for a global brain-turn permit; only
   granted admissions are completed samples.
 
@@ -47,8 +53,11 @@ completed samples. `observedCompleted` is the all-time process count while
 OpenRouter provider metrics count HTTP attempts, so `attempts` and usage can be
 higher than logical requests after a retry. Status is normalized to the fixed
 fixed `2xx`, `400`, `401`, `402`, `403`, `404`, `413`, `429`, other-4xx,
-`5xx`, `network`, and `other` buckets. Provider response bodies are discarded
-by adapters and are never accepted by this sink.
+`5xx`, `network`, and `other` buckets. A circuit remains `open` while idle after
+cooldown; the acquisition that owns the single probe performs and emits the
+`open -> half-open` transition before provider I/O, followed by `closed` on
+success or `open` on failure. Provider response bodies are discarded by
+adapters and are never accepted by this sink.
 
 Booking metrics distinguish create/update success, idempotent replay, and
 failure. Notifier metrics distinguish sent, failed-for-retry, and lost-claim
@@ -63,4 +72,7 @@ fails closed. Caddy/public requests are therefore denied even if they spoof
 `Host` or forwarding headers. The response uses `Cache-Control: no-store` and
 contains no PII. Save a response explicitly if an operator wants to process it
 with `scripts/observability-report.ts`; that script never reaches into live
-production memory.
+production memory. The report command accepts only the complete version-1
+schema: every nested object and fixed-cardinality status/circuit/outcome map has
+an exact key set, every value is validated, and any missing, unknown, PII,
+secret, or cardinality-bearing key fails before stdout is written.

@@ -34,8 +34,9 @@ function stubSession(options: {
 }
 
 describe("session registry lifecycle and source bounds", () => {
-	test("enforces active sessions per source and reclaims abandoned creates early", () => {
+	test("uses monotonic abandonment despite wall-clock jumps", () => {
 		let now = new Date("2026-07-30T20:22:00.000Z");
+		let monotonicNow = 0;
 		const registry = new SessionRegistry({
 			maxActiveConversations: 3,
 			maxActiveConversationsPerSource: 1,
@@ -46,13 +47,18 @@ describe("session registry lifecycle and source bounds", () => {
 			abandonedSessionMs: 100,
 			cleanupIntervalMs: 60_000,
 			now: () => now,
+			monotonicNow: () => monotonicNow,
 			createSession: ({ expiresAt }) => stubSession({ expiresAt }),
 		});
 		expect(registry.create(request, "ip:one")).not.toBeNull();
 		expect(registry.create(request, "ip:one")).toBeNull();
 		expect(registry.create(request, "ip:two")).not.toBeNull();
 		expect(registry.activeCount).toBe(2);
-		now = new Date(now.getTime() + 101);
+		now = new Date(now.getTime() + 10_000);
+		registry.cleanupExpired();
+		expect(registry.activeCount).toBe(2);
+		now = new Date(now.getTime() - 20_000);
+		monotonicNow = 101;
 		registry.cleanupExpired();
 		expect(registry.activeCount).toBe(0);
 	});
@@ -97,7 +103,8 @@ describe("session registry lifecycle and source bounds", () => {
 	});
 
 	test("deduplicates removed expiry stops and dispose awaits their promise", async () => {
-		let now = new Date("2026-07-30T20:22:00.000Z");
+		const now = new Date("2026-07-30T20:22:00.000Z");
+		let monotonicNow = 0;
 		let releaseStop: () => void = () => undefined;
 		const gate = new Promise<void>((resolve) => {
 			releaseStop = resolve;
@@ -112,6 +119,7 @@ describe("session registry lifecycle and source bounds", () => {
 			abandonedSessionMs: 10,
 			cleanupIntervalMs: 60_000,
 			now: () => now,
+			monotonicNow: () => monotonicNow,
 			createSession: ({ expiresAt }) =>
 				stubSession({
 					expiresAt,
@@ -122,7 +130,7 @@ describe("session registry lifecycle and source bounds", () => {
 				}),
 		});
 		registry.create(request);
-		now = new Date(now.getTime() + 11);
+		monotonicNow = 11;
 		registry.cleanupExpired();
 		registry.cleanupExpired();
 		let disposed = false;

@@ -31,7 +31,8 @@ function runtime(
 			},
 		} as RuntimeConfig,
 		metrics: new ObservabilityMetrics({
-			now: () => Date.parse("2026-07-31T00:00:00.000Z"),
+			monotonicNow: () => 0,
+			wallNow: () => new Date("2026-07-31T00:00:00.000Z"),
 		}),
 		registry: {
 			create: () => {

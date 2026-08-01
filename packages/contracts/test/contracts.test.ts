@@ -401,6 +401,36 @@ describe("shared contracts", () => {
 		]);
 	});
 
+	test("accepts one strict bounded typed final turn and rejects tool/status fields", () => {
+		const typed = {
+			v: 1,
+			type: "visitor.text.submit",
+			conversationId,
+			at,
+			payload: { sequence: 0, text: "  Финальная typed-реплика  " },
+		};
+		const parsed = ClientWsEventSchema.parse(typed);
+		expect(parsed).toMatchObject({
+			type: "visitor.text.submit",
+			payload: { sequence: 0, text: "Финальная typed-реплика" },
+		});
+		for (const invalid of [
+			{ ...typed, payload: { sequence: 0, text: "   " } },
+			{ ...typed, payload: { sequence: -1, text: "Текст" } },
+			{ ...typed, payload: { sequence: 0, text: "x".repeat(2_001) } },
+			{
+				...typed,
+				payload: { sequence: 0, text: "Текст", tool: "create_booking" },
+			},
+			{
+				...typed,
+				payload: { sequence: 0, text: "Текст", bookingStatus: "booked" },
+			},
+		]) {
+			expect(ClientWsEventSchema.safeParse(invalid).success).toBe(false);
+		}
+	});
+
 	test("keeps audio.commit and one final transcript without a partial event", () => {
 		const commit = {
 			v: 1,

@@ -469,6 +469,76 @@ describe("production browser voice integration", () => {
 		expect(value.session.getSnapshot().state.kind).toBe("processing");
 	});
 
+	test("submits typed text once, preserves retry sequence on rejection, and accepts only server final", async () => {
+		const value = await readySession();
+		expect(value.session.getSnapshot()).toMatchObject({
+			conversationStage: "GREETING",
+			textInputAvailable: true,
+			textSubmission: { status: "idle" },
+		});
+		expect(value.session.submitText("  Текстовая реплика  ")).toBe(true);
+		expect(value.session.submitText("Дубликат")).toBe(false);
+		expect(value.capture.stopCalls).toBeGreaterThan(0);
+		expect(sentJson(value.socket).at(-1)).toMatchObject({
+			type: "visitor.text.submit",
+			payload: { sequence: 0, text: "Текстовая реплика" },
+		});
+		expect(value.session.getSnapshot().textSubmission).toEqual({
+			status: "pending",
+		});
+
+		value.socket.server(
+			event("error", 2, {
+				code: "CAPACITY_EXCEEDED",
+				message: "Попробуйте снова.",
+				retryable: true,
+			}),
+		);
+		await flush();
+		expect(value.session.getSnapshot().textSubmission).toMatchObject({
+			status: "rejected",
+		});
+		expect(value.session.submitText("Текстовая реплика")).toBe(true);
+		expect(sentJson(value.socket).at(-1)).toMatchObject({
+			type: "visitor.text.submit",
+			payload: { sequence: 0 },
+		});
+		value.socket.server(
+			event("transcript.final", 3, {
+				turnId,
+				text: "Текстовая реплика",
+			}),
+		);
+		expect(value.session.getSnapshot().textSubmission).toEqual({
+			status: "accepted",
+			turnId,
+		});
+		expect(value.session.getSnapshot().transcript).toEqual([
+			{ id: turnId, speaker: "visitor", text: "Текстовая реплика" },
+		]);
+	});
+
+	test("projects COLLECT_BOOKING only from server stage events", async () => {
+		const value = await readySession();
+		value.socket.server(
+			event("assistant.text.done", 2, {
+				generationId,
+				fullText: "Оставьте имя и контакт.",
+			}),
+		);
+		expect(value.session.getSnapshot().conversationStage).toBe("GREETING");
+		value.socket.server(
+			event("state.changed", 3, {
+				from: "BOOKING_OFFER",
+				to: "COLLECT_BOOKING",
+				reason: "brain_stage_proposal_validated",
+			}),
+		);
+		expect(value.session.getSnapshot().conversationStage).toBe(
+			"COLLECT_BOOKING",
+		);
+	});
+
 	test("keeps only final visitor and completed assistant text", async () => {
 		const value = await readySession();
 		value.capture.emit();

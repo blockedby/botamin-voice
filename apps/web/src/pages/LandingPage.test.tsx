@@ -13,6 +13,9 @@ const idleVoice: VoiceDemoProps = {
 	transcript: [],
 	muted: false,
 	captureProgress: null,
+	conversationStage: null,
+	textInputAvailable: false,
+	textSubmission: { status: "idle" },
 	onConsentChange: noop,
 	onStart: noop,
 	onCommit: noop,
@@ -22,6 +25,7 @@ const idleVoice: VoiceDemoProps = {
 	onInterrupt: noop,
 	onReconnect: noop,
 	onRestart: noop,
+	onTextSubmit: () => false,
 };
 
 describe("Botamin landing narrative", () => {

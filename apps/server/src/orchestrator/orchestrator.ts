@@ -91,7 +91,13 @@ export type OrchestratorEvent =
 	| {
 			type: "ignored";
 			generationId: string;
-			source: "audio.commit" | "stt" | "brain" | "tts" | "generation";
+			source:
+				| "audio.commit"
+				| "visitor.text.submit"
+				| "stt"
+				| "brain"
+				| "tts"
+				| "generation";
 	  };
 
 export interface ConversationOrchestratorOptions {
@@ -116,6 +122,13 @@ export interface AudioCommitInput {
 	audio: Uint8Array;
 	contentType: "audio/wav";
 	language?: string;
+	knownFacts: KnownFacts;
+}
+
+export interface TextSubmitInput {
+	turnId: string;
+	generationId: string;
+	text: string;
 	knownFacts: KnownFacts;
 }
 
@@ -448,60 +461,44 @@ export class ConversationOrchestrator {
 		const userText = final.text.trim();
 		this.#metrics?.markFinalTranscript(input.turnId);
 		this.#sttTurns.finish(accepted.turn);
-		const negativeIntent = classifyConservativeNegativeIntent(
+		yield* this.#acceptFinalTurn({
+			turnId: input.turnId,
+			generationId: input.generationId,
 			userText,
-			this.#state,
-		);
-		if (negativeIntent) {
-			const from = this.#state.stage;
-			const declined = this.apply(
-				negativeIntent === "qualification_decline" && from === "BOOKED"
-					? { type: "qualification_consent_declined" }
-					: { type: "clear_refusal" },
-			);
-			if (declined.ok) {
-				const text = this.#state.booking
-					? QUALIFICATION_DECLINE
-					: PRE_BOOKING_DECLINE;
-				yield {
-					type: "transcript.final",
-					turnId: input.turnId,
-					text: userText,
-				};
-				yield { type: "text.delta", generationId: input.generationId, text };
-				yield { type: "text.done", generationId: input.generationId, text };
-				yield {
-					type: "state.changed",
-					generationId: input.generationId,
-					from,
-					to: this.#state.stage,
-					reason: "explicit_user_refusal",
-				};
-				return;
-			}
-		}
-		let active: ReturnType<GenerationCoordinator["start"]>["active"];
-		try {
-			// Final acceptance and current-generation ownership are one synchronous
-			// fence. A newer commit can only resume after both have happened.
-			active = this.#generations.start(input.generationId, input.turnId).active;
-		} catch {
+			knownFacts: input.knownFacts,
+		});
+	}
+
+	/** Bypasses STT while entering the exact same final-turn brain/policy path. */
+	async *acceptTextSubmit(
+		input: TextSubmitInput,
+	): AsyncGenerator<OrchestratorEvent> {
+		if (!this.canAcceptVisitorTurn) {
 			yield {
 				type: "ignored",
 				generationId: input.generationId,
-				source: "generation",
+				source: "visitor.text.submit",
 			};
 			return;
 		}
-		yield { type: "transcript.final", turnId: input.turnId, text: userText };
-		yield* this.#runBrainTurn(
-			{
-				turnId: input.turnId,
+		const userText = input.text.trim();
+		if (!userText) {
+			yield {
+				type: "ignored",
 				generationId: input.generationId,
-				userText,
-				knownFacts: input.knownFacts,
-			},
-			active,
+				source: "visitor.text.submit",
+			};
+			return;
+		}
+		this.#metrics?.markFinalTranscript(input.turnId);
+		yield* this.#acceptFinalTurn({ ...input, userText });
+	}
+
+	get canAcceptVisitorTurn(): boolean {
+		return (
+			this.#canProcessTurns() &&
+			this.#state.stage !== "IDLE" &&
+			this.#state.stage !== "CONNECTING"
 		);
 	}
 
@@ -549,6 +546,63 @@ export class ConversationOrchestrator {
 			settleWithin(resetTts, timeoutMs),
 		]).then(() => undefined);
 		return this.#closePromise;
+	}
+
+	async *#acceptFinalTurn(input: {
+		turnId: string;
+		generationId: string;
+		userText: string;
+		knownFacts: KnownFacts;
+	}): AsyncGenerator<OrchestratorEvent> {
+		const negativeIntent = classifyConservativeNegativeIntent(
+			input.userText,
+			this.#state,
+		);
+		if (negativeIntent) {
+			const from = this.#state.stage;
+			const declined = this.apply(
+				negativeIntent === "qualification_decline" && from === "BOOKED"
+					? { type: "qualification_consent_declined" }
+					: { type: "clear_refusal" },
+			);
+			if (declined.ok) {
+				const text = this.#state.booking
+					? QUALIFICATION_DECLINE
+					: PRE_BOOKING_DECLINE;
+				yield {
+					type: "transcript.final",
+					turnId: input.turnId,
+					text: input.userText,
+				};
+				yield { type: "text.delta", generationId: input.generationId, text };
+				yield { type: "text.done", generationId: input.generationId, text };
+				yield {
+					type: "state.changed",
+					generationId: input.generationId,
+					from,
+					to: this.#state.stage,
+					reason: "explicit_user_refusal",
+				};
+				return;
+			}
+		}
+		let active: ReturnType<GenerationCoordinator["start"]>["active"];
+		try {
+			active = this.#generations.start(input.generationId, input.turnId).active;
+		} catch {
+			yield {
+				type: "ignored",
+				generationId: input.generationId,
+				source: "generation",
+			};
+			return;
+		}
+		yield {
+			type: "transcript.final",
+			turnId: input.turnId,
+			text: input.userText,
+		};
+		yield* this.#runBrainTurn(input, active);
 	}
 
 	async *#runBrainTurn(

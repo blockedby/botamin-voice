@@ -17,6 +17,15 @@ export const BinaryAudioFrameSequenceSchema = z
 	.nonnegative()
 	.max(Number.MAX_SAFE_INTEGER);
 
+export const VISITOR_TEXT_MAX_LENGTH = 2_000 as const;
+
+/** Monotonic typed-turn sequence scoped to one conversation session. */
+export const VisitorTextSequenceSchema = z
+	.number()
+	.int()
+	.nonnegative()
+	.max(Number.MAX_SAFE_INTEGER);
+
 export const InputAudioConfigSchema = z
 	.object({
 		encoding: z.literal("pcm16le"),
@@ -50,6 +59,20 @@ export const AudioCommitEventSchema = z
 		...ClientEventBaseShape,
 		type: z.literal("audio.commit"),
 		payload: z.object({}).strict(),
+	})
+	.strict();
+
+/** One bounded, final visitor turn. It carries no provider or tool fields. */
+export const VisitorTextSubmitEventSchema = z
+	.object({
+		...ClientEventBaseShape,
+		type: z.literal("visitor.text.submit"),
+		payload: z
+			.object({
+				sequence: VisitorTextSequenceSchema,
+				text: z.string().trim().min(1).max(VISITOR_TEXT_MAX_LENGTH),
+			})
+			.strict(),
 	})
 	.strict();
 
@@ -112,6 +135,7 @@ export const ClientPingEventSchema = z
 export const ClientWsEventSchema = z.discriminatedUnion("type", [
 	ClientHelloEventSchema,
 	AudioCommitEventSchema,
+	VisitorTextSubmitEventSchema,
 	PlaybackStartedEventSchema,
 	PlaybackInterruptedEventSchema,
 	SessionStopEventSchema,

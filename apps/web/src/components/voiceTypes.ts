@@ -1,3 +1,5 @@
+import type { ConversationStage } from "@botamin/contracts";
+
 type ActiveBookingMarker = { bookingOutcome?: "committed" };
 
 export type VoiceUiState =
@@ -47,4 +49,17 @@ export interface FinalTranscriptEntry {
 export interface VoiceConsent {
 	voiceProcessing: boolean;
 	contactProcessing: boolean;
+}
+
+export type TextSubmissionState =
+	| { status: "idle" }
+	| { status: "pending" }
+	| { status: "accepted"; turnId: string }
+	| { status: "rejected"; message: string };
+
+export interface VoiceConversationProjection {
+	/** Exact server-owned stage; null before session.ready. */
+	conversationStage: ConversationStage | null;
+	textInputAvailable: boolean;
+	textSubmission: TextSubmissionState;
 }

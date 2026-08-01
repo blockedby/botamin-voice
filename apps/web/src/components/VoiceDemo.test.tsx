@@ -37,6 +37,9 @@ function renderVoice(
 			transcript={[]}
 			muted={false}
 			captureProgress={null}
+			conversationStage={null}
+			textInputAvailable={false}
+			textSubmission={{ status: "idle" }}
 			onConsentChange={noop}
 			onStart={noop}
 			onCommit={noop}
@@ -46,6 +49,7 @@ function renderVoice(
 			onInterrupt={noop}
 			onReconnect={noop}
 			onRestart={noop}
+			onTextSubmit={() => false}
 			{...overrides}
 		/>,
 	);
@@ -294,6 +298,34 @@ describe("VoiceDemo controls and transcript", () => {
 			},
 			transcript: fabricated,
 		});
+	});
+
+	test("derives booking form visibility from projected server stage, not transcript wording", () => {
+		const suggestiveTranscript = [
+			{
+				id: "agent-suggestion",
+				speaker: "agent" as const,
+				text: "Оставьте имя, компанию, email и телефон.",
+			},
+		];
+		expect(
+			renderVoice(
+				{ kind: "listening" },
+				{
+					transcript: suggestiveTranscript,
+					conversationStage: "BOOKING_OFFER",
+				},
+			),
+		).not.toContain("booking-details-title");
+		expect(
+			renderVoice(
+				{ kind: "thinking" },
+				{
+					transcript: [],
+					conversationStage: "COLLECT_BOOKING",
+				},
+			),
+		).toContain("booking-details-title");
 	});
 
 	test("booked confirms only the recorded lead and makes qualification optional", () => {

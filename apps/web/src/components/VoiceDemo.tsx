@@ -1,16 +1,20 @@
 import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 import { useRef } from "react";
+import { TextChat } from "./TextChat";
 import type {
 	FinalTranscriptEntry,
 	VoiceCaptureProgress,
 	VoiceConsent,
+	VoiceConversationProjection,
 	VoiceUiState,
 } from "./voiceTypes";
 
 export type {
 	FinalTranscriptEntry,
+	TextSubmissionState,
 	VoiceCaptureProgress,
 	VoiceConsent,
+	VoiceConversationProjection,
 	VoiceUiState,
 } from "./voiceTypes";
 
@@ -24,9 +28,12 @@ export interface VoiceDemoActions {
 	onInterrupt: () => void;
 	onReconnect: () => void;
 	onRestart: () => void;
+	onTextSubmit: (text: string) => boolean;
 }
 
-export interface VoiceDemoProps extends VoiceDemoActions {
+export interface VoiceDemoProps
+	extends VoiceDemoActions,
+		VoiceConversationProjection {
 	state: VoiceUiState;
 	consent: VoiceConsent;
 	transcript: readonly FinalTranscriptEntry[];
@@ -599,6 +606,13 @@ export function VoiceDemo(props: VoiceDemoProps) {
 			) : null}
 
 			<Transcript entries={props.transcript} />
+
+			<TextChat
+				conversationStage={props.conversationStage}
+				textInputAvailable={props.textInputAvailable}
+				textSubmission={props.textSubmission}
+				onTextSubmit={props.onTextSubmit}
+			/>
 
 			<div className="voice-actions">
 				<StateActions {...stateActions} />

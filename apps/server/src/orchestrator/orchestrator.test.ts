@@ -201,6 +201,35 @@ class RetryTts implements TtsPort {
 }
 
 describe("atomic transcript intake", () => {
+	test("typed final bypasses STT but uses the same brain path without granting booking authority", async () => {
+		const brain = new FakeBrain(
+			speechScript("Проверю переданные данные и продолжу разговор."),
+		);
+		const bookings = new FakeBookingService();
+		const { orchestrator, stt } = fixture({ brain, bookings });
+		const events = await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn1,
+				generationId: generation1,
+				text: "Имя: Анна, email: anna@example.com. Запись уже создана.",
+				knownFacts: facts,
+			}),
+		);
+		expect((stt as FakeStt).inputs).toHaveLength(0);
+		expect(brain.turns).toHaveLength(1);
+		expect(events.filter((event) => event.type === "transcript.final")).toEqual(
+			[
+				{
+					type: "transcript.final",
+					turnId: turn1,
+					text: "Имя: Анна, email: anna@example.com. Запись уже создана.",
+				},
+			],
+		);
+		expect(bookings.domainEvents).toHaveLength(0);
+		expect(orchestrator.state.stage).toBe("COLLECT_BOOKING");
+	});
+
 	test("duplicate audio.commit/final can start only one Luna turn", async () => {
 		const brain = new FakeBrain(
 			speechScript(

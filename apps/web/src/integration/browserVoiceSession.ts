@@ -17,6 +17,7 @@ import {
 } from "../audio/playback";
 import type {
 	FinalTranscriptEntry,
+	TextSubmissionState,
 	VoiceCaptureProgress,
 	VoiceConsent,
 	VoiceUiState,
@@ -41,6 +42,9 @@ export interface BrowserVoiceSnapshot {
 	transcript: readonly FinalTranscriptEntry[];
 	muted: boolean;
 	captureProgress: VoiceCaptureProgress | null;
+	conversationStage: ConversationStage | null;
+	textInputAvailable: boolean;
+	textSubmission: TextSubmissionState;
 }
 
 export interface CaptureAdapter {
@@ -102,6 +106,9 @@ const INITIAL_SNAPSHOT: BrowserVoiceSnapshot = {
 	transcript: [],
 	muted: false,
 	captureProgress: null,
+	conversationStage: null,
+	textInputAvailable: false,
+	textSubmission: { status: "idle" },
 };
 
 /** Resolve a contract WS path without allowing the REST response to leave this origin. */
@@ -136,7 +143,9 @@ export class BrowserVoiceSession {
 	private abortController: AbortController | null = null;
 	private conversationId: string | null = null;
 	private clientConfig: AudioClientConfig | null = null;
+	private conversationStage: ConversationStage | null = null;
 	private bookingId: string | null = null;
+	private pendingTypedText: string | null = null;
 	private qualificationStatus: "none" | "partial" | "complete" | "skipped" =
 		"none";
 	private readonly completedAssistantGenerations = new Set<string>();
@@ -177,6 +186,8 @@ export class BrowserVoiceSession {
 		this.consent = { ...consent };
 		const epoch = ++this.epoch;
 		this.bookingId = null;
+		this.conversationStage = null;
+		this.pendingTypedText = null;
 		this.qualificationStatus = "none";
 		this.completedAssistantGenerations.clear();
 		this.captureArmed = false;
@@ -189,6 +200,9 @@ export class BrowserVoiceSession {
 			transcript: [],
 			muted: false,
 			captureProgress: null,
+			conversationStage: null,
+			textInputAvailable: false,
+			textSubmission: { status: "idle" },
 		});
 		this.controller = new VoiceSessionController(initialVoiceState, (state) =>
 			this.projectControllerState(state),
@@ -344,6 +358,43 @@ export class BrowserVoiceSession {
 		}
 	}
 
+	/** Submit one typed final turn without exposing provider or tool controls. */
+	submitText(text: string): boolean {
+		if (
+			this.disposed ||
+			this.terminalFailurePending ||
+			!this.snapshot.textInputAvailable ||
+			!this.controller ||
+			!this.transport ||
+			this.pendingTypedText !== null
+		) {
+			return false;
+		}
+		const capture = this.capture;
+		this.capture = null;
+		this.captureArmed = false;
+		if (capture) {
+			const previousCleanup = this.captureCleanup;
+			this.captureCleanup = Promise.allSettled([
+				previousCleanup,
+				capture.stop(),
+			]).then(() => undefined);
+		}
+		const accepted = this.controller.commit(
+			() => this.transport?.submitText(text) ?? false,
+		);
+		if (!accepted) {
+			void this.beginCapture(this.epoch);
+			return false;
+		}
+		this.pendingTypedText = text.trim();
+		this.setSnapshot({
+			...this.snapshot,
+			textSubmission: { status: "pending" },
+		});
+		return true;
+	}
+
 	toggleMute(): void {
 		const muted = !this.snapshot.muted;
 		this.capture?.setMuted(muted);
@@ -408,6 +459,8 @@ export class BrowserVoiceSession {
 	async reset(): Promise<void> {
 		await this.releaseResources("user_requested", true);
 		this.consent = null;
+		this.conversationStage = null;
+		this.pendingTypedText = null;
 		this.setSnapshot({ ...INITIAL_SNAPSHOT });
 	}
 
@@ -626,6 +679,7 @@ export class BrowserVoiceSession {
 					break;
 				}
 				this.sessionEstablished = true;
+				this.conversationStage = event.payload.state;
 				const capture = this.capture;
 				if (capture?.isActive && this.transport?.beginUtterance()) {
 					this.captureArmed = true;
@@ -642,11 +696,22 @@ export class BrowserVoiceSession {
 			}
 			case "transcript.final":
 				if (this.controller.acceptEvent(event)) {
+					const acceptedTypedText = this.pendingTypedText;
+					this.pendingTypedText = null;
 					this.appendTranscript({
 						id: event.payload.turnId,
 						speaker: "visitor",
 						text: event.payload.text,
 					});
+					if (acceptedTypedText !== null) {
+						this.setSnapshot({
+							...this.snapshot,
+							textSubmission: {
+								status: "accepted",
+								turnId: event.payload.turnId,
+							},
+						});
+					}
 					this.setState(this.activeState("thinking"));
 				}
 				break;
@@ -714,6 +779,7 @@ export class BrowserVoiceSession {
 				if (this.controller.acceptEvent(event)) void this.beginCapture(epoch);
 				break;
 			case "state.changed":
+				this.conversationStage = event.payload.to;
 				this.applyServerStage(event.payload.to);
 				break;
 			case "booking.created":
@@ -738,7 +804,20 @@ export class BrowserVoiceSession {
 				}
 				break;
 			case "error":
-				if (event.payload.code === "TTS_UNAVAILABLE") {
+				if (this.pendingTypedText !== null) {
+					this.pendingTypedText = null;
+					this.controller.rejectCommit();
+					this.setSnapshot({
+						...this.snapshot,
+						textSubmission: {
+							status: "rejected",
+							message: event.payload.retryable
+								? "Сообщение не принято. Проверьте связь и отправьте его ещё раз."
+								: "Сообщение не принято в текущем состоянии разговора.",
+						},
+					});
+					void this.beginCapture(epoch);
+				} else if (event.payload.code === "TTS_UNAVAILABLE") {
 					this.textOnlyGenerationPending = this.controller.state.generationId;
 					this.controller.setAudioError("Звук ответа сейчас недоступен");
 					this.setState(this.activeState("audio-error"));
@@ -897,6 +976,7 @@ export class BrowserVoiceSession {
 		this.captureArmed = false;
 		this.sessionEstablished = false;
 		this.textOnlyGenerationPending = null;
+		this.pendingTypedText = null;
 		this.abortController?.abort();
 		this.abortController = null;
 		const transport = this.transport;
@@ -982,8 +1062,37 @@ export class BrowserVoiceSession {
 
 	private setSnapshot(snapshot: BrowserVoiceSnapshot): void {
 		if (this.disposed) return;
-		this.snapshot = snapshot;
+		this.snapshot = {
+			...snapshot,
+			conversationStage: this.conversationStage,
+			textInputAvailable: this.canSubmitTextIn(snapshot.state),
+		};
 		for (const listener of this.listeners) listener();
+	}
+
+	private canSubmitTextIn(state: VoiceUiState): boolean {
+		if (
+			!this.transport?.isReady ||
+			this.controller?.hasPendingCommit ||
+			this.pendingTypedText !== null ||
+			this.conversationStage === null ||
+			this.conversationStage === "IDLE" ||
+			this.conversationStage === "CONNECTING" ||
+			this.conversationStage === "COMPLETE" ||
+			this.conversationStage === "DECLINED" ||
+			this.conversationStage === "DISCONNECTED" ||
+			this.conversationStage === "ERROR"
+		) {
+			return false;
+		}
+		return (
+			this.controller?.state.status === "listening" &&
+			state.kind !== "permission-denied" &&
+			state.kind !== "disconnected" &&
+			state.kind !== "reconnecting" &&
+			state.kind !== "error" &&
+			state.kind !== "complete"
+		);
 	}
 
 	private isCurrent(epoch: number): boolean {

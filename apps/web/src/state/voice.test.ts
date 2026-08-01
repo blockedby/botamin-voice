@@ -130,6 +130,16 @@ describe("final-only voice state", () => {
 		expect(controller.hasPendingCommit).toBe(false);
 	});
 
+	test("recoverable rejection releases the pending final without accepting text", () => {
+		const controller = new VoiceSessionController();
+		controller.beginListening();
+		expect(controller.commit(() => true)).toBe(true);
+		expect(controller.rejectCommit()).toBe(true);
+		expect(controller.state.status).toBe("listening");
+		expect(controller.hasPendingCommit).toBe(false);
+		expect(controller.rejectCommit()).toBe(false);
+	});
+
 	test("does not enter processing when transport rejects commit", () => {
 		const controller = new VoiceSessionController();
 		controller.beginListening();

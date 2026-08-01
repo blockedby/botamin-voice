@@ -108,5 +108,5 @@ For OpenRouter/webhook key rotation: revoke or schedule revocation at the provid
 - T30 local synthetic timings prove functional sequencing only; they are not a benchmark or target-host SLO.
 - WebKit complete-MP3 playback and journey acceptance remain unobserved.
 - Target VPS resource behavior, DNS, public TLS/WSS, and target-host provider smokes remain unobserved.
-- The booking is an internal SQLite record plus notifier outbox event. No real calendar event, availability check, CRM record, or meeting invitation is created.
+- The booking is an internal SQLite record plus notifier outbox event. The internal scheduler excludes committed starts, but no real calendar event, external availability check, CRM record, or meeting invitation is created.
 - OpenRouter model/voice availability, paid rates, Codex subscription limits, and plan suitability are runtime/owner checks, not release guarantees.

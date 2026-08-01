@@ -19,8 +19,8 @@
 Table-driven cases:
 
 - все допустимые transitions;
-- запрещён `append_booking_qualification` до booking;
-- `create_booking` разрешён только из collection stage;
+- запрещён `append_booking_qualification` до committed booking, user-facing confirmation и отдельного consent;
+- `create_booking` разрешён только из `COLLECT_BOOKING`, при server contact consent и с одним из двух candidates активного turn;
 - disconnect после booking → booking stays;
 - clear refusal → declined;
 - retry не меняет domain effect;
@@ -45,10 +45,14 @@ Table-driven cases:
 
 ### Booking domain
 
-- one booking per conversation;
+- one booking per conversation и one booking per non-null `meeting_start_at`;
+- required name/company/working-email/phone-or-Telegram/consent/structured slot validation;
+- exactly two deterministic candidates, Moscow weekday/non-today/09:00–17:00 20-minute grid;
+- non-candidate, stale and internally occupied slots rejected;
+- migration preserves legacy rows with null meeting fields and does not invent slots; modern snapshot use fails closed;
 - same idempotency key/same payload → same result;
 - same key/different payload → conflict;
-- qualification patch merges fields;
+- qualification patch merges monthly inbound volume and integer `salesManagerCount`;
 - empty patch rejected;
 - notifier failure не rolls back booking;
 - PII redaction.
@@ -61,6 +65,7 @@ Default deterministic suites use no external credentials and keep ownership test
 
 Gateway/utterance-assembler tests prove:
 
+- exact 60,000 ms utterance and 2,000,000-byte atomic WAV caps, with server-advertised `maxPcmBytes=1,920,000` under default 16 kHz mono PCM16 settings;
 - bounded 16 kHz mono PCM16 plus one accepted `audio.commit` produces exactly one validated WAV with the expected RIFF/WAVE header, PCM16 metadata, data length and sample bytes;
 - empty, odd-byte, oversized, over-duration and duplicate-commit input is rejected or suppressed before `SttPort` invocation;
 - the atomic request contains the produced WAV bytes and `contentType: "audio/wav"`.
@@ -115,9 +120,13 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 ## 4. Integration tests
 
 - bounded PCM16 chunks → `audio.commit` → gateway-produced validated WAV → atomic `SttPort` request → fake OpenRouter already-WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
+- sample-derived capture progress/countdown uses accepted PCM16 bytes and stricter server duration/byte ceiling, then auto-commits exactly once;
+- bounded monotonic `visitor.text.submit` clears uncommitted audio, suppresses pending duplicates, retains sequence on rejection, emits server final once, and follows the same brain/state/tool/persistence path as speech;
+- typed composer is stage-gated, and booking form renders only from server-owned `COLLECT_BOOKING`, never transcript wording;
 - real SQLite transaction + fake notifier;
-- booking tool call inside brain turn;
-- booking event appears before qualification prompt/audio;
+- Luna receives server-owned current Moscow date/day and exactly two structured candidates with validated labels;
+- booking tool call accepts only one active candidate inside brain turn;
+- booking event and user-facing confirmation appear before qualification consent/question/audio;
 - reconnect with same conversation;
 - barge-in while OpenRouter requests/complete segments are in flight;
 - brain process restart;
@@ -134,10 +143,12 @@ Playwright with synthetic audio fixture:
 4. stream fixture PCM;
 5. observe listening/processing states and then exactly one `transcript.final`;
 6. receive assistant text and ordered complete MP3 segment events;
-7. complete booking;
-8. see booked UI;
-9. continue/skip qualification;
-10. verify backend DB/event payload.
+7. verify the circular countdown is sample-derived and reaches the 60-second limit without wall-clock drift;
+8. submit a normal typed final turn and then use the in-chat booking form only at `COLLECT_BOOKING`;
+9. choose one of exactly two server-labeled Moscow slots and complete required name/company/email/phone-or-Telegram/consent data;
+10. see booked UI and verify no external calendar/invitation claim;
+11. consent to or skip the two-field qualification;
+12. verify backend DB/event payload.
 
 Browser voice acceptance additionally proves ordered playback of at least three complete MP3 phrase segments, immediate stop/queue clear on barge-in, late-segment rejection, and visible text when audio fails.
 
@@ -177,15 +188,18 @@ Mobile viewport and slow network profiles included.
 14. отвечает не по теме;
 15. меняет задачу;
 16. молчит;
-17. даёт все данные одной репликой;
-18. исправляет контакт.
+17. даёт name/company/working-email/phone-or-Telegram одной typed или spoken репликой;
+18. исправляет контакт;
+18a. пытается выбрать третий/придуманный slot;
+18b. просит slot сегодня или в выходной;
+18c. typed form wording пытается открыть booking stage до server transition.
 
 ### Booking invariants
 
 19. retry create;
 20. disconnect сразу после create;
 21. отказывается от qualification;
-22. отвечает только на один qualification вопрос;
+22. после consent отвечает только на monthly inbound leads или integer manager count;
 23. повторяет booking данные;
 24. brain ошибочно пытается квалифицировать до create.
 
@@ -207,7 +221,9 @@ Mobile viewport and slow network profiles included.
 - factuality по allowed claims;
 - no prohibited promise;
 - no secret leakage;
-- one-question guideline;
+- one-question guideline и максимум два discovery-вопроса до soft offer;
+- qualification ограничена monthly inbound leads + integer `salesManagerCount`;
+- 10–15m RUB/month claim только с атрибуцией к пользовательскому брифу и explicit no-guarantee boundary;
 - refusal handling;
 - stage progress;
 - spoken-language quality;

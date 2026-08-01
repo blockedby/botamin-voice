@@ -193,6 +193,8 @@ patterns</a></li>
 <li><a href="#что-найдено-в-кейсах" id="toc-что-найдено-в-кейсах">4. Что
 найдено в кейсах</a>
 <ul>
+<li><a href="#дополнительный-claim-из-пользовательского-брифа" id="toc-дополнительный-claim-из-пользовательского-брифа">Дополнительный
+claim из пользовательского брифа</a></li>
 <li><a href="#правило-claims" id="toc-правило-claims">Правило
 claims</a></li>
 </ul></li>
@@ -215,8 +217,8 @@ Voice demo</a></li>
 </ul></li>
 <li><a href="#conversation-value-map" id="toc-conversation-value-map">7.
 Conversation value map</a></li>
-<li><a href="#минимальная-квалификация-для-этого-funnel" id="toc-минимальная-квалификация-для-этого-funnel">8. Минимальная
-квалификация для этого funnel</a></li>
+<li><a href="#cadence-booking-и-минимальная-квалификация" id="toc-cadence-booking-и-минимальная-квалификация">8. Cadence, booking
+и минимальная квалификация</a></li>
 <li><a href="#контентные-риски" id="toc-контентные-риски">9. Контентные
 риски</a></li>
 </ul></li>
@@ -712,10 +714,12 @@ document.</p>
 <p>Продемонстрировать работающий вертикальный срез AI-продавца
 Botamin:</p>
 <blockquote>
-<p>посетитель открывает лендинг, начинает голосовой разговор, получает
-релевантную презентацию продукта, отвечает на уточняющие вопросы,
-соглашается на встречу, передаёт минимальный контакт, после чего backend
-фиксирует бронь и опционально обогащает её квалификацией.</p>
+<p>посетитель открывает лендинг, начинает голосовой или печатный
+разговор, получает релевантную презентацию продукта, отвечает максимум
+на два discovery-вопроса до мягкого предложения следующего шага,
+выбирает один из двух внутренних слотов и передаёт обязательные
+booking-данные, после чего backend фиксирует бронь и опционально
+обогащает её ограниченной квалификацией.</p>
 </blockquote>
 <p>MVP должен выглядеть как небольшой реальный продукт, а не как набор
 несвязанных API-примеров.</p>
@@ -754,16 +758,23 @@ Botamin:</p>
 <ul>
 <li>адаптивный лендинг Botamin;</li>
 <li>браузерный доступ к микрофону;</li>
-<li>phrase-level STT на русском: chunked PCM16 до backend, bounded WAV
-request после <code>audio.commit</code>, final transcript only;</li>
+<li>phrase-level STT на русском: chunked PCM16 до backend, максимум 60
+секунд на реплику и 2,000,000 bytes на WAV request после
+<code>audio.commit</code>, final transcript only;</li>
+<li>provider-neutral final typed turns через
+<code>visitor.text.submit</code>, семантически равнозначные spoken
+turns;</li>
+<li>sample-derived circular countdown для активной записи;</li>
 <li>текстовое рассуждение и ответ через GPT-5.6 Luna в Codex;</li>
 <li>phrase-level TTS через полные MP3-сегменты, запускаемый до
 завершения полного ответа;</li>
 <li>interruption/barge-in на базовом уровне;</li>
 <li>управляемая state machine разговора;</li>
 <li>product knowledge из Botamin-сайта и Telegram-кейсов;</li>
-<li>создание внутренней брони;</li>
-<li>необязательная квалификация после брони;</li>
+<li>создание внутренней брони на одном из двух server-supplied
+structured 20-minute Moscow slots;</li>
+<li>необязательная квалификация после брони и отдельного согласия,
+только по monthly inbound leads и integer sales-manager count;</li>
 <li>SQLite persistence;</li>
 <li>console notifier и интерфейс для webhook/push;</li>
 <li>transcript/event audit;</li>
@@ -776,7 +787,8 @@ a later deployment gate;</li>
 <li>визуальный conversation builder;</li>
 <li>prompt CMS, роли и авторизация редакторов;</li>
 <li>реальный Google Calendar, Calendly или CRM;</li>
-<li>проверка свободных слотов;</li>
+<li>внешняя проверка календарной доступности; внутренний scheduler
+только исключает уже committed start times;</li>
 <li>телефония, SIP, PSTN, Twilio;</li>
 <li>исходящие звонки;</li>
 <li>полноценный call-center dashboard;</li>
@@ -863,18 +875,38 @@ gate</td>
 <td>выключено</td>
 </tr>
 <tr>
+<td>Utterance bounds</td>
+<td>60 секунд; WAV cap 2,000,000 bytes; countdown по принятым PCM16
+samples и stricter server ceiling</td>
+</tr>
+<tr>
+<td>Typed input</td>
+<td>финальный <code>visitor.text.submit</code>, тот же semantic turn
+pipeline, что и speech</td>
+</tr>
+<tr>
+<td>Booking</td>
+<td>имя, компания, рабочий email, телефон или Telegram, consent и один
+из ровно двух server-supplied 20-minute <code>Europe/Moscow</code>
+slots</td>
+</tr>
+<tr>
 <td>Qualification</td>
-<td>включаемая опция, только после booking</td>
+<td>включаемая опция, только после committed booking, confirmation и
+consent; monthly inbound leads + integer
+<code>salesManagerCount</code></td>
 </tr>
 </tbody>
 </table>
 <h2 id="допущения-которые-агенты-не-должны-превращать-в-блокеры">6.
 Допущения, которые агенты не должны превращать в блокеры</h2>
 <ul>
-<li>Как минимум один контактный канал обязателен: телефон, email или
-Telegram.</li>
-<li>Предпочтительное время хранится свободным текстом; календарного slot
-resolution нет.</li>
+<li>Для новой брони обязательны имя, компания, рабочий email, телефон
+или Telegram, consent и выбранный server-supplied slot.</li>
+<li>Backend владеет текущей московской датой/днём и выдаёт ровно два
+структурированных кандидата: будни, не сегодня, 20 минут, старты по
+сетке с 09:00 до 17:00 <code>Europe/Moscow</code>. Это внутреннее
+резервирование без внешнего календаря или availability API.</li>
 <li>Логотипы, точная типографика и brand book могут быть заменены
 аккуратным нейтральным стилем.</li>
 <li>Console output является достаточным handoff для P0.</li>
@@ -886,10 +918,10 @@ resolution нет.</li>
 </ul>
 <h2 id="термины">7. Термины</h2>
 <ul>
-<li><strong>Conversation</strong> — одна пользовательская голосовая
+<li><strong>Conversation</strong> — одна пользовательская voice/typed
 сессия.</li>
-<li><strong>Turn</strong> — одна завершённая реплика пользователя и
-следующий ответ агента.</li>
+<li><strong>Turn</strong> — одна завершённая spoken или typed реплика
+пользователя и следующий ответ агента.</li>
 <li><strong>Booking</strong> — внутренняя запись о согласованном
 следующем шаге, не календарное событие.</li>
 <li><strong>Qualification</strong> — необязательные сведения,
@@ -960,65 +992,78 @@ Document</h1>
 <tr>
 <td>US-001</td>
 <td>Как посетитель, я запускаю разговор одной кнопкой</td>
-<td>запрашивается mic permission, UI показывает состояние</td>
+<td>после двух consents запрашивается mic permission, UI показывает
+состояние</td>
 </tr>
 <tr>
 <td>US-002</td>
 <td>Я говорю естественно по-русски</td>
-<td>UI показывает listening/processing, затем ровно один
+<td>UI показывает sample-derived circular countdown во время capture,
+listening/processing, затем ровно один
 <code>transcript.final</code></td>
 </tr>
 <tr>
 <td>US-003</td>
+<td>Я печатаю финальную реплику</td>
+<td>stage-gated composer отправляет provider-neutral
+<code>visitor.text.submit</code>; server-accepted typed turn проходит
+тот же semantic pipeline, что и speech</td>
+</tr>
+<tr>
+<td>US-004</td>
 <td>Агент отвечает голосом и текстом</td>
 <td>первая полная MP3-фраза может проиграться до завершения ответа Luna;
 ответ не содержит markdown-мусора</td>
 </tr>
 <tr>
-<td>US-004</td>
-<td>Агент понимает, зачем я пришёл</td>
-<td>задаёт не более одного вопроса за раз, фиксирует роль/задачу</td>
-</tr>
-<tr>
 <td>US-005</td>
-<td>Агент объясняет Botamin на релевантном примере</td>
-<td>использует только утверждённые knowledge claims</td>
+<td>Агент понимает, зачем я пришёл</td>
+<td>задаёт не более одного вопроса за раз и максимум два
+discovery-вопроса до мягкого предложения следующего шага</td>
 </tr>
 <tr>
 <td>US-006</td>
+<td>Агент объясняет Botamin на релевантном примере</td>
+<td>использует только утверждённые knowledge claims; 10–15 млн ₽/месяц —
+только атрибутированное сообщение пользовательского брифа, не
+гарантия</td>
+</tr>
+<tr>
+<td>US-007</td>
 <td>Я могу возразить или перебить</td>
 <td>проигрывание останавливается, новый turn обрабатывается</td>
 </tr>
 <tr>
-<td>US-007</td>
-<td>Я соглашаюсь на встречу</td>
-<td>агент собирает минимум данных и вызывает
-<code>create_booking</code></td>
-</tr>
-<tr>
 <td>US-008</td>
-<td>После брони я могу ответить на доп. вопросы</td>
-<td>данные патчат ту же бронь через
-<code>append_booking_qualification</code></td>
+<td>Я соглашаюсь на встречу</td>
+<td>агент предлагает ровно два server-supplied слота, собирает
+обязательные данные и вызывает <code>create_booking</code> с выбранным
+кандидатом</td>
 </tr>
 <tr>
 <td>US-009</td>
+<td>После брони я могу ответить на два доп. вопроса</td>
+<td>после confirmation и consent месячный inbound volume и integer
+<code>salesManagerCount</code> патчат ту же бронь</td>
+</tr>
+<tr>
+<td>US-010</td>
 <td>Я могу отказаться от квалификации</td>
 <td>бронь остаётся <code>booked</code>, диалог корректно
 завершается</td>
 </tr>
 <tr>
-<td>US-010</td>
+<td>US-011</td>
 <td>Получатель видит данные</td>
-<td>console/webhook получает структурированный payload</td>
+<td>console/webhook получает структурированный payload со слотом</td>
 </tr>
 <tr>
-<td>US-011</td>
+<td>US-012</td>
 <td>Сервис перезапускается</td>
 <td>сохранённые booking/event данные остаются в volume</td>
 </tr>
 <tr>
-<td>US-012</td>
+<td>US-013</td>
 <td>Проект сначала разворачивается локально</td>
 <td><code>scripts/deploy-local.sh</code> поднимает готовые app + Caddy
 на <code>http://localhost:5173</code>; target VPS/TLS проверяется
@@ -1032,8 +1077,9 @@ Document</h1>
 <li><strong>FR-VOICE-001:</strong> создание сессии должно выдавать
 уникальный <code>conversationId</code>.</li>
 <li><strong>FR-VOICE-002:</strong> браузер передаёт mono PCM16, 16 kHz,
-чанками около 100 ms; browser/backend buffers ограничены
-duration/bytes.</li>
+чанками около 100 ms; максимум реплики — 60,000 ms, максимум atomic WAV
+— 2,000,000 bytes. Server-advertised client PCM cap учитывает WAV
+overhead и stricter ceiling (при defaults 1,920,000 PCM bytes).</li>
 <li><strong>FR-VOICE-003:</strong> backend держит единственный
 <code>OPENROUTER_API_KEY</code> server-side для STT и TTS.</li>
 <li><strong>FR-VOICE-004:</strong> <code>audio.commit</code> закрывает
@@ -1066,6 +1112,21 @@ voice path; retry не запускает Luna/tools повторно.</li>
 <li><strong>FR-VOICE-012:</strong> chunked PCM16 описывает только
 browser-to-gateway transport; provider boundary получает один atomic
 <code>audio/wav</code> request и возвращает один final result.</li>
+<li><strong>FR-VOICE-013:</strong> circular countdown отображается
+только при active capture и вычисляется по числу принятых PCM16 samples
+(<code>acceptedPcmBytes / 2 / 16000</code>), ограниченному меньшим из
+server <code>maxUtteranceMs</code> и byte-derived duration; wall-clock
+drift не является источником значения.</li>
+<li><strong>FR-TEXT-001:</strong> <code>visitor.text.submit</code>
+содержит один trimmed final typed turn до 2,000 символов, monotonic
+sequence и не содержит provider/tool fields.</li>
+<li><strong>FR-TEXT-002:</strong> typed turn очищает uncommitted
+microphone bytes, допускает не более одного pending submit и считается
+принятым только после server <code>transcript.final</code>; rejected
+retry сохраняет sequence.</li>
+<li><strong>FR-TEXT-003:</strong> после final acceptance typed и spoken
+turns семантически равнозначны: один и тот же Luna context, server state
+policy, tools, persistence, assistant text и optional TTS.</li>
 </ul>
 <h3 id="brain-and-orchestration">4.2 Brain and orchestration</h3>
 <ul>
@@ -1088,32 +1149,63 @@ privileges, кроме явно зарегистрированных домен�
 <li><strong>FR-BRAIN-008:</strong> reasoning effort задаётся
 конфигурацией; стартовый профиль Luna использует минимальный уровень,
 который проходит quality evals.</li>
+<li><strong>FR-BRAIN-009:</strong> каждый turn получает server-owned
+<code>currentInstant</code>, текущую московскую дату и день недели, а
+также ровно два structured meeting candidates с server-generated Russian
+<code>displayLabel</code>.</li>
+<li><strong>FR-BRAIN-010:</strong> cadence умеренно проактивен: один
+вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting
+offer, без повторного давления после ясного отказа.</li>
 </ul>
 <h3 id="booking">4.3 Booking</h3>
 <ul>
 <li><strong>FR-BOOK-001:</strong> обязательны
-<code>conversationId</code>, имя и хотя бы один контактный канал.</li>
-<li><strong>FR-BOOK-002:</strong> <code>create_booking</code> атомарен и
-идемпотентен по
-<code>conversationId</code>/<code>idempotencyKey</code>.</li>
-<li><strong>FR-BOOK-003:</strong> успешный tool всегда возвращает
+<code>conversationId</code>, имя, компания, рабочий email, телефон или
+Telegram, <code>consentConfirmed=true</code> и structured
+<code>meetingSlot</code>.</li>
+<li><strong>FR-BOOK-002:</strong> server выдаёт ровно два уникальных
+внутренних кандидата длительностью 20 минут в
+<code>Europe/Moscow</code>: будни, дата строго позже server-owned
+московского today, старты по 20-минутной сетке от 09:00 до 17:00
+включительно.</li>
+<li><strong>FR-BOOK-003:</strong> <code>create_booking</code> разрешён
+только в <code>COLLECT_BOOKING</code>; выбранный
+<code>meetingSlot</code> обязан byte-for-field совпасть с одним из двух
+candidates активного turn. Non-candidate, stale, occupied или уже не
+bookable slot отклоняется.</li>
+<li><strong>FR-BOOK-004:</strong> <code>create_booking</code> атомарен и
+идемпотентен по <code>conversationId</code>/<code>idempotencyKey</code>;
+уникальны conversation и non-null internal
+<code>meeting_start_at</code>.</li>
+<li><strong>FR-BOOK-005:</strong> успешный tool всегда возвращает
 стабильный <code>bookingId</code>.</li>
-<li><strong>FR-BOOK-004:</strong> событие <code>booking.created</code>
-отправляется до первого квалификационного вопроса.</li>
-<li><strong>FR-BOOK-005:</strong> meeting/calendar event не
-создаётся.</li>
-<li><strong>FR-BOOK-006:</strong> агент подтверждает только факт
-получения данных.</li>
+<li><strong>FR-BOOK-006:</strong> committed <code>booking.created</code>
+и user-facing confirmation предшествуют consent на qualification и
+первому qualification question.</li>
+<li><strong>FR-BOOK-007:</strong> backend сохраняет внутреннюю бронь и
+outbox event, но не создаёт внешнее calendar event/invitation, не
+вызывает external availability API и не создаёт CRM record.</li>
+<li><strong>FR-BOOK-008:</strong> in-chat form показывается только по
+server-owned <code>COLLECT_BOOKING</code>, валидирует
+name/company/working email/phone-or-Telegram и сериализует данные как
+обычную visitor typed turn; форма не вызывает tool и не подтверждает
+бронь.</li>
 </ul>
 <h3 id="post-booking-qualification">4.4 Post-booking qualification</h3>
 <ul>
-<li><strong>FR-QUAL-001:</strong> запускается только при
-<code>booking.status=booked</code>.</li>
-<li><strong>FR-QUAL-002:</strong> пользователь явно или контекстно
-соглашается на дополнительные вопросы.</li>
-<li><strong>FR-QUAL-003:</strong> каждое осмысленное подмножество данных
-может сохраняться patch-операцией.</li>
-<li><strong>FR-QUAL-004:</strong> поля qualification необязательны.</li>
+<li><strong>FR-QUAL-001:</strong> запускается только при committed
+<code>booking.status=booked</code> и после user-facing booking
+confirmation.</li>
+<li><strong>FR-QUAL-002:</strong> пользователь отдельно и явно
+соглашается на дополнительные вопросы; booking action envelope того же
+turn не может выдать это согласие.</li>
+<li><strong>FR-QUAL-003:</strong> conversational collection ограничен
+двумя полями: <code>monthlyLeadVolume</code> только для месячного объёма
+входящих лидов и <code>salesManagerCount</code> как integer
+<code>0..10000</code>.</li>
+<li><strong>FR-QUAL-004:</strong> оба поля необязательны и могут
+сохраняться partial patch-операцией; остальные legacy schema fields не
+являются вопросами текущего flow.</li>
 <li><strong>FR-QUAL-005:</strong> disconnect/decline переводит
 qualification в <code>partial</code> или <code>skipped</code>, но
 booking остаётся <code>booked</code>.</li>
@@ -1129,10 +1221,15 @@ booking остаётся <code>booked</code>.</li>
 <code>connecting</code>, <code>listening</code>, <code>thinking</code>,
 <code>speaking</code>, <code>booked</code>, <code>complete</code>,
 <code>error</code>.</li>
-<li><strong>FR-WEB-004:</strong> текстовая копия реплик доступна для
-accessibility/debug.</li>
-<li><strong>FR-WEB-005:</strong> mobile viewport поддерживается.</li>
-<li><strong>FR-WEB-006:</strong> при voice failure пользователю не
+<li><strong>FR-WEB-004:</strong> текстовая копия реплик и stage-gated
+multiline composer доступны в активных visitor-turn stages; Enter
+отправляет, Shift+Enter добавляет строку.</li>
+<li><strong>FR-WEB-005:</strong> booking details form существует внутри
+chat и видима только в <code>COLLECT_BOOKING</code>, полученном через
+server <code>state.changed</code>/<code>session.ready</code>, а не из
+transcript wording.</li>
+<li><strong>FR-WEB-006:</strong> mobile viewport поддерживается.</li>
+<li><strong>FR-WEB-007:</strong> при voice failure пользователю не
 показываются stack traces/provider details.</li>
 </ul>
 <h2 id="p1-и-p2">5. P1 и P2</h2>
@@ -1408,6 +1505,15 @@ event.</p>
 </tr>
 </tbody>
 </table>
+<h3 id="дополнительный-claim-из-пользовательского-брифа">Дополнительный
+claim из пользовательского брифа</h3>
+<p>Предоставленный пользователем бриф Botamin сообщает, что Botamin
+помог компаниям увеличить выручку на <strong>10–15 миллионов рублей в
+месяц</strong>. Это утверждение именованного пользовательского источника
+о прошлых результатах нескольких компаний; оно не было независимо
+проверено и не доказывает применимость к новому собеседнику. Допустимая
+формулировка обязана назвать пользовательский бриф Botamin и прямо
+отделить claim от гарантии, прогноза или обещания результата.</p>
 <h3 id="правило-claims">Правило claims</h3>
 <p>В prompt/knowledge нужно разделить:</p>
 <ul>
@@ -1494,7 +1600,7 @@ narrative</h2>
 </tr>
 <tr>
 <td>Discovery</td>
-<td>найти задачу</td>
+<td>найти задачу максимум за два вопроса до мягкого offer</td>
 <td><code>discovery.completed</code></td>
 <td>слишком много вопросов</td>
 </tr>
@@ -1512,13 +1618,15 @@ narrative</h2>
 </tr>
 <tr>
 <td>Booking</td>
-<td>сохранить минимальный лид</td>
+<td>сохранить полный обязательный набор и один из двух внутренних
+slots</td>
 <td><code>booking.created</code></td>
-<td>контакт не собран</td>
+<td>не собраны name/company/email/phone-or-Telegram/consent/slot</td>
 </tr>
 <tr>
 <td>Qualification</td>
-<td>обогатить лид</td>
+<td>после commit, confirmation и consent спросить inbound volume и
+manager count</td>
 <td><code>qualification.updated</code></td>
 <td>пользователь устал</td>
 </tr>
@@ -1577,19 +1685,24 @@ narrative</h2>
 </tr>
 </tbody>
 </table>
-<h2 id="минимальная-квалификация-для-этого-funnel">8. Минимальная
-квалификация для этого funnel</h2>
-<p>Квалификация после брони должна выбирать 3–5 вопросов по контексту, а
-не проходить анкету целиком:</p>
+<h2 id="cadence-booking-и-минимальная-квалификация">8. Cadence, booking
+и минимальная квалификация</h2>
+<p>Текущий funnel умеренно проактивен: агент задаёт по одному вопросу и
+не более двух discovery-вопросов до краткого мягкого предложения
+demo/встречи. После ясного отказа предложение не повторяется.</p>
+<p>После согласия агент предлагает ровно два labeled candidates из
+server context. Новая внутренняя бронь требует name, company, working
+email, phone or Telegram, consent и один выбранный structured 20-minute
+<code>Europe/Moscow</code> slot. Внешний календарь и external
+availability API отсутствуют.</p>
+<p>Квалификация начинается только после committed booking, user-facing
+confirmation и отдельного consent. Она ограничена двумя необязательными
+вопросами:</p>
 <ul>
-<li>роль и зона ответственности;</li>
-<li>отрасль / тип продаж;</li>
-<li>объём лидов в месяц или порядок величины;</li>
-<li>входящий, исходящий, реактивация или mix;</li>
-<li>текущий SLA ответа;</li>
-<li>CRM;</li>
-<li>главный bottleneck;</li>
-<li>желаемый срок пилота.</li>
+<li>месячный объём <strong>входящих</strong> лидов
+(<code>monthlyLeadVolume</code>);</li>
+<li>явное целое число менеджеров продаж
+(<code>salesManagerCount</code>).</li>
 </ul>
 <h2 id="контентные-риски">9. Контентные риски</h2>
 <ul>
@@ -1643,8 +1756,13 @@ orchestration layer, зато используется уже оплаченна
 <li>AudioWorklet capture;</li>
 <li>resample browser audio до mono PCM16 16 kHz;</li>
 <li>отправка бинарных PCM16 чанков около 100 ms;</li>
-<li>явный end-of-turn <code>audio.commit</code> и bounded local
-buffer;</li>
+<li>явный end-of-turn <code>audio.commit</code>, 60-second ceiling и
+server-advertised PCM byte cap, производный от 2,000,000-byte WAV
+cap;</li>
+<li>circular countdown по принятым samples, а не wall clock, с effective
+duration по stricter duration/byte ceiling;</li>
+<li>secure <code>visitor.text.submit</code> для bounded final typed turn
+и in-chat form только в server-owned <code>COLLECT_BOOKING</code>;</li>
 <li>UI states
 <code>listening → processing → transcript.final</code>;</li>
 <li>ordered playback queue для полных MP3 phrase segments;</li>
@@ -1677,8 +1795,12 @@ suppression;</li>
 <p>Источник истины для:</p>
 <ul>
 <li>текущего stage;</li>
-<li>собранных slots;</li>
-<li>разрешённых actions;</li>
+<li>server-owned current Moscow date/day и ровно двух structured/labeled
+internal meeting candidates;</li>
+<li>разрешённых actions, включая rejection любого create-booking slot
+вне active candidate tuple;</li>
+<li>qualification gating по committed booking, delivered confirmation и
+отдельному consent;</li>
 <li>booking lifecycle;</li>
 <li>prompt context;</li>
 <li>retry/cancellation;</li>
@@ -1774,9 +1896,22 @@ safe IDs, но не spoken text, PII, key или audio.</li>
 </ul>
 <h3 id="bookingservice">BookingService</h3>
 <ul>
-<li>валидирует contact minimum;</li>
-<li>создаёт/находит booking в одной транзакции;</li>
-<li>обновляет qualification patch;</li>
+<li>генерирует ровно два deterministic internal 20-minute candidates
+после текущей московской даты, только по будням и по 20-minute grid с
+09:00 до 17:00 starts;</li>
+<li>исключает уже committed internal start times без external
+calendar/availability API;</li>
+<li>валидирует name, company, working email, phone or Telegram, consent
+и structured <code>Europe/Moscow</code> slot;</li>
+<li>повторно проверяет slot по текущему server clock и отклоняет
+stale/non-bookable или internally occupied start до side effect;
+active-candidate membership до вызова сервиса проверяет
+orchestrator/tool policy;</li>
+<li>создаёт/находит booking в одной <code>BEGIN IMMEDIATE</code>
+transaction;</li>
+<li>обновляет qualification patch для существующей committed booking;
+confirmation/consent gating до вызова сервиса принадлежит
+orchestrator/tool policy;</li>
 <li>пишет event outbox;</li>
 <li>никогда не удаляет booking из-за incomplete qualification.</li>
 </ul>
@@ -1803,10 +1938,15 @@ Gateway/utterance assembler проверяет duration/bytes, создаёт и
 adapter повторно валидирует/bounds already-WAV request, base64-кодирует
 его и отправляет один <code>input_audio</code> chat completion.</li>
 <li>Только валидный неустаревший final transcript становится user turn и
-публикуется как <code>transcript.final</code>.</li>
-<li>Orchestrator добавляет stage, known slots, booking status и краткий
-dialogue context; Codex thread получает <code>turn/start</code> ровно
-один раз.</li>
+публикуется как <code>transcript.final</code>. Альтернативно, monotonic
+<code>visitor.text.submit</code> очищает uncommitted microphone bytes и
+создаёт такой же final turn без STT; до server
+<code>transcript.final</code> typed input не считается принятым.</li>
+<li>Orchestrator добавляет stage, known facts, booking status,
+server-owned current Moscow date/day и ровно два structured candidates с
+generated <code>displayLabel</code>; Codex thread получает
+<code>turn/start</code> ровно один раз независимо от typed/spoken
+origin.</li>
 <li>Text deltas проходят PII-safe sanitizer и bounded phrase
 chunker.</li>
 <li>Законченная короткая фраза отправляется в OpenRouter TTS; один
@@ -1857,27 +1997,38 @@ capability check;</li>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> BrainTurnInput {</span>
 <span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  conversationId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
 <span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>  threadId<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  userText<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  stage<span class="op">:</span> ConversationStage<span class="op">;</span></span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>  knownFacts<span class="op">:</span> KnownFacts<span class="op">;</span></span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>  booking<span class="op">:</span> BookingSnapshot <span class="op">|</span> <span class="dt">null</span><span class="op">;</span></span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>  allowedActions<span class="op">:</span> BrainActionName[]<span class="op">;</span></span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>  promptVersion<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> BrainDelta {</span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>  type<span class="op">:</span> <span class="st">&quot;speech.delta&quot;</span> <span class="op">|</span> <span class="st">&quot;tool.request&quot;</span> <span class="op">|</span> <span class="st">&quot;turn.completed&quot;</span> <span class="op">|</span> <span class="st">&quot;error&quot;</span><span class="op">;</span></span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>  text<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>  tool<span class="op">?:</span> { name<span class="op">:</span> BrainActionName<span class="op">;</span> callId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> args<span class="op">:</span> <span class="dt">unknown</span> }<span class="op">;</span></span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>  error<span class="op">?:</span> { code<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> retryable<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span> message<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> BrainPort {</span>
-<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>  <span class="fu">createThread</span>(conversationId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">&gt;;</span></span>
-<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>  <span class="fu">runTurn</span>(input<span class="op">:</span> BrainTurnInput<span class="op">,</span> signal<span class="op">:</span> AbortSignal)<span class="op">:</span> AsyncIterable<span class="op">&lt;</span>BrainDelta<span class="op">&gt;;</span></span>
-<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>  <span class="fu">interrupt</span>(threadId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> turnId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
-<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>  <span class="fu">health</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ProviderHealth<span class="op">&gt;;</span></span>
-<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  turnId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  generationId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>  userText<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>  stage<span class="op">:</span> ConversationStage<span class="op">;</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>  knownFacts<span class="op">:</span> KnownFacts<span class="op">;</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>  booking<span class="op">:</span> BookingSnapshot <span class="op">|</span> <span class="dt">null</span><span class="op">;</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>  schedulingContext<span class="op">:</span> {</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>    currentInstant<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    moscowLocalDate<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    moscowWeekday<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    candidateMeetingSlots<span class="op">:</span> [</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>      { meetingSlot<span class="op">:</span> MeetingSlot<span class="op">;</span> displayLabel<span class="op">:</span> <span class="dt">string</span> }<span class="op">,</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>      { meetingSlot<span class="op">:</span> MeetingSlot<span class="op">;</span> displayLabel<span class="op">:</span> <span class="dt">string</span> }</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    ]<span class="op">;</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>  }<span class="op">;</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>  allowedActions<span class="op">:</span> BrainActionName[]<span class="op">;</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>  promptVersion<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> BrainDelta {</span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>  type<span class="op">:</span> <span class="st">&quot;speech.delta&quot;</span> <span class="op">|</span> <span class="st">&quot;tool.request&quot;</span> <span class="op">|</span> <span class="st">&quot;turn.completed&quot;</span> <span class="op">|</span> <span class="st">&quot;error&quot;</span><span class="op">;</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>  text<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>  tool<span class="op">?:</span> { name<span class="op">:</span> BrainActionName<span class="op">;</span> callId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> args<span class="op">:</span> <span class="dt">unknown</span> }<span class="op">;</span></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>  error<span class="op">?:</span> { code<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> retryable<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span> message<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> BrainPort {</span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>  <span class="fu">createThread</span>(conversationId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">&gt;;</span></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>  <span class="fu">runTurn</span>(input<span class="op">:</span> BrainTurnInput<span class="op">,</span> signal<span class="op">:</span> AbortSignal)<span class="op">:</span> AsyncIterable<span class="op">&lt;</span>BrainDelta<span class="op">&gt;;</span></span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>  <span class="fu">interrupt</span>(threadId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> turnId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>  <span class="fu">health</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ProviderHealth<span class="op">&gt;;</span></span>
+<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <h2 id="provider-neutral-sttport">6. Provider-neutral SttPort</h2>
 <div class="sourceCode" id="cb3"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> SttTranscriptionRequest <span class="op">=</span> {</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  conversationId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
@@ -1965,7 +2116,9 @@ contract.</p>
 table-driven tests:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">transition</span>(currentState<span class="op">,</span> domainEvent) <span class="kw">=&gt;</span> nextState <span class="op">|</span> TransitionError</span></code></pre></div>
 <p>LLM не может напрямую записать произвольный next state. Он предлагает
-intent/action, orchestrator применяет допустимый transition.</p>
+intent/action, orchestrator применяет допустимый transition. Typed
+composer/form visibility также проецируется только из server stage;
+transcript wording не может открыть booking form или разрешить tool.</p>
 <h2 id="barge-in">10. Barge-in</h2>
 <p>При детекции начала пользовательской речи во время
 <code>speaking</code>:</p>
@@ -2159,6 +2312,8 @@ design и prompt architecture</h1>
 <li>не маскироваться под человека;</li>
 <li>одна реплика обычно 1–3 коротких предложения;</li>
 <li>один вопрос за раз;</li>
+<li>умеренно проактивно предложить demo/встречу не позднее ответа на
+второй discovery-вопрос;</li>
 <li>не повторять уже собранные данные;</li>
 <li>не спорить с ясным отказом;</li>
 <li>после двух мягких отказов завершить без давления;</li>
@@ -2168,8 +2323,12 @@ design и prompt architecture</h1>
 <li>не читать технические идентификаторы и JSON вслух;</li>
 <li>контакт повторять для подтверждения только при низкой уверенности
 STT;</li>
-<li>booking confirmation произносить сразу после tool success;</li>
-<li>qualification начинается только после confirmation и согласия.</li>
+<li>печатный и голосовой final input равнозначны по смыслу и проходят
+один state/tool flow;</li>
+<li>booking confirmation произносить только после committed tool
+success;</li>
+<li>qualification начинается только после confirmation и отдельного
+согласия и содержит максимум два целевых вопроса.</li>
 </ul>
 <h2 id="conversation-policy-по-stages">3. Conversation policy по
 stages</h2>
@@ -2182,14 +2341,10 @@ stages</h2>
 сейчас важнее: входящие заявки, недозвоны или холодная база?</p>
 </blockquote>
 <h3 id="discovery">DISCOVERY</h3>
-<p>Собрать минимум:</p>
-<ul>
-<li>роль;</li>
-<li>основной канал/сценарий;</li>
-<li>bottleneck;</li>
-<li>примерный объём или частоту проблемы.</li>
-</ul>
-<p>Не задавать все вопросы, если intent уже очевиден.</p>
+<p>Найти роль/сценарий и основной bottleneck. Задавать по одному вопросу
+и не более двух discovery-вопросов до краткого мягкого предложения
+demo/встречи. Если intent очевиден раньше, переходить к value/offer без
+анкеты.</p>
 <h3 id="value">VALUE</h3>
 <p>Структура:</p>
 <ol type="1">
@@ -2198,6 +2353,10 @@ stages</h2>
 <li>привести один case claim с атрибуцией, если помогает;</li>
 <li>проверить интерес.</li>
 </ol>
+<p>Число 10–15 млн ₽ в месяц допустимо только в точной атрибуции: это
+сообщение пользовательского брифа Botamin о прошлых результатах
+компаний, без независимой проверки, гарантии, прогноза или обещания
+собеседнику.</p>
 <h3 id="objection">OBJECTION</h3>
 <p>Алгоритм:</p>
 <ol type="1">
@@ -2213,27 +2372,42 @@ stages</h2>
 процесса. Записать?</p>
 </blockquote>
 <h3 id="collect_booking">COLLECT_BOOKING</h3>
-<p>Минимальный порядок:</p>
+<p>После согласия назвать ровно два
+<code>schedulingContext.candidateMeetingSlots</code> по их
+server-generated <code>displayLabel</code>. Не вычислять и не
+переформатировать дату, день недели, время или доступность.</p>
+<p>Обязательный набор:</p>
 <ol type="1">
 <li>имя;</li>
-<li>один удобный контакт;</li>
-<li>компания — если ещё не известна;</li>
-<li>пожелание по времени — свободным текстом.</li>
+<li>компания;</li>
+<li>рабочий email;</li>
+<li>телефон или Telegram;</li>
+<li>один выбранный structured 20-minute <code>Europe/Moscow</code>
+candidate;</li>
+<li>server-confirmed consent.</li>
 </ol>
-<p>Если пользователь дал несколько полей одной фразой, не переспрашивать
-их по одному.</p>
+<p>Если пользователь дал несколько полей одной spoken или typed
+репликой, не переспрашивать их по одному. In-chat form показывается
+только по server stage <code>COLLECT_BOOKING</code>, валидирует четыре
+пользовательских поля и передаёт их как обычный typed turn; она не
+вызывает tool и не подтверждает бронь.</p>
 <h3 id="booked">BOOKED</h3>
 <p>После <code>create_booking</code>:</p>
 <blockquote>
-<p>Всё получила и зафиксировала. Реальную запись в календарь я сейчас не
-создаю — коллега свяжется по указанному контакту. Можно ещё три коротких
-вопроса, чтобы он подготовился?</p>
+<p>Внутренняя бронь на выбранное время зафиксирована. Внешнее
+календарное событие или приглашение не создавалось; коллега сможет
+связаться по сохранённому контакту. Можно задать ещё два необязательных
+вопроса?</p>
 </blockquote>
 <p>Формулировку про отсутствие календаря можно сделать менее технической
 в production copy, но нельзя утверждать обратное.</p>
 <h3 id="post_booking_qualification">POST_BOOKING_QUALIFICATION</h3>
-<p>Выбирать вопросы динамически. Не более 3–5, если ответы короткие.
-После каждого содержательного блока допустим partial patch.</p>
+<p>Только после committed booking, user-facing confirmation и отдельного
+явного consent спросить по одному: месячный объём входящих лидов
+(<code>monthlyLeadVolume</code>) и целое число менеджеров продаж
+(<code>salesManagerCount</code>). Оба поля необязательны; после
+содержательного ответа допустим partial patch. Другие поля расширенной
+legacy schema не входят в текущий conversational flow.</p>
 <h3 id="complete">COMPLETE</h3>
 <p>Коротко повторить результат и завершить без нового CTA.</p>
 <h2 id="lifecycle-брони">4. Lifecycle брони</h2>
@@ -2259,9 +2433,34 @@ stages</h2>
 <span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;crm&quot;</span><span class="fu">:</span> <span class="kw">null</span></span>
 <span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
 <span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;booking&quot;</span><span class="fu">:</span> <span class="kw">null</span><span class="fu">,</span></span>
-<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;allowedActions&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;offer_booking&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
-<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;lastUserText&quot;</span><span class="fu">:</span> <span class="st">&quot;А как это будет интегрироваться?&quot;</span></span>
-<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;schedulingContext&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;currentInstant&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-02T08:00:00.000Z&quot;</span><span class="fu">,</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;moscowLocalDate&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-02&quot;</span><span class="fu">,</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;moscowWeekday&quot;</span><span class="fu">:</span> <span class="st">&quot;воскресенье&quot;</span><span class="fu">,</span></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;candidateMeetingSlots&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;meetingSlot&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;startAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:00:00.000Z&quot;</span><span class="fu">,</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;endAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:20:00.000Z&quot;</span><span class="fu">,</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;timeZone&quot;</span><span class="fu">:</span> <span class="st">&quot;Europe/Moscow&quot;</span><span class="fu">,</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;durationMinutes&quot;</span><span class="fu">:</span> <span class="dv">20</span></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>        <span class="fu">},</span></span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;displayLabel&quot;</span><span class="fu">:</span> <span class="st">&quot;03 августа 2026 года, понедельник, 09:00–09:20 по Москве&quot;</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>      <span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span></span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;meetingSlot&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;startAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:20:00.000Z&quot;</span><span class="fu">,</span></span>
+<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;endAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:40:00.000Z&quot;</span><span class="fu">,</span></span>
+<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;timeZone&quot;</span><span class="fu">:</span> <span class="st">&quot;Europe/Moscow&quot;</span><span class="fu">,</span></span>
+<span id="cb11-31"><a href="#cb11-31" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;durationMinutes&quot;</span><span class="fu">:</span> <span class="dv">20</span></span>
+<span id="cb11-32"><a href="#cb11-32" aria-hidden="true" tabindex="-1"></a>        <span class="fu">},</span></span>
+<span id="cb11-33"><a href="#cb11-33" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;displayLabel&quot;</span><span class="fu">:</span> <span class="st">&quot;03 августа 2026 года, понедельник, 09:20–09:40 по Москве&quot;</span></span>
+<span id="cb11-34"><a href="#cb11-34" aria-hidden="true" tabindex="-1"></a>      <span class="fu">}</span></span>
+<span id="cb11-35"><a href="#cb11-35" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb11-36"><a href="#cb11-36" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb11-37"><a href="#cb11-37" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;allowedActions&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;create_booking&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb11-38"><a href="#cb11-38" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;userText&quot;</span><span class="fu">:</span> <span class="st">&quot;Подойдёт первый вариант&quot;</span></span>
+<span id="cb11-39"><a href="#cb11-39" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p>Codex thread сохраняет естественную историю; compact state страхует
 от drift и упрощает resume.</p>
 <h2 id="prompt-files">6. Prompt files</h2>
@@ -2293,9 +2492,11 @@ knowledge-файлы; исходный repository туда не монтируе
 <li>при <code>thread/start</code> проверяет, что
 <code>instructionSources</code> содержит ожидаемый
 <code>AGENTS.md</code>;</li>
-<li>перед каждым <code>turn/start</code> добавляет компактный
+<li>перед каждым <code>turn/start</code> добавляет compact
 machine-generated context envelope: stage, known facts, booking
-snapshot, allowed actions и текст пользователя;</li>
+snapshot, server-owned current Moscow date/day, ровно два
+structured/labeled candidates, allowed actions и финальный текст
+пользователя независимо от typed/spoken origin;</li>
 <li>логирует только version/hash, не весь prompt;</li>
 <li>поддерживает hot reload только в development: новый prompt version
 применяется к новым conversations, а активные сохраняют исходную
@@ -2323,15 +2524,22 @@ MP3 response; cross-model fallback в P0 отсутствует.</p>
 <h3 id="create_booking"><code>create_booking</code></h3>
 <p>LLM вызывает только когда:</p>
 <ul>
-<li>пользователь согласился;</li>
-<li>известно имя;</li>
-<li>есть хотя бы один контакт;</li>
-<li>согласие на обработку/передачу данных зафиксировано UI или
-разговором.</li>
+<li>stage равен <code>COLLECT_BOOKING</code> и пользователь
+согласился;</li>
+<li>известны имя и компания;</li>
+<li>есть валидный рабочий email и телефон или Telegram;</li>
+<li>выбран один из ровно двух candidates активного server context;</li>
+<li>consent подтверждён server-side.</li>
 </ul>
+<p>Backend сверяет выбранный <code>meetingSlot</code> с обоими active
+candidates и отклоняет любой non-candidate/stale/occupied slot. Это
+внутренняя 20-minute бронь без external calendar event, invitation или
+availability API.</p>
 <h3 id="append_booking_qualification"><code>append_booking_qualification</code></h3>
-<p>LLM вызывает только после <code>bookingId</code>. Patch может быть
-частичным.</p>
+<p>LLM вызывает только после committed <code>bookingId</code>,
+user-facing confirmation и отдельного qualification consent. Текущий
+flow патчит только <code>monthlyLeadVolume</code> и integer
+<code>salesManagerCount</code>; patch может быть частичным.</p>
 <p>Backend возвращает safe result:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;ok&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
@@ -2378,8 +2586,10 @@ demo</td>
 </tr>
 <tr>
 <td>«Не хочу оставлять телефон»</td>
-<td>предложить email/Telegram</td>
-<td>давить или требовать один канал</td>
+<td>напомнить, что рабочий email обязателен, а дополнительным контактом
+может быть Telegram</td>
+<td>давить или выдавать email за замену обязательному
+phone-or-Telegram</td>
 </tr>
 <tr>
 <td>«Неинтересно»</td>
@@ -2421,11 +2631,16 @@ path</h2>
 <li>Пользователь: отвечает и спрашивает про CRM.</li>
 <li>Агент: описывает integration layer без обещания конкретного срока;
 предлагает demo.</li>
-<li>Пользователь: соглашается и даёт имя + Telegram.</li>
-<li>Backend: <code>booking.created</code>.</li>
-<li>Агент: подтверждает сохранение; просит разрешение на три доп.
-вопроса.</li>
-<li>Пользователь: отвечает на роль, CRM и срок.</li>
+<li>Агент: называет ровно два server-supplied Moscow candidates.</li>
+<li>Пользователь: typed form/репликой даёт имя, компанию, рабочий email,
+Telegram и выбирает первый slot; consent уже подтверждён server
+context.</li>
+<li>Backend: валидирует candidate и commit-ит
+<code>booking.created</code> без внешнего календарного события.</li>
+<li>Агент: подтверждает внутреннюю бронь; просит разрешение максимум на
+два доп. вопроса.</li>
+<li>Пользователь: соглашается и сообщает месячный объём входящих лидов и
+целое число менеджеров продаж.</li>
 <li>Backend: <code>booking.updated</code>.</li>
 <li>Агент: кратко суммирует и завершает.</li>
 </ol>
@@ -2485,10 +2700,12 @@ server MP3 phrase payload; arbitrary provider network chunks никогда не
 <span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;inputSampleRate&quot;</span><span class="fu">:</span> <span class="dv">16000</span><span class="fu">,</span></span>
 <span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;inputEncoding&quot;</span><span class="fu">:</span> <span class="st">&quot;pcm16le&quot;</span><span class="fu">,</span></span>
 <span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;chunkMs&quot;</span><span class="fu">:</span> <span class="dv">100</span><span class="fu">,</span></span>
-<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;outputContentType&quot;</span><span class="fu">:</span> <span class="st">&quot;audio/mpeg&quot;</span><span class="fu">,</span></span>
-<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;outputMode&quot;</span><span class="fu">:</span> <span class="st">&quot;complete-phrase-segments&quot;</span></span>
-<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
-<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;maxUtteranceMs&quot;</span><span class="fu">:</span> <span class="dv">60000</span><span class="fu">,</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;maxPcmBytes&quot;</span><span class="fu">:</span> <span class="dv">1920000</span><span class="fu">,</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;outputContentType&quot;</span><span class="fu">:</span> <span class="st">&quot;audio/mpeg&quot;</span><span class="fu">,</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;outputMode&quot;</span><span class="fu">:</span> <span class="st">&quot;complete-phrase-segments&quot;</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p>Errors: <code>CONSENT_REQUIRED</code>,
 <code>CAPACITY_EXCEEDED</code>, <code>BRAIN_NOT_READY</code>.
 Application JSON over 8192 bytes returns the same structured error
@@ -2559,11 +2776,13 @@ guards.</li>
 <span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;inputSampleRate&quot;</span><span class="fu">:</span> <span class="dv">16000</span><span class="fu">,</span></span>
 <span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;inputEncoding&quot;</span><span class="fu">:</span> <span class="st">&quot;pcm16le&quot;</span><span class="fu">,</span></span>
 <span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;chunkMs&quot;</span><span class="fu">:</span> <span class="dv">100</span><span class="fu">,</span></span>
-<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;outputContentType&quot;</span><span class="fu">:</span> <span class="st">&quot;audio/mpeg&quot;</span><span class="fu">,</span></span>
-<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;outputMode&quot;</span><span class="fu">:</span> <span class="st">&quot;complete-phrase-segments&quot;</span></span>
-<span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
-<span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
-<span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;maxUtteranceMs&quot;</span><span class="fu">:</span> <span class="dv">60000</span><span class="fu">,</span></span>
+<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;maxPcmBytes&quot;</span><span class="fu">:</span> <span class="dv">1920000</span><span class="fu">,</span></span>
+<span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;outputContentType&quot;</span><span class="fu">:</span> <span class="st">&quot;audio/mpeg&quot;</span><span class="fu">,</span></span>
+<span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;outputMode&quot;</span><span class="fu">:</span> <span class="st">&quot;complete-phrase-segments&quot;</span></span>
+<span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
+<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <h3 id="client-server-json-events">Client → server JSON events</h3>
 <table>
 <colgroup>
@@ -2589,6 +2808,12 @@ guards.</li>
 <td><code>{}</code></td>
 <td>закрыть bounded utterance и создать ровно один atomic
 final-transcription request</td>
+</tr>
+<tr>
+<td><code>visitor.text.submit</code></td>
+<td><code>{ sequence, text }</code></td>
+<td>отправить одну final typed turn до 2,000 chars без provider/tool
+fields</td>
 </tr>
 <tr>
 <td><code>playback.started</code></td>
@@ -2619,11 +2844,25 @@ pending hello-кандидат с коротким deadline и один bound so
 Reconnect заменяет bound socket только после полной проверки
 hello/token; неподтверждённый кандидат его не вытесняет.</p>
 <p>После handshake PCM16 audio идёт binary frames без base64.
-Gateway/utterance assembler ограничивает accumulated duration/bytes и
-после <code>audio.commit</code> кодирует ровно один validated mono PCM16
-WAV. Этот WAV передаётся atomic <code>SttPort</code>; только OpenRouter
-adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks
-не означают streaming transport до provider.</p>
+Gateway/utterance assembler ограничивает accumulated input максимумом
+60,000 ms и так, чтобы atomic WAV не превысил 2,000,000 bytes; при 16
+kHz mono PCM16 default duration ceiling строже и даёт
+<code>maxPcmBytes=1,920,000</code>. После <code>audio.commit</code>
+gateway кодирует ровно один validated WAV и передаёт его atomic
+<code>SttPort</code>; только OpenRouter adapter выполняет base64
+encoding уже готовых WAV bytes. Browser chunks не означают streaming
+transport до provider.</p>
+<p><code>visitor.text.submit</code> — secure provider-neutral
+alternative input, а не tool endpoint. Payload strict: trimmed non-empty
+<code>text</code> до 2,000 символов и monotonic nonnegative
+<code>sequence</code>. Typed submit supersedes/clears uncommitted
+microphone bytes, запрещён при pending/active turn или terminal stage, и
+считается принятым только когда server эмитит соответствующий
+<code>transcript.final</code>. Duplicate/stale sequence получает
+idempotency conflict; gap — invalid event; recoverable rejection
+позволяет повторить тот же sequence. После acceptance typed и spoken
+text проходят идентичные Luna context, stage policy, domain tools,
+persistence, assistant text и optional TTS.</p>
 <h3 id="server-client-events">Server → client events</h3>
 <table>
 <colgroup>
@@ -2698,9 +2937,13 @@ payload</td>
 <h3 id="binary-framing">Binary framing</h3>
 <p>Client microphone frames remain PCM16LE and are accumulated only
 within configured utterance duration/byte bounds until
-<code>audio.commit</code>. Server audio is an atomic phrase-level MP3
-payload associated with the preceding <code>audio.segment</code>
-metadata event:</p>
+<code>audio.commit</code>. UI duration/countdown is sample-derived:
+<code>durationMs = acceptedPcmBytes / (16000 × 2) × 1000</code>, а
+effective ceiling — минимум <code>maxUtteranceMs</code> и duration,
+выведенной из <code>maxPcmBytes</code>; circular timer не зависит от
+wall-clock ticks. Server audio is an atomic phrase-level MP3 payload
+associated with the preceding <code>audio.segment</code> metadata
+event:</p>
 <pre class="text"><code>byte 0:     kind (0x01 client PCM16LE, 0x02 server MP3 segment)
 bytes 1-8: unsigned sequence, big-endian/network byte order
 bytes 9+:  payload (raw PCM16LE or one complete MP3 file)</code></pre>
@@ -2917,15 +3160,33 @@ or notifier.</p>
 <span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  z<span class="op">.</span><span class="fu">object</span>({ channel<span class="op">:</span> z<span class="op">.</span><span class="fu">literal</span>(<span class="st">&quot;telegram&quot;</span>)<span class="op">,</span> value<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">2</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">128</span>) })<span class="op">,</span></span>
 <span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>])<span class="op">;</span></span>
 <span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> CreateBookingInputSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
-<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>  conversationId<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">10</span>)<span class="op">,</span></span>
-<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>  idempotencyKey<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">128</span>)<span class="op">,</span></span>
-<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">1</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">120</span>)<span class="op">,</span></span>
-<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>  contacts<span class="op">:</span> z<span class="op">.</span><span class="fu">array</span>(ContactSchema)<span class="op">.</span><span class="fu">min</span>(<span class="dv">1</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">3</span>)<span class="op">,</span></span>
-<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>  company<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">200</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>  preferredTimeText<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">500</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>  consentConfirmed<span class="op">:</span> z<span class="op">.</span><span class="fu">literal</span>(<span class="kw">true</span>)<span class="op">,</span></span>
-<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> BookingContactsSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">array</span>(ContactSchema)</span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span><span class="fu">min</span>(<span class="dv">2</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">3</span>)</span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span><span class="fu">superRefine</span>((contacts<span class="op">,</span> ctx) <span class="kw">=&gt;</span> {</span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> channels <span class="op">=</span> contacts<span class="op">.</span><span class="fu">map</span>((contact) <span class="kw">=&gt;</span> contact<span class="op">.</span><span class="at">channel</span>)<span class="op">;</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>channels<span class="op">.</span><span class="fu">includes</span>(<span class="st">&quot;email&quot;</span>)) ctx<span class="op">.</span><span class="fu">addIssue</span>({ code<span class="op">:</span> <span class="st">&quot;custom&quot;</span><span class="op">,</span> message<span class="op">:</span> <span class="st">&quot;A working email is required&quot;</span> })<span class="op">;</span></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="op">!</span>channels<span class="op">.</span><span class="fu">some</span>((channel) <span class="kw">=&gt;</span> channel <span class="op">===</span> <span class="st">&quot;phone&quot;</span> <span class="op">||</span> channel <span class="op">===</span> <span class="st">&quot;telegram&quot;</span>)) {</span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>      ctx<span class="op">.</span><span class="fu">addIssue</span>({ code<span class="op">:</span> <span class="st">&quot;custom&quot;</span><span class="op">,</span> message<span class="op">:</span> <span class="st">&quot;A phone or Telegram contact is required&quot;</span> })<span class="op">;</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="kw">new</span> <span class="bu">Set</span>(channels)<span class="op">.</span><span class="at">size</span> <span class="op">!==</span> channels<span class="op">.</span><span class="at">length</span>) ctx<span class="op">.</span><span class="fu">addIssue</span>({ code<span class="op">:</span> <span class="st">&quot;custom&quot;</span><span class="op">,</span> message<span class="op">:</span> <span class="st">&quot;Contact channels must be unique&quot;</span> })<span class="op">;</span></span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>  })<span class="op">;</span></span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> MeetingSlotSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>  startAt<span class="op">:</span> CanonicalRfc3339UtcSchema<span class="op">,</span></span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>  endAt<span class="op">:</span> CanonicalRfc3339UtcSchema<span class="op">,</span></span>
+<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>  timeZone<span class="op">:</span> z<span class="op">.</span><span class="fu">literal</span>(<span class="st">&quot;Europe/Moscow&quot;</span>)<span class="op">,</span></span>
+<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a>  durationMinutes<span class="op">:</span> z<span class="op">.</span><span class="fu">literal</span>(<span class="dv">20</span>)<span class="op">,</span></span>
+<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a>})<span class="op">.</span><span class="fu">strict</span>()<span class="op">;</span> <span class="co">// also validates weekday and 20-minute grid, 09:00..17:00 Moscow starts</span></span>
+<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> CreateBookingInputSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
+<span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a>  conversationId<span class="op">:</span> EntityIdSchema<span class="op">,</span></span>
+<span id="cb21-27"><a href="#cb21-27" aria-hidden="true" tabindex="-1"></a>  idempotencyKey<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">128</span>)<span class="op">,</span></span>
+<span id="cb21-28"><a href="#cb21-28" aria-hidden="true" tabindex="-1"></a>  name<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">trim</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">1</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">120</span>)<span class="op">,</span></span>
+<span id="cb21-29"><a href="#cb21-29" aria-hidden="true" tabindex="-1"></a>  contacts<span class="op">:</span> BookingContactsSchema<span class="op">,</span></span>
+<span id="cb21-30"><a href="#cb21-30" aria-hidden="true" tabindex="-1"></a>  company<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">trim</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">1</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">200</span>)<span class="op">,</span></span>
+<span id="cb21-31"><a href="#cb21-31" aria-hidden="true" tabindex="-1"></a>  meetingSlot<span class="op">:</span> MeetingSlotSchema<span class="op">,</span></span>
+<span id="cb21-32"><a href="#cb21-32" aria-hidden="true" tabindex="-1"></a>  consentConfirmed<span class="op">:</span> z<span class="op">.</span><span class="fu">literal</span>(<span class="kw">true</span>)<span class="op">,</span></span>
+<span id="cb21-33"><a href="#cb21-33" aria-hidden="true" tabindex="-1"></a>})<span class="op">.</span><span class="fu">strict</span>()<span class="op">;</span></span></code></pre></div>
 <p>Result:</p>
 <div class="sourceCode" id="cb22"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> CreateBookingResult <span class="op">=</span> {</span>
 <span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  ok<span class="op">:</span> <span class="kw">true</span><span class="op">;</span></span>
@@ -2935,26 +3196,30 @@ or notifier.</p>
 <span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>  createdAt<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
 <span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>}<span class="op">;</span></span></code></pre></div>
 <h3 id="append_booking_qualification-1"><code>append_booking_qualification</code></h3>
-<div class="sourceCode" id="cb23"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> QualificationPatchSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>  role<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">200</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>  industry<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">200</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  companySize<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">100</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>  monthlyLeadVolume<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">100</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>  currentChannels<span class="op">:</span> z<span class="op">.</span><span class="fu">array</span>(z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">80</span>))<span class="op">.</span><span class="fu">max</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>  crm<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">120</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>  currentProcess<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">1000</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>  pains<span class="op">:</span> z<span class="op">.</span><span class="fu">array</span>(z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">300</span>))<span class="op">.</span><span class="fu">max</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>  desiredUseCase<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">500</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>  timeline<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">200</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>  notes<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">1500</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>})<span class="op">.</span><span class="fu">strict</span>()<span class="op">;</span></span>
-<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> AppendQualificationInputSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
-<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>  bookingId<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">10</span>)<span class="op">,</span></span>
-<span id="cb23-17"><a href="#cb23-17" aria-hidden="true" tabindex="-1"></a>  idempotencyKey<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">128</span>)<span class="op">,</span></span>
-<span id="cb23-18"><a href="#cb23-18" aria-hidden="true" tabindex="-1"></a>  patch<span class="op">:</span> QualificationPatchSchema<span class="op">,</span></span>
-<span id="cb23-19"><a href="#cb23-19" aria-hidden="true" tabindex="-1"></a>  completion<span class="op">:</span> z<span class="op">.</span><span class="fu">enum</span>([<span class="st">&quot;partial&quot;</span><span class="op">,</span> <span class="st">&quot;complete&quot;</span><span class="op">,</span> <span class="st">&quot;skipped&quot;</span>])<span class="op">.</span><span class="fu">default</span>(<span class="st">&quot;partial&quot;</span>)<span class="op">,</span></span>
-<span id="cb23-20"><a href="#cb23-20" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<div class="sourceCode" id="cb23"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Storage contract retains these optional fields for compatibility. Current</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="co">// conversation policy collects only monthlyLeadVolume (monthly inbound leads)</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="co">// and integer salesManagerCount after committed booking, confirmation, and consent.</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> QualificationPatchSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>  role<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">200</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>  industry<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">200</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>  companySize<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">100</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>  monthlyLeadVolume<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">100</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>  salesManagerCount<span class="op">:</span> z<span class="op">.</span><span class="fu">number</span>()<span class="op">.</span><span class="fu">int</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">0</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">10000</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>  currentChannels<span class="op">:</span> z<span class="op">.</span><span class="fu">array</span>(z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">80</span>))<span class="op">.</span><span class="fu">max</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>  crm<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">120</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>  currentProcess<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">1000</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>  pains<span class="op">:</span> z<span class="op">.</span><span class="fu">array</span>(z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">300</span>))<span class="op">.</span><span class="fu">max</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>  desiredUseCase<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">500</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>  timeline<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">200</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>  notes<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">1500</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-17"><a href="#cb23-17" aria-hidden="true" tabindex="-1"></a>})<span class="op">.</span><span class="fu">strict</span>()<span class="op">;</span></span>
+<span id="cb23-18"><a href="#cb23-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-19"><a href="#cb23-19" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> AppendQualificationInputSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
+<span id="cb23-20"><a href="#cb23-20" aria-hidden="true" tabindex="-1"></a>  bookingId<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">10</span>)<span class="op">,</span></span>
+<span id="cb23-21"><a href="#cb23-21" aria-hidden="true" tabindex="-1"></a>  idempotencyKey<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">128</span>)<span class="op">,</span></span>
+<span id="cb23-22"><a href="#cb23-22" aria-hidden="true" tabindex="-1"></a>  patch<span class="op">:</span> QualificationPatchSchema<span class="op">,</span></span>
+<span id="cb23-23"><a href="#cb23-23" aria-hidden="true" tabindex="-1"></a>  completion<span class="op">:</span> z<span class="op">.</span><span class="fu">enum</span>([<span class="st">&quot;partial&quot;</span><span class="op">,</span> <span class="st">&quot;complete&quot;</span><span class="op">,</span> <span class="st">&quot;skipped&quot;</span>])<span class="op">.</span><span class="fu">default</span>(<span class="st">&quot;partial&quot;</span>)<span class="op">,</span></span>
+<span id="cb23-24"><a href="#cb23-24" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
 <p>Result:</p>
 <div class="sourceCode" id="cb24"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> AppendQualificationResult <span class="op">=</span> {</span>
 <span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>  ok<span class="op">:</span> <span class="kw">true</span><span class="op">;</span></span>
@@ -2968,16 +3233,27 @@ execution</h2>
 <div class="sourceCode" id="cb25"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="cf">switch</span> (tool<span class="op">.</span><span class="at">name</span>) {</span>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">case</span> <span class="st">&quot;create_booking&quot;</span><span class="op">:</span></span>
 <span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(state <span class="op">===</span> <span class="st">&quot;COLLECT_BOOKING&quot;</span>)<span class="op">;</span></span>
-<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(currentBooking <span class="op">===</span> <span class="kw">null</span> <span class="op">||</span> currentBooking<span class="op">.</span><span class="at">conversationId</span> <span class="op">===</span> conversationId)<span class="op">;</span></span>
-<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">break</span><span class="op">;</span></span>
-<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">case</span> <span class="st">&quot;append_booking_qualification&quot;</span><span class="op">:</span></span>
-<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>([<span class="st">&quot;BOOKED&quot;</span><span class="op">,</span> <span class="st">&quot;POST_BOOKING_QUALIFICATION&quot;</span>]<span class="op">.</span><span class="fu">includes</span>(state))<span class="op">;</span></span>
-<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(currentBooking<span class="op">?.</span><span class="at">id</span> <span class="op">===</span> args<span class="op">.</span><span class="at">bookingId</span>)<span class="op">;</span></span>
-<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">break</span><span class="op">;</span></span>
-<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<p>LLM-provided <code>conversationId</code>, <code>bookingId</code> и
-consent сверяются с server-side session; нельзя доверять им как
-единственному источнику.</p>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(serverContactConsentConfirmed <span class="op">===</span> <span class="kw">true</span>)<span class="op">;</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(currentBooking <span class="op">===</span> <span class="kw">null</span> <span class="op">||</span> currentBooking<span class="op">.</span><span class="at">conversationId</span> <span class="op">===</span> conversationId)<span class="op">;</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(candidateMeetingSlots<span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">2</span>)<span class="op">;</span></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(candidateMeetingSlots<span class="op">.</span><span class="fu">some</span>((slot) <span class="kw">=&gt;</span> <span class="fu">deepEqual</span>(slot<span class="op">,</span> args<span class="op">.</span><span class="at">meetingSlot</span>)))<span class="op">;</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">case</span> <span class="st">&quot;append_booking_qualification&quot;</span><span class="op">:</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>([<span class="st">&quot;BOOKED&quot;</span><span class="op">,</span> <span class="st">&quot;POST_BOOKING_QUALIFICATION&quot;</span>]<span class="op">.</span><span class="fu">includes</span>(state))<span class="op">;</span></span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(currentBooking<span class="op">?.</span><span class="at">id</span> <span class="op">===</span> args<span class="op">.</span><span class="at">bookingId</span>)<span class="op">;</span></span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(bookingConfirmationDelivered <span class="op">===</span> <span class="kw">true</span>)<span class="op">;</span></span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(qualificationConsent <span class="op">===</span> <span class="st">&quot;granted&quot;</span>)<span class="op">;</span></span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>LLM-provided <code>conversationId</code>, <code>bookingId</code>,
+slot и consent сверяются с server-side session; нельзя доверять им как
+единственному источнику. Server перед каждым Luna turn строит
+<code>schedulingContext</code> из собственного clock: canonical
+<code>currentInstant</code>, <code>moscowLocalDate</code>,
+<code>moscowWeekday</code> и tuple ровно из двух
+<code>{ meetingSlot, displayLabel }</code>. Tool execution повторно
+отвергает slot вне tuple; BookingService повторно отвергает
+now-non-bookable или internally occupied start.</p>
 <h2 id="sqlite-model">7. SQLite model</h2>
 <h3 id="conversations"><code>conversations</code></h3>
 <table>
@@ -3058,8 +3334,8 @@ consent сверяются с server-side session; нельзя доверять
 <li><code>user_text</code>;</li>
 <li><code>assistant_text</code>;</li>
 <li><code>state_before</code>, <code>state_after</code>;</li>
-<li><code>audio_commit_at</code>, <code>stt_request_at</code>,
-<code>stt_final_at</code>;</li>
+<li><code>speech_final_at</code> nullable — момент принятого final
+spoken или typed user turn;</li>
 <li><code>brain_started_at</code>;</li>
 <li><code>first_text_delta_at</code>;</li>
 <li><code>first_audio_at</code>;</li>
@@ -3070,6 +3346,10 @@ consent сверяются с server-side session; нельзя доверять
 </ul>
 <h3 id="bookings"><code>bookings</code></h3>
 <table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
 <thead>
 <tr>
 <th>Column</th>
@@ -3099,15 +3379,34 @@ consent сверяются с server-side session; нельзя доверять
 </tr>
 <tr>
 <td><code>company</code></td>
-<td>nullable</td>
+<td>nullable физически только для сохранённых legacy rows;
+required/non-empty для всех новых bookings</td>
 </tr>
 <tr>
 <td><code>preferred_time_text</code></td>
-<td>nullable</td>
+<td>deprecated nullable legacy column; не входит в active API/tool/event
+contracts и не записывается новым flow</td>
+</tr>
+<tr>
+<td><code>meeting_start_at</code></td>
+<td>nullable для legacy rows; canonical UTC, required для новых
+bookings, UNIQUE when non-null</td>
+</tr>
+<tr>
+<td><code>meeting_end_at</code></td>
+<td>nullable для legacy rows; ровно +20 минут, required для новых
+bookings</td>
+</tr>
+<tr>
+<td><code>meeting_timezone</code></td>
+<td>nullable для legacy rows; <code>Europe/Moscow</code>, required для
+новых bookings</td>
 </tr>
 <tr>
 <td><code>qualification_json</code></td>
-<td>default <code>{}</code></td>
+<td>default <code>{}</code>; active flow writes only monthly inbound
+<code>monthlyLeadVolume</code> and integer
+<code>salesManagerCount</code></td>
 </tr>
 <tr>
 <td><code>qualification_status</code></td>
@@ -3119,6 +3418,15 @@ consent сверяются с server-side session; нельзя доверять
 </tr>
 </tbody>
 </table>
+<p>Migration <code>0003_internal_meeting_slots.sql</code> добавляет три
+meeting columns, partial unique index на non-null start и insert/update
+triggers для company, canonical timestamps, exact 20-minute duration,
+Moscow weekday и 09:00–17:00/20-minute-grid rules. Existing legacy rows
+намеренно сохраняются с <code>NULL</code> meeting fields и прежним
+deprecated text column: migration не придумывает им slots и не удаляет
+их. Domain snapshot/service fail closed при попытке использовать такую
+legacy row как complete modern booking; все новые inserts и relevant
+updates обязаны удовлетворять triggers.</p>
 <h3 id="idempotency_keys"><code>idempotency_keys</code></h3>
 <ul>
 <li><code>scope</code>;</li>
@@ -3153,7 +3461,9 @@ consent сверяются с server-side session; нельзя доверять
   lookup idempotency key
   if found: return stored result
   lookup booking by conversation_id
-  if found: persist replay key and return same booking
+  if found: validate complete modern snapshot, persist replay key and return same booking
+  validate server clock and selected candidate
+  reject occupied meeting_start_at
   insert booking
   insert domain_event booking.created
   insert notification_outbox
@@ -3177,13 +3487,21 @@ COMMIT</code></pre>
 <span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;bookingId&quot;</span><span class="fu">:</span> <span class="st">&quot;bkg_...&quot;</span><span class="fu">,</span></span>
 <span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;conversationId&quot;</span><span class="fu">:</span> <span class="st">&quot;conv_...&quot;</span><span class="fu">,</span></span>
 <span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;Александр&quot;</span><span class="fu">,</span></span>
-<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;contacts&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="fu">{</span> <span class="dt">&quot;channel&quot;</span><span class="fu">:</span> <span class="st">&quot;telegram&quot;</span><span class="fu">,</span> <span class="dt">&quot;value&quot;</span><span class="fu">:</span> <span class="st">&quot;@alex&quot;</span> <span class="fu">}</span><span class="ot">]</span><span class="fu">,</span></span>
-<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;company&quot;</span><span class="fu">:</span> <span class="st">&quot;Example LLC&quot;</span><span class="fu">,</span></span>
-<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;preferredTimeText&quot;</span><span class="fu">:</span> <span class="st">&quot;завтра после 15:00&quot;</span><span class="fu">,</span></span>
-<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;status&quot;</span><span class="fu">:</span> <span class="st">&quot;booked&quot;</span><span class="fu">,</span></span>
-<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;qualificationStatus&quot;</span><span class="fu">:</span> <span class="st">&quot;none&quot;</span></span>
-<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
-<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;contacts&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span> <span class="dt">&quot;channel&quot;</span><span class="fu">:</span> <span class="st">&quot;email&quot;</span><span class="fu">,</span> <span class="dt">&quot;value&quot;</span><span class="fu">:</span> <span class="st">&quot;alex@example.com&quot;</span> <span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span> <span class="dt">&quot;channel&quot;</span><span class="fu">:</span> <span class="st">&quot;telegram&quot;</span><span class="fu">,</span> <span class="dt">&quot;value&quot;</span><span class="fu">:</span> <span class="st">&quot;@alex&quot;</span> <span class="fu">}</span></span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;company&quot;</span><span class="fu">:</span> <span class="st">&quot;Example LLC&quot;</span><span class="fu">,</span></span>
+<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;meetingSlot&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;startAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:00:00.000Z&quot;</span><span class="fu">,</span></span>
+<span id="cb27-17"><a href="#cb27-17" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;endAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:20:00.000Z&quot;</span><span class="fu">,</span></span>
+<span id="cb27-18"><a href="#cb27-18" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;timeZone&quot;</span><span class="fu">:</span> <span class="st">&quot;Europe/Moscow&quot;</span><span class="fu">,</span></span>
+<span id="cb27-19"><a href="#cb27-19" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;durationMinutes&quot;</span><span class="fu">:</span> <span class="dv">20</span></span>
+<span id="cb27-20"><a href="#cb27-20" aria-hidden="true" tabindex="-1"></a>    <span class="fu">},</span></span>
+<span id="cb27-21"><a href="#cb27-21" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;status&quot;</span><span class="fu">:</span> <span class="st">&quot;booked&quot;</span><span class="fu">,</span></span>
+<span id="cb27-22"><a href="#cb27-22" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;qualificationStatus&quot;</span><span class="fu">:</span> <span class="st">&quot;none&quot;</span></span>
+<span id="cb27-23"><a href="#cb27-23" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb27-24"><a href="#cb27-24" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <h3 id="updated">Updated</h3>
 <div class="sourceCode" id="cb28"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
 <span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;v&quot;</span><span class="fu">:</span> <span class="dv">1</span><span class="fu">,</span></span>
@@ -3194,13 +3512,11 @@ COMMIT</code></pre>
 <span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;bookingId&quot;</span><span class="fu">:</span> <span class="st">&quot;bkg_...&quot;</span><span class="fu">,</span></span>
 <span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;qualificationStatus&quot;</span><span class="fu">:</span> <span class="st">&quot;partial&quot;</span><span class="fu">,</span></span>
 <span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;qualification&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;role&quot;</span><span class="fu">:</span> <span class="st">&quot;Head of Sales&quot;</span><span class="fu">,</span></span>
-<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;monthlyLeadVolume&quot;</span><span class="fu">:</span> <span class="st">&quot;около 2000&quot;</span><span class="fu">,</span></span>
-<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;crm&quot;</span><span class="fu">:</span> <span class="st">&quot;amoCRM&quot;</span><span class="fu">,</span></span>
-<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;pains&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;лиды ждут ночью&quot;</span><span class="ot">]</span></span>
-<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
-<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
-<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;monthlyLeadVolume&quot;</span><span class="fu">:</span> <span class="st">&quot;около 2000 входящих лидов в месяц&quot;</span><span class="fu">,</span></span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;salesManagerCount&quot;</span><span class="fu">:</span> <span class="dv">8</span></span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p>Webhook P1 подписывается
 <code>HMAC-SHA256(timestamp + &#39;.&#39; + rawBody)</code> и содержит event ID
 для deduplication.</p>
@@ -4173,9 +4489,11 @@ materially;</li>
 <p>Table-driven cases:</p>
 <ul>
 <li>все допустимые transitions;</li>
-<li>запрещён <code>append_booking_qualification</code> до booking;</li>
-<li><code>create_booking</code> разрешён только из collection
-stage;</li>
+<li>запрещён <code>append_booking_qualification</code> до committed
+booking, user-facing confirmation и отдельного consent;</li>
+<li><code>create_booking</code> разрешён только из
+<code>COLLECT_BOOKING</code>, при server contact consent и с одним из
+двух candidates активного turn;</li>
 <li>disconnect после booking → booking stays;</li>
 <li>clear refusal → declined;</li>
 <li>retry не меняет domain effect;</li>
@@ -4200,10 +4518,20 @@ stage;</li>
 </ul>
 <h3 id="booking-domain">Booking domain</h3>
 <ul>
-<li>one booking per conversation;</li>
+<li>one booking per conversation и one booking per non-null
+<code>meeting_start_at</code>;</li>
+<li>required
+name/company/working-email/phone-or-Telegram/consent/structured slot
+validation;</li>
+<li>exactly two deterministic candidates, Moscow
+weekday/non-today/09:00–17:00 20-minute grid;</li>
+<li>non-candidate, stale and internally occupied slots rejected;</li>
+<li>migration preserves legacy rows with null meeting fields and does
+not invent slots; modern snapshot use fails closed;</li>
 <li>same idempotency key/same payload → same result;</li>
 <li>same key/different payload → conflict;</li>
-<li>qualification patch merges fields;</li>
+<li>qualification patch merges monthly inbound volume and integer
+<code>salesManagerCount</code>;</li>
 <li>empty patch rejected;</li>
 <li>notifier failure не rolls back booking;</li>
 <li>PII redaction.</li>
@@ -4215,6 +4543,9 @@ OpenRouter STT</h3>
 ownership tests separate.</p>
 <p>Gateway/utterance-assembler tests prove:</p>
 <ul>
+<li>exact 60,000 ms utterance and 2,000,000-byte atomic WAV caps, with
+server-advertised <code>maxPcmBytes=1,920,000</code> under default 16
+kHz mono PCM16 settings;</li>
 <li>bounded 16 kHz mono PCM16 plus one accepted
 <code>audio.commit</code> produces exactly one validated WAV with the
 expected RIFF/WAVE header, PCM16 metadata, data length and sample
@@ -4297,9 +4628,23 @@ status/latency/byte evidence.</p>
 validated WAV → atomic <code>SttPort</code> request → fake OpenRouter
 already-WAV request/final transcript → fake brain deltas → fake
 OpenRouter complete MP3 segments → WS client;</li>
+<li>sample-derived capture progress/countdown uses accepted PCM16 bytes
+and stricter server duration/byte ceiling, then auto-commits exactly
+once;</li>
+<li>bounded monotonic <code>visitor.text.submit</code> clears
+uncommitted audio, suppresses pending duplicates, retains sequence on
+rejection, emits server final once, and follows the same
+brain/state/tool/persistence path as speech;</li>
+<li>typed composer is stage-gated, and booking form renders only from
+server-owned <code>COLLECT_BOOKING</code>, never transcript
+wording;</li>
 <li>real SQLite transaction + fake notifier;</li>
-<li>booking tool call inside brain turn;</li>
-<li>booking event appears before qualification prompt/audio;</li>
+<li>Luna receives server-owned current Moscow date/day and exactly two
+structured candidates with validated labels;</li>
+<li>booking tool call accepts only one active candidate inside brain
+turn;</li>
+<li>booking event and user-facing confirmation appear before
+qualification consent/question/audio;</li>
 <li>reconnect with same conversation;</li>
 <li>barge-in while OpenRouter requests/complete segments are in
 flight;</li>
@@ -4317,9 +4662,14 @@ flight;</li>
 <li>observe listening/processing states and then exactly one
 <code>transcript.final</code>;</li>
 <li>receive assistant text and ordered complete MP3 segment events;</li>
-<li>complete booking;</li>
-<li>see booked UI;</li>
-<li>continue/skip qualification;</li>
+<li>verify the circular countdown is sample-derived and reaches the
+60-second limit without wall-clock drift;</li>
+<li>submit a normal typed final turn and then use the in-chat booking
+form only at <code>COLLECT_BOOKING</code>;</li>
+<li>choose one of exactly two server-labeled Moscow slots and complete
+required name/company/email/phone-or-Telegram/consent data;</li>
+<li>see booked UI and verify no external calendar/invitation claim;</li>
+<li>consent to or skip the two-field qualification;</li>
 <li>verify backend DB/event payload.</li>
 </ol>
 <p>Browser voice acceptance additionally proves ordered playback of at
@@ -4358,15 +4708,19 @@ barge-in, late-segment rejection, and visible text when audio fails.</p>
 <li>отвечает не по теме;</li>
 <li>меняет задачу;</li>
 <li>молчит;</li>
-<li>даёт все данные одной репликой;</li>
-<li>исправляет контакт.</li>
+<li>даёт name/company/working-email/phone-or-Telegram одной typed или
+spoken репликой;</li>
+<li>исправляет контакт; 18a. пытается выбрать третий/придуманный slot;
+18b. просит slot сегодня или в выходной; 18c. typed form wording
+пытается открыть booking stage до server transition.</li>
 </ol>
 <h3 id="booking-invariants">Booking invariants</h3>
 <ol start="19" type="1">
 <li>retry create;</li>
 <li>disconnect сразу после create;</li>
 <li>отказывается от qualification;</li>
-<li>отвечает только на один qualification вопрос;</li>
+<li>после consent отвечает только на monthly inbound leads или integer
+manager count;</li>
 <li>повторяет booking данные;</li>
 <li>brain ошибочно пытается квалифицировать до create.</li>
 </ol>
@@ -4387,7 +4741,12 @@ barge-in, late-segment rejection, and visible text when audio fails.</p>
 <li>factuality по allowed claims;</li>
 <li>no prohibited promise;</li>
 <li>no secret leakage;</li>
-<li>one-question guideline;</li>
+<li>one-question guideline и максимум два discovery-вопроса до soft
+offer;</li>
+<li>qualification ограничена monthly inbound leads + integer
+<code>salesManagerCount</code>;</li>
+<li>10–15m RUB/month claim только с атрибуцией к пользовательскому брифу
+и explicit no-guarantee boundary;</li>
 <li>refusal handling;</li>
 <li>stage progress;</li>
 <li>spoken-language quality;</li>
@@ -5471,8 +5830,9 @@ unobserved.</li>
 <li>Target VPS resource behavior, DNS, public TLS/WSS, and target-host
 provider smokes remain unobserved.</li>
 <li>The booking is an internal SQLite record plus notifier outbox event.
-No real calendar event, availability check, CRM record, or meeting
-invitation is created.</li>
+The internal scheduler excludes committed starts, but no real calendar
+event, external availability check, CRM record, or meeting invitation is
+created.</li>
 <li>OpenRouter model/voice availability, paid rates, Codex subscription
 limits, and plan suitability are runtime/owner checks, not release
 guarantees.</li>

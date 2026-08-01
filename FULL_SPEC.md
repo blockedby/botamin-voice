@@ -34,7 +34,7 @@ lang: ru-RU
 
 Продемонстрировать работающий вертикальный срез AI-продавца Botamin:
 
-> посетитель открывает лендинг, начинает голосовой разговор, получает релевантную презентацию продукта, отвечает на уточняющие вопросы, соглашается на встречу, передаёт минимальный контакт, после чего backend фиксирует бронь и опционально обогащает её квалификацией.
+> посетитель открывает лендинг, начинает голосовой или печатный разговор, получает релевантную презентацию продукта, отвечает максимум на два discovery-вопроса до мягкого предложения следующего шага, выбирает один из двух внутренних слотов и передаёт обязательные booking-данные, после чего backend фиксирует бронь и опционально обогащает её ограниченной квалификацией.
 
 MVP должен выглядеть как небольшой реальный продукт, а не как набор несвязанных API-примеров.
 
@@ -52,14 +52,16 @@ MVP должен выглядеть как небольшой реальный �
 
 - адаптивный лендинг Botamin;
 - браузерный доступ к микрофону;
-- phrase-level STT на русском: chunked PCM16 до backend, bounded WAV request после `audio.commit`, final transcript only;
+- phrase-level STT на русском: chunked PCM16 до backend, максимум 60 секунд на реплику и 2,000,000 bytes на WAV request после `audio.commit`, final transcript only;
+- provider-neutral final typed turns через `visitor.text.submit`, семантически равнозначные spoken turns;
+- sample-derived circular countdown для активной записи;
 - текстовое рассуждение и ответ через GPT-5.6 Luna в Codex;
 - phrase-level TTS через полные MP3-сегменты, запускаемый до завершения полного ответа;
 - interruption/barge-in на базовом уровне;
 - управляемая state machine разговора;
 - product knowledge из Botamin-сайта и Telegram-кейсов;
-- создание внутренней брони;
-- необязательная квалификация после брони;
+- создание внутренней брони на одном из двух server-supplied structured 20-minute Moscow slots;
+- необязательная квалификация после брони и отдельного согласия, только по monthly inbound leads и integer sales-manager count;
 - SQLite persistence;
 - console notifier и интерфейс для webhook/push;
 - transcript/event audit;
@@ -71,7 +73,7 @@ MVP должен выглядеть как небольшой реальный �
 - визуальный conversation builder;
 - prompt CMS, роли и авторизация редакторов;
 - реальный Google Calendar, Calendly или CRM;
-- проверка свободных слотов;
+- внешняя проверка календарной доступности; внутренний scheduler только исключает уже committed start times;
 - телефония, SIP, PSTN, Twilio;
 - исходящие звонки;
 - полноценный call-center dashboard;
@@ -99,12 +101,15 @@ MVP должен выглядеть как небольшой реальный �
 | Prompts | Markdown в Git |
 | Deployment | local-first Compose project on one trusted machine; app + Caddy only. One target VPS with TLS/WSS is the later production-shaped gate |
 | Raw audio retention | выключено |
-| Qualification | включаемая опция, только после booking |
+| Utterance bounds | 60 секунд; WAV cap 2,000,000 bytes; countdown по принятым PCM16 samples и stricter server ceiling |
+| Typed input | финальный `visitor.text.submit`, тот же semantic turn pipeline, что и speech |
+| Booking | имя, компания, рабочий email, телефон или Telegram, consent и один из ровно двух server-supplied 20-minute `Europe/Moscow` slots |
+| Qualification | включаемая опция, только после committed booking, confirmation и consent; monthly inbound leads + integer `salesManagerCount` |
 
 ## 6. Допущения, которые агенты не должны превращать в блокеры
 
-- Как минимум один контактный канал обязателен: телефон, email или Telegram.
-- Предпочтительное время хранится свободным текстом; календарного slot resolution нет.
+- Для новой брони обязательны имя, компания, рабочий email, телефон или Telegram, consent и выбранный server-supplied slot.
+- Backend владеет текущей московской датой/днём и выдаёт ровно два структурированных кандидата: будни, не сегодня, 20 минут, старты по сетке с 09:00 до 17:00 `Europe/Moscow`. Это внутреннее резервирование без внешнего календаря или availability API.
 - Логотипы, точная типографика и brand book могут быть заменены аккуратным нейтральным стилем.
 - Console output является достаточным handoff для P0.
 - Если subscription auth временно недоступен, сервис показывает понятный degraded state; автоматический переход на платный API не включается без конфигурации.
@@ -112,8 +117,8 @@ MVP должен выглядеть как небольшой реальный �
 
 ## 7. Термины
 
-- **Conversation** — одна пользовательская голосовая сессия.
-- **Turn** — одна завершённая реплика пользователя и следующий ответ агента.
+- **Conversation** — одна пользовательская voice/typed сессия.
+- **Turn** — одна завершённая spoken или typed реплика пользователя и следующий ответ агента.
 - **Booking** — внутренняя запись о согласованном следующем шаге, не календарное событие.
 - **Qualification** — необязательные сведения, добавляемые к уже существующей брони.
 - **BrainPort** — внутренний интерфейс текстового LLM-мозга.
@@ -160,25 +165,26 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 | ID | История | Приёмка |
 |---|---|---|
-| US-001 | Как посетитель, я запускаю разговор одной кнопкой | запрашивается mic permission, UI показывает состояние |
-| US-002 | Я говорю естественно по-русски | UI показывает listening/processing, затем ровно один `transcript.final` |
-| US-003 | Агент отвечает голосом и текстом | первая полная MP3-фраза может проиграться до завершения ответа Luna; ответ не содержит markdown-мусора |
-| US-004 | Агент понимает, зачем я пришёл | задаёт не более одного вопроса за раз, фиксирует роль/задачу |
-| US-005 | Агент объясняет Botamin на релевантном примере | использует только утверждённые knowledge claims |
-| US-006 | Я могу возразить или перебить | проигрывание останавливается, новый turn обрабатывается |
-| US-007 | Я соглашаюсь на встречу | агент собирает минимум данных и вызывает `create_booking` |
-| US-008 | После брони я могу ответить на доп. вопросы | данные патчат ту же бронь через `append_booking_qualification` |
-| US-009 | Я могу отказаться от квалификации | бронь остаётся `booked`, диалог корректно завершается |
-| US-010 | Получатель видит данные | console/webhook получает структурированный payload |
-| US-011 | Сервис перезапускается | сохранённые booking/event данные остаются в volume |
-| US-012 | Проект сначала разворачивается локально | `scripts/deploy-local.sh` поднимает готовые app + Caddy на `http://localhost:5173`; target VPS/TLS проверяется отдельным later gate |
+| US-001 | Как посетитель, я запускаю разговор одной кнопкой | после двух consents запрашивается mic permission, UI показывает состояние |
+| US-002 | Я говорю естественно по-русски | UI показывает sample-derived circular countdown во время capture, listening/processing, затем ровно один `transcript.final` |
+| US-003 | Я печатаю финальную реплику | stage-gated composer отправляет provider-neutral `visitor.text.submit`; server-accepted typed turn проходит тот же semantic pipeline, что и speech |
+| US-004 | Агент отвечает голосом и текстом | первая полная MP3-фраза может проиграться до завершения ответа Luna; ответ не содержит markdown-мусора |
+| US-005 | Агент понимает, зачем я пришёл | задаёт не более одного вопроса за раз и максимум два discovery-вопроса до мягкого предложения следующего шага |
+| US-006 | Агент объясняет Botamin на релевантном примере | использует только утверждённые knowledge claims; 10–15 млн ₽/месяц — только атрибутированное сообщение пользовательского брифа, не гарантия |
+| US-007 | Я могу возразить или перебить | проигрывание останавливается, новый turn обрабатывается |
+| US-008 | Я соглашаюсь на встречу | агент предлагает ровно два server-supplied слота, собирает обязательные данные и вызывает `create_booking` с выбранным кандидатом |
+| US-009 | После брони я могу ответить на два доп. вопроса | после confirmation и consent месячный inbound volume и integer `salesManagerCount` патчат ту же бронь |
+| US-010 | Я могу отказаться от квалификации | бронь остаётся `booked`, диалог корректно завершается |
+| US-011 | Получатель видит данные | console/webhook получает структурированный payload со слотом |
+| US-012 | Сервис перезапускается | сохранённые booking/event данные остаются в volume |
+| US-013 | Проект сначала разворачивается локально | `scripts/deploy-local.sh` поднимает готовые app + Caddy на `http://localhost:5173`; target VPS/TLS проверяется отдельным later gate |
 
 ## 4. Functional requirements
 
 ### 4.1 Voice session
 
 - **FR-VOICE-001:** создание сессии должно выдавать уникальный `conversationId`.
-- **FR-VOICE-002:** браузер передаёт mono PCM16, 16 kHz, чанками около 100 ms; browser/backend buffers ограничены duration/bytes.
+- **FR-VOICE-002:** браузер передаёт mono PCM16, 16 kHz, чанками около 100 ms; максимум реплики — 60,000 ms, максимум atomic WAV — 2,000,000 bytes. Server-advertised client PCM cap учитывает WAV overhead и stricter ceiling (при defaults 1,920,000 PCM bytes).
 - **FR-VOICE-003:** backend держит единственный `OPENROUTER_API_KEY` server-side для STT и TTS.
 - **FR-VOICE-004:** `audio.commit` закрывает utterance; gateway/utterance assembler создаёт ровно один validated mono PCM16 WAV и передаёт его atomic `SttPort`. Adapter валидирует/bounds already-WAV bytes, base64-кодирует их без conversion и выполняет один audio-input chat completion. UI получает только один `transcript.final`, а Luna запускается только для валидного неустаревшего результата.
 - **FR-VOICE-005:** при barge-in клиент немедленно останавливает playback и очищает очередь, backend abort-ит OpenRouter fetches текущего `generationId` и по возможности вызывает `turn/interrupt`.
@@ -189,6 +195,10 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-VOICE-010:** перед TTS удаляются PII, tool envelopes, hidden IDs, Markdown, code fences и raw URLs; hard limit сегмента — configurable, default 240 chars.
 - **FR-VOICE-011:** STT duration/byte/time/retry guards и TTS per-segment/turn/session/concurrency/response guards ограничивают voice path; retry не запускает Luna/tools повторно.
 - **FR-VOICE-012:** chunked PCM16 описывает только browser-to-gateway transport; provider boundary получает один atomic `audio/wav` request и возвращает один final result.
+- **FR-VOICE-013:** circular countdown отображается только при active capture и вычисляется по числу принятых PCM16 samples (`acceptedPcmBytes / 2 / 16000`), ограниченному меньшим из server `maxUtteranceMs` и byte-derived duration; wall-clock drift не является источником значения.
+- **FR-TEXT-001:** `visitor.text.submit` содержит один trimmed final typed turn до 2,000 символов, monotonic sequence и не содержит provider/tool fields.
+- **FR-TEXT-002:** typed turn очищает uncommitted microphone bytes, допускает не более одного pending submit и считается принятым только после server `transcript.final`; rejected retry сохраняет sequence.
+- **FR-TEXT-003:** после final acceptance typed и spoken turns семантически равнозначны: один и тот же Luna context, server state policy, tools, persistence, assistant text и optional TTS.
 
 ### 4.2 Brain and orchestration
 
@@ -200,22 +210,26 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-BRAIN-006:** system/product/conversation prompts загружаются из Markdown.
 - **FR-BRAIN-007:** tool mode имеет feature flag: `dynamic` и стабильный fallback `envelope`.
 - **FR-BRAIN-008:** reasoning effort задаётся конфигурацией; стартовый профиль Luna использует минимальный уровень, который проходит quality evals.
+- **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, а также ровно два structured meeting candidates с server-generated Russian `displayLabel`.
+- **FR-BRAIN-010:** cadence умеренно проактивен: один вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting offer, без повторного давления после ясного отказа.
 
 ### 4.3 Booking
 
-- **FR-BOOK-001:** обязательны `conversationId`, имя и хотя бы один контактный канал.
-- **FR-BOOK-002:** `create_booking` атомарен и идемпотентен по `conversationId`/`idempotencyKey`.
-- **FR-BOOK-003:** успешный tool всегда возвращает стабильный `bookingId`.
-- **FR-BOOK-004:** событие `booking.created` отправляется до первого квалификационного вопроса.
-- **FR-BOOK-005:** meeting/calendar event не создаётся.
-- **FR-BOOK-006:** агент подтверждает только факт получения данных.
+- **FR-BOOK-001:** обязательны `conversationId`, имя, компания, рабочий email, телефон или Telegram, `consentConfirmed=true` и structured `meetingSlot`.
+- **FR-BOOK-002:** server выдаёт ровно два уникальных внутренних кандидата длительностью 20 минут в `Europe/Moscow`: будни, дата строго позже server-owned московского today, старты по 20-минутной сетке от 09:00 до 17:00 включительно.
+- **FR-BOOK-003:** `create_booking` разрешён только в `COLLECT_BOOKING`; выбранный `meetingSlot` обязан byte-for-field совпасть с одним из двух candidates активного turn. Non-candidate, stale, occupied или уже не bookable slot отклоняется.
+- **FR-BOOK-004:** `create_booking` атомарен и идемпотентен по `conversationId`/`idempotencyKey`; уникальны conversation и non-null internal `meeting_start_at`.
+- **FR-BOOK-005:** успешный tool всегда возвращает стабильный `bookingId`.
+- **FR-BOOK-006:** committed `booking.created` и user-facing confirmation предшествуют consent на qualification и первому qualification question.
+- **FR-BOOK-007:** backend сохраняет внутреннюю бронь и outbox event, но не создаёт внешнее calendar event/invitation, не вызывает external availability API и не создаёт CRM record.
+- **FR-BOOK-008:** in-chat form показывается только по server-owned `COLLECT_BOOKING`, валидирует name/company/working email/phone-or-Telegram и сериализует данные как обычную visitor typed turn; форма не вызывает tool и не подтверждает бронь.
 
 ### 4.4 Post-booking qualification
 
-- **FR-QUAL-001:** запускается только при `booking.status=booked`.
-- **FR-QUAL-002:** пользователь явно или контекстно соглашается на дополнительные вопросы.
-- **FR-QUAL-003:** каждое осмысленное подмножество данных может сохраняться patch-операцией.
-- **FR-QUAL-004:** поля qualification необязательны.
+- **FR-QUAL-001:** запускается только при committed `booking.status=booked` и после user-facing booking confirmation.
+- **FR-QUAL-002:** пользователь отдельно и явно соглашается на дополнительные вопросы; booking action envelope того же turn не может выдать это согласие.
+- **FR-QUAL-003:** conversational collection ограничен двумя полями: `monthlyLeadVolume` только для месячного объёма входящих лидов и `salesManagerCount` как integer `0..10000`.
+- **FR-QUAL-004:** оба поля необязательны и могут сохраняться partial patch-операцией; остальные legacy schema fields не являются вопросами текущего flow.
 - **FR-QUAL-005:** disconnect/decline переводит qualification в `partial` или `skipped`, но booking остаётся `booked`.
 - **FR-QUAL-006:** повторный patch идемпотентен.
 
@@ -224,9 +238,10 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-WEB-001:** above-the-fold объясняет продукт и содержит один primary CTA.
 - **FR-WEB-002:** до запуска голоса показывается понятное объяснение микрофона и обработки данных.
 - **FR-WEB-003:** UI имеет состояния `idle`, `connecting`, `listening`, `thinking`, `speaking`, `booked`, `complete`, `error`.
-- **FR-WEB-004:** текстовая копия реплик доступна для accessibility/debug.
-- **FR-WEB-005:** mobile viewport поддерживается.
-- **FR-WEB-006:** при voice failure пользователю не показываются stack traces/provider details.
+- **FR-WEB-004:** текстовая копия реплик и stage-gated multiline composer доступны в активных visitor-turn stages; Enter отправляет, Shift+Enter добавляет строку.
+- **FR-WEB-005:** booking details form существует внутри chat и видима только в `COLLECT_BOOKING`, полученном через server `state.changed`/`session.ready`, а не из transcript wording.
+- **FR-WEB-006:** mobile viewport поддерживается.
+- **FR-WEB-007:** при voice failure пользователю не показываются stack traces/provider details.
 
 ## 5. P1 и P2
 
@@ -359,6 +374,10 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 | поставщик стройматериалов | 1000 обращений, 31% горячих лидов, нагрузка пяти менеджеров | масштаб и квалификация по предметным полям |
 | Foxford / сценарий недозвонов | возвращённая и квалифицированная часть пропущенных контактов | реактивация после неуспешного звонка |
 
+### Дополнительный claim из пользовательского брифа
+
+Предоставленный пользователем бриф Botamin сообщает, что Botamin помог компаниям увеличить выручку на **10–15 миллионов рублей в месяц**. Это утверждение именованного пользовательского источника о прошлых результатах нескольких компаний; оно не было независимо проверено и не доказывает применимость к новому собеседнику. Допустимая формулировка обязана назвать пользовательский бриф Botamin и прямо отделить claim от гарантии, прогноза или обещания результата.
+
 ### Правило claims
 
 В prompt/knowledge нужно разделить:
@@ -419,11 +438,11 @@ Sticky/inline widget с transcript, статусом и одной главно�
 |---|---|---|---|
 | Visit | понять ценность | `landing.viewed` | неясный оффер |
 | Voice start | снять страх mic | `conversation.started` | permission denied |
-| Discovery | найти задачу | `discovery.completed` | слишком много вопросов |
+| Discovery | найти задачу максимум за два вопроса до мягкого offer | `discovery.completed` | слишком много вопросов |
 | Value | связать pain и use case | `value.presented` | общая презентация |
 | Intent | получить согласие на следующий шаг | `booking.offered` | нет доверия/времени |
-| Booking | сохранить минимальный лид | `booking.created` | контакт не собран |
-| Qualification | обогатить лид | `qualification.updated` | пользователь устал |
+| Booking | сохранить полный обязательный набор и один из двух внутренних slots | `booking.created` | не собраны name/company/email/phone-or-Telegram/consent/slot |
+| Qualification | после commit, confirmation и consent спросить inbound volume и manager count | `qualification.updated` | пользователь устал |
 | Handoff | вывести структурированный результат | `notification.sent` | provider/output error |
 
 ## 7. Conversation value map
@@ -437,18 +456,16 @@ Sticky/inline widget с transcript, статусом и одной главно�
 | «Боюсь качества» | knowledge base, итерации, human review | общий процесс внедрения |
 | «Нужна интеграция» | CRM/connectors как продуктовая возможность | сайт Botamin; без обещания конкретной даты |
 
-## 8. Минимальная квалификация для этого funnel
+## 8. Cadence, booking и минимальная квалификация
 
-Квалификация после брони должна выбирать 3–5 вопросов по контексту, а не проходить анкету целиком:
+Текущий funnel умеренно проактивен: агент задаёт по одному вопросу и не более двух discovery-вопросов до краткого мягкого предложения demo/встречи. После ясного отказа предложение не повторяется.
 
-- роль и зона ответственности;
-- отрасль / тип продаж;
-- объём лидов в месяц или порядок величины;
-- входящий, исходящий, реактивация или mix;
-- текущий SLA ответа;
-- CRM;
-- главный bottleneck;
-- желаемый срок пилота.
+После согласия агент предлагает ровно два labeled candidates из server context. Новая внутренняя бронь требует name, company, working email, phone or Telegram, consent и один выбранный structured 20-minute `Europe/Moscow` slot. Внешний календарь и external availability API отсутствуют.
+
+Квалификация начинается только после committed booking, user-facing confirmation и отдельного consent. Она ограничена двумя необязательными вопросами:
+
+- месячный объём **входящих** лидов (`monthlyLeadVolume`);
+- явное целое число менеджеров продаж (`salesManagerCount`).
 
 ## 9. Контентные риски
 
@@ -489,7 +506,9 @@ Sticky/inline widget с transcript, статусом и одной главно�
 - AudioWorklet capture;
 - resample browser audio до mono PCM16 16 kHz;
 - отправка бинарных PCM16 чанков около 100 ms;
-- явный end-of-turn `audio.commit` и bounded local buffer;
+- явный end-of-turn `audio.commit`, 60-second ceiling и server-advertised PCM byte cap, производный от 2,000,000-byte WAV cap;
+- circular countdown по принятым samples, а не wall clock, с effective duration по stricter duration/byte ceiling;
+- secure `visitor.text.submit` для bounded final typed turn и in-chat form только в server-owned `COLLECT_BOOKING`;
 - UI states `listening → processing → transcript.final`;
 - ordered playback queue для полных MP3 phrase segments;
 - decode через Web Audio или `HTMLAudio`;
@@ -519,8 +538,9 @@ Sticky/inline widget с transcript, статусом и одной главно�
 Источник истины для:
 
 - текущего stage;
-- собранных slots;
-- разрешённых actions;
+- server-owned current Moscow date/day и ровно двух structured/labeled internal meeting candidates;
+- разрешённых actions, включая rejection любого create-booking slot вне active candidate tuple;
+- qualification gating по committed booking, delivered confirmation и отдельному consent;
 - booking lifecycle;
 - prompt context;
 - retry/cancellation;
@@ -575,9 +595,12 @@ P0 transport — direct typed JSON-RPC к app-server. Универсальный
 
 ### BookingService
 
-- валидирует contact minimum;
-- создаёт/находит booking в одной транзакции;
-- обновляет qualification patch;
+- генерирует ровно два deterministic internal 20-minute candidates после текущей московской даты, только по будням и по 20-minute grid с 09:00 до 17:00 starts;
+- исключает уже committed internal start times без external calendar/availability API;
+- валидирует name, company, working email, phone or Telegram, consent и structured `Europe/Moscow` slot;
+- повторно проверяет slot по текущему server clock и отклоняет stale/non-bookable или internally occupied start до side effect; active-candidate membership до вызова сервиса проверяет orchestrator/tool policy;
+- создаёт/находит booking в одной `BEGIN IMMEDIATE` transaction;
+- обновляет qualification patch для существующей committed booking; confirmation/consent gating до вызова сервиса принадлежит orchestrator/tool policy;
 - пишет event outbox;
 - никогда не удаляет booking из-за incomplete qualification.
 
@@ -602,8 +625,8 @@ P0 adapter — structured console JSON. P1 — signed HTTP webhook с retry/outb
 1. Browser отправляет примерно 100 ms PCM16 chunks; gateway/utterance assembler собирает их в bounded utterance.
 2. End-of-turn / `audio.commit` закрывает реплику. Gateway/utterance assembler проверяет duration/bytes, создаёт и валидирует ровно один mono PCM16 WAV.
 3. Gateway передаёт WAV атомарному `SttPort`; OpenRouter STT adapter повторно валидирует/bounds already-WAV request, base64-кодирует его и отправляет один `input_audio` chat completion.
-4. Только валидный неустаревший final transcript становится user turn и публикуется как `transcript.final`.
-5. Orchestrator добавляет stage, known slots, booking status и краткий dialogue context; Codex thread получает `turn/start` ровно один раз.
+4. Только валидный неустаревший final transcript становится user turn и публикуется как `transcript.final`. Альтернативно, monotonic `visitor.text.submit` очищает uncommitted microphone bytes и создаёт такой же final turn без STT; до server `transcript.final` typed input не считается принятым.
+5. Orchestrator добавляет stage, known facts, booking status, server-owned current Moscow date/day и ровно два structured candidates с generated `displayLabel`; Codex thread получает `turn/start` ровно один раз независимо от typed/spoken origin.
 6. Text deltas проходят PII-safe sanitizer и bounded phrase chunker.
 7. Законченная короткая фраза отправляется в OpenRouter TTS; один request соответствует одному segment.
 8. После проверки один полный `audio/mpeg` segment идёт в browser ordered playback queue.
@@ -641,10 +664,21 @@ export type BrainToolMode = "dynamic" | "envelope";
 export interface BrainTurnInput {
   conversationId: string;
   threadId?: string;
+  turnId: string;
+  generationId: string;
   userText: string;
   stage: ConversationStage;
   knownFacts: KnownFacts;
   booking: BookingSnapshot | null;
+  schedulingContext: {
+    currentInstant: string;
+    moscowLocalDate: string;
+    moscowWeekday: string;
+    candidateMeetingSlots: [
+      { meetingSlot: MeetingSlot; displayLabel: string },
+      { meetingSlot: MeetingSlot; displayLabel: string }
+    ];
+  };
   allowedActions: BrainActionName[];
   promptVersion: string;
 }
@@ -763,7 +797,7 @@ Backend transition function должна быть чистой и покрыто
 transition(currentState, domainEvent) => nextState | TransitionError
 ```
 
-LLM не может напрямую записать произвольный next state. Он предлагает intent/action, orchestrator применяет допустимый transition.
+LLM не может напрямую записать произвольный next state. Он предлагает intent/action, orchestrator применяет допустимый transition. Typed composer/form visibility также проецируется только из server stage; transcript wording не может открыть booking form или разрешить tool.
 
 ## 10. Barge-in
 
@@ -952,6 +986,7 @@ STORE_RAW_AUDIO=false
 - не маскироваться под человека;
 - одна реплика обычно 1–3 коротких предложения;
 - один вопрос за раз;
+- умеренно проактивно предложить demo/встречу не позднее ответа на второй discovery-вопрос;
 - не повторять уже собранные данные;
 - не спорить с ясным отказом;
 - после двух мягких отказов завершить без давления;
@@ -959,8 +994,9 @@ STORE_RAW_AUDIO=false
 - при неизвестном факте честно предложить передать вопрос коллеге;
 - не читать технические идентификаторы и JSON вслух;
 - контакт повторять для подтверждения только при низкой уверенности STT;
-- booking confirmation произносить сразу после tool success;
-- qualification начинается только после confirmation и согласия.
+- печатный и голосовой final input равнозначны по смыслу и проходят один state/tool flow;
+- booking confirmation произносить только после committed tool success;
+- qualification начинается только после confirmation и отдельного согласия и содержит максимум два целевых вопроса.
 
 ## 3. Conversation policy по stages
 
@@ -974,14 +1010,7 @@ STORE_RAW_AUDIO=false
 
 ### DISCOVERY
 
-Собрать минимум:
-
-- роль;
-- основной канал/сценарий;
-- bottleneck;
-- примерный объём или частоту проблемы.
-
-Не задавать все вопросы, если intent уже очевиден.
+Найти роль/сценарий и основной bottleneck. Задавать по одному вопросу и не более двух discovery-вопросов до краткого мягкого предложения demo/встречи. Если intent очевиден раньше, переходить к value/offer без анкеты.
 
 ### VALUE
 
@@ -991,6 +1020,8 @@ STORE_RAW_AUDIO=false
 2. описать релевантный workflow Botamin;
 3. привести один case claim с атрибуцией, если помогает;
 4. проверить интерес.
+
+Число 10–15 млн ₽ в месяц допустимо только в точной атрибуции: это сообщение пользовательского брифа Botamin о прошлых результатах компаний, без независимой проверки, гарантии, прогноза или обещания собеседнику.
 
 ### OBJECTION
 
@@ -1008,26 +1039,30 @@ STORE_RAW_AUDIO=false
 
 ### COLLECT_BOOKING
 
-Минимальный порядок:
+После согласия назвать ровно два `schedulingContext.candidateMeetingSlots` по их server-generated `displayLabel`. Не вычислять и не переформатировать дату, день недели, время или доступность.
+
+Обязательный набор:
 
 1. имя;
-2. один удобный контакт;
-3. компания — если ещё не известна;
-4. пожелание по времени — свободным текстом.
+2. компания;
+3. рабочий email;
+4. телефон или Telegram;
+5. один выбранный structured 20-minute `Europe/Moscow` candidate;
+6. server-confirmed consent.
 
-Если пользователь дал несколько полей одной фразой, не переспрашивать их по одному.
+Если пользователь дал несколько полей одной spoken или typed репликой, не переспрашивать их по одному. In-chat form показывается только по server stage `COLLECT_BOOKING`, валидирует четыре пользовательских поля и передаёт их как обычный typed turn; она не вызывает tool и не подтверждает бронь.
 
 ### BOOKED
 
 После `create_booking`:
 
-> Всё получила и зафиксировала. Реальную запись в календарь я сейчас не создаю — коллега свяжется по указанному контакту. Можно ещё три коротких вопроса, чтобы он подготовился?
+> Внутренняя бронь на выбранное время зафиксирована. Внешнее календарное событие или приглашение не создавалось; коллега сможет связаться по сохранённому контакту. Можно задать ещё два необязательных вопроса?
 
 Формулировку про отсутствие календаря можно сделать менее технической в production copy, но нельзя утверждать обратное.
 
 ### POST_BOOKING_QUALIFICATION
 
-Выбирать вопросы динамически. Не более 3–5, если ответы короткие. После каждого содержательного блока допустим partial patch.
+Только после committed booking, user-facing confirmation и отдельного явного consent спросить по одному: месячный объём входящих лидов (`monthlyLeadVolume`) и целое число менеджеров продаж (`salesManagerCount`). Оба поля необязательны; после содержательного ответа допустим partial patch. Другие поля расширенной legacy schema не входят в текущий conversational flow.
 
 ### COMPLETE
 
@@ -1061,8 +1096,33 @@ STORE_RAW_AUDIO=false
     "crm": null
   },
   "booking": null,
-  "allowedActions": ["offer_booking"],
-  "lastUserText": "А как это будет интегрироваться?"
+  "schedulingContext": {
+    "currentInstant": "2026-08-02T08:00:00.000Z",
+    "moscowLocalDate": "2026-08-02",
+    "moscowWeekday": "воскресенье",
+    "candidateMeetingSlots": [
+      {
+        "meetingSlot": {
+          "startAt": "2026-08-03T06:00:00.000Z",
+          "endAt": "2026-08-03T06:20:00.000Z",
+          "timeZone": "Europe/Moscow",
+          "durationMinutes": 20
+        },
+        "displayLabel": "03 августа 2026 года, понедельник, 09:00–09:20 по Москве"
+      },
+      {
+        "meetingSlot": {
+          "startAt": "2026-08-03T06:20:00.000Z",
+          "endAt": "2026-08-03T06:40:00.000Z",
+          "timeZone": "Europe/Moscow",
+          "durationMinutes": 20
+        },
+        "displayLabel": "03 августа 2026 года, понедельник, 09:20–09:40 по Москве"
+      }
+    ]
+  },
+  "allowedActions": ["create_booking"],
+  "userText": "Подойдёт первый вариант"
 }
 ```
 
@@ -1097,7 +1157,7 @@ Prompt compiler:
 - собирает `/app/runtime-brain/AGENTS.md` — основной instruction source для Codex thread;
 - при необходимости копирует туда только разрешённые read-only knowledge-файлы; исходный repository туда не монтируется;
 - при `thread/start` проверяет, что `instructionSources` содержит ожидаемый `AGENTS.md`;
-- перед каждым `turn/start` добавляет компактный machine-generated context envelope: stage, known facts, booking snapshot, allowed actions и текст пользователя;
+- перед каждым `turn/start` добавляет compact machine-generated context envelope: stage, known facts, booking snapshot, server-owned current Moscow date/day, ровно два structured/labeled candidates, allowed actions и финальный текст пользователя независимо от typed/spoken origin;
 - логирует только version/hash, не весь prompt;
 - поддерживает hot reload только в development: новый prompt version применяется к новым conversations, а активные сохраняют исходную версию.
 
@@ -1120,14 +1180,17 @@ Bounded phrase chunker выпускает первую фразу примерн
 
 LLM вызывает только когда:
 
-- пользователь согласился;
-- известно имя;
-- есть хотя бы один контакт;
-- согласие на обработку/передачу данных зафиксировано UI или разговором.
+- stage равен `COLLECT_BOOKING` и пользователь согласился;
+- известны имя и компания;
+- есть валидный рабочий email и телефон или Telegram;
+- выбран один из ровно двух candidates активного server context;
+- consent подтверждён server-side.
+
+Backend сверяет выбранный `meetingSlot` с обоими active candidates и отклоняет любой non-candidate/stale/occupied slot. Это внутренняя 20-minute бронь без external calendar event, invitation или availability API.
 
 ### `append_booking_qualification`
 
-LLM вызывает только после `bookingId`. Patch может быть частичным.
+LLM вызывает только после committed `bookingId`, user-facing confirmation и отдельного qualification consent. Текущий flow патчит только `monthlyLeadVolume` и integer `salesManagerCount`; patch может быть частичным.
 
 Backend возвращает safe result:
 
@@ -1150,7 +1213,7 @@ Backend возвращает safe result:
 | «Дорого» | уточнить объём рутины/потерь, перевести к расчёту пилота | придумывать цену/ROI |
 | «У нас сложный продукт» | спросить пример сложного вопроса, объяснить knowledge boundary | заявлять, что знает любой продукт без внедрения |
 | «У нас уже CRM» | объяснить handoff/integration как отдельный слой | обещать конкретный connector без проверки |
-| «Не хочу оставлять телефон» | предложить email/Telegram | давить или требовать один канал |
+| «Не хочу оставлять телефон» | напомнить, что рабочий email обязателен, а дополнительным контактом может быть Telegram | давить или выдавать email за замену обязательному phone-or-Telegram |
 | «Неинтересно» | один раз уточнить причину, затем уважительно завершить | повторно продавать после ясного отказа |
 
 ## 10. Failure behavior
@@ -1180,12 +1243,13 @@ Backend возвращает safe result:
 3. Агент: связывает 24/7 входящую обработку и квалификацию с pain; задаёт вопрос о текущем процессе.
 4. Пользователь: отвечает и спрашивает про CRM.
 5. Агент: описывает integration layer без обещания конкретного срока; предлагает demo.
-6. Пользователь: соглашается и даёт имя + Telegram.
-7. Backend: `booking.created`.
-8. Агент: подтверждает сохранение; просит разрешение на три доп. вопроса.
-9. Пользователь: отвечает на роль, CRM и срок.
-10. Backend: `booking.updated`.
-11. Агент: кратко суммирует и завершает.
+6. Агент: называет ровно два server-supplied Moscow candidates.
+7. Пользователь: typed form/репликой даёт имя, компанию, рабочий email, Telegram и выбирает первый slot; consent уже подтверждён server context.
+8. Backend: валидирует candidate и commit-ит `booking.created` без внешнего календарного события.
+9. Агент: подтверждает внутреннюю бронь; просит разрешение максимум на два доп. вопроса.
+10. Пользователь: соглашается и сообщает месячный объём входящих лидов и целое число менеджеров продаж.
+11. Backend: `booking.updated`.
+12. Агент: кратко суммирует и завершает.
 
 ## 12. Eval rubric для каждой реплики
 
@@ -1248,6 +1312,8 @@ Response `201`:
     "inputSampleRate": 16000,
     "inputEncoding": "pcm16le",
     "chunkMs": 100,
+    "maxUtteranceMs": 60000,
+    "maxPcmBytes": 1920000,
     "outputContentType": "audio/mpeg",
     "outputMode": "complete-phrase-segments"
   }
@@ -1320,6 +1386,8 @@ Server:
       "inputSampleRate": 16000,
       "inputEncoding": "pcm16le",
       "chunkMs": 100,
+      "maxUtteranceMs": 60000,
+      "maxPcmBytes": 1920000,
       "outputContentType": "audio/mpeg",
       "outputMode": "complete-phrase-segments"
     }
@@ -1333,6 +1401,7 @@ Server:
 |---|---|---|
 | `client.hello` | audio config, resume token | handshake |
 | `audio.commit` | `{}` | закрыть bounded utterance и создать ровно один atomic final-transcription request |
+| `visitor.text.submit` | `{ sequence, text }` | отправить одну final typed turn до 2,000 chars без provider/tool fields |
 | `playback.started` | `generationId` | метрика |
 | `playback.interrupted` | `generationId`, reason | barge-in |
 | `session.stop` | reason | корректное завершение |
@@ -1340,7 +1409,9 @@ Server:
 
 Первый `client.hello` обязан предъявить одноразовый `clientToken` из REST response; `session.ready` сразу заменяет его новым resume token. На session допускается один pending hello-кандидат с коротким deadline и один bound socket. Reconnect заменяет bound socket только после полной проверки hello/token; неподтверждённый кандидат его не вытесняет.
 
-После handshake PCM16 audio идёт binary frames без base64. Gateway/utterance assembler ограничивает accumulated duration/bytes и после `audio.commit` кодирует ровно один validated mono PCM16 WAV. Этот WAV передаётся atomic `SttPort`; только OpenRouter adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks не означают streaming transport до provider.
+После handshake PCM16 audio идёт binary frames без base64. Gateway/utterance assembler ограничивает accumulated input максимумом 60,000 ms и так, чтобы atomic WAV не превысил 2,000,000 bytes; при 16 kHz mono PCM16 default duration ceiling строже и даёт `maxPcmBytes=1,920,000`. После `audio.commit` gateway кодирует ровно один validated WAV и передаёт его atomic `SttPort`; только OpenRouter adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks не означают streaming transport до provider.
+
+`visitor.text.submit` — secure provider-neutral alternative input, а не tool endpoint. Payload strict: trimmed non-empty `text` до 2,000 символов и monotonic nonnegative `sequence`. Typed submit supersedes/clears uncommitted microphone bytes, запрещён при pending/active turn или terminal stage, и считается принятым только когда server эмитит соответствующий `transcript.final`. Duplicate/stale sequence получает idempotency conflict; gap — invalid event; recoverable rejection позволяет повторить тот же sequence. После acceptance typed и spoken text проходят идентичные Luna context, stage policy, domain tools, persistence, assistant text и optional TTS.
 
 ### Server → client events
 
@@ -1362,7 +1433,7 @@ Server:
 
 ### Binary framing
 
-Client microphone frames remain PCM16LE and are accumulated only within configured utterance duration/byte bounds until `audio.commit`. Server audio is an atomic phrase-level MP3 payload associated with the preceding `audio.segment` metadata event:
+Client microphone frames remain PCM16LE and are accumulated only within configured utterance duration/byte bounds until `audio.commit`. UI duration/countdown is sample-derived: `durationMs = acceptedPcmBytes / (16000 × 2) × 1000`, а effective ceiling — минимум `maxUtteranceMs` и duration, выведенной из `maxPcmBytes`; circular timer не зависит от wall-clock ticks. Server audio is an atomic phrase-level MP3 payload associated with the preceding `audio.segment` metadata event:
 
 ```text
 byte 0:     kind (0x01 client PCM16LE, 0x02 server MP3 segment)
@@ -1481,15 +1552,33 @@ const ContactSchema = z.discriminatedUnion("channel", [
   z.object({ channel: z.literal("telegram"), value: z.string().min(2).max(128) }),
 ]);
 
+const BookingContactsSchema = z.array(ContactSchema)
+  .min(2).max(3)
+  .superRefine((contacts, ctx) => {
+    const channels = contacts.map((contact) => contact.channel);
+    if (!channels.includes("email")) ctx.addIssue({ code: "custom", message: "A working email is required" });
+    if (!channels.some((channel) => channel === "phone" || channel === "telegram")) {
+      ctx.addIssue({ code: "custom", message: "A phone or Telegram contact is required" });
+    }
+    if (new Set(channels).size !== channels.length) ctx.addIssue({ code: "custom", message: "Contact channels must be unique" });
+  });
+
+const MeetingSlotSchema = z.object({
+  startAt: CanonicalRfc3339UtcSchema,
+  endAt: CanonicalRfc3339UtcSchema,
+  timeZone: z.literal("Europe/Moscow"),
+  durationMinutes: z.literal(20),
+}).strict(); // also validates weekday and 20-minute grid, 09:00..17:00 Moscow starts
+
 const CreateBookingInputSchema = z.object({
-  conversationId: z.string().min(10),
+  conversationId: EntityIdSchema,
   idempotencyKey: z.string().min(10).max(128),
-  name: z.string().min(1).max(120),
-  contacts: z.array(ContactSchema).min(1).max(3),
-  company: z.string().max(200).optional(),
-  preferredTimeText: z.string().max(500).optional(),
+  name: z.string().trim().min(1).max(120),
+  contacts: BookingContactsSchema,
+  company: z.string().trim().min(1).max(200),
+  meetingSlot: MeetingSlotSchema,
   consentConfirmed: z.literal(true),
-});
+}).strict();
 ```
 
 Result:
@@ -1507,11 +1596,15 @@ type CreateBookingResult = {
 ### `append_booking_qualification`
 
 ```ts
+// Storage contract retains these optional fields for compatibility. Current
+// conversation policy collects only monthlyLeadVolume (monthly inbound leads)
+// and integer salesManagerCount after committed booking, confirmation, and consent.
 const QualificationPatchSchema = z.object({
   role: z.string().max(200).optional(),
   industry: z.string().max(200).optional(),
   companySize: z.string().max(100).optional(),
   monthlyLeadVolume: z.string().max(100).optional(),
+  salesManagerCount: z.number().int().min(0).max(10000).optional(),
   currentChannels: z.array(z.string().max(80)).max(10).optional(),
   crm: z.string().max(120).optional(),
   currentProcess: z.string().max(1000).optional(),
@@ -1547,16 +1640,21 @@ type AppendQualificationResult = {
 switch (tool.name) {
   case "create_booking":
     assert(state === "COLLECT_BOOKING");
+    assert(serverContactConsentConfirmed === true);
     assert(currentBooking === null || currentBooking.conversationId === conversationId);
+    assert(candidateMeetingSlots.length === 2);
+    assert(candidateMeetingSlots.some((slot) => deepEqual(slot, args.meetingSlot)));
     break;
   case "append_booking_qualification":
     assert(["BOOKED", "POST_BOOKING_QUALIFICATION"].includes(state));
     assert(currentBooking?.id === args.bookingId);
+    assert(bookingConfirmationDelivered === true);
+    assert(qualificationConsent === "granted");
     break;
 }
 ```
 
-LLM-provided `conversationId`, `bookingId` и consent сверяются с server-side session; нельзя доверять им как единственному источнику.
+LLM-provided `conversationId`, `bookingId`, slot и consent сверяются с server-side session; нельзя доверять им как единственному источнику. Server перед каждым Luna turn строит `schedulingContext` из собственного clock: canonical `currentInstant`, `moscowLocalDate`, `moscowWeekday` и tuple ровно из двух `{ meetingSlot, displayLabel }`. Tool execution повторно отвергает slot вне tuple; BookingService повторно отвергает now-non-bookable или internally occupied start.
 
 ## 7. SQLite model
 
@@ -1584,7 +1682,7 @@ LLM-provided `conversationId`, `bookingId` и consent сверяются с serv
 - `user_text`;
 - `assistant_text`;
 - `state_before`, `state_after`;
-- `audio_commit_at`, `stt_request_at`, `stt_final_at`;
+- `speech_final_at` nullable — момент принятого final spoken или typed user turn;
 - `brain_started_at`;
 - `first_text_delta_at`;
 - `first_audio_at`;
@@ -1602,11 +1700,16 @@ LLM-provided `conversationId`, `bookingId` и consent сверяются с serv
 | `status` | CHECK = `booked` in MVP |
 | `name` | NOT NULL |
 | `contacts_json` | NOT NULL |
-| `company` | nullable |
-| `preferred_time_text` | nullable |
-| `qualification_json` | default `{}` |
+| `company` | nullable физически только для сохранённых legacy rows; required/non-empty для всех новых bookings |
+| `preferred_time_text` | deprecated nullable legacy column; не входит в active API/tool/event contracts и не записывается новым flow |
+| `meeting_start_at` | nullable для legacy rows; canonical UTC, required для новых bookings, UNIQUE when non-null |
+| `meeting_end_at` | nullable для legacy rows; ровно +20 минут, required для новых bookings |
+| `meeting_timezone` | nullable для legacy rows; `Europe/Moscow`, required для новых bookings |
+| `qualification_json` | default `{}`; active flow writes only monthly inbound `monthlyLeadVolume` and integer `salesManagerCount` |
 | `qualification_status` | none/partial/complete/skipped |
 | `created_at`, `updated_at` | timestamps |
+
+Migration `0003_internal_meeting_slots.sql` добавляет три meeting columns, partial unique index на non-null start и insert/update triggers для company, canonical timestamps, exact 20-minute duration, Moscow weekday и 09:00–17:00/20-minute-grid rules. Existing legacy rows намеренно сохраняются с `NULL` meeting fields и прежним deprecated text column: migration не придумывает им slots и не удаляет их. Domain snapshot/service fail closed при попытке использовать такую legacy row как complete modern booking; все новые inserts и relevant updates обязаны удовлетворять triggers.
 
 ### `idempotency_keys`
 
@@ -1644,7 +1747,9 @@ BEGIN IMMEDIATE
   lookup idempotency key
   if found: return stored result
   lookup booking by conversation_id
-  if found: persist replay key and return same booking
+  if found: validate complete modern snapshot, persist replay key and return same booking
+  validate server clock and selected candidate
+  reject occupied meeting_start_at
   insert booking
   insert domain_event booking.created
   insert notification_outbox
@@ -1673,9 +1778,17 @@ COMMIT
     "bookingId": "bkg_...",
     "conversationId": "conv_...",
     "name": "Александр",
-    "contacts": [{ "channel": "telegram", "value": "@alex" }],
+    "contacts": [
+      { "channel": "email", "value": "alex@example.com" },
+      { "channel": "telegram", "value": "@alex" }
+    ],
     "company": "Example LLC",
-    "preferredTimeText": "завтра после 15:00",
+    "meetingSlot": {
+      "startAt": "2026-08-03T06:00:00.000Z",
+      "endAt": "2026-08-03T06:20:00.000Z",
+      "timeZone": "Europe/Moscow",
+      "durationMinutes": 20
+    },
     "status": "booked",
     "qualificationStatus": "none"
   }
@@ -1694,10 +1807,8 @@ COMMIT
     "bookingId": "bkg_...",
     "qualificationStatus": "partial",
     "qualification": {
-      "role": "Head of Sales",
-      "monthlyLeadVolume": "около 2000",
-      "crm": "amoCRM",
-      "pains": ["лиды ждут ночью"]
+      "monthlyLeadVolume": "около 2000 входящих лидов в месяц",
+      "salesManagerCount": 8
     }
   }
 }
@@ -2275,8 +2386,8 @@ The chart deliberately contains no numeric currency estimate. Variable usage dep
 Table-driven cases:
 
 - все допустимые transitions;
-- запрещён `append_booking_qualification` до booking;
-- `create_booking` разрешён только из collection stage;
+- запрещён `append_booking_qualification` до committed booking, user-facing confirmation и отдельного consent;
+- `create_booking` разрешён только из `COLLECT_BOOKING`, при server contact consent и с одним из двух candidates активного turn;
 - disconnect после booking → booking stays;
 - clear refusal → declined;
 - retry не меняет domain effect;
@@ -2301,10 +2412,14 @@ Table-driven cases:
 
 ### Booking domain
 
-- one booking per conversation;
+- one booking per conversation и one booking per non-null `meeting_start_at`;
+- required name/company/working-email/phone-or-Telegram/consent/structured slot validation;
+- exactly two deterministic candidates, Moscow weekday/non-today/09:00–17:00 20-minute grid;
+- non-candidate, stale and internally occupied slots rejected;
+- migration preserves legacy rows with null meeting fields and does not invent slots; modern snapshot use fails closed;
 - same idempotency key/same payload → same result;
 - same key/different payload → conflict;
-- qualification patch merges fields;
+- qualification patch merges monthly inbound volume and integer `salesManagerCount`;
 - empty patch rejected;
 - notifier failure не rolls back booking;
 - PII redaction.
@@ -2317,6 +2432,7 @@ Default deterministic suites use no external credentials and keep ownership test
 
 Gateway/utterance-assembler tests prove:
 
+- exact 60,000 ms utterance and 2,000,000-byte atomic WAV caps, with server-advertised `maxPcmBytes=1,920,000` under default 16 kHz mono PCM16 settings;
 - bounded 16 kHz mono PCM16 plus one accepted `audio.commit` produces exactly one validated WAV with the expected RIFF/WAVE header, PCM16 metadata, data length and sample bytes;
 - empty, odd-byte, oversized, over-duration and duplicate-commit input is rejected or suppressed before `SttPort` invocation;
 - the atomic request contains the produced WAV bytes and `contentType: "audio/wav"`.
@@ -2371,9 +2487,13 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 ## 4. Integration tests
 
 - bounded PCM16 chunks → `audio.commit` → gateway-produced validated WAV → atomic `SttPort` request → fake OpenRouter already-WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
+- sample-derived capture progress/countdown uses accepted PCM16 bytes and stricter server duration/byte ceiling, then auto-commits exactly once;
+- bounded monotonic `visitor.text.submit` clears uncommitted audio, suppresses pending duplicates, retains sequence on rejection, emits server final once, and follows the same brain/state/tool/persistence path as speech;
+- typed composer is stage-gated, and booking form renders only from server-owned `COLLECT_BOOKING`, never transcript wording;
 - real SQLite transaction + fake notifier;
-- booking tool call inside brain turn;
-- booking event appears before qualification prompt/audio;
+- Luna receives server-owned current Moscow date/day and exactly two structured candidates with validated labels;
+- booking tool call accepts only one active candidate inside brain turn;
+- booking event and user-facing confirmation appear before qualification consent/question/audio;
 - reconnect with same conversation;
 - barge-in while OpenRouter requests/complete segments are in flight;
 - brain process restart;
@@ -2390,10 +2510,12 @@ Playwright with synthetic audio fixture:
 4. stream fixture PCM;
 5. observe listening/processing states and then exactly one `transcript.final`;
 6. receive assistant text and ordered complete MP3 segment events;
-7. complete booking;
-8. see booked UI;
-9. continue/skip qualification;
-10. verify backend DB/event payload.
+7. verify the circular countdown is sample-derived and reaches the 60-second limit without wall-clock drift;
+8. submit a normal typed final turn and then use the in-chat booking form only at `COLLECT_BOOKING`;
+9. choose one of exactly two server-labeled Moscow slots and complete required name/company/email/phone-or-Telegram/consent data;
+10. see booked UI and verify no external calendar/invitation claim;
+11. consent to or skip the two-field qualification;
+12. verify backend DB/event payload.
 
 Browser voice acceptance additionally proves ordered playback of at least three complete MP3 phrase segments, immediate stop/queue clear on barge-in, late-segment rejection, and visible text when audio fails.
 
@@ -2433,15 +2555,18 @@ Mobile viewport and slow network profiles included.
 14. отвечает не по теме;
 15. меняет задачу;
 16. молчит;
-17. даёт все данные одной репликой;
-18. исправляет контакт.
+17. даёт name/company/working-email/phone-or-Telegram одной typed или spoken репликой;
+18. исправляет контакт;
+18a. пытается выбрать третий/придуманный slot;
+18b. просит slot сегодня или в выходной;
+18c. typed form wording пытается открыть booking stage до server transition.
 
 ### Booking invariants
 
 19. retry create;
 20. disconnect сразу после create;
 21. отказывается от qualification;
-22. отвечает только на один qualification вопрос;
+22. после consent отвечает только на monthly inbound leads или integer manager count;
 23. повторяет booking данные;
 24. brain ошибочно пытается квалифицировать до create.
 
@@ -2463,7 +2588,9 @@ Mobile viewport and slow network profiles included.
 - factuality по allowed claims;
 - no prohibited promise;
 - no secret leakage;
-- one-question guideline;
+- one-question guideline и максимум два discovery-вопроса до soft offer;
+- qualification ограничена monthly inbound leads + integer `salesManagerCount`;
+- 10–15m RUB/month claim только с атрибуцией к пользовательскому брифу и explicit no-guarantee boundary;
 - refusal handling;
 - stage progress;
 - spoken-language quality;
@@ -3190,7 +3317,7 @@ For OpenRouter/webhook key rotation: revoke or schedule revocation at the provid
 - T30 local synthetic timings prove functional sequencing only; they are not a benchmark or target-host SLO.
 - WebKit complete-MP3 playback and journey acceptance remain unobserved.
 - Target VPS resource behavior, DNS, public TLS/WSS, and target-host provider smokes remain unobserved.
-- The booking is an internal SQLite record plus notifier outbox event. No real calendar event, availability check, CRM record, or meeting invitation is created.
+- The booking is an internal SQLite record plus notifier outbox event. The internal scheduler excludes committed starts, but no real calendar event, external availability check, CRM record, or meeting invitation is created.
 - OpenRouter model/voice availability, paid rates, Codex subscription limits, and plan suitability are runtime/owner checks, not release guarantees.
 
 

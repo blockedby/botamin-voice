@@ -43,6 +43,8 @@ Response `201`:
     "inputSampleRate": 16000,
     "inputEncoding": "pcm16le",
     "chunkMs": 100,
+    "maxUtteranceMs": 60000,
+    "maxPcmBytes": 1920000,
     "outputContentType": "audio/mpeg",
     "outputMode": "complete-phrase-segments"
   }
@@ -115,6 +117,8 @@ Server:
       "inputSampleRate": 16000,
       "inputEncoding": "pcm16le",
       "chunkMs": 100,
+      "maxUtteranceMs": 60000,
+      "maxPcmBytes": 1920000,
       "outputContentType": "audio/mpeg",
       "outputMode": "complete-phrase-segments"
     }
@@ -128,6 +132,7 @@ Server:
 |---|---|---|
 | `client.hello` | audio config, resume token | handshake |
 | `audio.commit` | `{}` | закрыть bounded utterance и создать ровно один atomic final-transcription request |
+| `visitor.text.submit` | `{ sequence, text }` | отправить одну final typed turn до 2,000 chars без provider/tool fields |
 | `playback.started` | `generationId` | метрика |
 | `playback.interrupted` | `generationId`, reason | barge-in |
 | `session.stop` | reason | корректное завершение |
@@ -135,7 +140,9 @@ Server:
 
 Первый `client.hello` обязан предъявить одноразовый `clientToken` из REST response; `session.ready` сразу заменяет его новым resume token. На session допускается один pending hello-кандидат с коротким deadline и один bound socket. Reconnect заменяет bound socket только после полной проверки hello/token; неподтверждённый кандидат его не вытесняет.
 
-После handshake PCM16 audio идёт binary frames без base64. Gateway/utterance assembler ограничивает accumulated duration/bytes и после `audio.commit` кодирует ровно один validated mono PCM16 WAV. Этот WAV передаётся atomic `SttPort`; только OpenRouter adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks не означают streaming transport до provider.
+После handshake PCM16 audio идёт binary frames без base64. Gateway/utterance assembler ограничивает accumulated input максимумом 60,000 ms и так, чтобы atomic WAV не превысил 2,000,000 bytes; при 16 kHz mono PCM16 default duration ceiling строже и даёт `maxPcmBytes=1,920,000`. После `audio.commit` gateway кодирует ровно один validated WAV и передаёт его atomic `SttPort`; только OpenRouter adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks не означают streaming transport до provider.
+
+`visitor.text.submit` — secure provider-neutral alternative input, а не tool endpoint. Payload strict: trimmed non-empty `text` до 2,000 символов и monotonic nonnegative `sequence`. Typed submit supersedes/clears uncommitted microphone bytes, запрещён при pending/active turn или terminal stage, и считается принятым только когда server эмитит соответствующий `transcript.final`. Duplicate/stale sequence получает idempotency conflict; gap — invalid event; recoverable rejection позволяет повторить тот же sequence. После acceptance typed и spoken text проходят идентичные Luna context, stage policy, domain tools, persistence, assistant text и optional TTS.
 
 ### Server → client events
 
@@ -157,7 +164,7 @@ Server:
 
 ### Binary framing
 
-Client microphone frames remain PCM16LE and are accumulated only within configured utterance duration/byte bounds until `audio.commit`. Server audio is an atomic phrase-level MP3 payload associated with the preceding `audio.segment` metadata event:
+Client microphone frames remain PCM16LE and are accumulated only within configured utterance duration/byte bounds until `audio.commit`. UI duration/countdown is sample-derived: `durationMs = acceptedPcmBytes / (16000 × 2) × 1000`, а effective ceiling — минимум `maxUtteranceMs` и duration, выведенной из `maxPcmBytes`; circular timer не зависит от wall-clock ticks. Server audio is an atomic phrase-level MP3 payload associated with the preceding `audio.segment` metadata event:
 
 ```text
 byte 0:     kind (0x01 client PCM16LE, 0x02 server MP3 segment)
@@ -276,15 +283,33 @@ const ContactSchema = z.discriminatedUnion("channel", [
   z.object({ channel: z.literal("telegram"), value: z.string().min(2).max(128) }),
 ]);
 
+const BookingContactsSchema = z.array(ContactSchema)
+  .min(2).max(3)
+  .superRefine((contacts, ctx) => {
+    const channels = contacts.map((contact) => contact.channel);
+    if (!channels.includes("email")) ctx.addIssue({ code: "custom", message: "A working email is required" });
+    if (!channels.some((channel) => channel === "phone" || channel === "telegram")) {
+      ctx.addIssue({ code: "custom", message: "A phone or Telegram contact is required" });
+    }
+    if (new Set(channels).size !== channels.length) ctx.addIssue({ code: "custom", message: "Contact channels must be unique" });
+  });
+
+const MeetingSlotSchema = z.object({
+  startAt: CanonicalRfc3339UtcSchema,
+  endAt: CanonicalRfc3339UtcSchema,
+  timeZone: z.literal("Europe/Moscow"),
+  durationMinutes: z.literal(20),
+}).strict(); // also validates weekday and 20-minute grid, 09:00..17:00 Moscow starts
+
 const CreateBookingInputSchema = z.object({
-  conversationId: z.string().min(10),
+  conversationId: EntityIdSchema,
   idempotencyKey: z.string().min(10).max(128),
-  name: z.string().min(1).max(120),
-  contacts: z.array(ContactSchema).min(1).max(3),
-  company: z.string().max(200).optional(),
-  preferredTimeText: z.string().max(500).optional(),
+  name: z.string().trim().min(1).max(120),
+  contacts: BookingContactsSchema,
+  company: z.string().trim().min(1).max(200),
+  meetingSlot: MeetingSlotSchema,
   consentConfirmed: z.literal(true),
-});
+}).strict();
 ```
 
 Result:
@@ -302,11 +327,15 @@ type CreateBookingResult = {
 ### `append_booking_qualification`
 
 ```ts
+// Storage contract retains these optional fields for compatibility. Current
+// conversation policy collects only monthlyLeadVolume (monthly inbound leads)
+// and integer salesManagerCount after committed booking, confirmation, and consent.
 const QualificationPatchSchema = z.object({
   role: z.string().max(200).optional(),
   industry: z.string().max(200).optional(),
   companySize: z.string().max(100).optional(),
   monthlyLeadVolume: z.string().max(100).optional(),
+  salesManagerCount: z.number().int().min(0).max(10000).optional(),
   currentChannels: z.array(z.string().max(80)).max(10).optional(),
   crm: z.string().max(120).optional(),
   currentProcess: z.string().max(1000).optional(),
@@ -342,16 +371,21 @@ type AppendQualificationResult = {
 switch (tool.name) {
   case "create_booking":
     assert(state === "COLLECT_BOOKING");
+    assert(serverContactConsentConfirmed === true);
     assert(currentBooking === null || currentBooking.conversationId === conversationId);
+    assert(candidateMeetingSlots.length === 2);
+    assert(candidateMeetingSlots.some((slot) => deepEqual(slot, args.meetingSlot)));
     break;
   case "append_booking_qualification":
     assert(["BOOKED", "POST_BOOKING_QUALIFICATION"].includes(state));
     assert(currentBooking?.id === args.bookingId);
+    assert(bookingConfirmationDelivered === true);
+    assert(qualificationConsent === "granted");
     break;
 }
 ```
 
-LLM-provided `conversationId`, `bookingId` и consent сверяются с server-side session; нельзя доверять им как единственному источнику.
+LLM-provided `conversationId`, `bookingId`, slot и consent сверяются с server-side session; нельзя доверять им как единственному источнику. Server перед каждым Luna turn строит `schedulingContext` из собственного clock: canonical `currentInstant`, `moscowLocalDate`, `moscowWeekday` и tuple ровно из двух `{ meetingSlot, displayLabel }`. Tool execution повторно отвергает slot вне tuple; BookingService повторно отвергает now-non-bookable или internally occupied start.
 
 ## 7. SQLite model
 
@@ -379,7 +413,7 @@ LLM-provided `conversationId`, `bookingId` и consent сверяются с serv
 - `user_text`;
 - `assistant_text`;
 - `state_before`, `state_after`;
-- `audio_commit_at`, `stt_request_at`, `stt_final_at`;
+- `speech_final_at` nullable — момент принятого final spoken или typed user turn;
 - `brain_started_at`;
 - `first_text_delta_at`;
 - `first_audio_at`;
@@ -397,11 +431,16 @@ LLM-provided `conversationId`, `bookingId` и consent сверяются с serv
 | `status` | CHECK = `booked` in MVP |
 | `name` | NOT NULL |
 | `contacts_json` | NOT NULL |
-| `company` | nullable |
-| `preferred_time_text` | nullable |
-| `qualification_json` | default `{}` |
+| `company` | nullable физически только для сохранённых legacy rows; required/non-empty для всех новых bookings |
+| `preferred_time_text` | deprecated nullable legacy column; не входит в active API/tool/event contracts и не записывается новым flow |
+| `meeting_start_at` | nullable для legacy rows; canonical UTC, required для новых bookings, UNIQUE when non-null |
+| `meeting_end_at` | nullable для legacy rows; ровно +20 минут, required для новых bookings |
+| `meeting_timezone` | nullable для legacy rows; `Europe/Moscow`, required для новых bookings |
+| `qualification_json` | default `{}`; active flow writes only monthly inbound `monthlyLeadVolume` and integer `salesManagerCount` |
 | `qualification_status` | none/partial/complete/skipped |
 | `created_at`, `updated_at` | timestamps |
+
+Migration `0003_internal_meeting_slots.sql` добавляет три meeting columns, partial unique index на non-null start и insert/update triggers для company, canonical timestamps, exact 20-minute duration, Moscow weekday и 09:00–17:00/20-minute-grid rules. Existing legacy rows намеренно сохраняются с `NULL` meeting fields и прежним deprecated text column: migration не придумывает им slots и не удаляет их. Domain snapshot/service fail closed при попытке использовать такую legacy row как complete modern booking; все новые inserts и relevant updates обязаны удовлетворять triggers.
 
 ### `idempotency_keys`
 
@@ -439,7 +478,9 @@ BEGIN IMMEDIATE
   lookup idempotency key
   if found: return stored result
   lookup booking by conversation_id
-  if found: persist replay key and return same booking
+  if found: validate complete modern snapshot, persist replay key and return same booking
+  validate server clock and selected candidate
+  reject occupied meeting_start_at
   insert booking
   insert domain_event booking.created
   insert notification_outbox
@@ -468,9 +509,17 @@ COMMIT
     "bookingId": "bkg_...",
     "conversationId": "conv_...",
     "name": "Александр",
-    "contacts": [{ "channel": "telegram", "value": "@alex" }],
+    "contacts": [
+      { "channel": "email", "value": "alex@example.com" },
+      { "channel": "telegram", "value": "@alex" }
+    ],
     "company": "Example LLC",
-    "preferredTimeText": "завтра после 15:00",
+    "meetingSlot": {
+      "startAt": "2026-08-03T06:00:00.000Z",
+      "endAt": "2026-08-03T06:20:00.000Z",
+      "timeZone": "Europe/Moscow",
+      "durationMinutes": 20
+    },
     "status": "booked",
     "qualificationStatus": "none"
   }
@@ -489,10 +538,8 @@ COMMIT
     "bookingId": "bkg_...",
     "qualificationStatus": "partial",
     "qualification": {
-      "role": "Head of Sales",
-      "monthlyLeadVolume": "около 2000",
-      "crm": "amoCRM",
-      "pains": ["лиды ждут ночью"]
+      "monthlyLeadVolume": "около 2000 входящих лидов в месяц",
+      "salesManagerCount": 8
     }
   }
 }

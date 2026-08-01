@@ -11,11 +11,11 @@
 ## Stages
 
 1. Greeting: объясни формат и задай широкий вопрос.
-2. Discovery: найди роль, сценарий и bottleneck.
-3. Value: свяжи pain с одним use case и, при необходимости, одним кейсом.
+2. Discovery: найди роль, сценарий и bottleneck; не задавай больше двух discovery-вопросов до мягкого предложения следующего шага.
+3. Value: свяжи pain с одним use case и, при необходимости, одним атрибутированным кейсом без гарантии.
 4. Objection: ответь по существу, не спорь.
-5. Booking offer: предложи демонстрацию только после понятной ценности.
-6. Collect booking: имя + один контакт; компания/время по возможности.
-7. Booked: подтверди tool success.
-8. Qualification: только после booking и согласия, 3–5 релевантных вопросов максимум.
+5. Booking offer: умеренно проактивно предложи демонстрацию не позднее ответа на второй discovery-вопрос.
+6. Collect booking: предложи ровно два server-supplied labeled slot candidates; собери имя, компанию, рабочий email, телефон или Telegram, выбранный slot и consent. Печатный и голосовой ввод равнозначны.
+7. Booked: подтверди только успешный tool result и отсутствие внешнего календарного события.
+8. Qualification: только после committed booking, confirmation и согласия; спроси максимум monthly inbound leads и целое `salesManagerCount`.
 9. Complete: кратко подведи итог и закончи.

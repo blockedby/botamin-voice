@@ -26,7 +26,9 @@
 - AudioWorklet capture;
 - resample browser audio до mono PCM16 16 kHz;
 - отправка бинарных PCM16 чанков около 100 ms;
-- явный end-of-turn `audio.commit` и bounded local buffer;
+- явный end-of-turn `audio.commit`, 60-second ceiling и server-advertised PCM byte cap, производный от 2,000,000-byte WAV cap;
+- circular countdown по принятым samples, а не wall clock, с effective duration по stricter duration/byte ceiling;
+- secure `visitor.text.submit` для bounded final typed turn и in-chat form только в server-owned `COLLECT_BOOKING`;
 - UI states `listening → processing → transcript.final`;
 - ordered playback queue для полных MP3 phrase segments;
 - decode через Web Audio или `HTMLAudio`;
@@ -56,8 +58,9 @@
 Источник истины для:
 
 - текущего stage;
-- собранных slots;
-- разрешённых actions;
+- server-owned current Moscow date/day и ровно двух structured/labeled internal meeting candidates;
+- разрешённых actions, включая rejection любого create-booking slot вне active candidate tuple;
+- qualification gating по committed booking, delivered confirmation и отдельному consent;
 - booking lifecycle;
 - prompt context;
 - retry/cancellation;
@@ -112,9 +115,12 @@ P0 transport — direct typed JSON-RPC к app-server. Универсальный
 
 ### BookingService
 
-- валидирует contact minimum;
-- создаёт/находит booking в одной транзакции;
-- обновляет qualification patch;
+- генерирует ровно два deterministic internal 20-minute candidates после текущей московской даты, только по будням и по 20-minute grid с 09:00 до 17:00 starts;
+- исключает уже committed internal start times без external calendar/availability API;
+- валидирует name, company, working email, phone or Telegram, consent и structured `Europe/Moscow` slot;
+- повторно проверяет slot по текущему server clock и отклоняет stale/non-bookable или internally occupied start до side effect; active-candidate membership до вызова сервиса проверяет orchestrator/tool policy;
+- создаёт/находит booking в одной `BEGIN IMMEDIATE` transaction;
+- обновляет qualification patch для существующей committed booking; confirmation/consent gating до вызова сервиса принадлежит orchestrator/tool policy;
 - пишет event outbox;
 - никогда не удаляет booking из-за incomplete qualification.
 
@@ -139,8 +145,8 @@ P0 adapter — structured console JSON. P1 — signed HTTP webhook с retry/outb
 1. Browser отправляет примерно 100 ms PCM16 chunks; gateway/utterance assembler собирает их в bounded utterance.
 2. End-of-turn / `audio.commit` закрывает реплику. Gateway/utterance assembler проверяет duration/bytes, создаёт и валидирует ровно один mono PCM16 WAV.
 3. Gateway передаёт WAV атомарному `SttPort`; OpenRouter STT adapter повторно валидирует/bounds already-WAV request, base64-кодирует его и отправляет один `input_audio` chat completion.
-4. Только валидный неустаревший final transcript становится user turn и публикуется как `transcript.final`.
-5. Orchestrator добавляет stage, known slots, booking status и краткий dialogue context; Codex thread получает `turn/start` ровно один раз.
+4. Только валидный неустаревший final transcript становится user turn и публикуется как `transcript.final`. Альтернативно, monotonic `visitor.text.submit` очищает uncommitted microphone bytes и создаёт такой же final turn без STT; до server `transcript.final` typed input не считается принятым.
+5. Orchestrator добавляет stage, known facts, booking status, server-owned current Moscow date/day и ровно два structured candidates с generated `displayLabel`; Codex thread получает `turn/start` ровно один раз независимо от typed/spoken origin.
 6. Text deltas проходят PII-safe sanitizer и bounded phrase chunker.
 7. Законченная короткая фраза отправляется в OpenRouter TTS; один request соответствует одному segment.
 8. После проверки один полный `audio/mpeg` segment идёт в browser ordered playback queue.
@@ -178,10 +184,21 @@ export type BrainToolMode = "dynamic" | "envelope";
 export interface BrainTurnInput {
   conversationId: string;
   threadId?: string;
+  turnId: string;
+  generationId: string;
   userText: string;
   stage: ConversationStage;
   knownFacts: KnownFacts;
   booking: BookingSnapshot | null;
+  schedulingContext: {
+    currentInstant: string;
+    moscowLocalDate: string;
+    moscowWeekday: string;
+    candidateMeetingSlots: [
+      { meetingSlot: MeetingSlot; displayLabel: string },
+      { meetingSlot: MeetingSlot; displayLabel: string }
+    ];
+  };
   allowedActions: BrainActionName[];
   promptVersion: string;
 }
@@ -300,7 +317,7 @@ Backend transition function должна быть чистой и покрыто
 transition(currentState, domainEvent) => nextState | TransitionError
 ```
 
-LLM не может напрямую записать произвольный next state. Он предлагает intent/action, orchestrator применяет допустимый transition.
+LLM не может напрямую записать произвольный next state. Он предлагает intent/action, orchestrator применяет допустимый transition. Typed composer/form visibility также проецируется только из server stage; transcript wording не может открыть booking form или разрешить tool.
 
 ## 10. Barge-in
 

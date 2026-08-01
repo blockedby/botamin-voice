@@ -255,6 +255,7 @@ scripts/codex-sdk-spike.ts
 scripts/deploy-local.sh
 scripts/deploy-production.sh
 scripts/device-auth.sh
+scripts/materialize-compose-secrets.ts
 scripts/observability-report.ts
 scripts/openrouter-stt-smoke.ts
 scripts/openrouter-tts-smoke.ts
@@ -262,6 +263,7 @@ scripts/restore.sh
 scripts/rollback.sh
 scripts/run-openrouter-smoke.sh
 scripts/run-pandoc.sh
+scripts/test-compose-file-secrets.sh
 scripts/update-release-artifacts.py
 scripts/validate-spec.py
 scripts/wait-ready.sh
@@ -293,6 +295,7 @@ tasks/tasks.yaml
 technical-spec.html
 tests/contracts/T30_REPLACE_reference_gateway_assembler.test.ts
 tests/contracts/external-smoke-gating.test.ts
+tests/contracts/materialize-compose-secrets.test.ts
 tests/contracts/openrouter-cross-component.test.ts
 tests/contracts/openrouter-provider-harness.test.ts
 tests/contracts/typecheck-negative-control.ts

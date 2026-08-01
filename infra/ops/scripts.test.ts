@@ -66,6 +66,45 @@ describe("bounded readiness checks", () => {
 	});
 });
 
+describe("file-backed Compose secret wiring", () => {
+	test("deploy wrappers materialize and export every source before Compose", async () => {
+		for (const path of [
+			"scripts/deploy-local.sh",
+			"scripts/deploy-production.sh",
+		]) {
+			const deployment = await readFile(path, "utf8");
+			expect(deployment).toContain(
+				"bun scripts/materialize-compose-secrets.ts",
+			);
+			expect(deployment).toContain("export OPENROUTER_API_KEY_FILE=");
+			expect(deployment).toContain("export WEBHOOK_URL_FILE=");
+			expect(deployment).toContain("export WEBHOOK_SIGNING_SECRET_FILE=");
+			expect(deployment.indexOf("materialize-compose-secrets.ts")).toBeLessThan(
+				deployment.indexOf("docker compose"),
+			);
+			expect(deployment).not.toMatch(/(?:source|\.)\s+\.env(?:\s|$)/m);
+		}
+	});
+
+	test("device auth uses explicit blank files and recovery keeps deployed files", async () => {
+		const deviceAuth = await readFile("scripts/device-auth.sh", "utf8");
+		expect(deviceAuth).toContain("export OPENROUTER_API_KEY_FILE=/dev/null");
+		expect(deviceAuth).toContain("export WEBHOOK_URL_FILE=/dev/null");
+		expect(deviceAuth).toContain(
+			"export WEBHOOK_SIGNING_SECRET_FILE=/dev/null",
+		);
+		for (const path of [
+			"scripts/backup.sh",
+			"scripts/restore.sh",
+			"scripts/rollback.sh",
+		]) {
+			const operation = await readFile(path, "utf8");
+			expect(operation).toContain(".runtime/secrets");
+			expect(operation).toContain("export OPENROUTER_API_KEY_FILE=");
+		}
+	});
+});
+
 describe("OpenRouter smoke guard", () => {
 	test("fails explicitly when an A2 smoke entrypoint is absent", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "botamin-smoke-test-"));

@@ -6,11 +6,26 @@ cd "$(dirname "$0")/.."
 if [ ! -f .env ]; then
   cp .env.example .env
   chmod 0600 .env
-  printf '%s\n' "Created .env from .env.example (provider keys remain blank)." >&2
+  printf '%s\n' "Created mode-0600 .env from .env.example; fill OPENROUTER_API_KEY, then retry." >&2
 fi
 
+bun scripts/materialize-compose-secrets.ts
+compose_secret_dir="$(pwd -P)/.runtime/secrets"
+export OPENROUTER_API_KEY_FILE="$compose_secret_dir/openrouter_api_key"
+export WEBHOOK_URL_FILE="$compose_secret_dir/webhook_url"
+export WEBHOOK_SIGNING_SECRET_FILE="$compose_secret_dir/webhook_signing_secret"
+
 config_file="$(mktemp)"
-trap 'rm -f "$config_file"' EXIT HUP INT TERM
+cleanup() {
+  rm -f "$config_file"
+}
+interrupted() {
+  cleanup
+  trap - EXIT HUP INT TERM
+  exit 130
+}
+trap cleanup EXIT
+trap interrupted HUP INT TERM
 docker compose config > "$config_file"
 
 # A rendered config may name a secret, but must never contain common token values.

@@ -142,11 +142,11 @@ services:
 
 secrets:
   openrouter_api_key:
-    environment: OPENROUTER_API_KEY
+    file: ${OPENROUTER_API_KEY_FILE:-/dev/null}
   webhook_signing_secret:
-    environment: WEBHOOK_SIGNING_SECRET
+    file: ${WEBHOOK_SIGNING_SECRET_FILE:-/dev/null}
   webhook_url:
-    environment: WEBHOOK_URL
+    file: ${WEBHOOK_URL_FILE:-/dev/null}
 
 volumes:
   app-data:

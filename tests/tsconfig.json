@@ -9,8 +9,10 @@
 	},
 	"include": [
 		"contracts/**/*.ts",
+		"e2e/**/*.ts",
 		"fixtures/**/*.ts",
 		"security/**/*.ts",
+		"../scripts/local-voice-e2e-smoke.ts",
 		"../apps/server/src/**/*.ts",
 		"../apps/web/src/audio/**/*.ts",
 		"../apps/web/src/integration/**/*.ts",

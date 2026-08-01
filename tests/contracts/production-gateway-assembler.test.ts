@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { PcmUtteranceAssembler } from "../../apps/server/src/gateway/wav";
 import { CANONICAL_FRAME_BYTES } from "../../apps/web/src/audio/pcm";
 import { decodeAndPairServerSegment } from "../../apps/web/src/transport/binary";
 import {
@@ -16,10 +17,8 @@ import {
 	createDeterministicWavFixture,
 	parseMonoPcm16Wav,
 } from "../../packages/test-fixtures/src";
-import { T30ReferenceGatewayUtteranceAssembler } from "../fixtures/reference-gateway-utterance-assembler";
 
 const conversationId = "01J00000000000000000000000";
-const turnId = "01J00000000000000000000001";
 const generationId = "01J00000000000000000000002";
 const segmentId = "01J00000000000000000000003";
 const at = "2026-07-30T20:22:00.000Z";
@@ -69,7 +68,7 @@ function readyEvent() {
 	};
 }
 
-describe("T30 REPLACE/COMPARE: test-only reference gateway utterance assembler", () => {
+describe("production gateway utterance assembler", () => {
 	test("bounded browser PCM plus one accepted commit creates exactly one canonical WAV", () => {
 		const socket = new LoopbackSocket();
 		const transport = new VoiceTransport({
@@ -101,17 +100,20 @@ describe("T30 REPLACE/COMPARE: test-only reference gateway utterance assembler",
 			decodeBinaryAudioFrame(binaryFrames[0] as Uint8Array).payload,
 		).toEqual(pcm);
 
-		const assembler = new T30ReferenceGatewayUtteranceAssembler({
-			maxPcmBytes: CANONICAL_FRAME_BYTES,
-			maxDurationMs: 100,
+		const assembler = new PcmUtteranceAssembler({
+			maxAudioBytes: CANONICAL_FRAME_BYTES + 44,
+			maxUtteranceMs: 100,
+			maxFramePayloadBytes: CANONICAL_FRAME_BYTES,
 		});
-		assembler.appendBinaryFrame(binaryFrames[0] as Uint8Array);
-		const request = assembler.commit({ conversationId, turnId });
-		expect(request).not.toBeNull();
-		expect(assembler.commit({ conversationId, turnId })).toBeNull();
-		expect(request?.contentType).toBe("audio/wav");
-		expect(request?.audio).toEqual(createDeterministicWavFixture());
-		expect(parseMonoPcm16Wav(request?.audio as Uint8Array)).toMatchObject({
+		assembler.append(
+			decodeBinaryAudioFrame(binaryFrames[0] as Uint8Array).payload,
+		);
+		const wav = assembler.commit();
+		expect(() => assembler.commit()).toThrow(
+			expect.objectContaining({ code: "UTTERANCE_ALREADY_COMMITTED" }),
+		);
+		expect(wav).toEqual(createDeterministicWavFixture());
+		expect(parseMonoPcm16Wav(wav)).toMatchObject({
 			channels: 1,
 			sampleRate: 16_000,
 			bitsPerSample: 16,
@@ -120,46 +122,27 @@ describe("T30 REPLACE/COMPARE: test-only reference gateway utterance assembler",
 		});
 	});
 
-	test("reference bounds malformed, oversized and duplicate input before SttPort", () => {
-		const assembler = new T30ReferenceGatewayUtteranceAssembler({
-			maxPcmBytes: 4,
-			maxDurationMs: 100,
-			maxFrameBytes: 4,
+	test("production bounds malformed, oversized and duplicate input before SttPort", () => {
+		const assembler = new PcmUtteranceAssembler({
+			maxAudioBytes: 3_244,
+			maxUtteranceMs: 100,
+			maxFramePayloadBytes: 3_200,
 		});
-		expect(() => assembler.commit({ conversationId, turnId })).toThrow("empty");
-		expect(() =>
-			assembler.appendBinaryFrame(
-				encodeBinaryAudioFrame({
-					kind: BINARY_AUDIO_FRAME_KIND.clientPcm16,
-					sequence: 0,
-					payload: new Uint8Array([0]),
-				}),
-			),
-		).toThrow("malformed PCM");
-		expect(() =>
-			assembler.appendBinaryFrame(
-				encodeBinaryAudioFrame({
-					kind: BINARY_AUDIO_FRAME_KIND.clientPcm16,
-					sequence: 0,
-					payload: new Uint8Array(6),
-				}),
-			),
-		).toThrow("malformed PCM");
+		expect(() => assembler.commit()).toThrow(
+			expect.objectContaining({ code: "UTTERANCE_EMPTY" }),
+		);
+		expect(() => assembler.append(new Uint8Array([0]))).toThrow(
+			expect.objectContaining({ code: "INVALID_PCM_FRAME" }),
+		);
+		expect(() => assembler.append(new Uint8Array(3_202))).toThrow(
+			expect.objectContaining({ code: "INVALID_PCM_FRAME" }),
+		);
 
-		const overDuration = new T30ReferenceGatewayUtteranceAssembler({
-			maxPcmBytes: 3_200,
-			maxDurationMs: 1,
-			maxFrameBytes: 3_200,
-		});
-		expect(() =>
-			overDuration.appendBinaryFrame(
-				encodeBinaryAudioFrame({
-					kind: BINARY_AUDIO_FRAME_KIND.clientPcm16,
-					sequence: 0,
-					payload: new Uint8Array(34),
-				}),
-			),
-		).toThrow("exceeds its bound");
+		assembler.append(new Uint8Array(3_200));
+		expect(() => assembler.append(new Uint8Array(2))).toThrow(
+			expect.objectContaining({ code: "UTTERANCE_TOO_LARGE" }),
+		);
+		expect(assembler.hasAudio).toBe(false);
 	});
 
 	test("browser server-audio codec preserves a complete canonical MP3 payload", () => {

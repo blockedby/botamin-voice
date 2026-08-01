@@ -142,6 +142,7 @@ export class BrowserVoiceSession {
 	private sessionEstablished = false;
 	private disposed = false;
 	private playbackUnavailable = false;
+	private textOnlyGenerationPending: string | null = null;
 	private terminalFailurePending = false;
 
 	constructor(private readonly factories: BrowserVoiceFactories) {}
@@ -171,6 +172,7 @@ export class BrowserVoiceSession {
 		this.completedAssistantGenerations.clear();
 		this.captureArmed = false;
 		this.sessionEstablished = false;
+		this.textOnlyGenerationPending = null;
 		this.terminalFailurePending = false;
 		this.setSnapshot({
 			state: { kind: "connecting" },
@@ -324,6 +326,7 @@ export class BrowserVoiceSession {
 
 	interrupt(): void {
 		if (!this.controller) return;
+		this.textOnlyGenerationPending = null;
 		this.controller.bargeIn({
 			stopLocalPlayback: () => {
 				this.playback?.bargeIn();
@@ -519,6 +522,7 @@ export class BrowserVoiceSession {
 				this.setState(this.activeState("connecting"));
 				break;
 			case "reconnecting": {
+				this.textOnlyGenerationPending = null;
 				if (!this.sessionEstablished) {
 					void this.failStartup(epoch);
 					break;
@@ -582,9 +586,10 @@ export class BrowserVoiceSession {
 			case "assistant.text.delta":
 				this.controller.acceptEvent(event);
 				break;
-			case "assistant.text.done":
+			case "assistant.text.done": {
+				const accepted = this.controller.acceptEvent(event);
 				if (
-					this.controller.acceptEvent(event) &&
+					accepted &&
 					event.payload.fullText.length > 0 &&
 					!this.completedAssistantGenerations.has(event.payload.generationId)
 				) {
@@ -598,10 +603,20 @@ export class BrowserVoiceSession {
 						text: event.payload.fullText,
 					});
 				}
+				const textOnlyGeneration =
+					this.textOnlyGenerationPending === event.payload.generationId;
+				if (textOnlyGeneration) this.textOnlyGenerationPending = null;
+				if (accepted && textOnlyGeneration) {
+					if (this.controller.completePlayback(event.payload.generationId)) {
+						this.setState(this.activeState("audio-error"));
+						void this.beginCapture(epoch);
+					}
+				}
 				if (this.terminalFailurePending) {
 					void this.finishTerminalFailure(epoch);
 				}
 				break;
+			}
 			case "audio.segment":
 				if (this.controller.acceptEvent(event)) {
 					if (this.playbackUnavailable || !this.playback) {
@@ -657,9 +672,9 @@ export class BrowserVoiceSession {
 				break;
 			case "error":
 				if (event.payload.code === "TTS_UNAVAILABLE") {
+					this.textOnlyGenerationPending = this.controller.state.generationId;
 					this.controller.setAudioError("Звук ответа сейчас недоступен");
 					this.setState(this.activeState("audio-error"));
-					void this.beginCapture(epoch);
 				} else if (event.payload.code === "STT_UNAVAILABLE") {
 					this.setState(this.activeState("error"));
 					void this.beginCapture(epoch);
@@ -814,6 +829,7 @@ export class BrowserVoiceSession {
 		this.captureStarting = false;
 		this.captureArmed = false;
 		this.sessionEstablished = false;
+		this.textOnlyGenerationPending = null;
 		this.abortController?.abort();
 		this.abortController = null;
 		const transport = this.transport;

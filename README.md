@@ -37,6 +37,8 @@ Open <http://localhost:5173>. The single `OPENROUTER_API_KEY` is backend-only an
 
 For direct Bun development outside Compose, the absolute `CODEX_HOME` in `.env` applies. Compose intentionally uses the persistent `botamin-codex-home` volume instead. Treat its `auth.json` as a password and restrict Docker access.
 
+Run the canonical credential-free test suite with `bun run test`; it excludes ignored generated `dist` output.
+
 ## Local operations
 
 ```bash

@@ -15,7 +15,7 @@
 ## Integrated baseline evidence
 
 - Current `main` implementation sequence PRs #6–#21 is present (16 squash commits from atomic MP3 contracts through the PR #21 production journey/local-smoke artifact).
-- Integrated PR #21 branch evidence supplied for T40 records **444 tests, 0 failures**, plus passing typecheck, lint/format, build, deterministic spec checks, and a **315-file** checksum set.
+- Integrated PR #21 branch evidence supplied for T40 included passing typecheck, lint/format, build, deterministic spec checks, and a **315-file** checksum set. Its pre-canonical test count is superseded by the release-commit suite below, which excludes ignored generated `dist` output.
 - The committed [`evidence/T30-observed-local-voice-smoke-2026-07-31.md`](evidence/T30-observed-local-voice-smoke-2026-07-31.md) is owner-observed real local OpenRouter/Luna evidence: the one-turn path completed final transcript/text/audio events; the five-turn path produced five finals/text/audio completions, exactly one booked SQLite row, and exactly one sent outbox event at attempt 1.
 - T30 is local functional evidence only. It is not a target-host run or latency benchmark.
 
@@ -35,7 +35,7 @@ This documentation pass did not repeat a credentialed deploy, browser session, o
 After `bun install --frozen-lockfile` restored the locked workspace dependencies:
 
 ```text
-bun test: 444 passed, 0 failed across 55 files (3,788 assertions)
+bun run test: 433 passed, 0 failed across 54 files (3,788 assertions), both before and after bun run build
 bun run typecheck: passed (contracts, prompt compiler, test fixtures, web, server)
 bun run lint:format: passed (141 files, no fixes)
 bun run build: passed (all five workspaces; production web bundle built)

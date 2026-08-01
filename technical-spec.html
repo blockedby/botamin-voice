@@ -4449,8 +4449,9 @@ candidate <code>0.5.0-local-rc.1</code></h3>
 <li><label><input type="checkbox" checked></input>Integrated implementation
 baseline contains PRs #6–#21.</label></li>
 <li><label><input type="checkbox" checked></input>Fresh deterministic
-release-commit suite passes 444 tests across 55 files with no failures
-and 3,788 assertions; command evidence is recorded in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>.</label></li>
+release-commit suite passes 433 tests across 54 files with no failures
+and 3,788 assertions before and after <code>bun run build</code>;
+command evidence is recorded in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>.</label></li>
 <li><label><input type="checkbox" checked></input>Product landing,
 CTA/consent, AI identity, Botamin use cases, refusal behavior, booking
 order/idempotency, safe provider failures, barge-in, prompt loading,
@@ -4606,7 +4607,7 @@ schemas, fake ports.</p>
 <p>Definition of Done:</p>
 <ul>
 <li><code>bun install</code>, <code>bun run typecheck</code>,
-<code>bun test</code> работают;</li>
+<code>bun run test</code> работают;</li>
 <li>contracts не импортируют server/browser-specific code;</li>
 <li><code>BrainPort</code>, atomic final-transcription
 <code>SttPort</code>, complete-segment <code>TtsPort</code>, booking
@@ -5334,8 +5335,9 @@ not a target-VPS or public TLS release.</p>
 <li><label><input type="checkbox" checked></input>Integrated implementation
 baseline is current through PRs #6–#21.</label></li>
 <li><label><input type="checkbox" checked></input>Fresh deterministic
-release-commit suite passed 444 tests across 55 files with 0 failures
-and 3,788 assertions.</label></li>
+release-commit suite passed 433 tests across 54 files with 0 failures
+and 3,788 assertions before and after
+<code>bun run build</code>.</label></li>
 <li><label><input type="checkbox" checked></input>Typecheck, lint/format,
 build, deterministic spec generation, validator, and the 315-file
 checksum set passed on that baseline.</label></li>

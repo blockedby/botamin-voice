@@ -72,7 +72,7 @@ tasks:
   acceptance:
   - bun install succeeds
   - bun run typecheck succeeds
-  - bun test succeeds
+  - bun run test succeeds
   - browser and server compile against the same contracts
   - no provider HTTP or SDK type is required by packages/contracts
 - id: T01

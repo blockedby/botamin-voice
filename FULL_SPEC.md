@@ -2521,7 +2521,7 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 ### Local release candidate `0.5.0-local-rc.1`
 
 - [x] Integrated implementation baseline contains PRs #6–#21.
-- [x] Fresh deterministic release-commit suite passes 444 tests across 55 files with no failures and 3,788 assertions; command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md).
+- [x] Fresh deterministic release-commit suite passes 433 tests across 54 files with no failures and 3,788 assertions before and after `bun run build`; command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md).
 - [x] Product landing, CTA/consent, AI identity, Botamin use cases, refusal behavior, booking order/idempotency, safe provider failures, barge-in, prompt loading, envelope mode, and sandbox boundaries have deterministic coverage.
 - [x] Chrome desktop/mobile local acceptance covers landing, consent, permission-denied safe state, no fetch/WebSocket before mic permission, and no horizontal overflow.
 - [x] Owner-observed real local OpenRouter/Luna evidence records one complete turn and a five-turn journey with exactly one booking and one sent outbox event; see [`../evidence/T30-observed-local-voice-smoke-2026-07-31.md`](evidence/T30-observed-local-voice-smoke-2026-07-31.md).
@@ -2597,7 +2597,7 @@ Target-VPS compose/health/preflight/provider evidence and benchmark-grade latenc
 
 Definition of Done:
 
-- `bun install`, `bun run typecheck`, `bun test` работают;
+- `bun install`, `bun run typecheck`, `bun run test` работают;
 - contracts не импортируют server/browser-specific code;
 - `BrainPort`, atomic final-transcription `SttPort`, complete-segment `TtsPort`, booking schemas и WS event union существуют;
 - fake adapters позволяют собрать skeleton E2E;
@@ -3093,7 +3093,7 @@ VoiceOrchestrator
 ## Local P0 checklist
 
 - [x] Integrated implementation baseline is current through PRs #6–#21.
-- [x] Fresh deterministic release-commit suite passed 444 tests across 55 files with 0 failures and 3,788 assertions.
+- [x] Fresh deterministic release-commit suite passed 433 tests across 54 files with 0 failures and 3,788 assertions before and after `bun run build`.
 - [x] Typecheck, lint/format, build, deterministic spec generation, validator, and the 315-file checksum set passed on that baseline.
 - [x] The committed [T30 owner-observed artifact](evidence/T30-observed-local-voice-smoke-2026-07-31.md) records a real local OpenRouter/Luna one-turn path and a five-turn path with exactly one booked row and one sent outbox event.
 - [x] `scripts/deploy-local.sh` was observed succeeding with mode-`0600` materialized files mounted read-only; app and Caddy were healthy and dependency readiness reported all checks ready.

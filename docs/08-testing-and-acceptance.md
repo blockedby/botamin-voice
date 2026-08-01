@@ -265,7 +265,7 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 ### Local release candidate `0.5.0-local-rc.1`
 
 - [x] Integrated implementation baseline contains PRs #6–#21.
-- [x] Fresh deterministic release-commit suite passes 444 tests across 55 files with no failures and 3,788 assertions; command evidence is recorded in [`../VALIDATION.md`](../VALIDATION.md).
+- [x] Fresh deterministic release-commit suite passes 433 tests across 54 files with no failures and 3,788 assertions before and after `bun run build`; command evidence is recorded in [`../VALIDATION.md`](../VALIDATION.md).
 - [x] Product landing, CTA/consent, AI identity, Botamin use cases, refusal behavior, booking order/idempotency, safe provider failures, barge-in, prompt loading, envelope mode, and sandbox boundaries have deterministic coverage.
 - [x] Chrome desktop/mobile local acceptance covers landing, consent, permission-denied safe state, no fetch/WebSocket before mic permission, and no horizontal overflow.
 - [x] Owner-observed real local OpenRouter/Luna evidence records one complete turn and a five-turn journey with exactly one booking and one sent outbox event; see [`../evidence/T30-observed-local-voice-smoke-2026-07-31.md`](../evidence/T30-observed-local-voice-smoke-2026-07-31.md).

@@ -35,7 +35,7 @@
 
 Definition of Done:
 
-- `bun install`, `bun run typecheck`, `bun test` работают;
+- `bun install`, `bun run typecheck`, `bun run test` работают;
 - contracts не импортируют server/browser-specific code;
 - `BrainPort`, atomic final-transcription `SttPort`, complete-segment `TtsPort`, booking schemas и WS event union существуют;
 - fake adapters позволяют собрать skeleton E2E;

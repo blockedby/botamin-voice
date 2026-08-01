@@ -35,23 +35,38 @@ afterEach(async () => {
 });
 
 describe("dotenv parsing for Compose secrets", () => {
-	test("preserves spaces and equals without evaluating shell syntax", () => {
-		const values = parseDotenv(`
-OPENROUTER_APP_TITLE=Botamin Voice Demo
-OPENROUTER_API_KEY=part=one=two
-WEBHOOK_URL="https://example.test/hook?left=1&right=two words"
-WEBHOOK_SIGNING_SECRET='literal # value = $(touch /tmp/never-run)'
-PLAIN=kept # trailing comment
-`);
-		expect(values.OPENROUTER_APP_TITLE).toBe("Botamin Voice Demo");
-		expect(values.OPENROUTER_API_KEY).toBe("part=one=two");
-		expect(values.WEBHOOK_URL).toBe(
-			"https://example.test/hook?left=1&right=two words",
+	test("matches Compose comment, spacing, quoting, and escape rules without eval", async () => {
+		const shellMarker = "/tmp/botamin-dotenv-must-not-eval";
+		await rm(shellMarker, { force: true });
+		const fixture = await readFile(
+			join(repositoryRoot, "tests/fixtures/compose-dotenv.env"),
+			"utf8",
 		);
-		expect(values.WEBHOOK_SIGNING_SECRET).toBe(
-			"literal # value = $(touch /tmp/never-run)",
+		const values = parseDotenv(fixture);
+
+		expect(values.HASH).toBe("abc#def");
+		expect(values.URL_FRAGMENT).toBe(
+			"https://example.test/callback#confirmation",
 		);
-		expect(values.PLAIN).toBe("kept");
+		expect(values.INLINE_COMMENT).toBe("kept value");
+		expect(values.SPACES).toBe("Botamin Voice Demo");
+		expect(values.EQUALS).toBe("left=middle=right");
+		expect(values.SINGLE).toBe(
+			"literal # value = spaces; quote: ' ; slash: \\\\",
+		);
+		expect(values.DOUBLE).toBe(
+			'double # value = spaces; quote: "; slash: \\; newline:\n; tab:\t',
+		);
+		expect(values.SHELL_LITERAL).toBe(
+			"$(touch /tmp/botamin-dotenv-must-not-eval)",
+		);
+		expect(await Bun.file(shellMarker).exists()).toBeFalse();
+	});
+
+	test("treats backticks as unquoted data", () => {
+		expect(parseDotenv("VALUE=`literal value`\n").VALUE).toBe(
+			"`literal value`",
+		);
 	});
 });
 
@@ -138,6 +153,58 @@ describe("Compose secret materialization", () => {
 });
 
 describe.skipIf(!composeAvailable)("file-backed Compose rendering", () => {
+	test("dotenv fixture matches docker compose config", async () => {
+		const keys = [
+			"HASH",
+			"URL_FRAGMENT",
+			"INLINE_COMMENT",
+			"SPACES",
+			"EQUALS",
+			"SINGLE",
+			"DOUBLE",
+			"SHELL_LITERAL",
+		] as const;
+		const environment = processEnvironment();
+		for (const key of keys) delete environment[key];
+		const fixturePath = "tests/fixtures/compose-dotenv.env";
+		const values = parseDotenv(await readFile(fixturePath, "utf8"));
+		const child = Bun.spawn(
+			[
+				"docker",
+				"compose",
+				"--env-file",
+				fixturePath,
+				"-f",
+				"tests/fixtures/compose-dotenv.yml",
+				"config",
+				"--format",
+				"json",
+			],
+			{ cwd: repositoryRoot, env: environment, stdout: "pipe", stderr: "pipe" },
+		);
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect(exitCode).toBe(0);
+		expect(stderr).toBe("");
+		const config = JSON.parse(stdout) as {
+			services: { probe: { environment: Record<string, string> } };
+		};
+		const rendered = Object.fromEntries(
+			keys.map((key) => [key, config.services.probe.environment[key]]),
+		);
+		// Compose escapes a literal dollar as $$ in its rendered service model.
+		rendered.SHELL_LITERAL = rendered.SHELL_LITERAL?.replaceAll("$$", "$");
+		expect(rendered).toEqual(
+			Object.fromEntries(keys.map((key) => [key, values[key]])),
+		);
+		expect(
+			await Bun.file("/tmp/botamin-dotenv-must-not-eval").exists(),
+		).toBeFalse();
+	});
+
 	test("uses explicit file sources and never renders the environment key", async () => {
 		const sentinel = "compose-must-not-render-this-key";
 		const sourceRoot = "/tmp/botamin-compose-secret-sources";

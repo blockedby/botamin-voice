@@ -117,9 +117,9 @@ function parseValue(raw: string, lineNumber: number): string {
 	const value = raw.trimStart();
 	if (value === "") return "";
 	const quote = value[0];
-	if (quote !== '"' && quote !== "'" && quote !== "`") {
-		const comment = value.indexOf("#");
-		return (comment < 0 ? value : value.slice(0, comment)).trimEnd();
+	if (quote !== '"' && quote !== "'") {
+		const comment = /[ \t]#/.exec(value);
+		return (comment === null ? value : value.slice(0, comment.index)).trimEnd();
 	}
 
 	let result = "";
@@ -133,6 +133,19 @@ function parseValue(raw: string, lineNumber: number): string {
 		}
 		if (quote === '"' && character === "\\") {
 			escaped = true;
+			continue;
+		}
+		if (quote === "'" && character === "\\") {
+			let runLength = 1;
+			while (value[index + runLength] === "\\") runLength += 1;
+			if (value[index + runLength] === "'" && runLength % 2 === 1) {
+				result += "\\".repeat(runLength - 1);
+				result += "'";
+				index += runLength;
+				continue;
+			}
+			result += "\\".repeat(runLength);
+			index += runLength - 1;
 			continue;
 		}
 		if (character === quote) {

@@ -252,6 +252,7 @@ scripts/build-spec.sh
 scripts/codex-generate-schemas.ts
 scripts/codex-preflight.ts
 scripts/codex-sdk-spike.ts
+scripts/compose-secret-files.sh
 scripts/deploy-local.sh
 scripts/deploy-production.sh
 scripts/device-auth.sh
@@ -300,6 +301,8 @@ tests/contracts/openrouter-cross-component.test.ts
 tests/contracts/openrouter-provider-harness.test.ts
 tests/contracts/typecheck-negative-control.ts
 tests/contracts/voice-data-leakage.test.ts
+tests/fixtures/compose-dotenv.env
+tests/fixtures/compose-dotenv.yml
 tests/fixtures/reference-gateway-utterance-assembler.ts
 tests/security/failure-drills.test.ts
 tests/security/leakage-and-bundle.test.ts

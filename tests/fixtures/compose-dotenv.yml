@@ -1,0 +1,12 @@
+services:
+  probe:
+    image: busybox:1.36
+    environment:
+      HASH: ${HASH}
+      URL_FRAGMENT: ${URL_FRAGMENT}
+      INLINE_COMMENT: ${INLINE_COMMENT}
+      SPACES: ${SPACES}
+      EQUALS: ${EQUALS}
+      SINGLE: ${SINGLE}
+      DOUBLE: ${DOUBLE}
+      SHELL_LITERAL: ${SHELL_LITERAL}

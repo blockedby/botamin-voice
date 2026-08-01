@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { monotonicNowMs, type MonotonicClock } from "./clock";
+import { type MonotonicClock, monotonicNowMs } from "./clock";
 
 /**
  * Privacy-safe, process-local operational aggregates.

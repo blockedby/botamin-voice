@@ -52,7 +52,10 @@ if ! docker compose run --rm -e AUTO_MIGRATE=false app codex login status >/dev/
 fi
 
 docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate
-docker compose up -d
+# Always remount newly materialized/rotated files in app. Existing Caddy is not
+# force-recreated; Compose starts or updates it only when its own state requires it.
+docker compose up -d --no-deps --force-recreate app
+docker compose up -d caddy
 
 if ! READY_MAX_ATTEMPTS=60 READY_INTERVAL_SECONDS=2 \
   scripts/wait-ready.sh "https://$site_address/health/ready"; then

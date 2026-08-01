@@ -31,7 +31,7 @@ cp .env.example .env
 chmod 600 .env
 # Fill OPENROUTER_API_KEY without sourcing .env.
 ./scripts/deploy-local.sh
-curl -fsS http://localhost:5173/health/live
+curl -fsS http://localhost:5173/health/ready
 ```
 
 Equivalent explicit commands are:
@@ -45,9 +45,10 @@ export WEBHOOK_SIGNING_SECRET_FILE="$secret_dir/webhook_signing_secret"
 docker compose config >/tmp/botamin-compose-config.yml
 docker compose build --pull
 docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate
-docker compose up -d
+docker compose up -d --no-deps --force-recreate app
+docker compose up -d caddy
 docker compose ps
-curl -fsS http://localhost:5173/health/live
+curl -fsS http://localhost:5173/health/ready
 ```
 
 Caddy proxies WebSocket upgrades automatically. `docker compose down` preserves
@@ -56,17 +57,12 @@ Codex auth.
 
 ### Current integration boundary
 
-At this branch point the server exposes `/health/live`, but does not yet expose
-`/health/ready`, static frontend routes, the application WebSocket, Codex
-preflight, or the A2-owned `scripts/openrouter-stt-smoke.ts` and
-`scripts/openrouter-tts-smoke.ts`. The Docker build copies repository scripts
-and conditionally bundles either provider smoke entrypoint when its source is
-present. `scripts/assert-image-content.sh` proves required runtime files are in
-the image and compares provider-smoke presence with the checkout. Until A2
-lands, `/app/scripts/run-openrouter-smoke.sh stt|tts` fails explicitly with a
-missing-integration error; it cannot return false success or raw `ENOENT`.
-Production readiness and paid smokes must fail rather than be simulated until
-their integration routes/scripts land.
+The server exposes distinct `/health/live` and dependency-aware `/health/ready`
+routes. The Docker build copies repository scripts and conditionally bundles
+provider smoke entrypoints when their sources are present.
+`scripts/assert-image-content.sh` proves required runtime files are in the image
+and compares provider-smoke presence with the checkout. A missing paid-smoke
+integration fails explicitly; it cannot return false success or raw `ENOENT`.
 
 ## Secrets and Codex device auth
 
@@ -74,10 +70,12 @@ their integration routes/scripts land.
 shell), requires a nonblank OpenRouter key by default, rejects linked/unsafe
 paths, and atomically writes the three persistent sources under
 `.runtime/secrets` with directory mode `0700` and file mode `0600`. Compose
-mounts those files under `/run/secrets`; the non-root entrypoint exports values
-only into the app process. Values are not build arguments, image layers,
-rendered service environment, or script output. Deployment wrappers export all
-three `*_FILE` paths for every Compose command and do not delete these files.
+mounts those files under `/run/secrets`; after every materialization the
+deployment wrappers force-recreate only `app`, then start or update Caddy only
+if needed and require readiness. The non-root entrypoint exports values only
+into the app process. Values are not build arguments, image layers, rendered
+service environment, or script output. Deployment wrappers export all three
+`*_FILE` paths for every Compose command and do not delete these files.
 For later manual Compose commands, export the same paths shown in the explicit
 local commands above; never `source .env` (dotenv values may contain spaces).
 
@@ -94,9 +92,11 @@ survives app replacement and Compose project renaming. Treat `auth.json` as a pa
 not include it in ordinary backups. A production host should also encrypt the
 underlying disk/snapshot and restrict Docker access.
 
-The focused Bun tests prove dotenv parsing, permissions, symlink and blank-key
-policy, output redaction, and rendered file sources. The engine smoke proves
-secret creation succeeds with `read_only: true` after the app image is built:
+The focused Bun tests prove Compose-compatible dotenv parsing, permissions,
+symlink and blank-key policy, output redaction, wrapper ordering, and rendered
+file sources. The engine smoke atomically rotates a source inode/value and
+proves wrapper-style app recreation remounts it in a disposable `read_only`
+service without logging either value:
 
 ```bash
 bun test tests/contracts/materialize-compose-secrets.test.ts

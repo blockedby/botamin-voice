@@ -1,12 +1,3 @@
-CREATE TABLE `_booking_slot_migration_guard` (
-  `valid` integer NOT NULL CHECK (`valid` = 1)
-);
---> statement-breakpoint
-INSERT INTO `_booking_slot_migration_guard` (`valid`)
-SELECT CASE WHEN EXISTS (SELECT 1 FROM `bookings`) THEN 0 ELSE 1 END;
---> statement-breakpoint
-DROP TABLE `_booking_slot_migration_guard`;
---> statement-breakpoint
 ALTER TABLE `bookings` ADD `meeting_start_at` text;
 --> statement-breakpoint
 ALTER TABLE `bookings` ADD `meeting_end_at` text;

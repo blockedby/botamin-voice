@@ -98,7 +98,7 @@ describe("domain database migrations", () => {
 		closeDomainDatabase(upgraded);
 	});
 
-	test("fails closed instead of inventing meeting slots for legacy bookings", () => {
+	test("preserves legacy bookings without inventing meeting slots during upgrade", () => {
 		const { database: legacy, filename } = legacyDatabaseFixture();
 		legacy.$client.run(
 			`INSERT INTO conversations
@@ -119,25 +119,42 @@ describe("domain database migrations", () => {
 		);
 		closeDomainDatabase(legacy);
 
-		expect(() => openDomainDatabase({ filename })).toThrow(
-			"_booking_slot_migration_guard",
-		);
-		const unchanged = openDomainDatabase({
-			filename,
-			applyMigrations: false,
+		const upgraded = openDomainDatabase({ filename });
+		const row = upgraded.$client
+			.query<
+				{
+					count: number;
+					meetingStartAt: string | null;
+					meetingEndAt: string | null;
+					meetingTimeZone: string | null;
+				},
+				[]
+			>(
+				`SELECT count(*) AS count,
+				 meeting_start_at AS meetingStartAt,
+				 meeting_end_at AS meetingEndAt,
+				 meeting_timezone AS meetingTimeZone
+				 FROM bookings WHERE id = 'legacy-booking'`,
+			)
+			.get();
+		expect(row).toEqual({
+			count: 1,
+			meetingStartAt: null,
+			meetingEndAt: null,
+			meetingTimeZone: null,
 		});
-		expect(
-			unchanged.$client
-				.query<{ value: number }, []>("SELECT count(*) AS value FROM bookings")
-				.get()?.value,
-		).toBe(1);
-		expect(
-			unchanged.$client
-				.query<{ name: string }, []>("PRAGMA table_info(bookings)")
-				.all()
-				.some((column) => column.name === "meeting_start_at"),
-		).toBe(false);
-		closeDomainDatabase(unchanged);
+		const columns = upgraded.$client
+			.query<{ name: string }, []>("PRAGMA table_info(bookings)")
+			.all()
+			.map((column) => column.name);
+		expect(columns).toEqual(
+			expect.arrayContaining([
+				"meeting_start_at",
+				"meeting_end_at",
+				"meeting_timezone",
+			]),
+		);
+		closeDomainDatabase(upgraded);
 	});
 
 	test("fails closed on legacy operation scopes without their subject", () => {

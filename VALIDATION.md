@@ -15,7 +15,7 @@
 ## Integrated baseline evidence
 
 - Current `main` implementation sequence PRs #6–#21 is present (16 squash commits from atomic MP3 contracts through the PR #21 production journey/local-smoke artifact).
-- Integrated PR #21 branch evidence supplied for T40 records **444 combined tests, 0 failures**, plus passing typecheck, lint/format, build, deterministic spec checks, and a **315-file** checksum set.
+- Integrated PR #21 branch evidence supplied for T40 records **444 tests, 0 failures**, plus passing typecheck, lint/format, build, deterministic spec checks, and a **315-file** checksum set.
 - The committed [`evidence/T30-observed-local-voice-smoke-2026-07-31.md`](evidence/T30-observed-local-voice-smoke-2026-07-31.md) is owner-observed real local OpenRouter/Luna evidence: the one-turn path completed final transcript/text/audio events; the five-turn path produced five finals/text/audio completions, exactly one booked SQLite row, and exactly one sent outbox event at attempt 1.
 - T30 is local functional evidence only. It is not a target-host run or latency benchmark.
 
@@ -35,11 +35,11 @@ This documentation pass did not repeat a credentialed deploy, browser session, o
 After `bun install --frozen-lockfile` restored the locked workspace dependencies:
 
 ```text
-bun test: 433 passed, 0 failed across 54 files (3,788 assertions)
+bun test: 444 passed, 0 failed across 55 files (3,788 assertions)
 bun run typecheck: passed (contracts, prompt compiler, test fixtures, web, server)
 bun run lint:format: passed (141 files, no fixes)
 bun run build: passed (all five workspaces; production web bundle built)
-scripts/build-spec.sh twice: byte-identical 12-artifact hash sets
+scripts/build-spec.sh + update-release-artifacts.py twice: byte-identical 14-artifact hash sets (7 SVG, 3 PNG, FULL_SPEC.md, technical-spec.html, MANIFEST.txt, CHECKSUMS.sha256)
 scripts/validate-spec.py: ALL VALIDATIONS PASSED
 active retired-provider/retired-STT scan: 0 matches; superseded correction excluded
 docker compose config --quiet: passed with safe /dev/null secret defaults
@@ -48,8 +48,6 @@ scripts/test-compose-file-secrets.sh: passed read-only rotated-inode remount eng
 CHECKSUMS.sha256: 316 files verified after T40 artifact regeneration
 git diff --check: passed
 ```
-
-The fresh `bun test` runner reports its own 433-test count; the separately supplied integrated PR #21 combined evidence remains 444. Both counts are recorded explicitly rather than conflated.
 
 ## Active contract and secret boundary
 

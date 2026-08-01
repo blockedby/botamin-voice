@@ -11,7 +11,7 @@
 ## Local P0 checklist
 
 - [x] Integrated implementation baseline is current through PRs #6–#21.
-- [x] Deterministic suite on the integrated PR #21 baseline passed 444 tests with 0 failures.
+- [x] Fresh deterministic release-commit suite passed 444 tests across 55 files with 0 failures and 3,788 assertions.
 - [x] Typecheck, lint/format, build, deterministic spec generation, validator, and the 315-file checksum set passed on that baseline.
 - [x] The committed [T30 owner-observed artifact](../evidence/T30-observed-local-voice-smoke-2026-07-31.md) records a real local OpenRouter/Luna one-turn path and a five-turn path with exactly one booked row and one sent outbox event.
 - [x] `scripts/deploy-local.sh` was observed succeeding with mode-`0600` materialized files mounted read-only; app and Caddy were healthy and dependency readiness reported all checks ready.

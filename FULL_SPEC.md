@@ -1785,20 +1785,19 @@ Authenticate before the first local deploy through the supported wrapper:
 
 The wrapper builds the app image, runs interactive device auth, checks login status, and stores the result in the fixed persistent `botamin-codex-home` volume mounted at `/codex-home`. The host-side `CODEX_HOME` value in `.env` applies only to direct Bun operation.
 
-### Preflight
+### Readiness and optional deeper preflight
 
-Deployment script делает:
+`scripts/deploy-local.sh` waits for `/health/ready`. The automatic readiness path verifies the isolated Codex runtime configuration and app-server handshake, ChatGPT account/auth state, requested model/effort availability, the compiled prompt file, SQLite read/write, queue capacity, notifier state, and local STT/TTS configuration and circuit health. It does **not** run `thread/start`, inspect `instructionSources` from a created thread, execute a synthetic turn, wait for a streamed delta, or send `turn/interrupt`. Failed required checks make `/health/ready` return `503` and prevent new voice sessions.
 
-1. `codex login status`;
-2. старт app-server и handshake;
-3. `model/list`, проверка `gpt-5.6-luna`;
-4. `thread/start` в `CODEX_CWD` и проверка `instructionSources` на compiled `AGENTS.md`;
-5. короткий synthetic turn;
-6. проверка `turn/interrupt`;
-7. запись/чтение SQLite;
-8. проверка prompt bundle checksum.
+The standalone `scripts/codex-preflight.ts` is a separate, deeper owner-authorized check that has already been observed historically; it is not called by deployment or readiness. After compiling `AGENTS.md` into an isolated runtime directory, an owner may explicitly run:
 
-Если preflight не прошёл, `/health/ready` возвращает 503 и новые voice sessions не создаются.
+```bash
+CODEX_HOME=/absolute/protected/codex-home \
+CODEX_CWD=/absolute/isolated/runtime-brain \
+bun scripts/codex-preflight.ts
+```
+
+That optional command performs `thread/start`, verifies `instructionSources`, runs a short synthetic Codex turn, observes a streamed delta, and checks `turn/interrupt`; it consumes authorized Codex subscription usage. No deploy, health, or readiness command automatically runs this check, a paid OpenRouter request, or a Codex generation turn.
 
 ### Ограничения subscription mode
 
@@ -2522,7 +2521,7 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 ### Local release candidate `0.5.0-local-rc.1`
 
 - [x] Integrated implementation baseline contains PRs #6–#21.
-- [x] Deterministic test baseline passes 444 tests with no failures; current release-commit checks are recorded in [`../VALIDATION.md`](VALIDATION.md).
+- [x] Fresh deterministic release-commit suite passes 444 tests across 55 files with no failures and 3,788 assertions; command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md).
 - [x] Product landing, CTA/consent, AI identity, Botamin use cases, refusal behavior, booking order/idempotency, safe provider failures, barge-in, prompt loading, envelope mode, and sandbox boundaries have deterministic coverage.
 - [x] Chrome desktop/mobile local acceptance covers landing, consent, permission-denied safe state, no fetch/WebSocket before mic permission, and no horizontal overflow.
 - [x] Owner-observed real local OpenRouter/Luna evidence records one complete turn and a five-turn journey with exactly one booking and one sent outbox event; see [`../evidence/T30-observed-local-voice-smoke-2026-07-31.md`](evidence/T30-observed-local-voice-smoke-2026-07-31.md).
@@ -3094,7 +3093,7 @@ VoiceOrchestrator
 ## Local P0 checklist
 
 - [x] Integrated implementation baseline is current through PRs #6–#21.
-- [x] Deterministic suite on the integrated PR #21 baseline passed 444 tests with 0 failures.
+- [x] Fresh deterministic release-commit suite passed 444 tests across 55 files with 0 failures and 3,788 assertions.
 - [x] Typecheck, lint/format, build, deterministic spec generation, validator, and the 315-file checksum set passed on that baseline.
 - [x] The committed [T30 owner-observed artifact](evidence/T30-observed-local-voice-smoke-2026-07-31.md) records a real local OpenRouter/Luna one-turn path and a five-turn path with exactly one booked row and one sent outbox event.
 - [x] `scripts/deploy-local.sh` was observed succeeding with mode-`0600` materialized files mounted read-only; app and Caddy were healthy and dependency readiness reported all checks ready.

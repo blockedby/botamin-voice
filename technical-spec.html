@@ -389,7 +389,8 @@ image</a></li>
 subscription auth on the trusted host</a>
 <ul>
 <li><a href="#bootstrap" id="toc-bootstrap">Bootstrap</a></li>
-<li><a href="#preflight" id="toc-preflight">Preflight</a></li>
+<li><a href="#readiness-and-optional-deeper-preflight" id="toc-readiness-and-optional-deeper-preflight">Readiness and optional
+deeper preflight</a></li>
 <li><a href="#ограничения-subscription-mode" id="toc-ограничения-subscription-mode">Ограничения subscription
 mode</a></li>
 </ul></li>
@@ -3368,21 +3369,34 @@ checks login status, and stores the result in the fixed persistent
 <code>botamin-codex-home</code> volume mounted at
 <code>/codex-home</code>. The host-side <code>CODEX_HOME</code> value in
 <code>.env</code> applies only to direct Bun operation.</p>
-<h3 id="preflight">Preflight</h3>
-<p>Deployment script делает:</p>
-<ol type="1">
-<li><code>codex login status</code>;</li>
-<li>старт app-server и handshake;</li>
-<li><code>model/list</code>, проверка <code>gpt-5.6-luna</code>;</li>
-<li><code>thread/start</code> в <code>CODEX_CWD</code> и проверка
-<code>instructionSources</code> на compiled <code>AGENTS.md</code>;</li>
-<li>короткий synthetic turn;</li>
-<li>проверка <code>turn/interrupt</code>;</li>
-<li>запись/чтение SQLite;</li>
-<li>проверка prompt bundle checksum.</li>
-</ol>
-<p>Если preflight не прошёл, <code>/health/ready</code> возвращает 503 и
-новые voice sessions не создаются.</p>
+<h3 id="readiness-and-optional-deeper-preflight">Readiness and optional
+deeper preflight</h3>
+<p><code>scripts/deploy-local.sh</code> waits for
+<code>/health/ready</code>. The automatic readiness path verifies the
+isolated Codex runtime configuration and app-server handshake, ChatGPT
+account/auth state, requested model/effort availability, the compiled
+prompt file, SQLite read/write, queue capacity, notifier state, and
+local STT/TTS configuration and circuit health. It does
+<strong>not</strong> run <code>thread/start</code>, inspect
+<code>instructionSources</code> from a created thread, execute a
+synthetic turn, wait for a streamed delta, or send
+<code>turn/interrupt</code>. Failed required checks make
+<code>/health/ready</code> return <code>503</code> and prevent new voice
+sessions.</p>
+<p>The standalone <code>scripts/codex-preflight.ts</code> is a separate,
+deeper owner-authorized check that has already been observed
+historically; it is not called by deployment or readiness. After
+compiling <code>AGENTS.md</code> into an isolated runtime directory, an
+owner may explicitly run:</p>
+<div class="sourceCode" id="cb30"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="va">CODEX_HOME</span><span class="op">=</span>/absolute/protected/codex-home <span class="dt">\</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a><span class="va">CODEX_CWD</span><span class="op">=</span>/absolute/isolated/runtime-brain <span class="dt">\</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a><span class="ex">bun</span> scripts/codex-preflight.ts</span></code></pre></div>
+<p>That optional command performs <code>thread/start</code>, verifies
+<code>instructionSources</code>, runs a short synthetic Codex turn,
+observes a streamed delta, and checks <code>turn/interrupt</code>; it
+consumes authorized Codex subscription usage. No deploy, health, or
+readiness command automatically runs this check, a paid OpenRouter
+request, or a Codex generation turn.</p>
 <h3 id="ограничения-subscription-mode">Ограничения subscription
 mode</h3>
 <ul>
@@ -3465,17 +3479,17 @@ provider URL;</li>
 </ul>
 <h2 id="observability">7. Observability</h2>
 <h3 id="structured-log-fields">Structured log fields</h3>
-<div class="sourceCode" id="cb30"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
-<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;level&quot;</span><span class="fu">:</span> <span class="st">&quot;info&quot;</span><span class="fu">,</span></span>
-<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;event&quot;</span><span class="fu">:</span> <span class="st">&quot;brain.turn.completed&quot;</span><span class="fu">,</span></span>
-<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;conversationId&quot;</span><span class="fu">:</span> <span class="st">&quot;conv_...&quot;</span><span class="fu">,</span></span>
-<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;turnId&quot;</span><span class="fu">:</span> <span class="st">&quot;turn_...&quot;</span><span class="fu">,</span></span>
-<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;stage&quot;</span><span class="fu">:</span> <span class="st">&quot;VALUE&quot;</span><span class="fu">,</span></span>
-<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;durationMs&quot;</span><span class="fu">:</span> <span class="dv">823</span><span class="fu">,</span></span>
-<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;firstDeltaMs&quot;</span><span class="fu">:</span> <span class="dv">611</span><span class="fu">,</span></span>
-<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;model&quot;</span><span class="fu">:</span> <span class="st">&quot;gpt-5.6-luna&quot;</span><span class="fu">,</span></span>
-<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;promptVersion&quot;</span><span class="fu">:</span> <span class="st">&quot;sha256:...&quot;</span></span>
-<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb31"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;level&quot;</span><span class="fu">:</span> <span class="st">&quot;info&quot;</span><span class="fu">,</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;event&quot;</span><span class="fu">:</span> <span class="st">&quot;brain.turn.completed&quot;</span><span class="fu">,</span></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;conversationId&quot;</span><span class="fu">:</span> <span class="st">&quot;conv_...&quot;</span><span class="fu">,</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;turnId&quot;</span><span class="fu">:</span> <span class="st">&quot;turn_...&quot;</span><span class="fu">,</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;stage&quot;</span><span class="fu">:</span> <span class="st">&quot;VALUE&quot;</span><span class="fu">,</span></span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;durationMs&quot;</span><span class="fu">:</span> <span class="dv">823</span><span class="fu">,</span></span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;firstDeltaMs&quot;</span><span class="fu">:</span> <span class="dv">611</span><span class="fu">,</span></span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;model&quot;</span><span class="fu">:</span> <span class="st">&quot;gpt-5.6-luna&quot;</span><span class="fu">,</span></span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;promptVersion&quot;</span><span class="fu">:</span> <span class="st">&quot;sha256:...&quot;</span></span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p>PII не включается в generic logs.</p>
 <h3 id="metrics">Metrics</h3>
 <ul>
@@ -3707,19 +3721,19 @@ Luna/tools</td>
 </table>
 <h2 id="basic-runbook">12. Basic runbook</h2>
 <h3 id="local-deploy">Local deploy</h3>
-<div class="sourceCode" id="cb32"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> .env.example .env</span>
-<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a><span class="fu">chmod</span> 600 .env</span>
-<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Fill the backend-only OPENROUTER_API_KEY without sourcing .env.</span></span>
-<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/device-auth.sh</span></span>
-<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/deploy-local.sh</span></span>
-<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/ready</span></code></pre></div>
+<div class="sourceCode" id="cb33"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> .env.example .env</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="fu">chmod</span> 600 .env</span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Fill the backend-only OPENROUTER_API_KEY without sourcing .env.</span></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/device-auth.sh</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/deploy-local.sh</span></span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/ready</span></code></pre></div>
 <p>The wrapper does not run paid provider smokes. Recovery and
 observability commands are maintained in <a href="infra/README.md"><code>../infra/README.md</code></a> and the
 release checklist in <a href="docs/11-local-release-handoff.md"><code>11-local-release-handoff.md</code></a>.</p>
 <h3 id="re-authenticate-codex">Re-authenticate Codex</h3>
-<div class="sourceCode" id="cb33"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose stop app</span>
-<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/device-auth.sh</span></span>
-<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/deploy-local.sh</span></span></code></pre></div>
+<div class="sourceCode" id="cb34"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose stop app</span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/device-auth.sh</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/deploy-local.sh</span></span></code></pre></div>
 <h3 id="openrouter-deploy-smoke">OpenRouter deploy smoke</h3>
 <p>Paid external smokes are manual-only, explicit opt-in, and excluded
 from default CI. Local owner commands and the target-VPS forms are
@@ -3730,7 +3744,7 @@ only safe aggregate evidence; TTS requires <code>2xx</code>, compatible
 <code>audio/mpeg</code>, and non-empty bytes. Neither is called by
 health checks or ordinary deployment.</p>
 <h3 id="inspect-last-booking-events">Inspect last booking events</h3>
-<div class="sourceCode" id="cb34"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose logs app <span class="at">--since</span> 30m <span class="kw">|</span> <span class="fu">grep</span> <span class="st">&#39;booking\.&#39;</span></span></code></pre></div>
+<div class="sourceCode" id="cb35"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose logs app <span class="at">--since</span> 30m <span class="kw">|</span> <span class="fu">grep</span> <span class="st">&#39;booking\.&#39;</span></span></code></pre></div>
 <h3 id="restore">Restore</h3>
 <ol type="1">
 <li>stop app;</li>
@@ -4434,9 +4448,9 @@ candidate <code>0.5.0-local-rc.1</code></h3>
 <ul class="task-list">
 <li><label><input type="checkbox" checked></input>Integrated implementation
 baseline contains PRs #6–#21.</label></li>
-<li><label><input type="checkbox" checked></input>Deterministic test
-baseline passes 444 tests with no failures; current release-commit
-checks are recorded in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>.</label></li>
+<li><label><input type="checkbox" checked></input>Fresh deterministic
+release-commit suite passes 444 tests across 55 files with no failures
+and 3,788 assertions; command evidence is recorded in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>.</label></li>
 <li><label><input type="checkbox" checked></input>Product landing,
 CTA/consent, AI identity, Botamin use cases, refusal behavior, booking
 order/idempotency, safe provider failures, barge-in, prompt loading,
@@ -4939,12 +4953,12 @@ tools и exact streamed deltas на Bun.</li>
 </ul>
 <p>Итоговая граница позволяет заменить transport без изменения
 оркестратора:</p>
-<div class="sourceCode" id="cb39"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> BrainPort {</span>
-<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">createThread</span>(conversationId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">&gt;;</span></span>
-<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">runTurn</span>(input<span class="op">:</span> BrainTurnInput<span class="op">,</span> signal<span class="op">:</span> AbortSignal)<span class="op">:</span> AsyncIterable<span class="op">&lt;</span>BrainDelta<span class="op">&gt;;</span></span>
-<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">interrupt</span>(threadId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> turnId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
-<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">health</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ProviderHealth<span class="op">&gt;;</span></span>
-<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<div class="sourceCode" id="cb40"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> BrainPort {</span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">createThread</span>(conversationId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">&gt;;</span></span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">runTurn</span>(input<span class="op">:</span> BrainTurnInput<span class="op">,</span> signal<span class="op">:</span> AbortSignal)<span class="op">:</span> AsyncIterable<span class="op">&lt;</span>BrainDelta<span class="op">&gt;;</span></span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">interrupt</span>(threadId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> turnId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">health</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ProviderHealth<span class="op">&gt;;</span></span>
+<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <h2 id="почему-у-задачи-необычные-требования">2. Почему у задачи
 необычные требования</h2>
 <p>Обычная библиотека для <code>generateText()</code> недостаточна.
@@ -5246,16 +5260,16 @@ production silently</td>
 </table>
 <h2 id="package-policy">6. Package policy</h2>
 <p>Предлагаемый минимум:</p>
-<div class="sourceCode" id="cb40"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
-<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;dependencies&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;hono&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;pinned&gt;&quot;</span><span class="fu">,</span></span>
-<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;zod&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;pinned&gt;&quot;</span><span class="fu">,</span></span>
-<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;drizzle-orm&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;pinned&gt;&quot;</span></span>
-<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
-<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;devDependencies&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb40-8"><a href="#cb40-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;@openai/codex-sdk&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;optional-pinned-for-spikes-or-evals&gt;&quot;</span></span>
-<span id="cb40-9"><a href="#cb40-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
-<span id="cb40-10"><a href="#cb40-10" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb41"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;dependencies&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;hono&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;pinned&gt;&quot;</span><span class="fu">,</span></span>
+<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;zod&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;pinned&gt;&quot;</span><span class="fu">,</span></span>
+<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;drizzle-orm&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;pinned&gt;&quot;</span></span>
+<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb41-7"><a href="#cb41-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;devDependencies&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb41-8"><a href="#cb41-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;@openai/codex-sdk&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;optional-pinned-for-spikes-or-evals&gt;&quot;</span></span>
+<span id="cb41-9"><a href="#cb41-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb41-10"><a href="#cb41-10" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p>Правила:</p>
 <ul>
 <li>production не зависит от floating versions;</li>
@@ -5319,9 +5333,9 @@ not a target-VPS or public TLS release.</p>
 <ul class="task-list">
 <li><label><input type="checkbox" checked></input>Integrated implementation
 baseline is current through PRs #6–#21.</label></li>
-<li><label><input type="checkbox" checked></input>Deterministic suite on
-the integrated PR #21 baseline passed 444 tests with 0
-failures.</label></li>
+<li><label><input type="checkbox" checked></input>Fresh deterministic
+release-commit suite passed 444 tests across 55 files with 0 failures
+and 3,788 assertions.</label></li>
 <li><label><input type="checkbox" checked></input>Typecheck, lint/format,
 build, deterministic spec generation, validator, and the 315-file
 checksum set passed on that baseline.</label></li>
@@ -5362,13 +5376,13 @@ not need host decoding.</li>
 <li>A paid OpenRouter account/key and an authorized Codex subscription
 for real voice use.</li>
 </ul>
-<div class="sourceCode" id="cb42"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> .env.example .env</span>
-<span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a><span class="fu">chmod</span> 600 .env</span>
-<span id="cb42-3"><a href="#cb42-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Put the one backend-only OPENROUTER_API_KEY in .env; never source this file.</span></span>
-<span id="cb42-4"><a href="#cb42-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb42-5"><a href="#cb42-5" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/device-auth.sh</span></span>
-<span id="cb42-6"><a href="#cb42-6" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/deploy-local.sh</span></span>
-<span id="cb42-7"><a href="#cb42-7" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/ready</span></code></pre></div>
+<div class="sourceCode" id="cb43"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> .env.example .env</span>
+<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a><span class="fu">chmod</span> 600 .env</span>
+<span id="cb43-3"><a href="#cb43-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Put the one backend-only OPENROUTER_API_KEY in .env; never source this file.</span></span>
+<span id="cb43-4"><a href="#cb43-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb43-5"><a href="#cb43-5" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/device-auth.sh</span></span>
+<span id="cb43-6"><a href="#cb43-6" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/deploy-local.sh</span></span>
+<span id="cb43-7"><a href="#cb43-7" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/ready</span></code></pre></div>
 <p>Open <a href="http://localhost:5173" class="uri">http://localhost:5173</a>. Device auth is interactive and
 persists in the fixed <code>botamin-codex-home</code> Docker volume.
 Protect Docker access and the underlying disk; do not include Codex
@@ -5384,13 +5398,13 @@ files are mounted under <code>/run/secrets</code>; key values are not
 build args or browser configuration.</p>
 <h2 id="health-readiness-and-metrics">Health, readiness, and
 metrics</h2>
-<div class="sourceCode" id="cb43"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose ps</span>
-<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/live</span>
-<span id="cb43-3"><a href="#cb43-3" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/ready</span>
-<span id="cb43-4"><a href="#cb43-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb43-5"><a href="#cb43-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Safe aggregate metrics are intentionally direct-loopback only.</span></span>
-<span id="cb43-6"><a href="#cb43-6" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose exec <span class="at">-T</span> app bun <span class="at">-e</span> <span class="dt">\</span></span>
-<span id="cb43-7"><a href="#cb43-7" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;const r=await fetch(&#39;http://127.0.0.1:3000/metrics&#39;);if(!r.ok)process.exit(1);console.log(await r.text())&quot;</span></span></code></pre></div>
+<div class="sourceCode" id="cb44"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose ps</span>
+<span id="cb44-2"><a href="#cb44-2" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/live</span>
+<span id="cb44-3"><a href="#cb44-3" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/ready</span>
+<span id="cb44-4"><a href="#cb44-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb44-5"><a href="#cb44-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Safe aggregate metrics are intentionally direct-loopback only.</span></span>
+<span id="cb44-6"><a href="#cb44-6" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose exec <span class="at">-T</span> app bun <span class="at">-e</span> <span class="dt">\</span></span>
+<span id="cb44-7"><a href="#cb44-7" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;const r=await fetch(&#39;http://127.0.0.1:3000/metrics&#39;);if(!r.ok)process.exit(1);console.log(await r.text())&quot;</span></span></code></pre></div>
 <p>Caddy/public access to <code>/metrics</code> is denied. Readiness is
 dependency-aware and may return <code>503</code> for Codex auth/model,
 DB, prompt, voice configuration, capacity, or worker failures; health
@@ -5401,37 +5415,37 @@ only</h2>
 call paid providers. Against an already-ready local server, an owner may
 deliberately run the integrated smoke; it spends OpenRouter STT/TTS and
 Codex subscription usage:</p>
-<div class="sourceCode" id="cb44"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="va">BOTAMIN_EXTERNAL_VOICE_E2E</span><span class="op">=</span>1 <span class="ex">bun</span> run scripts/local-voice-e2e-smoke.ts <span class="dt">\</span></span>
-<span id="cb44-2"><a href="#cb44-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--server-url</span> http://localhost:5173 <span class="dt">\</span></span>
-<span id="cb44-3"><a href="#cb44-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--origin</span> http://localhost:5173 <span class="dt">\</span></span>
-<span id="cb44-4"><a href="#cb44-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--fixture-turns</span> 1</span></code></pre></div>
+<div class="sourceCode" id="cb45"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="va">BOTAMIN_EXTERNAL_VOICE_E2E</span><span class="op">=</span>1 <span class="ex">bun</span> run scripts/local-voice-e2e-smoke.ts <span class="dt">\</span></span>
+<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--server-url</span> http://localhost:5173 <span class="dt">\</span></span>
+<span id="cb45-3"><a href="#cb45-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--origin</span> http://localhost:5173 <span class="dt">\</span></span>
+<span id="cb45-4"><a href="#cb45-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--fixture-turns</span> 1</span></code></pre></div>
 <p><code>ffmpeg</code> is mandatory for this non-browser decoder check.
 Use real bounded PCM files rather than <code>--fixture-turns</code> when
 synthetic input is not appropriate. Isolated STT/TTS image probes are
 also paid; export the deployed file paths first and run them only with
 explicit approval:</p>
-<div class="sourceCode" id="cb45"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="va">compose_secret_operation</span><span class="op">=</span>paid-smoke</span>
-<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a><span class="bu">.</span> ./scripts/compose-secret-files.sh</span>
-<span id="cb45-3"><a href="#cb45-3" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh stt</span>
-<span id="cb45-4"><a href="#cb45-4" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh tts</span></code></pre></div>
+<div class="sourceCode" id="cb46"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="va">compose_secret_operation</span><span class="op">=</span>paid-smoke</span>
+<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a><span class="bu">.</span> ./scripts/compose-secret-files.sh</span>
+<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh stt</span>
+<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh tts</span></code></pre></div>
 <h2 id="backup-restore-rotation-stop-and-rollback">Backup, restore,
 rotation, stop, and rollback</h2>
-<div class="sourceCode" id="cb46"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Online SQLite VACUUM INTO backup plus protected checksum sidecar</span></span>
-<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span></span>
-<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span> /data/backups/before-release.db</span>
-<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb46-5"><a href="#cb46-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Restore verifies permissions, checksum, integrity, migration, and readiness</span></span>
-<span id="cb46-6"><a href="#cb46-6" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/restore.sh</span> /data/backups/before-release.db</span>
-<span id="cb46-7"><a href="#cb46-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb46-8"><a href="#cb46-8" aria-hidden="true" tabindex="-1"></a><span class="co"># Stop while retaining named volumes</span></span>
-<span id="cb46-9"><a href="#cb46-9" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose stop</span>
-<span id="cb46-10"><a href="#cb46-10" aria-hidden="true" tabindex="-1"></a><span class="co"># Remove containers/network while retaining named volumes</span></span>
-<span id="cb46-11"><a href="#cb46-11" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose down</span>
-<span id="cb46-12"><a href="#cb46-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb46-13"><a href="#cb46-13" aria-hidden="true" tabindex="-1"></a><span class="co"># Roll back to an existing/pullable immutable image, optionally with its DB backup</span></span>
-<span id="cb46-14"><a href="#cb46-14" aria-hidden="true" tabindex="-1"></a><span class="va">PREVIOUS_IMAGE</span><span class="op">=</span>botamin-voice:0.5.0-local-rc.1-previoussha</span>
-<span id="cb46-15"><a href="#cb46-15" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/rollback.sh</span> <span class="st">&quot;</span><span class="va">$PREVIOUS_IMAGE</span><span class="st">&quot;</span></span>
-<span id="cb46-16"><a href="#cb46-16" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/rollback.sh</span> <span class="st">&quot;</span><span class="va">$PREVIOUS_IMAGE</span><span class="st">&quot;</span> /data/backups/before-release.db</span></code></pre></div>
+<div class="sourceCode" id="cb47"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Online SQLite VACUUM INTO backup plus protected checksum sidecar</span></span>
+<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span></span>
+<span id="cb47-3"><a href="#cb47-3" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span> /data/backups/before-release.db</span>
+<span id="cb47-4"><a href="#cb47-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb47-5"><a href="#cb47-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Restore verifies permissions, checksum, integrity, migration, and readiness</span></span>
+<span id="cb47-6"><a href="#cb47-6" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/restore.sh</span> /data/backups/before-release.db</span>
+<span id="cb47-7"><a href="#cb47-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb47-8"><a href="#cb47-8" aria-hidden="true" tabindex="-1"></a><span class="co"># Stop while retaining named volumes</span></span>
+<span id="cb47-9"><a href="#cb47-9" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose stop</span>
+<span id="cb47-10"><a href="#cb47-10" aria-hidden="true" tabindex="-1"></a><span class="co"># Remove containers/network while retaining named volumes</span></span>
+<span id="cb47-11"><a href="#cb47-11" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose down</span>
+<span id="cb47-12"><a href="#cb47-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb47-13"><a href="#cb47-13" aria-hidden="true" tabindex="-1"></a><span class="co"># Roll back to an existing/pullable immutable image, optionally with its DB backup</span></span>
+<span id="cb47-14"><a href="#cb47-14" aria-hidden="true" tabindex="-1"></a><span class="va">PREVIOUS_IMAGE</span><span class="op">=</span>botamin-voice:0.5.0-local-rc.1-previoussha</span>
+<span id="cb47-15"><a href="#cb47-15" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/rollback.sh</span> <span class="st">&quot;</span><span class="va">$PREVIOUS_IMAGE</span><span class="st">&quot;</span></span>
+<span id="cb47-16"><a href="#cb47-16" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/rollback.sh</span> <span class="st">&quot;</span><span class="va">$PREVIOUS_IMAGE</span><span class="st">&quot;</span> /data/backups/before-release.db</span></code></pre></div>
 <p>Never use <code>docker compose down -v</code>. SQLite migrations are
 forward-only; use the matching pre-release backup if an older image
 cannot read the current schema.</p>

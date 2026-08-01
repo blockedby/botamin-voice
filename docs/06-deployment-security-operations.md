@@ -49,20 +49,19 @@ Authenticate before the first local deploy through the supported wrapper:
 
 The wrapper builds the app image, runs interactive device auth, checks login status, and stores the result in the fixed persistent `botamin-codex-home` volume mounted at `/codex-home`. The host-side `CODEX_HOME` value in `.env` applies only to direct Bun operation.
 
-### Preflight
+### Readiness and optional deeper preflight
 
-Deployment script делает:
+`scripts/deploy-local.sh` waits for `/health/ready`. The automatic readiness path verifies the isolated Codex runtime configuration and app-server handshake, ChatGPT account/auth state, requested model/effort availability, the compiled prompt file, SQLite read/write, queue capacity, notifier state, and local STT/TTS configuration and circuit health. It does **not** run `thread/start`, inspect `instructionSources` from a created thread, execute a synthetic turn, wait for a streamed delta, or send `turn/interrupt`. Failed required checks make `/health/ready` return `503` and prevent new voice sessions.
 
-1. `codex login status`;
-2. старт app-server и handshake;
-3. `model/list`, проверка `gpt-5.6-luna`;
-4. `thread/start` в `CODEX_CWD` и проверка `instructionSources` на compiled `AGENTS.md`;
-5. короткий synthetic turn;
-6. проверка `turn/interrupt`;
-7. запись/чтение SQLite;
-8. проверка prompt bundle checksum.
+The standalone `scripts/codex-preflight.ts` is a separate, deeper owner-authorized check that has already been observed historically; it is not called by deployment or readiness. After compiling `AGENTS.md` into an isolated runtime directory, an owner may explicitly run:
 
-Если preflight не прошёл, `/health/ready` возвращает 503 и новые voice sessions не создаются.
+```bash
+CODEX_HOME=/absolute/protected/codex-home \
+CODEX_CWD=/absolute/isolated/runtime-brain \
+bun scripts/codex-preflight.ts
+```
+
+That optional command performs `thread/start`, verifies `instructionSources`, runs a short synthetic Codex turn, observes a streamed delta, and checks `turn/interrupt`; it consumes authorized Codex subscription usage. No deploy, health, or readiness command automatically runs this check, a paid OpenRouter request, or a Codex generation turn.
 
 ### Ограничения subscription mode
 

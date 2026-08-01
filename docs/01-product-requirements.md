@@ -44,7 +44,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 | US-009 | Я могу отказаться от квалификации | бронь остаётся `booked`, диалог корректно завершается |
 | US-010 | Получатель видит данные | console/webhook получает структурированный payload |
 | US-011 | Сервис перезапускается | сохранённые booking/event данные остаются в volume |
-| US-012 | Проект разворачивается на VPS | `docker compose up -d` поднимает готовый сервис |
+| US-012 | Проект сначала разворачивается локально | `scripts/deploy-local.sh` поднимает готовые app + Caddy на `http://localhost:5173`; target VPS/TLS проверяется отдельным later gate |
 
 ## 4. Functional requirements
 
@@ -134,7 +134,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 | NFR-SEC-002 | raw credentials в клиентском bundle/logs | 0 |
 | NFR-PRIV-001 | raw audio storage | off by default |
 | NFR-OBS-001 | traceability | `conversationId`, `turnId`, `bookingId` во всех событиях |
-| NFR-OPS-001 | deployment | один compose project |
+| NFR-OPS-001 | deployment | один local-first Compose project; target VPS/TLS evidence later |
 | NFR-OPS-002 | backup | ежедневная копия SQLite + restore check |
 | NFR-COMP-001 | browser | актуальные Chrome, Edge, Safari; Firefox best effort |
 | NFR-A11Y-001 | keyboard/control labels | WCAG-oriented базовый уровень |
@@ -174,3 +174,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - доля диалогов с manual review flag.
 
 Метрики качества продаж нельзя интерпретировать без объёма трафика и human review выборки.
+
+## 9. Release sequencing boundary
+
+`0.5.0-local-rc.1` is accepted only for local hosting on a trusted owner machine. Chrome desktop/mobile and local Compose evidence can close local gates, but cannot close WebKit, target-VPS resource behavior, DNS, public TLS/WSS, or target-host paid-smoke gates. The internal booking remains deliberately different from a real calendar event.

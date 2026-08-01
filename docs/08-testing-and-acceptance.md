@@ -262,66 +262,41 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ## 10. Acceptance checklist P0
 
-### Product
+### Local release candidate `0.5.0-local-rc.1`
 
-- [ ] Landing speaks specifically about Botamin.
-- [ ] Primary CTA starts voice flow.
-- [ ] Agent introduces itself as AI.
-- [ ] At least three Botamin use cases are covered.
-- [ ] Clear refusal ends conversation correctly.
+- [x] Integrated implementation baseline contains PRs #6–#21.
+- [x] Deterministic test baseline passes 444 tests with no failures; current release-commit checks are recorded in [`../VALIDATION.md`](../VALIDATION.md).
+- [x] Product landing, CTA/consent, AI identity, Botamin use cases, refusal behavior, booking order/idempotency, safe provider failures, barge-in, prompt loading, envelope mode, and sandbox boundaries have deterministic coverage.
+- [x] Chrome desktop/mobile local acceptance covers landing, consent, permission-denied safe state, no fetch/WebSocket before mic permission, and no horizontal overflow.
+- [x] Owner-observed real local OpenRouter/Luna evidence records one complete turn and a five-turn journey with exactly one booking and one sent outbox event; see [`../evidence/T30-observed-local-voice-smoke-2026-07-31.md`](../evidence/T30-observed-local-voice-smoke-2026-07-31.md).
+- [x] `scripts/deploy-local.sh` was observed completing with read-only file secrets, healthy app/Caddy, and all dependency readiness checks ready at `http://localhost:5173`.
+- [x] Compose contains only app and Caddy in the P0 application path; the OpenRouter key stays backend-only, and text-only TTS degradation is environment-configurable without rebuilding.
+- [x] Backup/restore/rollback scripts, permission/checksum/integrity guards, readiness loops, and key-remount ordering pass credential-free deterministic validation and are documented for the owner.
 
-### Voice
+Checked local gates do not imply target-host or cross-browser production acceptance. Local provider observations are not repeated by default checks.
 
-- [ ] Opt-in paid Russian STT smoke returns one final transcript from a bounded, validated WAV.
-- [ ] Voice UI exposes exactly one current `transcript.final` for each accepted utterance.
-- [ ] Chosen OpenRouter voice is understandable in the target-VPS Russian smoke.
-- [ ] Complete `audio/mpeg` phrase segments decode in sequence in Chromium and WebKit.
-- [ ] Barge-in stops old playback, clears queue and drops late segments.
-- [ ] `401`/`402`/`404`, budget and circuit failures preserve text UX and booking.
-- [ ] No TTS retry repeats Luna, notifier or business tools.
+### Later target release gates — not closed by local RC
 
-### Booking
+- [ ] Complete MP3 playback and voice journey accepted in WebKit.
+- [ ] Clean target-VPS deploy accepted under target CPU/RAM/storage/network conditions.
+- [ ] Public DNS and TLS/WSS accepted on the target host.
+- [ ] Explicitly approved target-host Russian STT/TTS smokes accepted with current model/voice/account configuration.
+- [ ] Target-host latency/load evidence establishes a release profile; local synthetic timings are not reused as a benchmark.
+- [ ] Owner reviews Codex/OpenRouter plan suitability, current rates, capacity, privacy copy, and public commercial operation.
 
-- [ ] Valid minimal details produce one booking.
-- [ ] `booking.created` is printed/pushed before qualification.
-- [ ] Duplicate retries return same `bookingId`.
-- [ ] Qualification patches the same booking.
-- [ ] Skip/disconnect never removes booking.
-- [ ] Agent does not claim calendar creation.
-
-### Brain
-
-- [ ] Codex subscription auth preflight passes.
-- [ ] `gpt-5.6-luna` is actually selected.
-- [ ] Prompts load from Markdown and have a version hash.
-- [ ] Dynamic tools or envelope fallback passes contract tests.
-- [ ] Shell/network actions are blocked.
-
-### Operations
-
-- [ ] `docker compose up -d` works on a clean VPS.
-- [ ] TLS/WSS works.
-- [ ] `/health/live` and `/health/ready` are correct.
-- [ ] SQLite survives restart.
-- [ ] Backup can be restored.
-- [ ] No provider keys in frontend bundle/logs.
-- [ ] Compose has only app and Caddy in the P0 path, and no TTS sidecar.
-- [ ] Runtime OpenRouter secret wiring and target-VPS smoke command are documented.
-- [ ] Text-only mode is enabled through env without rebuilding the image.
+A real calendar event is intentionally out of scope rather than an unchecked release gate. The product stores an internal booking and notification outbox event only.
 
 ## 11. Release evidence bundle
 
-Агент, собирающий RC, прикладывает:
+The local RC bundle contains:
 
-- commit SHA;
-- compose config without secrets;
-- health output;
-- schema migration status;
-- Codex model/auth preflight result без token;
-- target-VPS OpenRouter Russian STT and MP3 smoke statuses, latency, byte counts, safe provider IDs if present and selected model/voice/format;
-- evidence timestamps for `audio.commit`, STT request/final result, first Luna delta, TTS request/completion and playback;
-- 24+ eval summary;
-- latency report;
-- duplicate/idempotency test report;
-- one redacted `booking.created` и `booking.updated` example;
-- known limitations.
+- final commit SHA and exact uncreated tag recommendation;
+- deterministic test/type/lint/build/spec/validator/checksum results;
+- current MANIFEST/checksum file count;
+- credential-free Compose config, shell/wrapper, and file-secret engine checks;
+- redacted owner-observed T30 one-turn and five-turn real local path evidence;
+- local Compose health/readiness and Chrome desktop/mobile acceptance observations supplied for T40;
+- deployment, backup, restore, key rotation, stop, and rollback commands;
+- known limitations and explicit WebKit/VPS/TLS blockers.
+
+Target-VPS compose/health/preflight/provider evidence and benchmark-grade latency remain a later evidence bundle; they must not be inferred from this local release candidate.

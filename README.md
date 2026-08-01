@@ -1,82 +1,86 @@
-# Botamin Voice Sales Agent — техническая спецификация
+# Botamin Voice Sales Agent
 
 > **Correction 004 (authoritative, read first):** [`corrections/CORRECTION-004_OPENROUTER_VOICE_ONLY.md`](corrections/CORRECTION-004_OPENROUTER_VOICE_ONLY.md)
 >
 > Then read [`CURRENT_DECISIONS.md`](CURRENT_DECISIONS.md) and [`AGENT_START_HERE.md`](AGENT_START_HERE.md).
 
-**Версия:** 0.5-demo
+**Spec version:** `0.5-demo`
 
-**Дата:** 31 июля 2026
+**Local release candidate:** `0.5.0-local-rc.1`
 
-**Статус:** согласованная основа для передачи агентам-разработчикам
+**Current release scope:** local hosting first; target VPS, public TLS/WSS, and WebKit acceptance are later gates.
 
-## Одним абзацем
+## What this repository runs
 
-Нужно сделать full-stack сайт Botamin с браузерным голосовым AI-продавцом. Browser отправляет PCM16 chunks на backend; gateway/utterance assembler ограничивает mono PCM16 по времени/байтам, создаёт ровно один валидный WAV и после `audio.commit` передаёт его атомарным `audio/wav` запросом в `SttPort`. OpenRouter adapter валидирует и ограничивает уже готовый WAV, base64-кодирует его и отправляет как `input_audio` в chat completion. Только `transcript.final` идёт в Codex app-server с `gpt-5.6-luna`; ответ озвучивается через OpenRouter TTS короткими полными MP3-сегментами. Phrase-level STT добавляет явно принятую end-of-turn latency. Агент **сначала** создаёт внутреннюю бронь, а **затем опционально** дополняет её квалификацией. Реальный календарь или CRM не подключаются. Промпты и knowledge base остаются Markdown; всё поднимается одним `docker compose` на одной VPS.
+Botamin is a full-stack landing page with a browser voice AI seller. The browser sends bounded PCM16 chunks to the backend; after `audio.commit`, the gateway creates one validated WAV for an atomic OpenRouter STT request. One final transcript goes to Codex app-server with `gpt-5.6-luna`; OpenRouter TTS returns complete MP3 phrase segments. The backend creates an internal booking before optional qualification. It does **not** create a real calendar or CRM record.
 
-## Локальная настройка доступов
+## Local-first start
+
+Prerequisites: Bun `1.3.14`, Docker Engine with Compose v2, and browser microphone support. `ffmpeg` is required only for the opt-in owner-operated voice smoke.
 
 ```bash
 cp .env.example .env
+chmod 600 .env
+# Set OPENROUTER_API_KEY in .env. Do not source .env.
+
+# Interactive Codex device login into the persistent botamin-codex-home volume:
+./scripts/device-auth.sh
+
+# Materializes mode-0600 file secrets, builds, migrates, starts app+Caddy,
+# and waits for dependency-aware readiness. It does not run paid smokes.
+./scripts/deploy-local.sh
+
+curl -fsS http://localhost:5173/health/ready
 ```
 
-1. **OpenRouter voice:** добавьте backend-only `OPENROUTER_API_KEY`. Один ключ авторизует STT и TTS; STT выполняется атомарно после `audio.commit` и публикует только `transcript.final`. Для local attribution оставьте `OPENROUTER_HTTP_REFERER=http://localhost:5173`.
-2. **Codex subscription:** выполните вход через ChatGPT, без OpenAI API key:
+Open <http://localhost:5173>. The single `OPENROUTER_API_KEY` is backend-only and authorizes STT and TTS. `scripts/deploy-local.sh` parses `.env` as dotenv data, writes read-only Compose secret mounts from `.runtime/secrets`, and force-recreates the app so rotated files are remounted. Do not pass the key through build arguments, render it into Compose environment output, or commit `.env`/`.runtime`.
 
-   ```bash
-   export CODEX_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/botamin-voice/codex-home"
-   mkdir -p "$CODEX_HOME"
-   codex login --device-auth
-   codex login status
-   ```
+For direct Bun development outside Compose, the absolute `CODEX_HOME` in `.env` applies. Compose intentionally uses the persistent `botamin-codex-home` volume instead. Treat its `auth.json` as a password and restrict Docker access.
 
-Укажите этот абсолютный `CODEX_HOME` в `.env`. Для локальной версии `NOTIFIER=console`; PII идёт только в выделенный lead sink, а не в обычный application logger. Для `NOTIFIER=webhook` обязательны URL и signing secret; persisted worker выполняет bounded retry. Не коммитьте `.env` или Codex credentials.
+## Local operations
 
-## Неподвижные инварианты
+```bash
+# Service state
+docker compose ps
 
-1. `booking.created` происходит до постквалификации.
-2. После создания брони отказ, обрыв связи или ошибка квалификации не отменяют бронь.
-3. Повторный `create_booking` возвращает ту же бронь, а не создаёт дубль.
-4. Ключ OpenRouter и Codex credentials никогда не попадают в браузер.
-5. В production не хранится сырое аудио, если это отдельно не включено.
-6. Агент не утверждает, что встреча добавлена в календарь: в MVP календарной интеграции нет.
-7. Онлайн-редактор сценариев и промптов отсутствует.
-8. Основной LLM-мозг — Codex subscription + GPT-5.6 Luna; OpenRouter — единственный backend STT и TTS gateway.
-9. STT-модель, TTS-модель и voice ID задаются конфигурацией. Voice usage считается платным; бесплатный allowance не предполагается.
-10. Универсальный AI SDK не является частью критического realtime-path: brain и voice скрыты за собственными ports; P0 Codex transport — direct app-server JSON-RPC.
+# Safe loopback-only aggregate metrics; /metrics through Caddy is denied.
+docker compose exec -T app bun -e \
+  "const r=await fetch('http://127.0.0.1:3000/metrics');if(!r.ok)process.exit(1);console.log(await r.text())"
 
-## С чего начинать агентам
+# Backup and stop without deleting named volumes
+./scripts/backup.sh
+docker compose stop
+# Or remove containers/network while preserving named volumes:
+docker compose down
+```
 
-1. [`CURRENT_DECISIONS.md`](CURRENT_DECISIONS.md) — краткие действующие решения.
-2. [`docs/00-scope-and-assumptions.md`](docs/00-scope-and-assumptions.md) — границы.
-3. [`docs/03-system-architecture.md`](docs/03-system-architecture.md) — архитектура и интерфейсы.
-4. [`docs/05-api-events-data.md`](docs/05-api-events-data.md) — контракты.
-5. [`docs/10-ai-library-evaluation.md`](docs/10-ai-library-evaluation.md) — transport decisions.
-6. [`docs/09-agent-task-plan.md`](docs/09-agent-task-plan.md) и [`tasks/tasks.yaml`](tasks/tasks.yaml) — параллельный план.
-7. [`docs/08-testing-and-acceptance.md`](docs/08-testing-and-acceptance.md) — Definition of Done.
+Never use `docker compose down -v` on a host with bookings or Codex auth. Restore, rollback, key rotation, paid-smoke commands, and the exact local release checklist are in [`docs/11-local-release-handoff.md`](docs/11-local-release-handoff.md). Detailed file-secret behavior is in [`infra/README.md`](infra/README.md).
 
-## Состав пакета
+## Fixed invariants
 
-| Файл | Назначение |
+1. `booking.created` happens before optional post-booking qualification.
+2. Refusal, disconnect, or qualification failure after booking does not remove it.
+3. Retried `create_booking` returns the same booking rather than a duplicate.
+4. OpenRouter and Codex credentials never reach the browser.
+5. Raw audio is not retained by default.
+6. The agent never claims that a calendar event was created.
+7. OpenRouter is the only STT/TTS gateway; Codex subscription + GPT-5.6 Luna is the brain.
+8. Phrase-level STT adds accepted end-of-turn latency; local synthetic timings are not a hosting benchmark.
+
+## Documentation map
+
+| Path | Purpose |
 |---|---|
-| `docs/01-product-requirements.md` | продуктовые и нефункциональные требования |
-| `docs/02-botamin-research-and-funnel.md` | отдельное исследование Botamin и воронка |
-| `docs/03-system-architecture.md` | компоненты, voice pipeline, Codex/Luna |
-| `docs/04-conversation-design.md` | сценарий разговора, prompts, guardrails |
-| `docs/05-api-events-data.md` | REST/WS events, tools, схема данных |
-| `docs/06-deployment-security-operations.md` | Docker, VPS, auth, security, runbook |
-| `docs/07-tradeoffs-and-adrs.md` | принятые trade-offs и риски |
-| `docs/08-testing-and-acceptance.md` | тесты, evals и release gates |
-| `docs/09-agent-task-plan.md` | задачи, зависимости и merge-порядок |
-| `docs/10-ai-library-evaluation.md` | сравнение Codex SDK, app-server, Vercel AI SDK и orchestration frameworks |
-| `tasks/agents/*.md` | готовые задания отдельным агентам |
-| `starter/prompts/*.md` | стартовые prompt-файлы |
-| `diagrams/*.svg` | схемы архитектуры и state machines |
-| `charts/*.png` | latency budget, metered cost inputs без неподтверждённых цен и параллелизация |
-| `FULL_SPEC.md` / `technical-spec.html` | собранная спецификация |
-| `VALIDATION.md` | отчёт о проверке ссылок, task graph, схем и standalone HTML |
-| `scripts/build-spec.sh` / `scripts/validate-spec.py` | воспроизводимая сборка и валидация пакета |
+| `CURRENT_DECISIONS.md` | authoritative active decisions |
+| `docs/00-scope-and-assumptions.md` | scope and boundaries |
+| `docs/03-system-architecture.md` | components and voice pipeline |
+| `docs/05-api-events-data.md` | REST/WS, tools, and data contracts |
+| `docs/06-deployment-security-operations.md` | deployment/security/operations design |
+| `docs/08-testing-and-acceptance.md` | tests and local/later release gates |
+| `docs/09-agent-task-plan.md` | task dependencies and T40 status |
+| `docs/11-local-release-handoff.md` | local RC runbook, checklist, limitations, rollback |
+| `evidence/T30-observed-local-voice-smoke-2026-07-31.md` | redacted owner-observed real local provider path |
+| `VALIDATION.md` | current evidence and explicit unobserved boundaries |
+| `FULL_SPEC.md` / `technical-spec.html` | deterministic generated specification |
 
-## Ограничение исходника
-
-Страница Notion `uprosti.notion.site/conversation-designer` на момент подготовки возвращала ошибку, поэтому пакет основан на согласованной с заказчиком трактовке в текущем диалоге, а не на дословном экспорте Notion. Это ограничение не блокирует разработку, но при появлении экспорта стоит сделать короткий gap review.
+The unavailable Notion source remains a known research limitation; see the detailed scope and research documents before changing product claims.

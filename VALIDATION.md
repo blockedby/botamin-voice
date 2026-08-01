@@ -1,47 +1,74 @@
-# Validation report — Correction 004
+# Validation report — local release candidate
 
-**Date:** 31 July 2026
+**Date:** 1 August 2026
 
 **Spec version:** `0.5-demo`
-**Result:** documentation, backlog, generated artifacts, and atomic STT contract integration passed
 
-This report covers the OpenRouter-only voice migration and its shared atomic STT prerequisite. It does not claim provider adapters, browser acceptance, deployment, runtime degradation drills, or paid external smokes.
+**Release label:** `0.5.0-local-rc.1`
 
-## Active contract
+**Branch:** `release/local-0.5.0-rc1`
 
-- OpenRouter is the only STT/TTS gateway and uses one backend-only `OPENROUTER_API_KEY`.
-- Browser PCM16 chunks end with one accepted `audio.commit`.
-- The gateway creates one bounded mono PCM16 16 kHz WAV.
-- Atomic `SttPort` receives that `audio/wav` and returns one current `transcript.final`; no provider session or partial event exists.
-- `OpenRouterSttAdapter` validates and base64-encodes the existing WAV without wrapping it again.
-- TTS returns complete provider-neutral `audio/mpeg` phrase segments using the canonical nine-byte binary framing contract.
+**Integrated baseline:** `1b604b8bdf0ab51db4a2c4c3436d41f5c935fe9d` (PR #21)
 
-## Reproducible artifacts
+**Result:** local P0 evidence and handoff gates pass. This report does not claim a target-VPS, public TLS/WSS, or WebKit release.
 
-`scripts/run-pandoc.sh` pins Pandoc `3.10.1`; diagram rendering uses `@viz-js/viz@3.17.0`; chart generation is deterministic. Two complete builds produced no second-build diff across seven SVGs, three PNGs, `FULL_SPEC.md`, and `technical-spec.html`.
+## Integrated baseline evidence
 
-## Verification
+- Current `main` implementation sequence PRs #6–#21 is present (16 squash commits from atomic MP3 contracts through the PR #21 production journey/local-smoke artifact).
+- Integrated PR #21 branch evidence supplied for T40 records **444 combined tests, 0 failures**, plus passing typecheck, lint/format, build, deterministic spec checks, and a **315-file** checksum set.
+- The committed [`evidence/T30-observed-local-voice-smoke-2026-07-31.md`](evidence/T30-observed-local-voice-smoke-2026-07-31.md) is owner-observed real local OpenRouter/Luna evidence: the one-turn path completed final transcript/text/audio events; the five-turn path produced five finals/text/audio completions, exactly one booked SQLite row, and exactly one sent outbox event at attempt 1.
+- T30 is local functional evidence only. It is not a target-host run or latency benchmark.
+
+## Observed local runtime and browser evidence
+
+The T40 handoff evidence records:
+
+- `scripts/deploy-local.sh` completed with mode-`0600` materialized files mounted read-only;
+- app and Caddy were healthy; dependency readiness reported all checks ready;
+- the local endpoint was `http://localhost:5173`;
+- Chrome desktop and mobile covered landing, consent, microphone permission denial, the safe denied state, zero fetch/WebSocket activity before microphone permission, and no horizontal overflow.
+
+This documentation pass did not repeat a credentialed deploy, browser session, or paid provider request. The observations above are retained with that provenance rather than represented as fresh T40 automation.
+
+## Fresh credential-free T40 verification
+
+After `bun install --frozen-lockfile` restored the locked workspace dependencies:
 
 ```text
+bun test: 433 passed, 0 failed across 54 files (3,788 assertions)
+bun run typecheck: passed (contracts, prompt compiler, test fixtures, web, server)
+bun run lint:format: passed (141 files, no fixes)
+bun run build: passed (all five workspaces; production web bundle built)
+scripts/build-spec.sh twice: byte-identical 12-artifact hash sets
 scripts/validate-spec.py: ALL VALIDATIONS PASSED
-CHECKSUMS.sha256: 164 files OK
-YAML DAG: 15 tasks, 5 gates, acyclic
-SVG/PNG validation: 7 SVG and 3 PNG passed
-OpenRouter-only env/tasks/agent packets: passed
-Correction 003 superseded/excluded: passed
-retired provider and retired STT source scan: zero active matches
-bun run typecheck: passed (5 workspaces)
-bun test: passed (81 source tests, 0 failed)
-bun run lint:format: passed
-bun run build: passed
+active retired-provider/retired-STT scan: 0 matches; superseded correction excluded
+docker compose config --quiet: passed with safe /dev/null secret defaults
+shell syntax: all scripts/*.sh and infra/entrypoint.sh passed
+scripts/test-compose-file-secrets.sh: passed read-only rotated-inode remount engine smoke
+CHECKSUMS.sha256: 316 files verified after T40 artifact regeneration
 git diff --check: passed
 ```
 
-The validator was also probed with disposable retired partial-event and provider-session constructs and rejected all of them as intended.
+The fresh `bun test` runner reports its own 433-test count; the separately supplied integrated PR #21 combined evidence remains 444. Both counts are recorded explicitly rather than conflated.
 
-## Scope boundaries
+## Active contract and secret boundary
 
-- OpenRouter STT/TTS adapters and fake HTTP provider suites: not implemented by this documentation migration.
-- Paid Russian OpenRouter STT smoke: not run.
-- Paid Russian OpenRouter TTS smoke: not run.
-- `docker compose config`: not applicable to this branch; T15 is integrated separately.
+- OpenRouter remains the only STT/TTS gateway and uses one backend-only `OPENROUTER_API_KEY`.
+- Browser PCM16 is bounded and assembled into one validated WAV after `audio.commit`; provider STT is phrase-level and nonstreaming and emits one current `transcript.final`.
+- `scripts/deploy-local.sh` parses `.env` without shell evaluation, materializes private file sources, exports only `*_FILE` paths, and force-recreates app before readiness.
+- Codex device auth persists in the fixed `botamin-codex-home` volume and must be protected as a password-like secret.
+- Paid OpenRouter/Codex smokes are explicit owner opt-ins and were not called by T40 verification.
+
+## Scope boundaries and remaining blockers
+
+Local P0 checklist: **passed**; see [`docs/11-local-release-handoff.md`](docs/11-local-release-handoff.md).
+
+Outstanding later gates:
+
+- WebKit complete-MP3 playback and voice journey remain unobserved.
+- Target VPS resource behavior, clean deploy, DNS, public TLS/WSS, and target-host paid smokes remain unobserved.
+- Local synthetic timings are functional sequencing evidence, not benchmark/SLO evidence.
+- The app creates one internal SQLite booking and notifier outbox event; it does not create a real calendar/CRM record or meeting invitation.
+- OpenRouter model/voice availability and rates, Codex plan suitability/capacity, privacy copy, and public commercial operation require owner review at the later target-host gate.
+
+No Git tag was created. Exact recommendation after owner acceptance: `v0.5.0-local-rc.1`.

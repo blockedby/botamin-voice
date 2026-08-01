@@ -4,6 +4,8 @@
 
 ![Deployment](../diagrams/05-deployment.svg)
 
+Release `0.5.0-local-rc.1` uses this topology on one trusted local machine at `http://localhost:5173`. A target VPS, DNS, public TLS/WSS and target-host smokes are later gates and are not implied by local readiness.
+
 Один `docker-compose.yml`, ровно два application-path сервиса рекомендуются:
 
 1. `app` — Bun server, React static, Codex app-server child process, SQLite access и native HTTPS `fetch` к OpenRouter.
@@ -18,35 +20,9 @@ Persistent volumes:
 
 ## 2. Compose requirements
 
-```yaml
-services:
-  app:
-    build: .
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      - app-data:/data
-      - codex-home:/codex-home
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health/live"]
-      interval: 15s
-      timeout: 3s
-      retries: 5
-    expose: ["3000"]
+The tracked [`../docker-compose.yml`](../docker-compose.yml) is the exact runtime contract. It pins app/Caddy inputs, runs the app as non-root with a read-only filesystem, persists SQLite and Codex auth in named volumes, and receives OpenRouter/webhook values only through read-only files under `/run/secrets`.
 
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    ports: ["80:80", "443:443"]
-    volumes:
-      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-    depends_on:
-      app:
-        condition: service_healthy
-```
-
-Это ориентир; финальный compose должен pin-ить image/tool versions.
+Do not use `env_file: .env`, source `.env`, or invoke raw `docker compose up` as the documented bootstrap. `scripts/deploy-local.sh` parses dotenv data, materializes mode-`0600` sources below `.runtime/secrets`, exports the three `*_FILE` paths, builds, migrates, force-recreates app, starts Caddy, and requires readiness. Raw `docker compose config` remains safe with `/dev/null` defaults but does not constitute a configured deploy.
 
 ## 3. Docker image
 
@@ -61,18 +37,17 @@ Multi-stage:
 
 Не использовать floating `latest` для Codex в production. Версия CLI фиксируется, потому что app-server schemas version-specific. `OPENROUTER_API_KEY` inject-ится только runtime secret/env и отсутствует в build args, layers, image history и rendered Compose evidence.
 
-## 4. Codex subscription auth на VPS
+## 4. Codex subscription auth on the trusted host
 
 ### Bootstrap
 
-После первого deploy:
+Authenticate before the first local deploy through the supported wrapper:
 
 ```bash
-docker compose run --rm app codex login --device-auth
-docker compose run --rm app codex login status
+./scripts/device-auth.sh
 ```
 
-`CODEX_HOME=/codex-home` должен указывать на persistent volume.
+The wrapper builds the app image, runs interactive device auth, checks login status, and stores the result in the fixed persistent `botamin-codex-home` volume mounted at `/codex-home`. The host-side `CODEX_HOME` value in `.env` applies only to direct Bun operation.
 
 ### Preflight
 
@@ -268,36 +243,30 @@ Source key берётся из direct peer address. Forwarded IP игнорир�
 
 ## 12. Basic runbook
 
-### Deploy
+### Local deploy
 
 ```bash
-git pull
-docker compose build --pull
-docker compose run --rm app bun run db:migrate
-docker compose up -d
-docker compose ps
-curl -fsS https://HOST/health/ready
+cp .env.example .env
+chmod 600 .env
+# Fill the backend-only OPENROUTER_API_KEY without sourcing .env.
+./scripts/device-auth.sh
+./scripts/deploy-local.sh
+curl -fsS http://localhost:5173/health/ready
 ```
+
+The wrapper does not run paid provider smokes. Recovery and observability commands are maintained in [`../infra/README.md`](../infra/README.md) and the release checklist in [`11-local-release-handoff.md`](11-local-release-handoff.md).
 
 ### Re-authenticate Codex
 
 ```bash
 docker compose stop app
-docker compose run --rm app codex login --device-auth
-docker compose run --rm app codex login status
-docker compose up -d app
+./scripts/device-auth.sh
+./scripts/deploy-local.sh
 ```
 
 ### OpenRouter deploy smoke
 
-After runtime secrets are installed on the target VPS:
-
-```bash
-docker compose run --rm app bun run scripts/openrouter-stt-smoke.ts
-docker compose run --rm app bun run scripts/openrouter-tts-smoke.ts
-```
-
-Both external paid smokes are deploy/manual-only and excluded from default CI. STT uses a bounded Russian WAV fixture, requires one non-empty final transcript and prints only status/latency/byte counts/safe IDs—not audio or text. TTS writes MP3 outside the repository or to an ignored artifact path and requires `2xx`, `audio/mpeg` and non-empty bytes. Both fail safely for missing key and typed provider/config errors. Neither smoke is claimed by this documentation migration.
+Paid external smokes are manual-only, explicit opt-in, and excluded from default CI. Local owner commands and the target-VPS forms are documented separately in [`11-local-release-handoff.md`](11-local-release-handoff.md) and [`../infra/README.md`](../infra/README.md). STT requires one non-empty final transcript from bounded WAV input and emits only safe aggregate evidence; TTS requires `2xx`, compatible `audio/mpeg`, and non-empty bytes. Neither is called by health checks or ordinary deployment.
 
 ### Inspect last booking events
 

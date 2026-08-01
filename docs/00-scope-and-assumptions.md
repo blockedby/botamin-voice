@@ -33,7 +33,7 @@ MVP должен выглядеть как небольшой реальный �
 - SQLite persistence;
 - console notifier и интерфейс для webhook/push;
 - transcript/event audit;
-- Docker Compose, TLS, health checks, backup;
+- local-first Docker Compose, health checks and backup; VPS TLS/WSS is a later deployment gate;
 - тесты контрактов, компонентов, E2E и conversation evals.
 
 ## 4. Вне scope
@@ -67,7 +67,7 @@ MVP должен выглядеть как небольшой реальный �
 | Notifications | console обязательно; webhook — адаптер |
 | Calendar | отсутствует |
 | Prompts | Markdown в Git |
-| Deployment | один Compose project на одной VPS; только app + Caddy в P0 application path |
+| Deployment | local-first Compose project on one trusted machine; app + Caddy only. One target VPS with TLS/WSS is the later production-shaped gate |
 | Raw audio retention | выключено |
 | Qualification | включаемая опция, только после booking |
 

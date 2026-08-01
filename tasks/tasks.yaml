@@ -444,7 +444,8 @@ tasks:
   wave: 5
   priority: P0
   owner: A0
-  title: Release candidate and handoff
+  status: local_rc_handoff
+  title: Local release candidate and handoff
   depends_on:
   - T31
   - T32
@@ -453,15 +454,16 @@ tasks:
   - docs
   - release artifacts
   outputs:
-  - tagged release commit
-  - deployment and rollback instructions
-  - acceptance evidence bundle
-  - known limitations and configuration matrix
+  - untagged local release commit with exact tag recommendation
+  - local deployment, recovery and rollback instructions
+  - local acceptance evidence bundle
+  - known limitations and later target-host gate matrix
   acceptance:
-  - clean deploy from documentation succeeds
-  - all P0 checklist items are checked
-  - docs match actual environment variables and commands
-  - no unresolved critical issue remains
+  - clean local deploy from documentation is observed ready at http://localhost:5173
+  - all local P0 checklist items are checked and later WebKit/VPS/TLS gates remain explicitly unchecked
+  - docs match actual file-backed secrets, environment variables and commands
+  - no unresolved critical issue remains inside local scope
   - active docs, tasks, environment variables, agent packets, diagrams, charts and sources contain no stale non-OpenRouter
     voice provider, credential, path or streaming-STT instruction
   - Correction 003 is superseded and excluded from active onboarding and generated specifications
+  - no target-VPS release or Git tag is claimed

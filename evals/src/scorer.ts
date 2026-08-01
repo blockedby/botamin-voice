@@ -1,5 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import {
+	AppendQualificationInputSchema,
+	CreateBookingInputSchema,
+	type MeetingSlot,
+	MeetingSlotSchema,
+} from "../../packages/contracts/src/index.js";
 
 export type BookingExpectation = "required" | "forbidden" | "optional";
 
@@ -10,7 +16,7 @@ export interface ScenarioDefinition {
 	language: "ru";
 	direction: "inbound" | "outbound" | "reactivation" | "system";
 	description: string;
-	serverContext?: { slotCandidates: string[] };
+	serverContext?: { slotCandidates: SlotCandidate[] };
 	expected: {
 		requiredStageOrder: string[];
 		finalStages: string[];
@@ -27,6 +33,11 @@ export interface ScenarioDefinition {
 		expectedFailureModes: string[];
 		ttsMode: "required" | "outage";
 	};
+}
+
+export interface SlotCandidate {
+	label: string;
+	meetingSlot: MeetingSlot;
 }
 
 export interface ScenarioFile {
@@ -581,6 +592,40 @@ function contactChannels(payload: unknown): Set<string> {
 	);
 }
 
+const RUSSIAN_MONTHS = [
+	"января",
+	"февраля",
+	"марта",
+	"апреля",
+	"мая",
+	"июня",
+	"июля",
+	"августа",
+	"сентября",
+	"октября",
+	"ноября",
+	"декабря",
+] as const;
+
+function meetingSlotLabel(slot: MeetingSlot): string {
+	const moscow = new Date(new Date(slot.startAt).getTime() + 3 * 60 * 60_000);
+	const month = RUSSIAN_MONTHS[moscow.getUTCMonth()];
+	if (!month) throw new Error("Invalid Moscow meeting-slot month");
+	const time = `${String(moscow.getUTCHours()).padStart(2, "0")}:${String(
+		moscow.getUTCMinutes(),
+	).padStart(2, "0")}`;
+	return `${moscow.getUTCDate()} ${month} ${moscow.getUTCFullYear()} года, ${time} по Москве`;
+}
+
+function sameMeetingSlot(left: MeetingSlot, right: MeetingSlot): boolean {
+	return (
+		left.startAt === right.startAt &&
+		left.endAt === right.endAt &&
+		left.timeZone === right.timeZone &&
+		left.durationMinutes === right.durationMinutes
+	);
+}
+
 function allOutputEvents(events: EvalEvent[]): EvalEvent[] {
 	return events.filter(
 		(event) =>
@@ -1127,6 +1172,26 @@ function scoreScenario(
 	const createCalls = toolCalls.filter(
 		(event) => event.name === "create_booking",
 	);
+	for (const call of createCalls) {
+		assertCritical(
+			CreateBookingInputSchema.safeParse(call.payload).success,
+			"create_booking_payload_contract",
+			"create_booking payload must match the shared CreateBookingInputSchema",
+			call.sequence,
+		);
+	}
+	const qualificationCalls = toolCalls.filter(
+		(event) => event.name === "append_booking_qualification",
+	);
+	for (const call of qualificationCalls) {
+		const parsed = AppendQualificationInputSchema.safeParse(call.payload);
+		assertCritical(
+			parsed.success && parsed.data.bookingId === call.bookingId,
+			"qualification_payload_contract",
+			"append_booking_qualification payload must match the shared contract and event bookingId",
+			call.sequence,
+		);
+	}
 	assertCritical(
 		createCalls.length <= scenario.expected.booking.maxCreateCalls,
 		"excess_create_booking_calls",
@@ -1134,9 +1199,14 @@ function scoreScenario(
 	);
 
 	const slotCandidates = scenario.serverContext?.slotCandidates ?? [];
+	const slotLabels = slotCandidates.map((candidate) => candidate.label);
 	if (scenario.expected.booking.outcome === "required") {
 		assertCritical(
-			slotCandidates.length === 2 && new Set(slotCandidates).size === 2,
+			slotCandidates.length === 2 &&
+				new Set(slotLabels).size === 2 &&
+				new Set(
+					slotCandidates.map((candidate) => candidate.meetingSlot.startAt),
+				).size === 2,
 			"invalid_server_slots",
 			"Booking scenarios require exactly two unique server-owned slot candidates",
 		);
@@ -1147,7 +1217,7 @@ function scoreScenario(
 				bookingAcceptedSequence !== undefined &&
 				bookingAcceptedSequence < event.sequence &&
 				event.sequence < firstCreateSequence &&
-				slotCandidates.every((slot) => event.text?.includes(slot)),
+				slotLabels.every((slot) => event.text?.includes(slot)),
 		);
 		assertCritical(
 			slotOffer !== undefined,
@@ -1161,7 +1231,7 @@ function scoreScenario(
 			(event) =>
 				(bookingAcceptedSequence === undefined ||
 					event.sequence < bookingAcceptedSequence) &&
-				(slotCandidates.some((slot) => event.text?.includes(slot)) ||
+				(slotLabels.some((slot) => event.text?.includes(slot)) ||
 					slotLike.test(event.text ?? "")),
 		);
 		assertCritical(
@@ -1177,7 +1247,7 @@ function scoreScenario(
 				event.sequence >= firstCreateSequence
 			)
 				continue;
-			const residual = slotCandidates.reduce(
+			const residual = slotLabels.reduce(
 				(text, slot) => text.replaceAll(slot, ""),
 				event.text ?? "",
 			);
@@ -1212,11 +1282,14 @@ function scoreScenario(
 				"Booking requires name, company, working email, phone or Telegram, and consent",
 				call.sequence,
 			);
+			const parsed = CreateBookingInputSchema.safeParse(call.payload);
 			assertCritical(
-				typeof payload?.preferredTimeText === "string" &&
-					slotCandidates.includes(payload.preferredTimeText),
+				parsed.success &&
+					slotCandidates.some((candidate) =>
+						sameMeetingSlot(candidate.meetingSlot, parsed.data.meetingSlot),
+					),
 				"selected_slot_not_supplied",
-				"Selected booking slot must exactly match one server candidate",
+				"Selected structured meeting slot must exactly match one server candidate",
 				call.sequence,
 			);
 		}
@@ -1406,19 +1479,14 @@ function scoreScenario(
 			"qualification_expected",
 			"Accepted qualification must contain a question or update",
 		);
-		const qualificationCalls = toolCalls.filter(
-			(event) => event.name === "append_booking_qualification",
-		);
 		assertCritical(
 			qualificationCalls.some((event) => {
 				const patch = record(record(event.payload)?.patch);
 				return (
 					typeof patch?.monthlyLeadVolume === "string" &&
 					patch.monthlyLeadVolume.trim().length > 0 &&
-					typeof patch.notes === "string" &&
-					/\b\d+\s+(?:sales[-\s]?менеджер|менеджер[\p{L}]*\s+(?:по\s+)?продаж)/iu.test(
-						patch.notes,
-					)
+					typeof patch.salesManagerCount === "number" &&
+					Number.isInteger(patch.salesManagerCount)
 				);
 			}),
 			"qualification_fields_missing",
@@ -1656,13 +1724,28 @@ function validateDefinitions(
 				["slotCandidates"],
 				`Scenario ${scenario.id} server context`,
 			);
+			const candidates = scenario.serverContext.slotCandidates;
 			if (
-				!Array.isArray(scenario.serverContext.slotCandidates) ||
-				scenario.serverContext.slotCandidates.length !== 2 ||
-				scenario.serverContext.slotCandidates.some(
-					(slot) => typeof slot !== "string" || slot.trim().length === 0,
-				) ||
-				new Set(scenario.serverContext.slotCandidates).size !== 2
+				!Array.isArray(candidates) ||
+				candidates.length !== 2 ||
+				candidates.some((candidate) => {
+					if (candidate === null || typeof candidate !== "object") return true;
+					exactKeys(
+						candidate,
+						["label", "meetingSlot"],
+						`Scenario ${scenario.id} slot candidate`,
+					);
+					const parsed = MeetingSlotSchema.safeParse(candidate.meetingSlot);
+					return (
+						typeof candidate.label !== "string" ||
+						candidate.label.trim().length === 0 ||
+						!parsed.success ||
+						candidate.label !== meetingSlotLabel(parsed.data)
+					);
+				}) ||
+				new Set(candidates.map((candidate) => candidate.label)).size !== 2 ||
+				new Set(candidates.map((candidate) => candidate.meetingSlot.startAt))
+					.size !== 2
 			) {
 				throw new Error(
 					`Scenario ${scenario.id} has invalid server slot context`,
@@ -1824,6 +1907,11 @@ export function scoreEval(
 		const result = results.find((candidate) => candidate.id === scenario.id);
 		return !result?.criticalFailures.some((failure) =>
 			[
+				"create_booking_payload_contract",
+				"invalid_server_slots",
+				"missing_server_slot_offer",
+				"missing_booking_data",
+				"selected_slot_not_supplied",
 				"qualification_before_booking",
 				"qualification_before_confirmation",
 				"qualification_without_consent",

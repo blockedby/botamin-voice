@@ -56,7 +56,7 @@ export const REQUIRED_POLICY_SENTENCES: Readonly<
 	],
 	"prompts/qualification.md": [
 		"месячный объём входящих лидов — сохрани в `monthlyLeadVolume`;",
-		"явное число менеджеров продаж — сохрани в `notes` без домысливания.",
+		"явное число менеджеров продаж — сохрани целым числом в `salesManagerCount` без домысливания.",
 	],
 	"prompts/speech-style.md": [
 		"Выражай одну мысль и задавай не больше одного вопроса.",

@@ -74,6 +74,9 @@ async function buildArtifact(): Promise<object> {
 		"evals/scenarios/scenarios.json",
 		"evals/fixtures/passing-transcripts.jsonl",
 		"evals/fixtures/negative-controls/manifest.json",
+		"packages/contracts/src/common.ts",
+		"packages/contracts/src/domain.ts",
+		"packages/contracts/src/tools.ts",
 		...manifest.controls.map(
 			(control) => `evals/fixtures/negative-controls/${control.file}`,
 		),

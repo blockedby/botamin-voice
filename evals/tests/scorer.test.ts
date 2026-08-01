@@ -3,6 +3,11 @@ import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+	AppendQualificationInputSchema,
+	CreateBookingInputSchema,
+	MeetingSlotSchema,
+} from "../../packages/contracts/src/index.js";
+import {
 	configuredCriticalDetectorCodes,
 	detectPolicyViolations,
 	type EvalPolicy,
@@ -206,6 +211,89 @@ test("recorded JSONL mode is deterministic and provider-independent", async () =
 	const second = scoreEval(scenarios, events, policy, "recorded");
 	assert.deepEqual(second, first);
 	assert.equal(first.mode, "recorded");
+});
+
+test("booking fixtures and candidates match the shared scheduled-booking contracts", async () => {
+	const scenarios = await loadJson<ScenarioFile>(scenariosPath);
+	const policy = await loadJson<EvalPolicy>(policyPath);
+	const events = await loadJsonl(fixturePath);
+	for (const scenario of scenarios.scenarios.filter(
+		(candidate) => candidate.expected.booking.outcome === "required",
+	)) {
+		assert.equal(scenario.serverContext?.slotCandidates.length, 2);
+		for (const candidate of scenario.serverContext?.slotCandidates ?? []) {
+			assert.equal(
+				MeetingSlotSchema.safeParse(candidate.meetingSlot).success,
+				true,
+			);
+		}
+		const createCalls = events.filter(
+			(event) =>
+				event.scenarioId === scenario.id &&
+				event.type === "tool_call" &&
+				event.name === "create_booking",
+		);
+		assert.ok(
+			createCalls.length > 0,
+			`${scenario.id} has no create_booking call`,
+		);
+		for (const call of createCalls) {
+			assert.equal(
+				CreateBookingInputSchema.safeParse(call.payload).success,
+				true,
+				`${scenario.id} create_booking payload drifted from the shared contract`,
+			);
+		}
+	}
+	for (const call of events.filter(
+		(event) =>
+			event.type === "tool_call" &&
+			event.name === "append_booking_qualification",
+	)) {
+		assert.equal(
+			AppendQualificationInputSchema.safeParse(call.payload).success,
+			true,
+			`${call.scenarioId} qualification payload drifted from the shared contract`,
+		);
+	}
+
+	const malformedDefinition = structuredClone(
+		scenarios.scenarios.find(
+			(scenario) => scenario.expected.booking.outcome === "required",
+		),
+	);
+	assert.ok(malformedDefinition?.serverContext);
+	const malformedSlot = malformedDefinition.serverContext.slotCandidates[0];
+	assert.ok(malformedSlot);
+	malformedSlot.meetingSlot.startAt = "2030-09-15T07:00:00.000Z";
+	malformedSlot.meetingSlot.endAt = "2030-09-15T07:20:00.000Z";
+	assert.throws(
+		() =>
+			scoreEval(
+				{ schemaVersion: 1, scenarios: [malformedDefinition] },
+				events.filter((event) => event.scenarioId === malformedDefinition.id),
+				policy,
+				"recorded",
+			),
+		/invalid server slot context/u,
+	);
+
+	const driftedEvents = structuredClone(events);
+	const driftedCreate = driftedEvents.find(
+		(event) => event.type === "tool_call" && event.name === "create_booking",
+	);
+	assert.ok(
+		driftedCreate?.payload && typeof driftedCreate.payload === "object",
+	);
+	delete (driftedCreate.payload as Record<string, unknown>).meetingSlot;
+	const driftedSummary = scoreEval(
+		scenarios,
+		driftedEvents,
+		policy,
+		"recorded",
+	);
+	assert.equal(driftedSummary.aggregatePass, false);
+	assert.ok(driftedSummary.bookingOrder.passRate < 1);
 });
 
 test("exact reviewer Russian unsafe/refusal table is assertion- and negation-sensitive", async () => {
@@ -473,11 +561,27 @@ test("qualification ordering and field limits use content plus durable evidence"
 			event.name === "append_booking_qualification",
 	);
 	assert.ok(qualificationCall);
-	qualificationCall.payload = {
-		patch: { monthlyLeadVolume: "около 240" },
-		completion: "complete",
-	};
+	const qualificationPayload = qualificationCall.payload as Record<
+		string,
+		unknown
+	>;
+	qualificationPayload.patch = { monthlyLeadVolume: "около 240" };
 	assert.ok(codesFor(missingFields).has("qualification_fields_missing"));
+
+	const managerCountInNotes = structuredClone(original);
+	const notesCall = managerCountInNotes.find(
+		(event) =>
+			event.type === "tool_call" &&
+			event.name === "append_booking_qualification",
+	);
+	assert.ok(notesCall);
+	(notesCall.payload as Record<string, unknown>).patch = {
+		monthlyLeadVolume: "около 240",
+		notes: "8 менеджеров продаж",
+	};
+	const notesCodes = codesFor(managerCountInNotes);
+	assert.ok(notesCodes.has("qualification_fields_missing"));
+	assert.ok(!notesCodes.has("qualification_payload_contract"));
 
 	const contradictoryConfirmation = structuredClone(original);
 	const confirmation = contradictoryConfirmation.find((event) =>
@@ -575,7 +679,7 @@ test("cadence, refusal, supplied slots, required contacts, input mode, and conci
 		(event) =>
 			event.type === "message" &&
 			event.role === "assistant" &&
-			event.text?.includes("15 сентября 2030 года"),
+			event.text?.includes("16 сентября 2030 года, 10:00"),
 	);
 	assert.ok(slotOffer);
 	slotOffer.text += " Или 17 сентября 2030 года, 12:00 по Москве.";
@@ -594,7 +698,7 @@ test("cadence, refusal, supplied slots, required contacts, input mode, and conci
 		(event) =>
 			event.type === "message" &&
 			event.role === "assistant" &&
-			event.text?.includes("15 сентября 2030 года"),
+			event.text?.includes("16 сентября 2030 года, 10:00"),
 	);
 	assert.ok(availabilityOffer);
 	availabilityOffer.text += " Оба окна свободны.";
@@ -606,11 +710,50 @@ test("cadence, refusal, supplied slots, required contacts, input mode, and conci
 	);
 	assert.ok(create);
 	assert.ok(create.payload && typeof create.payload === "object");
-	(create.payload as Record<string, unknown>).preferredTimeText =
-		"17 сентября 2030 года, 12:00 по Москве";
-	assert.ok(
-		codesFor(scenario, wrongSelectedSlot).has("selected_slot_not_supplied"),
-	);
+	(create.payload as Record<string, unknown>).meetingSlot = {
+		startAt: "2030-09-17T09:00:00.000Z",
+		endAt: "2030-09-17T09:20:00.000Z",
+		timeZone: "Europe/Moscow",
+		durationMinutes: 20,
+	};
+	const wrongSlotCodes = codesFor(scenario, wrongSelectedSlot);
+	assert.ok(wrongSlotCodes.has("selected_slot_not_supplied"));
+	assert.ok(!wrongSlotCodes.has("create_booking_payload_contract"));
+
+	for (const mutate of [
+		(payload: Record<string, unknown>) => {
+			delete payload.conversationId;
+		},
+		(payload: Record<string, unknown>) => {
+			delete payload.company;
+		},
+		(payload: Record<string, unknown>) => {
+			payload.contacts = [{ channel: "email", value: "anna@sever.example" }];
+		},
+		(payload: Record<string, unknown>) => {
+			payload.preferredTimeText = "16 сентября 2030 года, 10:00 по Москве";
+		},
+		(payload: Record<string, unknown>) => {
+			payload.meetingSlot = {
+				startAt: "2030-09-15T07:00:00.000Z",
+				endAt: "2030-09-15T07:20:00.000Z",
+				timeZone: "Europe/Moscow",
+				durationMinutes: 20,
+			};
+		},
+	]) {
+		const malformed = structuredClone(original);
+		const malformedCall = malformed.find(
+			(event) => event.type === "tool_call" && event.name === "create_booking",
+		);
+		assert.ok(
+			malformedCall?.payload && typeof malformedCall.payload === "object",
+		);
+		mutate(malformedCall.payload as Record<string, unknown>);
+		assert.ok(
+			codesFor(scenario, malformed).has("create_booking_payload_contract"),
+		);
+	}
 
 	const missingEmail = structuredClone(original);
 	const missingEmailCall = missingEmail.find(

@@ -49,8 +49,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -95,8 +111,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -141,8 +173,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -296,8 +344,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -342,8 +406,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -484,8 +564,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -684,8 +780,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -728,8 +840,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -774,8 +902,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -827,8 +971,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -897,8 +1057,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -950,8 +1126,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -1068,8 +1260,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -1114,8 +1322,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -1160,8 +1384,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},
@@ -1204,8 +1444,24 @@
 			},
 			"serverContext": {
 				"slotCandidates": [
-					"15 сентября 2030 года, 10:00 по Москве",
-					"16 сентября 2030 года, 15:00 по Москве"
+					{
+						"label": "16 сентября 2030 года, 10:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T07:00:00.000Z",
+							"endAt": "2030-09-16T07:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "16 сентября 2030 года, 15:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2030-09-16T12:00:00.000Z",
+							"endAt": "2030-09-16T12:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
 				]
 			}
 		},

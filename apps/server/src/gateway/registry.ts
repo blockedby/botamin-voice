@@ -1,4 +1,5 @@
 import type { CreateConversationRequest } from "@botamin/contracts";
+import { monotonicNowMs, type ObservabilityMetrics } from "../observability";
 import type { GatewaySession } from "./session";
 import {
 	type BrainTurnAdmission,
@@ -29,14 +30,16 @@ export interface SessionRegistryOptions {
 	terminalErrorCleanupMs?: number;
 	createSession(context: CreateSessionContext): GatewaySession;
 	now?: () => Date;
+	monotonicNow?: () => number;
 	idFactory?: () => string;
 	cleanupIntervalMs?: number;
+	metrics?: ObservabilityMetrics;
 }
 
 interface SessionRecord {
 	session: GatewaySession;
 	sourceKey: string;
-	createdAtMs: number;
+	createdAtMonotonicMs: number;
 }
 
 /** Process-local bounded registry; durable booking data remains in SQLite. */
@@ -50,31 +53,40 @@ export class SessionRegistry {
 	readonly #activeBySource = new Map<string, number>();
 	readonly #maxActive: number;
 	readonly #maxActivePerSource: number;
+	readonly #maxConcurrentBrainTurns: number;
+	readonly #maxPendingBrainTurns: number;
 	readonly #sessionMaxMs: number;
 	readonly #abandonedSessionMs: number;
 	readonly #terminalErrorCleanupMs: number;
 	readonly #createSession: SessionRegistryOptions["createSession"];
 	readonly #now: () => Date;
+	readonly #monotonicNow: () => number;
 	readonly #idFactory: () => string;
 	readonly #timer: ReturnType<typeof setInterval>;
 	readonly #turnQueue: BrainTurnQueue;
+	readonly #metrics: ObservabilityMetrics | undefined;
 	#disposed = false;
 
 	constructor(options: SessionRegistryOptions) {
 		this.#maxActive = options.maxActiveConversations;
 		this.#maxActivePerSource =
 			options.maxActiveConversationsPerSource ?? options.maxActiveConversations;
+		this.#maxConcurrentBrainTurns = options.maxConcurrentBrainTurns;
+		this.#maxPendingBrainTurns = options.maxPendingBrainTurns ?? 0;
 		this.#sessionMaxMs = options.sessionMaxMs;
 		this.#abandonedSessionMs = options.abandonedSessionMs ?? 10_000;
 		this.#terminalErrorCleanupMs = options.terminalErrorCleanupMs ?? 5_000;
 		this.#createSession = options.createSession;
 		this.#now = options.now ?? (() => new Date());
+		this.#monotonicNow = options.monotonicNow ?? monotonicNowMs;
 		this.#idFactory = options.idFactory ?? (() => Bun.randomUUIDv7());
+		this.#metrics = options.metrics;
 		this.#turnQueue = new BrainTurnQueue({
-			maxActive: options.maxConcurrentBrainTurns,
-			maxPending: options.maxPendingBrainTurns ?? 0,
+			maxActive: this.#maxConcurrentBrainTurns,
+			maxPending: this.#maxPendingBrainTurns,
 			queueTimeoutMs: options.brainQueueTimeoutMs ?? 45_000,
 		});
+		this.#updateCapacity();
 		this.#timer = setInterval(
 			() => this.cleanupExpired(),
 			options.cleanupIntervalMs ?? 1_000,
@@ -92,27 +104,48 @@ export class SessionRegistry {
 			!this.hasCapacity ||
 			(this.#activeBySource.get(sourceKey) ?? 0) >= this.#maxActivePerSource
 		) {
+			this.#metrics?.recordQueue("session_capacity");
 			return null;
 		}
 		const now = this.#now();
+		const createdAtMonotonicMs = this.#monotonicNow();
 		const conversationId = this.#idFactory();
 		const expiresAt = new Date(now.getTime() + this.#sessionMaxMs);
 		const session = this.#createSession({
 			conversationId,
 			expiresAt,
 			request,
-			acquireTurn: (input) => this.#turnQueue.acquire(input),
+			acquireTurn: async (input) => {
+				const startedAt = this.#monotonicNow();
+				const pending = this.#turnQueue.acquire(input);
+				this.#updateCapacity();
+				const result = await pending;
+				this.#metrics?.recordQueue(
+					result.ok ? "granted" : result.reason,
+					Math.max(0, this.#monotonicNow() - startedAt),
+				);
+				this.#updateCapacity();
+				if (!result.ok) return result;
+				return {
+					ok: true,
+					release: () => {
+						result.release();
+						this.#updateCapacity();
+					},
+				};
+			},
 			onTerminalError: () => this.#scheduleTerminalErrorCleanup(conversationId),
 		});
 		this.#sessions.set(conversationId, {
 			session,
 			sourceKey,
-			createdAtMs: now.getTime(),
+			createdAtMonotonicMs,
 		});
 		this.#activeBySource.set(
 			sourceKey,
 			(this.#activeBySource.get(sourceKey) ?? 0) + 1,
 		);
+		this.#updateCapacity();
 		return session;
 	}
 
@@ -140,10 +173,11 @@ export class SessionRegistry {
 
 	cleanupExpired(): void {
 		const now = this.#now();
+		const monotonicNow = this.#monotonicNow();
 		for (const [id, record] of this.#sessions) {
 			const abandoned =
 				!record.session.established &&
-				now.getTime() - record.createdAtMs >= this.#abandonedSessionMs;
+				monotonicNow - record.createdAtMonotonicMs >= this.#abandonedSessionMs;
 			if (
 				!record.session.stopped &&
 				!record.session.isExpired(now) &&
@@ -200,7 +234,19 @@ export class SessionRegistry {
 		const next = (this.#activeBySource.get(record.sourceKey) ?? 1) - 1;
 		if (next <= 0) this.#activeBySource.delete(record.sourceKey);
 		else this.#activeBySource.set(record.sourceKey, next);
+		this.#updateCapacity();
 		return record;
+	}
+
+	#updateCapacity(): void {
+		this.#metrics?.setCapacity({
+			activeSessions: this.#sessions.size,
+			maxActiveSessions: this.#maxActive,
+			activeBrainTurns: this.#turnQueue.activeCount,
+			maxActiveBrainTurns: this.#maxConcurrentBrainTurns,
+			pendingBrainTurns: this.#turnQueue.pendingCount,
+			maxPendingBrainTurns: this.#maxPendingBrainTurns,
+		});
 	}
 
 	#scheduleTerminalErrorCleanup(conversationId: string): void {

@@ -10,6 +10,7 @@
 	"include": [
 		"contracts/**/*.ts",
 		"fixtures/**/*.ts",
+		"security/**/*.ts",
 		"../apps/server/src/**/*.ts",
 		"../apps/web/src/audio/**/*.ts",
 		"../apps/web/src/integration/**/*.ts",

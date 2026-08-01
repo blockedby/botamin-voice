@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { SttTranscriptionRequest } from "@botamin/contracts";
 import { createDeterministicWavFixture } from "../../../../../../packages/test-fixtures/src/wav";
+import { ObservabilityMetrics } from "../../../observability";
 import {
 	OpenRouterSttAdapter,
 	type OpenRouterSttTelemetryEvent,
@@ -257,12 +258,20 @@ describe("OpenRouterSttAdapter protocol", () => {
 		expect(body.model).toBe("vendor/audio-model");
 	});
 
-	test("telemetry contains only safe dimensions", async () => {
+	test("telemetry contains only safe dimensions and uses monotonic latency", async () => {
 		const events: OpenRouterSttTelemetryEvent[] = [];
 		const wav = createDeterministicWavFixture();
+		let monotonicNow = 10;
+		let wallNow = Date.parse("2026-07-31T00:00:00.000Z");
 		const adapter = new OpenRouterSttAdapter({
 			config: config(),
-			fetch: queuedFetch([transcriptResponse("Иван, +79990001122")]),
+			monotonicNow: () => monotonicNow,
+			wallNow: () => wallNow,
+			fetch: async () => {
+				wallNow = Date.parse("2020-01-01T00:00:00.000Z");
+				monotonicNow = 50;
+				return transcriptResponse("Иван, +79990001122");
+			},
 			telemetry: (event) => events.push(event),
 		});
 		await adapter.transcribe(request({ audio: wav }));
@@ -277,8 +286,11 @@ describe("OpenRouterSttAdapter protocol", () => {
 			audioBytes: wav.byteLength,
 			durationMs: 100,
 			status: 200,
-			providerRequestId: "gen_stt_1",
+			latencyMs: 40,
 		});
+		expect(snapshot).not.toContain(CONVERSATION_ID);
+		expect(snapshot).not.toContain(TURN_ID);
+		expect(snapshot).not.toContain("gen_stt_1");
 	});
 });
 
@@ -647,15 +659,26 @@ describe("OpenRouterSttAdapter lifecycle guards", () => {
 	test("opens after retryable failures and permits one successful half-open probe", async () => {
 		let now = 0;
 		let fetches = 0;
+		let stateAtProbeFetch: string | undefined;
+		const circuitStates: string[] = [];
+		const metrics = new ObservabilityMetrics({
+			monotonicNow: () => now,
+			wallNow: () => new Date("2026-07-31T00:00:00.000Z"),
+		});
 		const adapter = new OpenRouterSttAdapter({
 			config: config({
 				maxRetries: 0,
 				circuitFailureThreshold: 1,
 				circuitCooldownMs: 10,
 			}),
-			now: () => now,
+			monotonicNow: () => now,
+			circuitTelemetry: (state) => {
+				circuitStates.push(state);
+				metrics.recordCircuitState("stt", state);
+			},
 			fetch: async () => {
 				fetches += 1;
+				if (fetches === 2) stateAtProbeFetch = circuitStates.at(-1);
 				return fetches === 1
 					? new Response("upstream", { status: 503 })
 					: transcriptResponse();
@@ -669,10 +692,29 @@ describe("OpenRouterSttAdapter lifecycle guards", () => {
 		expect(openError.code).toBe("STT_CIRCUIT_OPEN");
 		expect(fetches).toBe(1);
 		now = 11;
+		let provider = (
+			metrics.snapshot() as {
+				providers: Record<string, Record<string, unknown>>;
+			}
+		).providers.openrouterStt;
+		expect(provider).toMatchObject({
+			currentCircuitState: "open",
+			circuitTransitions: { closed: 1, open: 1, "half-open": 0 },
+		});
 		await expect(
 			adapter.transcribe(request({ turnId: "01J00000000000000000000003" })),
 		).resolves.toMatchObject({ final: true });
 		expect(await adapter.health()).toBe("ready");
+		expect(stateAtProbeFetch).toBe("half-open");
+		provider = (
+			metrics.snapshot() as {
+				providers: Record<string, Record<string, unknown>>;
+			}
+		).providers.openrouterStt;
+		expect(provider).toMatchObject({
+			currentCircuitState: "closed",
+			circuitTransitions: { closed: 2, open: 1, "half-open": 1 },
+		});
 	});
 
 	test("readiness is unavailable without the shared key", async () => {

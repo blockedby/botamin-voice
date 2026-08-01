@@ -8,6 +8,7 @@ import {
 	type IdFactory,
 } from "../domain/booking/support";
 import { safeOperationalError } from "../domain/privacy/redaction";
+import type { ObservabilityMetrics } from "../observability";
 import type { NamedLeadNotifier } from "./notifier";
 
 export interface OutboxDeliveryResult {
@@ -26,12 +27,14 @@ export interface NotificationOutboxWorkerOptions {
 	now?: Clock;
 	leaseMs?: number;
 	claimTokenFactory?: IdFactory;
+	metrics?: ObservabilityMetrics;
 }
 
 export class NotificationOutboxWorker {
 	private readonly now: Clock;
 	private readonly leaseMs: number;
 	private readonly claimTokenFactory: IdFactory;
+	private readonly metrics: ObservabilityMetrics | undefined;
 
 	constructor(
 		private readonly database: DomainDatabase,
@@ -41,6 +44,7 @@ export class NotificationOutboxWorker {
 		this.now = options.now ?? (() => new Date());
 		this.leaseMs = options.leaseMs ?? 30_000;
 		this.claimTokenFactory = options.claimTokenFactory ?? createEntityId;
+		this.metrics = options.metrics;
 	}
 
 	async processEvent(eventId: string): Promise<OutboxDeliveryResult> {
@@ -70,7 +74,9 @@ export class NotificationOutboxWorker {
 				 WHERE id = ? AND claim_token = ? AND status = 'pending'`,
 				[this.now().toISOString(), claimed.id, claimed.claimToken],
 			);
-			return { eventId, delivered: completion.changes === 1 };
+			const delivered = completion.changes === 1;
+			this.metrics?.recordNotification(delivered ? "sent" : "claim_lost");
+			return { eventId, delivered };
 		} catch (error) {
 			const retryDelayMs = Math.min(
 				60_000,
@@ -87,9 +93,9 @@ export class NotificationOutboxWorker {
 					claimed.claimToken,
 				],
 			);
-			if (failure.changes !== 1) {
-				return { eventId, delivered: false };
-			}
+			this.metrics?.recordNotification(
+				failure.changes === 1 ? "failed" : "claim_lost",
+			);
 			return { eventId, delivered: false };
 		}
 	}

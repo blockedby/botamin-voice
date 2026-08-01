@@ -12,6 +12,7 @@ import {
 	type ServerWsEvent,
 	ServerWsEventSchema,
 } from "@botamin/contracts";
+import type { ObservabilityMetrics } from "../observability";
 import type {
 	ConversationOrchestrator,
 	OrchestratorEvent,
@@ -79,6 +80,7 @@ export interface GatewaySessionOptions {
 	idFactory?: () => string;
 	tokenFactory?: () => string;
 	now?: () => Date;
+	metrics?: ObservabilityMetrics;
 }
 
 type HistoryRecord =
@@ -108,6 +110,7 @@ export class GatewaySession {
 	readonly #acquireTurn: GatewaySessionOptions["acquireTurn"];
 	readonly #idFactory: () => string;
 	readonly #now: () => Date;
+	readonly #metrics: ObservabilityMetrics | undefined;
 	readonly #assemblerLimits: {
 		maxUtteranceMs: number;
 		maxAudioBytes: number;
@@ -162,6 +165,7 @@ export class GatewaySession {
 		this.#acquireTurn = options.acquireTurn;
 		this.#idFactory = options.idFactory ?? (() => Bun.randomUUIDv7());
 		this.#now = options.now ?? (() => new Date());
+		this.#metrics = options.metrics;
 		const initialToken =
 			options.tokenFactory?.() ?? randomBytes(32).toString("base64url");
 		this.#initialClientToken = initialToken;
@@ -469,6 +473,7 @@ export class GatewaySession {
 		this.#assembler = null;
 		const queueController = new AbortController();
 		const queuedId = this.#idFactory();
+		this.#metrics?.markAudioCommit(queuedId);
 		this.#queuedTurnControllers.set(queuedId, queueController);
 		let admission: Awaited<ReturnType<GatewaySessionOptions["acquireTurn"]>>;
 		try {
@@ -477,12 +482,14 @@ export class GatewaySession {
 				signal: queueController.signal,
 			});
 		} catch {
+			this.#metrics?.finishCorrelation(queuedId);
 			if (!this.#stopped) this.#sendSafeError("CAPACITY_EXCEEDED", true);
 			return;
 		} finally {
 			this.#queuedTurnControllers.delete(queuedId);
 		}
 		if (!admission.ok) {
+			this.#metrics?.finishCorrelation(queuedId);
 			if (
 				!this.#stopped &&
 				(admission.reason === "overflow" || admission.reason === "timeout")
@@ -494,6 +501,7 @@ export class GatewaySession {
 		const release = admission.release;
 		if (this.#stopped || this.isExpired()) {
 			release();
+			this.#metrics?.finishCorrelation(queuedId);
 			return;
 		}
 		const turnId = queuedId;
@@ -545,6 +553,7 @@ export class GatewaySession {
 			} finally {
 				// A persistence failure must never leak the global brain permit.
 				release();
+				this.#metrics?.finishCorrelation(turnId);
 			}
 		}
 	}

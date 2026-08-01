@@ -197,6 +197,9 @@ docker compose run --rm -e AUTO_MIGRATE=false app codex --version
 docker compose run --rm -e AUTO_MIGRATE=false app id
 docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js permissions
 docker compose exec -T app bun /app/ops/db.js integrity
+# Loopback-only safe aggregate snapshot; public/Caddy requests are denied.
+docker compose exec -T app bun -e \
+  "const r=await fetch('http://127.0.0.1:3000/metrics');if(!r.ok)process.exit(1);console.log(await r.text())"
 scripts/assert-image-content.sh "${APP_IMAGE:-botamin-voice:local}"
 docker compose logs --tail=100 app caddy
 ```

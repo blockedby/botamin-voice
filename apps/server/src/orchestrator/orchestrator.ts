@@ -11,6 +11,7 @@ import type {
 	TtsPort,
 } from "@botamin/contracts";
 import { TtsAudioSegmentSchema } from "@botamin/contracts";
+import type { ObservabilityMetrics } from "../observability";
 import { buildBrainContext } from "./context";
 import { GenerationCoordinator } from "./generation";
 import {
@@ -106,6 +107,7 @@ export interface ConversationOrchestratorOptions {
 	speechChunker?: SpeechChunkerOptions;
 	speechBudgets?: SpeechBudgetOptions;
 	createId?: () => string;
+	metrics?: ObservabilityMetrics;
 }
 
 export interface AudioCommitInput {
@@ -262,6 +264,7 @@ export class ConversationOrchestrator {
 	readonly #prefetch = new SpeechPrefetchCoordinator();
 	readonly #chunkerOptions: SpeechChunkerOptions;
 	readonly #createId: () => string;
+	readonly #metrics: ObservabilityMetrics | undefined;
 	readonly #pendingDynamicEvents = new Map<string, OrchestratorEvent[]>();
 	readonly #deferredDomainEvents: Array<
 		Extract<
@@ -301,6 +304,7 @@ export class ConversationOrchestrator {
 		this.#chunkerOptions = options.speechChunker ?? {};
 		this.#budgets = new SpeechBudgetGuard(options.speechBudgets);
 		this.#createId = options.createId ?? (() => Bun.randomUUIDv7());
+		this.#metrics = options.metrics;
 		if (this.#state.stage === "DISCONNECTED") this.#sttTurns.suspend();
 		else if (isTerminalStage(this.#state.stage)) this.#sttTurns.close();
 	}
@@ -406,6 +410,7 @@ export class ConversationOrchestrator {
 		}
 		let final: SttTranscriptionResult;
 		try {
+			this.#metrics?.markSttRequest(input.turnId);
 			final = await this.#stt.transcribe({
 				conversationId: this.conversationId,
 				turnId: input.turnId,
@@ -441,6 +446,7 @@ export class ConversationOrchestrator {
 			return;
 		}
 		const userText = final.text.trim();
+		this.#metrics?.markFinalTranscript(input.turnId);
 		this.#sttTurns.finish(accepted.turn);
 		const negativeIntent = classifyConservativeNegativeIntent(
 			userText,
@@ -627,6 +633,10 @@ export class ConversationOrchestrator {
 						source: "brain",
 					};
 					continue;
+				}
+
+				if (delta.type === "speech.delta") {
+					this.#metrics?.markFirstLlmDelta(input.turnId);
 				}
 
 				for (const event of this.#takeDynamicEvents(input.generationId)) {
@@ -924,10 +934,27 @@ export class ConversationOrchestrator {
 				publishable: false,
 			};
 		}
-		const execution = await this.#tools.execute(
-			this.#state,
-			this.conversationId,
-			request,
+		let execution: SafeToolExecution;
+		try {
+			execution = await this.#tools.execute(
+				this.#state,
+				this.conversationId,
+				request,
+			);
+		} catch (error) {
+			this.#metrics?.recordBooking(
+				request.name === "create_booking" ? "create" : "update",
+				"failure",
+			);
+			throw error;
+		}
+		this.#metrics?.recordBooking(
+			request.name === "create_booking" ? "create" : "update",
+			execution.ok
+				? execution.value.replayedCall
+					? "replay"
+					: "success"
+				: "failure",
 		);
 		const stillCurrent =
 			this.#canProcessTurns() && this.#generations.accept(generationId, turnId);
@@ -1150,6 +1177,13 @@ export class ConversationOrchestrator {
 			};
 			return { visibleText: visible, audioProduced: false };
 		}
+		const ttsStartedAt = this.#metrics?.markTtsRequest();
+		let ttsSettled = false;
+		const settleTts = (outcome: "success" | "failure" | "stale"): void => {
+			if (ttsSettled || ttsStartedAt === undefined) return;
+			ttsSettled = true;
+			this.#metrics?.recordTtsCompletion(ttsStartedAt, outcome);
+		};
 		try {
 			const result = TtsAudioSegmentSchema.parse(
 				await this.#tts.synthesize({
@@ -1166,6 +1200,7 @@ export class ConversationOrchestrator {
 				result.generationId !== turn.generationId ||
 				result.segmentId !== segmentId
 			) {
+				settleTts("stale");
 				yield {
 					type: "ignored",
 					generationId: result.generationId,
@@ -1175,8 +1210,13 @@ export class ConversationOrchestrator {
 			}
 			const sequence = this.#generations.nextAudioSeq(turn.generationId);
 			if (sequence === null) {
+				settleTts("stale");
 				return { visibleText: visible, audioProduced: false };
 			}
+			// Settlement belongs to the synth promise, not to downstream generator
+			// consumption. Record it before playback-ready publication can yield.
+			settleTts("success");
+			this.#metrics?.markFirstPlaybackReady(turn.turnId);
 			yield {
 				type: "audio.segment",
 				generationId: result.generationId,
@@ -1188,7 +1228,9 @@ export class ConversationOrchestrator {
 			};
 			return { visibleText: visible, audioProduced: true };
 		} catch {
-			if (this.#generations.accept(turn.generationId, turn.turnId)) {
+			const current = this.#generations.accept(turn.generationId, turn.turnId);
+			settleTts(current ? "failure" : "stale");
+			if (current) {
 				yield {
 					type: "degraded",
 					generationId: turn.generationId,
@@ -1199,6 +1241,13 @@ export class ConversationOrchestrator {
 			}
 			return { visibleText: visible, audioProduced: false };
 		} finally {
+			// Covers unexpected synchronous failures before the explicit settlement
+			// sites while remaining idempotent after any yielded event.
+			settleTts(
+				this.#generations.accept(turn.generationId, turn.turnId)
+					? "failure"
+					: "stale",
+			);
 			this.#prefetch.finish(segmentId);
 		}
 	}

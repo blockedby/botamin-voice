@@ -380,7 +380,7 @@ describe("deterministic retry, timeout, abort, stale and circuit behavior", () =
 				},
 			}),
 			fetch: fixture.fetch,
-			now: () => now,
+			monotonicNow: () => now,
 		});
 		await expect(adapter.synthesize(ttsRequest())).rejects.toMatchObject({
 			code: "TTS_PROVIDER_UPSTREAM",

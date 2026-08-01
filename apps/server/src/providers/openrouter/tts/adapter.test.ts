@@ -4,6 +4,7 @@ import {
 	createDeterministicMp3Fixture,
 	createMalformedMp3Fixture,
 } from "../../../../../../packages/test-fixtures/src/mp3";
+import { ObservabilityMetrics } from "../../../observability";
 import {
 	loadOpenRouterVoiceConfig,
 	type OpenRouterVoiceConfig,
@@ -186,8 +187,12 @@ describe("OpenRouterTtsAdapter protocol", () => {
 			format: "mp3",
 			status: 200,
 			bytes: mp3.byteLength,
-			providerRequestId: "req_tts_1",
 		});
+		expect(snapshot).not.toContain(CONVERSATION_ID);
+		expect(snapshot).not.toContain(TURN_ID);
+		expect(snapshot).not.toContain(GENERATION_ID);
+		expect(snapshot).not.toContain(SEGMENT_ID);
+		expect(snapshot).not.toContain("req_tts_1");
 	});
 });
 
@@ -454,21 +459,30 @@ describe("OpenRouterTtsAdapter lifecycle, budgets and readiness", () => {
 		await expect(first).rejects.toMatchObject({ name: "AbortError" });
 	});
 
-	test("opens, degrades to text-only, half-opens after cooldown and closes on success", async () => {
+	test("opens, half-opens after cooldown and counts a failed probe reopening", async () => {
 		let now = 0;
 		let fetches = 0;
+		let stateAtProbeFetch: string | undefined;
+		const circuitStates: string[] = [];
+		const metrics = new ObservabilityMetrics({
+			monotonicNow: () => now,
+			wallNow: () => new Date("2026-07-31T00:00:00.000Z"),
+		});
 		const adapter = new OpenRouterTtsAdapter({
 			config: config({
 				maxRetries: 0,
 				circuitFailureThreshold: 1,
 				circuitCooldownMs: 10,
 			}),
-			now: () => now,
+			monotonicNow: () => now,
+			circuitTelemetry: (state) => {
+				circuitStates.push(state);
+				metrics.recordCircuitState("tts", state);
+			},
 			fetch: async () => {
 				fetches += 1;
-				return fetches === 1
-					? new Response("upstream", { status: 503 })
-					: mp3Response();
+				if (fetches === 2) stateAtProbeFetch = circuitStates.at(-1);
+				return new Response("upstream", { status: 503 });
 			},
 		});
 		await captureError(adapter.synthesize(request()));
@@ -487,13 +501,34 @@ describe("OpenRouterTtsAdapter lifecycle, budgets and readiness", () => {
 		});
 		expect(fetches).toBe(1);
 		now = 11;
-		await adapter.synthesize(
-			request({
-				generationId: "01J0000000000000000000000B",
-				segmentId: "01J0000000000000000000000C",
-			}),
+		let provider = (
+			metrics.snapshot() as {
+				providers: Record<string, Record<string, unknown>>;
+			}
+		).providers.openrouterTts;
+		expect(provider).toMatchObject({
+			currentCircuitState: "open",
+			circuitTransitions: { closed: 1, open: 1, "half-open": 0 },
+		});
+		await captureError(
+			adapter.synthesize(
+				request({
+					generationId: "01J0000000000000000000000B",
+					segmentId: "01J0000000000000000000000C",
+				}),
+			),
 		);
-		expect(await adapter.health()).toBe("ready");
+		expect(await adapter.health()).toBe("degraded");
+		expect(stateAtProbeFetch).toBe("half-open");
+		provider = (
+			metrics.snapshot() as {
+				providers: Record<string, Record<string, unknown>>;
+			}
+		).providers.openrouterTts;
+		expect(provider).toMatchObject({
+			currentCircuitState: "open",
+			circuitTransitions: { closed: 1, open: 2, "half-open": 1 },
+		});
 	});
 
 	test("401/402/404 immediately open degraded mode and missing key is unavailable", async () => {

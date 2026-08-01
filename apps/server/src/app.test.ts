@@ -7,6 +7,7 @@ import {
 	StopConversationResponseSchema,
 } from "@botamin/contracts";
 import { bunRequestBodyHardLimit, createServerApp } from "./app";
+import { ObservabilityMetrics } from "./observability";
 import type { RuntimeConfig } from "./runtime/config";
 import type { RuntimeGatewaySession, ServerRuntime } from "./runtime/runtime";
 
@@ -29,6 +30,10 @@ function runtime(
 				historyBytes: 5_000_000,
 			},
 		} as RuntimeConfig,
+		metrics: new ObservabilityMetrics({
+			monotonicNow: () => 0,
+			wallNow: () => new Date("2026-07-31T00:00:00.000Z"),
+		}),
 		registry: {
 			create: () => {
 				if (options.capacity === false) return null;
@@ -84,6 +89,31 @@ describe("production server REST contracts", () => {
 		expect(ReadyHealthResponseSchema.parse(await ready.json()).status).toBe(
 			"ready",
 		);
+	});
+
+	test("serves safe metrics only to a verified loopback peer", async () => {
+		const app = createServerApp(runtime());
+		const local = await app.fetch(
+			new Request("http://public.example/metrics"),
+			{
+				remoteAddress: "127.0.0.2",
+			},
+		);
+		expect(local.status).toBe(200);
+		expect(await local.json()).toMatchObject({
+			schemaVersion: 1,
+			retention: { activeCorrelations: 0 },
+		});
+
+		for (const remoteAddress of [undefined, "203.0.113.9", "172.20.0.3"]) {
+			const denied = await app.fetch(
+				new Request("http://localhost/metrics", {
+					headers: { "x-forwarded-for": "127.0.0.1" },
+				}),
+				remoteAddress === undefined ? {} : { remoteAddress },
+			);
+			expect(denied.status).toBe(403);
+		}
 	});
 
 	test("requires both consents and returns only a safe structured error", async () => {

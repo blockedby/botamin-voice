@@ -69,6 +69,13 @@ export function createServerApp(runtime: ServerRuntime): Hono<ServerAppEnv> {
 		return context.json(response, response.status === "ready" ? 200 : 503);
 	});
 
+	app.get("/metrics", (context) => {
+		if (!isLoopbackAddress(context.env?.remoteAddress) || !runtime.metrics) {
+			return apiError(context, 403, "INVALID_EVENT", false);
+		}
+		return context.json(runtime.metrics.snapshot(), 200);
+	});
+
 	app.post("/api/v1/conversations", async (context) => {
 		if (!validRequiredOrigin(context, runtime.config.appOrigin)) {
 			return apiError(context, 403, "INVALID_EVENT", false);
@@ -264,6 +271,21 @@ async function normalizeWsData(
 		return new Uint8Array(await value.arrayBuffer());
 	}
 	return null;
+}
+
+function isLoopbackAddress(value: string | undefined): boolean {
+	if (value === undefined) return false;
+	const normalized = value.toLowerCase().replace(/^\[|\]$/g, "");
+	if (normalized === "::1") return true;
+	const ipv4 = normalized.startsWith("::ffff:")
+		? normalized.slice("::ffff:".length)
+		: normalized;
+	const octets = ipv4.split(".");
+	return (
+		octets.length === 4 &&
+		octets[0] === "127" &&
+		octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)
+	);
 }
 
 function validRequiredOrigin(

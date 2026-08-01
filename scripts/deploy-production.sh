@@ -21,8 +21,23 @@ if [ "$app_origin" != "https://$site_address" ]; then
   exit 1
 fi
 
+bun scripts/materialize-compose-secrets.ts
+compose_secret_dir="$(pwd -P)/.runtime/secrets"
+export OPENROUTER_API_KEY_FILE="$compose_secret_dir/openrouter_api_key"
+export WEBHOOK_URL_FILE="$compose_secret_dir/webhook_url"
+export WEBHOOK_SIGNING_SECRET_FILE="$compose_secret_dir/webhook_signing_secret"
+
 config_file="$(mktemp)"
-trap 'rm -f "$config_file"' EXIT HUP INT TERM
+cleanup() {
+  rm -f "$config_file"
+}
+interrupted() {
+  cleanup
+  trap - EXIT HUP INT TERM
+  exit 130
+}
+trap cleanup EXIT
+trap interrupted HUP INT TERM
 docker compose config > "$config_file"
 if grep -Eq 'Bearer [A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{12,}' "$config_file"; then
   printf '%s\n' "Refusing deploy: rendered Compose config appears to contain a credential." >&2
@@ -37,7 +52,10 @@ if ! docker compose run --rm -e AUTO_MIGRATE=false app codex login status >/dev/
 fi
 
 docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate
-docker compose up -d
+# Always remount newly materialized/rotated files in app. Existing Caddy is not
+# force-recreated; Compose starts or updates it only when its own state requires it.
+docker compose up -d --no-deps --force-recreate app
+docker compose up -d caddy
 
 if ! READY_MAX_ATTEMPTS=60 READY_INTERVAL_SECONDS=2 \
   scripts/wait-ready.sh "https://$site_address/health/ready"; then

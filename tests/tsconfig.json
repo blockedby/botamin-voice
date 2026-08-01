@@ -18,6 +18,7 @@
 		"../apps/web/src/transport/**/*.ts",
 		"../apps/web/src/components/voiceTypes.ts",
 		"../packages/contracts/src/**/*.ts",
-		"../packages/test-fixtures/src/**/*.ts"
+		"../packages/test-fixtures/src/**/*.ts",
+		"../scripts/materialize-compose-secrets.ts"
 	]
 }

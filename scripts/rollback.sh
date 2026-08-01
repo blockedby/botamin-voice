@@ -3,6 +3,9 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+compose_secret_operation=rollback
+. scripts/compose-secret-files.sh
+
 image="${1:-}"
 backup="${2:-}"
 if [ -z "$image" ]; then

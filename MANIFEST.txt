@@ -252,9 +252,11 @@ scripts/build-spec.sh
 scripts/codex-generate-schemas.ts
 scripts/codex-preflight.ts
 scripts/codex-sdk-spike.ts
+scripts/compose-secret-files.sh
 scripts/deploy-local.sh
 scripts/deploy-production.sh
 scripts/device-auth.sh
+scripts/materialize-compose-secrets.ts
 scripts/observability-report.ts
 scripts/openrouter-stt-smoke.ts
 scripts/openrouter-tts-smoke.ts
@@ -262,6 +264,7 @@ scripts/restore.sh
 scripts/rollback.sh
 scripts/run-openrouter-smoke.sh
 scripts/run-pandoc.sh
+scripts/test-compose-file-secrets.sh
 scripts/update-release-artifacts.py
 scripts/validate-spec.py
 scripts/wait-ready.sh
@@ -293,10 +296,13 @@ tasks/tasks.yaml
 technical-spec.html
 tests/contracts/T30_REPLACE_reference_gateway_assembler.test.ts
 tests/contracts/external-smoke-gating.test.ts
+tests/contracts/materialize-compose-secrets.test.ts
 tests/contracts/openrouter-cross-component.test.ts
 tests/contracts/openrouter-provider-harness.test.ts
 tests/contracts/typecheck-negative-control.ts
 tests/contracts/voice-data-leakage.test.ts
+tests/fixtures/compose-dotenv.env
+tests/fixtures/compose-dotenv.yml
 tests/fixtures/reference-gateway-utterance-assembler.ts
 tests/security/failure-drills.test.ts
 tests/security/leakage-and-bundle.test.ts

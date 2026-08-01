@@ -19,30 +19,36 @@ before migration or liveness. That brain directory contains only `AGENTS.md`.
 
 ## First local start (HTTP, no domain)
 
-OpenRouter is intentionally blank locally, so startup reports degraded voice:
-STT returns a retry/error without substituting typed input and TTS may use its
-configured text-only output fallback. Local startup does not spend paid usage.
-`CODEX_TOOL_MODE=envelope` is the safe default because environment-only app
-wiring cannot inject the awaited backend executor required by A3 dynamic mode.
-A later orchestrator may explicitly select `dynamic` only when it supplies that
-executor.
+The deployment wrappers require a nonblank OpenRouter key. Raw unconfigured
+`docker compose config` remains valid because every secret source defaults to
+`/dev/null`; a raw start is intentionally degraded and `/health/ready` stays
+unready rather than receiving a hidden credential. `CODEX_TOOL_MODE=envelope`
+is the safe default because environment-only app wiring cannot inject the
+awaited backend executor required by A3 dynamic mode.
 
 ```bash
 cp .env.example .env
 chmod 600 .env
+# Fill OPENROUTER_API_KEY without sourcing .env.
 ./scripts/deploy-local.sh
-curl -fsS http://localhost:5173/health/live
+curl -fsS http://localhost:5173/health/ready
 ```
 
 Equivalent explicit commands are:
 
 ```bash
+bun scripts/materialize-compose-secrets.ts
+secret_dir="$(pwd -P)/.runtime/secrets"
+export OPENROUTER_API_KEY_FILE="$secret_dir/openrouter_api_key"
+export WEBHOOK_URL_FILE="$secret_dir/webhook_url"
+export WEBHOOK_SIGNING_SECRET_FILE="$secret_dir/webhook_signing_secret"
 docker compose config >/tmp/botamin-compose-config.yml
 docker compose build --pull
 docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate
-docker compose up -d
+docker compose up -d --no-deps --force-recreate app
+docker compose up -d caddy
 docker compose ps
-curl -fsS http://localhost:5173/health/live
+curl -fsS http://localhost:5173/health/ready
 ```
 
 Caddy proxies WebSocket upgrades automatically. `docker compose down` preserves
@@ -51,30 +57,33 @@ Codex auth.
 
 ### Current integration boundary
 
-At this branch point the server exposes `/health/live`, but does not yet expose
-`/health/ready`, static frontend routes, the application WebSocket, Codex
-preflight, or the A2-owned `scripts/openrouter-stt-smoke.ts` and
-`scripts/openrouter-tts-smoke.ts`. The Docker build copies repository scripts
-and conditionally bundles either provider smoke entrypoint when its source is
-present. `scripts/assert-image-content.sh` proves required runtime files are in
-the image and compares provider-smoke presence with the checkout. Until A2
-lands, `/app/scripts/run-openrouter-smoke.sh stt|tts` fails explicitly with a
-missing-integration error; it cannot return false success or raw `ENOENT`.
-Production readiness and paid smokes must fail rather than be simulated until
-their integration routes/scripts land.
+The server exposes distinct `/health/live` and dependency-aware `/health/ready`
+routes. The Docker build copies repository scripts and conditionally bundles
+provider smoke entrypoints when their sources are present.
+`scripts/assert-image-content.sh` proves required runtime files are in the image
+and compares provider-smoke presence with the checkout. A missing paid-smoke
+integration fails explicitly; it cannot return false success or raw `ENOENT`.
 
 ## Secrets and Codex device auth
 
-`.env` supplies secret values to Compose's runtime `secrets.environment`
-mechanism. Compose mounts files under `/run/secrets`; the non-root entrypoint
-exports them only into the app process. They are not Docker build arguments,
-image layers, or rendered service environment values.
+`scripts/materialize-compose-secrets.ts` parses `.env` as dotenv data (never as
+shell), requires a nonblank OpenRouter key by default, rejects linked/unsafe
+paths, and atomically writes the three persistent sources under
+`.runtime/secrets` with directory mode `0700` and file mode `0600`. Compose
+mounts those files under `/run/secrets`; after every materialization the
+deployment wrappers force-recreate only `app`, then start or update Caddy only
+if needed and require readiness. The non-root entrypoint exports values only
+into the app process. Values are not build arguments, image layers, rendered
+service environment, or script output. Deployment wrappers export all three
+`*_FILE` paths for every Compose command and do not delete these files.
+For later manual Compose commands, export the same paths shown in the explicit
+local commands above; never `source .env` (dotenv values may contain spaces).
 
 ```bash
-# Interactive and persisted in the fixed codex-home volume:
+# Interactive and persisted in the fixed codex-home volume; provider key may be blank:
 ./scripts/device-auth.sh
 
-# Non-interactive status check:
+# Non-interactive status check after exporting the three *_FILE paths:
 docker compose run --rm -e AUTO_MIGRATE=false app codex login status
 ```
 
@@ -83,12 +92,15 @@ survives app replacement and Compose project renaming. Treat `auth.json` as a pa
 not include it in ordinary backups. A production host should also encrypt the
 underlying disk/snapshot and restrict Docker access.
 
-To prove config rendering does not reveal a test token:
+The focused Bun tests prove Compose-compatible dotenv parsing, permissions,
+symlink and blank-key policy, output redaction, wrapper ordering, and rendered
+file sources. The engine smoke atomically rotates a source inode/value and
+proves wrapper-style app recreation remounts it in a disposable `read_only`
+service without logging either value:
 
 ```bash
-OPENROUTER_API_KEY=sentinel-openrouter-value \
-  docker compose --env-file .env.example config >/tmp/compose.yml
-! grep -F sentinel-openrouter-value /tmp/compose.yml
+bun test tests/contracts/materialize-compose-secrets.test.ts
+./scripts/test-compose-file-secrets.sh
 ```
 
 ## Production HTTPS/WSS (later VPS phase)
@@ -102,8 +114,9 @@ APP_ORIGIN=https://voice.example.com
 OPENROUTER_HTTP_REFERER=https://voice.example.com
 ```
 
-Fill the one backend-only `OPENROUTER_API_KEY`, then export operational Compose
-controls (they are intentionally not application env) and deploy:
+Fill the one backend-only `OPENROUTER_API_KEY` in mode-`0600` `.env`, then
+export operational Compose controls (they are intentionally not application
+env) and deploy. The deployment script materializes and exports file sources:
 
 ```bash
 export SITE_ADDRESS=voice.example.com
@@ -157,7 +170,9 @@ docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate
 ```
 
 Backups use SQLite `VACUUM INTO`, not a raw copy of a live DB/WAL, and write a
-mode-`0600` `<backup>.sha256` sidecar bound to the backup basename:
+mode-`0600` `<backup>.sha256` sidecar bound to the backup basename. Backup,
+restore, and rollback require the persistent `.runtime/secrets` files created
+by a successful deployment; their wrappers validate and export those sources:
 
 ```bash
 ./scripts/backup.sh

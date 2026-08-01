@@ -3,6 +3,9 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+compose_secret_operation=backup
+. scripts/compose-secret-files.sh
+
 destination="${1:-}"
 if [ -n "$destination" ]; then
   case "$destination" in

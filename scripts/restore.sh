@@ -3,6 +3,9 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+compose_secret_operation=restore
+. scripts/compose-secret-files.sh
+
 backup="${1:-}"
 case "$backup" in
   /data/backups/*.db) ;;

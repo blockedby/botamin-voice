@@ -12,7 +12,7 @@
 		"format:check": "biome format package.json tsconfig.json tsconfig.base.json apps/*/package.json apps/*/tsconfig.json apps/web/index.html apps/web/vite.config.ts apps/*/src packages/*/package.json packages/*/tsconfig*.json packages/*/src packages/*/test*",
 		"lint": "biome lint package.json tsconfig.json tsconfig.base.json apps/*/package.json apps/*/tsconfig.json apps/web/index.html apps/web/vite.config.ts apps/*/src packages/*/package.json packages/*/tsconfig*.json packages/*/src packages/*/test*",
 		"lint:format": "biome check package.json tsconfig.json tsconfig.base.json apps/*/package.json apps/*/tsconfig.json apps/web/index.html apps/web/vite.config.ts apps/*/src packages/*/package.json packages/*/tsconfig*.json packages/*/src packages/*/test*",
-		"test": "bun test",
+		"test": "bun test --path-ignore-patterns '**/dist/**'",
 		"typecheck": "tsc -b --pretty false && bun run --filter '*' typecheck"
 	},
 	"devDependencies": {

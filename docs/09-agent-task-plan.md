@@ -35,7 +35,7 @@
 
 Definition of Done:
 
-- `bun install`, `bun run typecheck`, `bun test` работают;
+- `bun install`, `bun run typecheck`, `bun run test` работают;
 - contracts не импортируют server/browser-specific code;
 - `BrainPort`, atomic final-transcription `SttPort`, complete-segment `TtsPort`, booking schemas и WS event union существуют;
 - fake adapters позволяют собрать skeleton E2E;
@@ -227,18 +227,19 @@ DoD:
 
 ## 7. Волна 4 — release
 
-### T40 — Release candidate
+### T40 — Local release candidate
 
 **Владелец:** A0 или release integrator  
 **Зависимости:** T31, T32.
 
-- all gates green;
-- compose clean deploy;
+**Current label:** `0.5.0-local-rc.1`.
+
+- local P0 gates green on the integrated PR #21 baseline;
+- `scripts/deploy-local.sh` observed ready at `http://localhost:5173` with file-backed secrets;
 - active docs/tasks/env/agent packets/diagrams/charts/sources contain no stale second voice provider, credential/path or provider-streaming STT instruction and match code;
-- known limitations;
-- redacted demo payloads;
-- rollback instructions;
-- tag/release commit.
+- local evidence, known limitations, recovery instructions, and explicit later gates attached;
+- release commit prepared without creating or pushing a Git tag;
+- WebKit and target VPS/DNS/TLS/WSS remain later gates and are not claimed by the local RC.
 
 ## 8. Merge gates
 
@@ -261,11 +262,11 @@ T20 merge после прохождения invariant suite. Не ждать р�
 
 ### Gate G3 — External smoke
 
-Реальные OpenRouter/Codex tests проходят на VPS/staging с tagged test command.
+For the local RC, the committed T30 artifact records owner-observed real local OpenRouter/Codex paths. Paid probes are never part of default verification. Target-host paid smokes remain required only for the later VPS release.
 
 ### Gate G4 — RC
 
-Acceptance checklist полностью приложен, critical known issue отсутствует.
+The local checklist and known limitations are attached, with no unresolved critical issue inside local scope. WebKit and target VPS/DNS/TLS/WSS are explicit later blockers, so G4 must not be described as a target-VPS release gate.
 
 ## 9. Как выдавать задания агентам
 

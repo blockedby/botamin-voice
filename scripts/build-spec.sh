@@ -42,7 +42,12 @@ for file in "$ROOT"/docs/*.md "$ROOT/sources.md"; do
     -e 's#](../diagrams/#](diagrams/#g' \
     -e 's#](../charts/#](charts/#g' \
     -e 's#](../tasks/#](tasks/#g' \
+    -e 's#](../evidence/#](evidence/#g' \
+    -e 's#](../infra/#](infra/#g' \
+    -e 's#](../docker-compose.yml)#](docker-compose.yml)#g' \
+    -e 's#](../VALIDATION.md)#](VALIDATION.md)#g' \
     -e 's#](10-ai-library-evaluation.md)#](docs/10-ai-library-evaluation.md)#g' \
+    -e 's#](11-local-release-handoff.md)#](docs/11-local-release-handoff.md)#g' \
     "$file" >> "$OUT"
 done
 

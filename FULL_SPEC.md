@@ -63,7 +63,7 @@ MVP должен выглядеть как небольшой реальный �
 - SQLite persistence;
 - console notifier и интерфейс для webhook/push;
 - transcript/event audit;
-- Docker Compose, TLS, health checks, backup;
+- local-first Docker Compose, health checks and backup; VPS TLS/WSS is a later deployment gate;
 - тесты контрактов, компонентов, E2E и conversation evals.
 
 ## 4. Вне scope
@@ -97,7 +97,7 @@ MVP должен выглядеть как небольшой реальный �
 | Notifications | console обязательно; webhook — адаптер |
 | Calendar | отсутствует |
 | Prompts | Markdown в Git |
-| Deployment | один Compose project на одной VPS; только app + Caddy в P0 application path |
+| Deployment | local-first Compose project on one trusted machine; app + Caddy only. One target VPS with TLS/WSS is the later production-shaped gate |
 | Raw audio retention | выключено |
 | Qualification | включаемая опция, только после booking |
 
@@ -171,7 +171,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 | US-009 | Я могу отказаться от квалификации | бронь остаётся `booked`, диалог корректно завершается |
 | US-010 | Получатель видит данные | console/webhook получает структурированный payload |
 | US-011 | Сервис перезапускается | сохранённые booking/event данные остаются в volume |
-| US-012 | Проект разворачивается на VPS | `docker compose up -d` поднимает готовый сервис |
+| US-012 | Проект сначала разворачивается локально | `scripts/deploy-local.sh` поднимает готовые app + Caddy на `http://localhost:5173`; target VPS/TLS проверяется отдельным later gate |
 
 ## 4. Functional requirements
 
@@ -261,7 +261,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 | NFR-SEC-002 | raw credentials в клиентском bundle/logs | 0 |
 | NFR-PRIV-001 | raw audio storage | off by default |
 | NFR-OBS-001 | traceability | `conversationId`, `turnId`, `bookingId` во всех событиях |
-| NFR-OPS-001 | deployment | один compose project |
+| NFR-OPS-001 | deployment | один local-first Compose project; target VPS/TLS evidence later |
 | NFR-OPS-002 | backup | ежедневная копия SQLite + restore check |
 | NFR-COMP-001 | browser | актуальные Chrome, Edge, Safari; Firefox best effort |
 | NFR-A11Y-001 | keyboard/control labels | WCAG-oriented базовый уровень |
@@ -301,6 +301,10 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - доля диалогов с manual review flag.
 
 Метрики качества продаж нельзя интерпретировать без объёма трафика и human review выборки.
+
+## 9. Release sequencing boundary
+
+`0.5.0-local-rc.1` is accepted only for local hosting on a trusted owner machine. Chrome desktop/mobile and local Compose evidence can close local gates, but cannot close WebKit, target-VPS resource behavior, DNS, public TLS/WSS, or target-host paid-smoke gates. The internal booking remains deliberately different from a real calendar event.
 
 
 <div class="page-break"></div>
@@ -1736,6 +1740,8 @@ Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` �
 
 ![Deployment](diagrams/05-deployment.svg)
 
+Release `0.5.0-local-rc.1` uses this topology on one trusted local machine at `http://localhost:5173`. A target VPS, DNS, public TLS/WSS and target-host smokes are later gates and are not implied by local readiness.
+
 Один `docker-compose.yml`, ровно два application-path сервиса рекомендуются:
 
 1. `app` — Bun server, React static, Codex app-server child process, SQLite access и native HTTPS `fetch` к OpenRouter.
@@ -1750,35 +1756,9 @@ Persistent volumes:
 
 ## 2. Compose requirements
 
-```yaml
-services:
-  app:
-    build: .
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      - app-data:/data
-      - codex-home:/codex-home
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health/live"]
-      interval: 15s
-      timeout: 3s
-      retries: 5
-    expose: ["3000"]
+The tracked [`../docker-compose.yml`](docker-compose.yml) is the exact runtime contract. It pins app/Caddy inputs, runs the app as non-root with a read-only filesystem, persists SQLite and Codex auth in named volumes, and receives OpenRouter/webhook values only through read-only files under `/run/secrets`.
 
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    ports: ["80:80", "443:443"]
-    volumes:
-      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-    depends_on:
-      app:
-        condition: service_healthy
-```
-
-Это ориентир; финальный compose должен pin-ить image/tool versions.
+Do not use `env_file: .env`, source `.env`, or invoke raw `docker compose up` as the documented bootstrap. `scripts/deploy-local.sh` parses dotenv data, materializes mode-`0600` sources below `.runtime/secrets`, exports the three `*_FILE` paths, builds, migrates, force-recreates app, starts Caddy, and requires readiness. Raw `docker compose config` remains safe with `/dev/null` defaults but does not constitute a configured deploy.
 
 ## 3. Docker image
 
@@ -1793,33 +1773,31 @@ Multi-stage:
 
 Не использовать floating `latest` для Codex в production. Версия CLI фиксируется, потому что app-server schemas version-specific. `OPENROUTER_API_KEY` inject-ится только runtime secret/env и отсутствует в build args, layers, image history и rendered Compose evidence.
 
-## 4. Codex subscription auth на VPS
+## 4. Codex subscription auth on the trusted host
 
 ### Bootstrap
 
-После первого deploy:
+Authenticate before the first local deploy through the supported wrapper:
 
 ```bash
-docker compose run --rm app codex login --device-auth
-docker compose run --rm app codex login status
+./scripts/device-auth.sh
 ```
 
-`CODEX_HOME=/codex-home` должен указывать на persistent volume.
+The wrapper builds the app image, runs interactive device auth, checks login status, and stores the result in the fixed persistent `botamin-codex-home` volume mounted at `/codex-home`. The host-side `CODEX_HOME` value in `.env` applies only to direct Bun operation.
 
-### Preflight
+### Readiness and optional deeper preflight
 
-Deployment script делает:
+`scripts/deploy-local.sh` waits for `/health/ready`. The automatic readiness path verifies the isolated Codex runtime configuration and app-server handshake, ChatGPT account/auth state, requested model/effort availability, the compiled prompt file, SQLite read/write, queue capacity, notifier state, and local STT/TTS configuration and circuit health. It does **not** run `thread/start`, inspect `instructionSources` from a created thread, execute a synthetic turn, wait for a streamed delta, or send `turn/interrupt`. Failed required checks make `/health/ready` return `503` and prevent new voice sessions.
 
-1. `codex login status`;
-2. старт app-server и handshake;
-3. `model/list`, проверка `gpt-5.6-luna`;
-4. `thread/start` в `CODEX_CWD` и проверка `instructionSources` на compiled `AGENTS.md`;
-5. короткий synthetic turn;
-6. проверка `turn/interrupt`;
-7. запись/чтение SQLite;
-8. проверка prompt bundle checksum.
+The standalone `scripts/codex-preflight.ts` is a separate, deeper owner-authorized check that has already been observed historically; it is not called by deployment or readiness. After compiling `AGENTS.md` into an isolated runtime directory, an owner may explicitly run:
 
-Если preflight не прошёл, `/health/ready` возвращает 503 и новые voice sessions не создаются.
+```bash
+CODEX_HOME=/absolute/protected/codex-home \
+CODEX_CWD=/absolute/isolated/runtime-brain \
+bun scripts/codex-preflight.ts
+```
+
+That optional command performs `thread/start`, verifies `instructionSources`, runs a short synthetic Codex turn, observes a streamed delta, and checks `turn/interrupt`; it consumes authorized Codex subscription usage. No deploy, health, or readiness command automatically runs this check, a paid OpenRouter request, or a Codex generation turn.
 
 ### Ограничения subscription mode
 
@@ -2000,36 +1978,30 @@ Source key берётся из direct peer address. Forwarded IP игнорир�
 
 ## 12. Basic runbook
 
-### Deploy
+### Local deploy
 
 ```bash
-git pull
-docker compose build --pull
-docker compose run --rm app bun run db:migrate
-docker compose up -d
-docker compose ps
-curl -fsS https://HOST/health/ready
+cp .env.example .env
+chmod 600 .env
+# Fill the backend-only OPENROUTER_API_KEY without sourcing .env.
+./scripts/device-auth.sh
+./scripts/deploy-local.sh
+curl -fsS http://localhost:5173/health/ready
 ```
+
+The wrapper does not run paid provider smokes. Recovery and observability commands are maintained in [`../infra/README.md`](infra/README.md) and the release checklist in [`11-local-release-handoff.md`](docs/11-local-release-handoff.md).
 
 ### Re-authenticate Codex
 
 ```bash
 docker compose stop app
-docker compose run --rm app codex login --device-auth
-docker compose run --rm app codex login status
-docker compose up -d app
+./scripts/device-auth.sh
+./scripts/deploy-local.sh
 ```
 
 ### OpenRouter deploy smoke
 
-After runtime secrets are installed on the target VPS:
-
-```bash
-docker compose run --rm app bun run scripts/openrouter-stt-smoke.ts
-docker compose run --rm app bun run scripts/openrouter-tts-smoke.ts
-```
-
-Both external paid smokes are deploy/manual-only and excluded from default CI. STT uses a bounded Russian WAV fixture, requires one non-empty final transcript and prints only status/latency/byte counts/safe IDs—not audio or text. TTS writes MP3 outside the repository or to an ignored artifact path and requires `2xx`, `audio/mpeg` and non-empty bytes. Both fail safely for missing key and typed provider/config errors. Neither smoke is claimed by this documentation migration.
+Paid external smokes are manual-only, explicit opt-in, and excluded from default CI. Local owner commands and the target-VPS forms are documented separately in [`11-local-release-handoff.md`](docs/11-local-release-handoff.md) and [`../infra/README.md`](infra/README.md). STT requires one non-empty final transcript from bounded WAV input and emits only safe aggregate evidence; TTS requires `2xx`, compatible `audio/mpeg`, and non-empty bytes. Neither is called by health checks or ordinary deployment.
 
 ### Inspect last booking events
 
@@ -2546,69 +2518,44 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ## 10. Acceptance checklist P0
 
-### Product
+### Local release candidate `0.5.0-local-rc.1`
 
-- [ ] Landing speaks specifically about Botamin.
-- [ ] Primary CTA starts voice flow.
-- [ ] Agent introduces itself as AI.
-- [ ] At least three Botamin use cases are covered.
-- [ ] Clear refusal ends conversation correctly.
+- [x] Integrated implementation baseline contains PRs #6–#21.
+- [x] Fresh deterministic release-commit suite passes 433 tests across 54 files with no failures and 3,788 assertions before and after `bun run build`; command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md).
+- [x] Product landing, CTA/consent, AI identity, Botamin use cases, refusal behavior, booking order/idempotency, safe provider failures, barge-in, prompt loading, envelope mode, and sandbox boundaries have deterministic coverage.
+- [x] Chrome desktop/mobile local acceptance covers landing, consent, permission-denied safe state, no fetch/WebSocket before mic permission, and no horizontal overflow.
+- [x] Owner-observed real local OpenRouter/Luna evidence records one complete turn and a five-turn journey with exactly one booking and one sent outbox event; see [`../evidence/T30-observed-local-voice-smoke-2026-07-31.md`](evidence/T30-observed-local-voice-smoke-2026-07-31.md).
+- [x] `scripts/deploy-local.sh` was observed completing with read-only file secrets, healthy app/Caddy, and all dependency readiness checks ready at `http://localhost:5173`.
+- [x] Compose contains only app and Caddy in the P0 application path; the OpenRouter key stays backend-only, and text-only TTS degradation is environment-configurable without rebuilding.
+- [x] Backup/restore/rollback scripts, permission/checksum/integrity guards, readiness loops, and key-remount ordering pass credential-free deterministic validation and are documented for the owner.
 
-### Voice
+Checked local gates do not imply target-host or cross-browser production acceptance. Local provider observations are not repeated by default checks.
 
-- [ ] Opt-in paid Russian STT smoke returns one final transcript from a bounded, validated WAV.
-- [ ] Voice UI exposes exactly one current `transcript.final` for each accepted utterance.
-- [ ] Chosen OpenRouter voice is understandable in the target-VPS Russian smoke.
-- [ ] Complete `audio/mpeg` phrase segments decode in sequence in Chromium and WebKit.
-- [ ] Barge-in stops old playback, clears queue and drops late segments.
-- [ ] `401`/`402`/`404`, budget and circuit failures preserve text UX and booking.
-- [ ] No TTS retry repeats Luna, notifier or business tools.
+### Later target release gates — not closed by local RC
 
-### Booking
+- [ ] Complete MP3 playback and voice journey accepted in WebKit.
+- [ ] Clean target-VPS deploy accepted under target CPU/RAM/storage/network conditions.
+- [ ] Public DNS and TLS/WSS accepted on the target host.
+- [ ] Explicitly approved target-host Russian STT/TTS smokes accepted with current model/voice/account configuration.
+- [ ] Target-host latency/load evidence establishes a release profile; local synthetic timings are not reused as a benchmark.
+- [ ] Owner reviews Codex/OpenRouter plan suitability, current rates, capacity, privacy copy, and public commercial operation.
 
-- [ ] Valid minimal details produce one booking.
-- [ ] `booking.created` is printed/pushed before qualification.
-- [ ] Duplicate retries return same `bookingId`.
-- [ ] Qualification patches the same booking.
-- [ ] Skip/disconnect never removes booking.
-- [ ] Agent does not claim calendar creation.
-
-### Brain
-
-- [ ] Codex subscription auth preflight passes.
-- [ ] `gpt-5.6-luna` is actually selected.
-- [ ] Prompts load from Markdown and have a version hash.
-- [ ] Dynamic tools or envelope fallback passes contract tests.
-- [ ] Shell/network actions are blocked.
-
-### Operations
-
-- [ ] `docker compose up -d` works on a clean VPS.
-- [ ] TLS/WSS works.
-- [ ] `/health/live` and `/health/ready` are correct.
-- [ ] SQLite survives restart.
-- [ ] Backup can be restored.
-- [ ] No provider keys in frontend bundle/logs.
-- [ ] Compose has only app and Caddy in the P0 path, and no TTS sidecar.
-- [ ] Runtime OpenRouter secret wiring and target-VPS smoke command are documented.
-- [ ] Text-only mode is enabled through env without rebuilding the image.
+A real calendar event is intentionally out of scope rather than an unchecked release gate. The product stores an internal booking and notification outbox event only.
 
 ## 11. Release evidence bundle
 
-Агент, собирающий RC, прикладывает:
+The local RC bundle contains:
 
-- commit SHA;
-- compose config without secrets;
-- health output;
-- schema migration status;
-- Codex model/auth preflight result без token;
-- target-VPS OpenRouter Russian STT and MP3 smoke statuses, latency, byte counts, safe provider IDs if present and selected model/voice/format;
-- evidence timestamps for `audio.commit`, STT request/final result, first Luna delta, TTS request/completion and playback;
-- 24+ eval summary;
-- latency report;
-- duplicate/idempotency test report;
-- one redacted `booking.created` и `booking.updated` example;
-- known limitations.
+- final commit SHA and exact uncreated tag recommendation;
+- deterministic test/type/lint/build/spec/validator/checksum results;
+- current MANIFEST/checksum file count;
+- credential-free Compose config, shell/wrapper, and file-secret engine checks;
+- redacted owner-observed T30 one-turn and five-turn real local path evidence;
+- local Compose health/readiness and Chrome desktop/mobile acceptance observations supplied for T40;
+- deployment, backup, restore, key rotation, stop, and rollback commands;
+- known limitations and explicit WebKit/VPS/TLS blockers.
+
+Target-VPS compose/health/preflight/provider evidence and benchmark-grade latency remain a later evidence bundle; they must not be inferred from this local release candidate.
 
 
 <div class="page-break"></div>
@@ -2650,7 +2597,7 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 Definition of Done:
 
-- `bun install`, `bun run typecheck`, `bun test` работают;
+- `bun install`, `bun run typecheck`, `bun run test` работают;
 - contracts не импортируют server/browser-specific code;
 - `BrainPort`, atomic final-transcription `SttPort`, complete-segment `TtsPort`, booking schemas и WS event union существуют;
 - fake adapters позволяют собрать skeleton E2E;
@@ -2842,18 +2789,19 @@ DoD:
 
 ## 7. Волна 4 — release
 
-### T40 — Release candidate
+### T40 — Local release candidate
 
 **Владелец:** A0 или release integrator  
 **Зависимости:** T31, T32.
 
-- all gates green;
-- compose clean deploy;
+**Current label:** `0.5.0-local-rc.1`.
+
+- local P0 gates green on the integrated PR #21 baseline;
+- `scripts/deploy-local.sh` observed ready at `http://localhost:5173` with file-backed secrets;
 - active docs/tasks/env/agent packets/diagrams/charts/sources contain no stale second voice provider, credential/path or provider-streaming STT instruction and match code;
-- known limitations;
-- redacted demo payloads;
-- rollback instructions;
-- tag/release commit.
+- local evidence, known limitations, recovery instructions, and explicit later gates attached;
+- release commit prepared without creating or pushing a Git tag;
+- WebKit and target VPS/DNS/TLS/WSS remain later gates and are not claimed by the local RC.
 
 ## 8. Merge gates
 
@@ -2876,11 +2824,11 @@ T20 merge после прохождения invariant suite. Не ждать р�
 
 ### Gate G3 — External smoke
 
-Реальные OpenRouter/Codex tests проходят на VPS/staging с tagged test command.
+For the local RC, the committed T30 artifact records owner-observed real local OpenRouter/Codex paths. Paid probes are never part of default verification. Target-host paid smokes remain required only for the later VPS release.
 
 ### Gate G4 — RC
 
-Acceptance checklist полностью приложен, critical known issue отсутствует.
+The local checklist and known limitations are attached, with no unresolved critical issue inside local scope. WebKit and target VPS/DNS/TLS/WSS are explicit later blockers, so G4 must not be described as a target-VPS release gate.
 
 ## 9. Как выдавать задания агентам
 
@@ -3128,6 +3076,122 @@ VoiceOrchestrator
 ```
 
 Это минимизирует latency и magic, сохраняет barge-in, делает booking/qualification проверяемыми и оставляет путь к замене провайдера. Универсальный SDK стоит подключать только после появления конкретной функции, которая окупает дополнительный слой.
+
+
+<div class="page-break"></div>
+
+# 11. Local release candidate and handoff
+
+**Release label:** `0.5.0-local-rc.1`
+
+**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.1`
+
+**Tag state:** recommendation only; no tag is created or pushed by T40.
+
+**Scope:** local hosting on one trusted machine. This is not a target-VPS or public TLS release.
+
+## Local P0 checklist
+
+- [x] Integrated implementation baseline is current through PRs #6–#21.
+- [x] Fresh deterministic release-commit suite passed 433 tests across 54 files with 0 failures and 3,788 assertions before and after `bun run build`.
+- [x] Typecheck, lint/format, build, deterministic spec generation, validator, and the current 316-file checksum set passed.
+- [x] The committed [T30 owner-observed artifact](evidence/T30-observed-local-voice-smoke-2026-07-31.md) records a real local OpenRouter/Luna one-turn path and a five-turn path with exactly one booked row and one sent outbox event.
+- [x] `scripts/deploy-local.sh` was observed succeeding with mode-`0600` materialized files mounted read-only; app and Caddy were healthy and dependency readiness reported all checks ready.
+- [x] Chrome desktop/mobile acceptance was observed for landing, consent, microphone-permission denial, safe denied state, no fetch/WebSocket before microphone permission, and no horizontal overflow.
+- [x] The local URL, file-backed secret workflow, device auth, readiness, metrics, recovery, and paid opt-in boundaries are documented below.
+- [ ] WebKit playback and complete journey acceptance — later gate, unobserved.
+- [ ] Target VPS deploy, DNS, TLS/WSS, and target-host paid smokes — later gate, unobserved.
+
+The checked runtime/browser lines are observed handoff evidence, not claims that this T40 documentation pass repeated provider spending or cross-browser testing. Fresh credential-free checks for the release commit are recorded in [`VALIDATION.md`](VALIDATION.md).
+
+## Prerequisites and secure bootstrap
+
+- Bun `1.3.14` for repository checks and host smoke tooling.
+- Docker Engine and Docker Compose v2 for the supported local runtime.
+- `ffmpeg` on `PATH` only for `scripts/local-voice-e2e-smoke.ts`; ordinary deployment does not need host decoding.
+- A paid OpenRouter account/key and an authorized Codex subscription for real voice use.
+
+```bash
+cp .env.example .env
+chmod 600 .env
+# Put the one backend-only OPENROUTER_API_KEY in .env; never source this file.
+
+./scripts/device-auth.sh
+./scripts/deploy-local.sh
+curl -fsS http://localhost:5173/health/ready
+```
+
+Open <http://localhost:5173>. Device auth is interactive and persists in the fixed `botamin-codex-home` Docker volume. Protect Docker access and the underlying disk; do not include Codex `auth.json` in ordinary backups. The `CODEX_HOME` value in `.env` is for direct host Bun operation; Compose uses `/codex-home` backed by that named volume.
+
+`deploy-local.sh` parses `.env` without shell evaluation, atomically materializes `.runtime/secrets` as directory mode `0700` and files mode `0600`, exports only the `*_FILE` paths, builds, migrates, force-recreates the app, starts Caddy, and waits for readiness. The files are mounted under `/run/secrets`; key values are not build args or browser configuration.
+
+## Health, readiness, and metrics
+
+```bash
+docker compose ps
+curl -fsS http://localhost:5173/health/live
+curl -fsS http://localhost:5173/health/ready
+
+# Safe aggregate metrics are intentionally direct-loopback only.
+docker compose exec -T app bun -e \
+  "const r=await fetch('http://127.0.0.1:3000/metrics');if(!r.ok)process.exit(1);console.log(await r.text())"
+```
+
+Caddy/public access to `/metrics` is denied. Readiness is dependency-aware and may return `503` for Codex auth/model, DB, prompt, voice configuration, capacity, or worker failures; health checks never spend OpenRouter usage.
+
+## Paid smokes: explicit opt-in only
+
+Deployment, tests, health checks, and this release procedure do not call paid providers. Against an already-ready local server, an owner may deliberately run the integrated smoke; it spends OpenRouter STT/TTS and Codex subscription usage:
+
+```bash
+BOTAMIN_EXTERNAL_VOICE_E2E=1 bun run scripts/local-voice-e2e-smoke.ts \
+  --server-url http://localhost:5173 \
+  --origin http://localhost:5173 \
+  --fixture-turns 1
+```
+
+`ffmpeg` is mandatory for this non-browser decoder check. Use real bounded PCM files rather than `--fixture-turns` when synthetic input is not appropriate. Isolated STT/TTS image probes are also paid; export the deployed file paths first and run them only with explicit approval:
+
+```bash
+compose_secret_operation=paid-smoke
+. ./scripts/compose-secret-files.sh
+docker compose run --rm -e AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh stt
+docker compose run --rm -e AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh tts
+```
+
+## Backup, restore, rotation, stop, and rollback
+
+```bash
+# Online SQLite VACUUM INTO backup plus protected checksum sidecar
+./scripts/backup.sh
+./scripts/backup.sh /data/backups/before-release.db
+
+# Restore verifies permissions, checksum, integrity, migration, and readiness
+./scripts/restore.sh /data/backups/before-release.db
+
+# Stop while retaining named volumes
+docker compose stop
+# Remove containers/network while retaining named volumes
+docker compose down
+
+# Roll back to an existing/pullable immutable image, optionally with its DB backup
+PREVIOUS_IMAGE=botamin-voice:0.5.0-local-rc.1-previoussha
+./scripts/rollback.sh "$PREVIOUS_IMAGE"
+./scripts/rollback.sh "$PREVIOUS_IMAGE" /data/backups/before-release.db
+```
+
+Never use `docker compose down -v`. SQLite migrations are forward-only; use the matching pre-release backup if an older image cannot read the current schema.
+
+For OpenRouter/webhook key rotation: revoke or schedule revocation at the provider, replace the value in mode-`0600` `.env`, then rerun `./scripts/deploy-local.sh`. Its forced app recreation remounts the new secret inode. For Codex auth refresh, stop the app, rerun `./scripts/device-auth.sh`, then rerun `./scripts/deploy-local.sh`. Never print old/new values or copy auth into the repository.
+
+## Known limitations and next gates
+
+- STT is phrase-level and nonstreaming at the provider boundary: transcription starts after `audio.commit` and one complete bounded WAV.
+- T30 local synthetic timings prove functional sequencing only; they are not a benchmark or target-host SLO.
+- WebKit complete-MP3 playback and journey acceptance remain unobserved.
+- Target VPS resource behavior, DNS, public TLS/WSS, and target-host provider smokes remain unobserved.
+- The booking is an internal SQLite record plus notifier outbox event. No real calendar event, availability check, CRM record, or meeting invitation is created.
+- OpenRouter model/voice availability, paid rates, Codex subscription limits, and plan suitability are runtime/owner checks, not release guarantees.
 
 
 <div class="page-break"></div>

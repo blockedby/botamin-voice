@@ -157,6 +157,7 @@ docs/07-tradeoffs-and-adrs.md
 docs/08-testing-and-acceptance.md
 docs/09-agent-task-plan.md
 docs/10-ai-library-evaluation.md
+docs/11-local-release-handoff.md
 drizzle/0000_booking_domain.sql
 drizzle/0001_subject_scopes_and_outbox_claim.sql
 drizzle/0002_transcript_retention_index.sql

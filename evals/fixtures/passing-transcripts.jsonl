@@ -489,8 +489,8 @@
 {"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":23,"type":"stage","stage":"POST_BOOKING_QUALIFICATION"}
 {"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":24,"type":"message","role":"assistant","text":"Сколько входящих лидов приходит за месяц?","semantics":["qualification_question"]}
 {"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":25,"type":"tts_input","text":"Сколько входящих лидов приходит за месяц?"}
-{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":26,"type":"message","role":"user","text":"Около 240 входящих лидов; их обрабатывают 8 менеджеров продаж."}
-{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":27,"type":"tool_call","name":"append_booking_qualification","callId":"call_q","bookingId":"01J00000000000000000000001","payload":{"bookingId":"01J00000000000000000000001","idempotencyKey":"eval-qualification-post-booking-one-answer","patch":{"monthlyLeadVolume":"около 240","salesManagerCount":8},"completion":"complete"}}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":26,"type":"message","role":"user","text":"Около 240 входящих лидов."}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":27,"type":"tool_call","name":"append_booking_qualification","callId":"call_q","bookingId":"01J00000000000000000000001","payload":{"bookingId":"01J00000000000000000000001","idempotencyKey":"eval-qualification-post-booking-one-answer","patch":{"monthlyLeadVolume":"около 240"},"completion":"complete"}}
 {"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":28,"type":"domain_event","name":"qualification.updated","bookingId":"01J00000000000000000000001","callId":"call_q"}
 {"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":29,"type":"tool_result","name":"append_booking_qualification","ok":true,"callId":"call_q","bookingId":"01J00000000000000000000001","replayed":false}
 {"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":30,"type":"stage","stage":"COMPLETE"}

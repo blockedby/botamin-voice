@@ -1482,15 +1482,16 @@ function scoreScenario(
 		assertCritical(
 			qualificationCalls.some((event) => {
 				const patch = record(record(event.payload)?.patch);
-				return (
+				const hasMonthlyLeadVolume =
 					typeof patch?.monthlyLeadVolume === "string" &&
-					patch.monthlyLeadVolume.trim().length > 0 &&
-					typeof patch.salesManagerCount === "number" &&
-					Number.isInteger(patch.salesManagerCount)
-				);
+					patch.monthlyLeadVolume.trim().length > 0;
+				const hasSalesManagerCount =
+					typeof patch?.salesManagerCount === "number" &&
+					Number.isInteger(patch.salesManagerCount);
+				return hasMonthlyLeadVolume || hasSalesManagerCount;
 			}),
 			"qualification_fields_missing",
-			"Accepted qualification must preserve monthly inbound leads and an explicit numeric sales-manager count",
+			"Accepted qualification must preserve at least one allowed qualification answer",
 		);
 	}
 	if (

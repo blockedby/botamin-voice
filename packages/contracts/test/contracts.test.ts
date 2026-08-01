@@ -221,21 +221,67 @@ describe("shared contracts", () => {
 		}
 	});
 
-	test("allows an empty reusable patch only for skipped qualification input", () => {
+	test("limits qualification to two optional bounded fields", () => {
 		expect(QualificationPatchSchema.safeParse({}).success).toBe(true);
 		expect(
-			QualificationPatchSchema.safeParse({ salesManagerCount: 25 }).success,
+			QualificationPatchSchema.safeParse({ monthlyLeadVolume: " около 240 " })
+				.success,
 		).toBe(true);
+		for (const monthlyLeadVolume of ["", "   ", "x".repeat(101)]) {
+			expect(
+				QualificationPatchSchema.safeParse({ monthlyLeadVolume }).success,
+			).toBe(false);
+		}
+		for (const salesManagerCount of [0, 25, 10_000]) {
+			expect(
+				QualificationPatchSchema.safeParse({ salesManagerCount }).success,
+			).toBe(true);
+		}
 		for (const salesManagerCount of [-1, 1.5, 10_001, "25"]) {
 			expect(
 				QualificationPatchSchema.safeParse({ salesManagerCount }).success,
 			).toBe(false);
 		}
+		for (const [legacyField, legacyValue] of [
+			["role", "Head of Sales"],
+			["industry", "SaaS"],
+			["companySize", "100"],
+			["currentChannels", ["email"]],
+			["crm", "amoCRM"],
+			["currentProcess", "Manual"],
+			["pains", ["Slow follow-up"]],
+			["desiredUseCase", "Inbound qualification"],
+			["timeline", "This quarter"],
+			["notes", "Legacy note"],
+		] as const) {
+			expect(
+				QualificationPatchSchema.safeParse({
+					[legacyField]: legacyValue,
+				}).success,
+			).toBe(false);
+		}
+	});
+
+	test("allows one or both qualification fields for partial and complete input", () => {
 		for (const completion of ["partial", "complete"] as const) {
+			for (const [index, patch] of [
+				{ monthlyLeadVolume: "около 240" },
+				{ salesManagerCount: 8 },
+				{ monthlyLeadVolume: "около 240", salesManagerCount: 8 },
+			].entries()) {
+				expect(
+					AppendQualificationInputSchema.safeParse({
+						bookingId,
+						idempotencyKey: `qualification-${completion}-${index}`,
+						patch,
+						completion,
+					}).success,
+				).toBe(true);
+			}
 			expect(
 				AppendQualificationInputSchema.safeParse({
 					bookingId,
-					idempotencyKey: `qualification-${completion}`,
+					idempotencyKey: `qualification-empty-${completion}`,
 					patch: {},
 					completion,
 				}).success,
@@ -247,13 +293,6 @@ describe("shared contracts", () => {
 				idempotencyKey: "qualification-skipped",
 				patch: {},
 				completion: "skipped",
-			}).success,
-		).toBe(true);
-		expect(
-			AppendQualificationInputSchema.safeParse({
-				bookingId,
-				idempotencyKey: "qualification-partial",
-				patch: { role: "Head of Sales" },
 			}).success,
 		).toBe(true);
 	});
@@ -340,7 +379,7 @@ describe("shared contracts", () => {
 			input: {
 				bookingId,
 				idempotencyKey: "qualification-0001",
-				patch: { role: "Head of Sales" },
+				patch: { salesManagerCount: 8 },
 			},
 		};
 

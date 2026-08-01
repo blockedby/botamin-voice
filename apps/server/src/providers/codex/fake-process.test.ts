@@ -173,18 +173,8 @@ function dynamicToolCallParams(
 						bookingId: CONVERSATION_ID,
 						idempotencyKey: `qualification-${callId}`,
 						patch: {
-							role: "Основатель",
-							industry: null,
-							companySize: null,
-							monthlyLeadVolume: null,
+							monthlyLeadVolume: "около 240",
 							salesManagerCount: null,
-							currentChannels: null,
-							crm: null,
-							currentProcess: null,
-							pains: null,
-							desiredUseCase: null,
-							timeline: null,
-							notes: null,
 						},
 						completion: "complete",
 					},
@@ -1157,20 +1147,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 					payload: {
 						bookingId: "attacker-controlled-invalid-id",
 						idempotencyKey: "tiny",
-						patch: {
-							role: "Основатель",
-							industry: null,
-							companySize: null,
-							monthlyLeadVolume: null,
-							salesManagerCount: 8,
-							currentChannels: null,
-							crm: null,
-							currentProcess: null,
-							pains: null,
-							desiredUseCase: null,
-							timeline: null,
-							notes: null,
-						},
+						patch: { monthlyLeadVolume: null, salesManagerCount: 8 },
 						completion: "complete",
 					},
 				},
@@ -1201,7 +1178,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 			throw new Error("Expected normalized qualification request");
 		expect(request.tool.args).toMatchObject({
 			bookingId: BOOKING_ID,
-			patch: { role: "Основатель", salesManagerCount: 8 },
+			patch: { salesManagerCount: 8 },
 			completion: "complete",
 		});
 		expect(request.tool.args.idempotencyKey).not.toBe("tiny");
@@ -1234,20 +1211,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 				payload: {
 					bookingId: BOOKING_ID,
 					idempotencyKey: "model-qualification-key",
-					patch: {
-						role: "Основатель",
-						industry: null,
-						companySize: null,
-						monthlyLeadVolume: null,
-						salesManagerCount: null,
-						currentChannels: null,
-						crm: null,
-						currentProcess: null,
-						pains: null,
-						desiredUseCase: null,
-						timeline: null,
-						notes: null,
-					},
+					patch: { monthlyLeadVolume: null, salesManagerCount: null },
 					completion: "complete",
 				},
 			},
@@ -1307,6 +1271,22 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		const outputSchemaJson = JSON.stringify(BRAIN_ENVELOPE_OUTPUT_SCHEMA);
 		expect(outputSchemaJson).not.toContain('"oneOf"');
 		expect(outputSchemaJson).toContain('"meetingSlot"');
+		expect(outputSchemaJson).toContain('"monthlyLeadVolume"');
+		expect(outputSchemaJson).toContain('"salesManagerCount"');
+		for (const legacyField of [
+			"role",
+			"industry",
+			"companySize",
+			"currentChannels",
+			"crm",
+			"currentProcess",
+			"pains",
+			"desiredUseCase",
+			"timeline",
+			"notes",
+		]) {
+			expect(outputSchemaJson).not.toContain(`"${legacyField}"`);
+		}
 		expect(outputSchemaJson).not.toContain("preferredTimeText");
 		const { cwd, agentsPath } = await runtime();
 		const dangerousSpeech = "Готово, встреча забронирована.";

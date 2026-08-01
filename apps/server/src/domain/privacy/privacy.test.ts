@@ -179,7 +179,7 @@ describe("PII privacy services", () => {
 		await service.appendQualification({
 			bookingId: created.bookingId,
 			idempotencyKey: "delete-qualification-01",
-			patch: { notes: "Call +7 999 123-45-67" },
+			patch: { monthlyLeadVolume: "240; Call +7 999 123-45-67" },
 			completion: "partial",
 		});
 		expect(

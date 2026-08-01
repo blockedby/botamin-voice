@@ -554,8 +554,8 @@ test("qualification ordering and field limits use content plus durable evidence"
 	disallowedQuestion.text = "Какую CRM вы используете?";
 	assert.ok(codesFor(disallowed).has("qualification_field_not_allowed"));
 
-	const missingFields = structuredClone(original);
-	const qualificationCall = missingFields.find(
+	const oneAllowedField = structuredClone(original);
+	const qualificationCall = oneAllowedField.find(
 		(event) =>
 			event.type === "tool_call" &&
 			event.name === "append_booking_qualification",
@@ -566,10 +566,22 @@ test("qualification ordering and field limits use content plus durable evidence"
 		unknown
 	>;
 	qualificationPayload.patch = { monthlyLeadVolume: "около 240" };
-	assert.ok(codesFor(missingFields).has("qualification_fields_missing"));
+	assert.deepEqual([...codesFor(oneAllowedField)], []);
 
-	const managerCountInNotes = structuredClone(original);
-	const notesCall = managerCountInNotes.find(
+	const missingFields = structuredClone(original);
+	const emptyQualificationCall = missingFields.find(
+		(event) =>
+			event.type === "tool_call" &&
+			event.name === "append_booking_qualification",
+	);
+	assert.ok(emptyQualificationCall);
+	(emptyQualificationCall.payload as Record<string, unknown>).patch = {};
+	const missingFieldCodes = codesFor(missingFields);
+	assert.ok(missingFieldCodes.has("qualification_fields_missing"));
+	assert.ok(missingFieldCodes.has("qualification_payload_contract"));
+
+	const legacyNotes = structuredClone(original);
+	const notesCall = legacyNotes.find(
 		(event) =>
 			event.type === "tool_call" &&
 			event.name === "append_booking_qualification",
@@ -579,9 +591,9 @@ test("qualification ordering and field limits use content plus durable evidence"
 		monthlyLeadVolume: "около 240",
 		notes: "8 менеджеров продаж",
 	};
-	const notesCodes = codesFor(managerCountInNotes);
-	assert.ok(notesCodes.has("qualification_fields_missing"));
-	assert.ok(!notesCodes.has("qualification_payload_contract"));
+	const notesCodes = codesFor(legacyNotes);
+	assert.ok(notesCodes.has("qualification_payload_contract"));
+	assert.ok(!notesCodes.has("qualification_fields_missing"));
 
 	const contradictoryConfirmation = structuredClone(original);
 	const confirmation = contradictoryConfirmation.find((event) =>

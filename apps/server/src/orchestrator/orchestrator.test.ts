@@ -843,7 +843,7 @@ describe("booking and tool timeline", () => {
 					args: {
 						bookingId: "01J00000000000000000000001",
 						idempotencyKey: "qualification-consent-01",
-						patch: { role: "РОП" },
+						patch: { monthlyLeadVolume: "около 240" },
 						completion: "complete",
 					},
 				},
@@ -871,21 +871,21 @@ describe("booking and tool timeline", () => {
 		]);
 		expect(orchestrator.state).toMatchObject({
 			stage: "COMPLETE",
-			booking: { qualification: { role: "РОП" } },
+			booking: { qualification: { monthlyLeadVolume: "около 240" } },
 		});
 	});
 
 	for (const scenario of [
 		{
 			status: "partial" as const,
-			patch: { role: "РОП" },
+			patch: { monthlyLeadVolume: "около 240" },
 			expected:
 				"Дополнительные ответы сохранены. Можно продолжить или закончить на этом.",
 			terminal: false,
 		},
 		{
 			status: "complete" as const,
-			patch: { crm: "amoCRM" },
+			patch: { salesManagerCount: 8 },
 			expected: "Дополнительные ответы сохранены. Спасибо, на этом всё.",
 			terminal: true,
 		},
@@ -1103,7 +1103,7 @@ describe("booking and tool timeline", () => {
 					args: {
 						bookingId: booking.id,
 						idempotencyKey: "qualification-key-01",
-						patch: { role: "РОП" },
+						patch: { monthlyLeadVolume: "около 240" },
 						completion: "partial",
 					},
 				},
@@ -1118,7 +1118,7 @@ describe("booking and tool timeline", () => {
 					args: {
 						bookingId: "01J00000000000000000000099",
 						idempotencyKey: "qualification-key-02",
-						patch: { crm: "CRM" },
+						patch: { salesManagerCount: 8 },
 						completion: "complete",
 					},
 				},
@@ -1139,7 +1139,10 @@ describe("booking and tool timeline", () => {
 		]);
 		expect(orchestrator.state).toMatchObject({
 			stage: "POST_BOOKING_QUALIFICATION",
-			booking: { status: "booked", qualification: { role: "РОП" } },
+			booking: {
+				status: "booked",
+				qualification: { monthlyLeadVolume: "около 240" },
+			},
 		});
 	});
 

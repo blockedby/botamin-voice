@@ -221,7 +221,7 @@ describe("conversation transition policy", () => {
 		};
 		const updated = {
 			...booking,
-			qualification: { role: "РОП" },
+			qualification: { salesManagerCount: 8 },
 			qualificationStatus: "partial" as const,
 		};
 		expect(

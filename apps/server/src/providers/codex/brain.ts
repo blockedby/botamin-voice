@@ -87,9 +87,6 @@ const CONTACT_SCHEMA = {
 } as const;
 
 const QUALIFICATION_OUTPUT_PROPERTIES = {
-	role: nullable({ type: "string", minLength: 1, maxLength: 200 }),
-	industry: nullable({ type: "string", minLength: 1, maxLength: 200 }),
-	companySize: nullable({ type: "string", minLength: 1, maxLength: 100 }),
 	monthlyLeadVolume: nullable({
 		type: "string",
 		minLength: 1,
@@ -100,29 +97,6 @@ const QUALIFICATION_OUTPUT_PROPERTIES = {
 		minimum: 0,
 		maximum: 10_000,
 	}),
-	currentChannels: nullable({
-		type: "array",
-		maxItems: 10,
-		items: { type: "string", minLength: 1, maxLength: 80 },
-	}),
-	crm: nullable({ type: "string", minLength: 1, maxLength: 120 }),
-	currentProcess: nullable({
-		type: "string",
-		minLength: 1,
-		maxLength: 1000,
-	}),
-	pains: nullable({
-		type: "array",
-		maxItems: 10,
-		items: { type: "string", minLength: 1, maxLength: 300 },
-	}),
-	desiredUseCase: nullable({
-		type: "string",
-		minLength: 1,
-		maxLength: 500,
-	}),
-	timeline: nullable({ type: "string", minLength: 1, maxLength: 200 }),
-	notes: nullable({ type: "string", minLength: 1, maxLength: 1500 }),
 } as const;
 
 const MEETING_SLOT_OUTPUT_SCHEMA = {

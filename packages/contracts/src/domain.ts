@@ -150,21 +150,8 @@ export const QualificationStatusSchema = z.enum([
 
 export const QualificationPatchSchema = z
 	.object({
-		role: z.string().trim().min(1).max(200).optional(),
-		industry: z.string().trim().min(1).max(200).optional(),
-		companySize: z.string().trim().min(1).max(100).optional(),
 		monthlyLeadVolume: z.string().trim().min(1).max(100).optional(),
 		salesManagerCount: z.number().int().min(0).max(10_000).optional(),
-		currentChannels: z
-			.array(z.string().trim().min(1).max(80))
-			.max(10)
-			.optional(),
-		crm: z.string().trim().min(1).max(120).optional(),
-		currentProcess: z.string().trim().min(1).max(1000).optional(),
-		pains: z.array(z.string().trim().min(1).max(300)).max(10).optional(),
-		desiredUseCase: z.string().trim().min(1).max(500).optional(),
-		timeline: z.string().trim().min(1).max(200).optional(),
-		notes: z.string().trim().min(1).max(1500).optional(),
 	})
 	.strict();
 

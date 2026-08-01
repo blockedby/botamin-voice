@@ -2,7 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { CreateBookingInput } from "@botamin/contracts";
+import type {
+	AppendQualificationInput,
+	CreateBookingInput,
+} from "@botamin/contracts";
 import { count, eq } from "drizzle-orm";
 import { ConversationStore } from "../../db/conversation-store";
 import {
@@ -252,13 +255,13 @@ describe("SQLite booking transaction", () => {
 		const firstQualification = {
 			bookingId: first.bookingId,
 			idempotencyKey: qualificationKey,
-			patch: { role: "CEO" },
+			patch: { monthlyLeadVolume: "около 100" },
 			completion: "partial" as const,
 		};
 		const secondQualification = {
 			bookingId: second.bookingId,
 			idempotencyKey: qualificationKey,
-			patch: { role: "CMO" },
+			patch: { monthlyLeadVolume: "около 200" },
 			completion: "partial" as const,
 		};
 		await service.appendQualification(firstQualification);
@@ -266,21 +269,23 @@ describe("SQLite booking transaction", () => {
 		expect(await service.appendQualification(firstQualification)).toMatchObject(
 			{
 				bookingId: first.bookingId,
-				updatedFields: ["role"],
+				updatedFields: ["monthlyLeadVolume"],
 			},
 		);
 		await expect(
 			service.appendQualification({
 				...firstQualification,
-				patch: { role: "CFO" },
+				patch: { monthlyLeadVolume: "около 300" },
 			}),
 		).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
-		expect((await service.findById(first.bookingId))?.qualification?.role).toBe(
-			"CEO",
-		);
 		expect(
-			(await service.findById(second.bookingId))?.qualification?.role,
-		).toBe("CMO");
+			(await service.findById(first.bookingId))?.qualification
+				?.monthlyLeadVolume,
+		).toBe("около 100");
+		expect(
+			(await service.findById(second.bookingId))?.qualification
+				?.monthlyLeadVolume,
+		).toBe("около 200");
 		closeDomainDatabase(database);
 	});
 
@@ -383,48 +388,36 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(reopened);
 	});
 
-	test("merges partial qualification and accepts an empty skipped patch", async () => {
+	test("persists and merges the two optional qualification fields", async () => {
 		const { database, input } = fixture();
 		const service = new SqliteBookingService(database);
 		const created = await service.createBooking(input);
-		await service.appendQualification({
+		const first = await service.appendQualification({
 			bookingId: created.bookingId,
 			idempotencyKey: "qualification-partial-01",
-			patch: { role: "Head of Sales", crm: "amoCRM" },
+			patch: { monthlyLeadVolume: "около 2000" },
 			completion: "partial",
 		});
 		const second = await service.appendQualification({
 			bookingId: created.bookingId,
-			idempotencyKey: "qualification-partial-02",
-			patch: {
-				monthlyLeadVolume: "около 2000",
-				salesManagerCount: 12,
-			},
-			completion: "partial",
-		});
-		const skipped = await service.appendQualification({
-			bookingId: created.bookingId,
-			idempotencyKey: "qualification-skipped-01",
-			patch: {},
-			completion: "skipped",
+			idempotencyKey: "qualification-complete-01",
+			patch: { salesManagerCount: 12 },
+			completion: "complete",
 		});
 		const snapshot = await service.findById(created.bookingId);
 
-		expect(second.updatedFields).toEqual([
-			"monthlyLeadVolume",
-			"salesManagerCount",
-		]);
-		expect(skipped).toMatchObject({
-			bookingId: created.bookingId,
-			qualificationStatus: "skipped",
-			updatedFields: [],
+		expect(first).toMatchObject({
+			qualificationStatus: "partial",
+			updatedFields: ["monthlyLeadVolume"],
+		});
+		expect(second).toMatchObject({
+			qualificationStatus: "complete",
+			updatedFields: ["salesManagerCount"],
 		});
 		expect(snapshot).toMatchObject({
 			status: "booked",
-			qualificationStatus: "skipped",
+			qualificationStatus: "complete",
 			qualification: {
-				role: "Head of Sales",
-				crm: "amoCRM",
 				monthlyLeadVolume: "около 2000",
 				salesManagerCount: 12,
 			},
@@ -432,7 +425,30 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 	});
 
-	test("rejects empty partial qualification and qualification key conflicts", async () => {
+	test("accepts an empty skipped patch", async () => {
+		const { database, input } = fixture();
+		const service = new SqliteBookingService(database);
+		const created = await service.createBooking(input);
+		const skipped = await service.appendQualification({
+			bookingId: created.bookingId,
+			idempotencyKey: "qualification-skipped-01",
+			patch: {},
+			completion: "skipped",
+		});
+
+		expect(skipped).toMatchObject({
+			bookingId: created.bookingId,
+			qualificationStatus: "skipped",
+			updatedFields: [],
+		});
+		expect(await service.findById(created.bookingId)).toMatchObject({
+			qualificationStatus: "skipped",
+			qualification: {},
+		});
+		closeDomainDatabase(database);
+	});
+
+	test("rejects empty or legacy qualification and key conflicts", async () => {
 		const { database, input } = fixture();
 		const service = new SqliteBookingService(database);
 		const created = await service.createBooking(input);
@@ -444,17 +460,37 @@ describe("SQLite booking transaction", () => {
 				completion: "partial",
 			}),
 		).rejects.toMatchObject({ code: "BOOKING_VALIDATION_FAILED" });
+		for (const [field, value] of [
+			["role", "Head of Sales"],
+			["crm", "amoCRM"],
+		] as const) {
+			const legacyInput = {
+				bookingId: created.bookingId,
+				idempotencyKey: `qualification-legacy-${field}`,
+				patch: { [field]: value },
+				completion: "partial",
+			} as unknown as AppendQualificationInput;
+			await expect(
+				service.appendQualification(legacyInput),
+			).rejects.toMatchObject({
+				code: "BOOKING_VALIDATION_FAILED",
+			});
+		}
+		expect(await service.findById(created.bookingId)).toMatchObject({
+			qualificationStatus: "none",
+			qualification: {},
+		});
 		await service.appendQualification({
 			bookingId: created.bookingId,
 			idempotencyKey: "qualification-conflict-01",
-			patch: { role: "CEO" },
+			patch: { salesManagerCount: 3 },
 			completion: "partial",
 		});
 		await expect(
 			service.appendQualification({
 				bookingId: created.bookingId,
 				idempotencyKey: "qualification-conflict-01",
-				patch: { role: "CMO" },
+				patch: { salesManagerCount: 4 },
 				completion: "partial",
 			}),
 		).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });

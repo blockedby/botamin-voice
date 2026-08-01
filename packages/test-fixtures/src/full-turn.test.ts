@@ -197,7 +197,7 @@ describe("fake full turn", () => {
 		const qualificationInput = {
 			bookingId: committedBooking.id,
 			idempotencyKey: "qualification-0001",
-			patch: { role: "Head of Sales" },
+			patch: { monthlyLeadVolume: "около 240" },
 			completion: "partial" as const,
 		};
 		BookingToolExecutionSchema.parse({
@@ -259,7 +259,7 @@ describe("fake full turn", () => {
 		await bookings.appendQualification({
 			bookingId: second.bookingId,
 			idempotencyKey: "qualification-second",
-			patch: { role: "Head of Sales" },
+			patch: { salesManagerCount: 8 },
 			completion: "complete",
 		});
 

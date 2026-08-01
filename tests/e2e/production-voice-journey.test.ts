@@ -382,7 +382,7 @@ class ScriptedLuna implements BrainPort {
 						args: {
 							bookingId: input.booking.id,
 							idempotencyKey: "t30-qualification-idempotency-key",
-							patch: { role: "Руководитель" },
+							patch: { monthlyLeadVolume: "около 240" },
 							completion: "complete",
 						},
 					},

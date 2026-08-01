@@ -88,7 +88,7 @@ describe("allowed action and tool authorization policy", () => {
 				args: {
 					bookingId: "01J00000000000000000000001",
 					idempotencyKey: "qualification-0001",
-					patch: { role: "РОП" },
+					patch: { salesManagerCount: 8 },
 					completion: "partial",
 				},
 			},
@@ -144,6 +144,55 @@ describe("allowed action and tool authorization policy", () => {
 			}),
 		).toEqual(["append_booking_qualification"]);
 		expect(created.status).toBe("booked");
+	});
+
+	test("server boundary rejects legacy role-only and CRM-only qualification patches", async () => {
+		const service = new FakeBookingService();
+		await service.createBooking(input);
+		const booking = await service.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const state: ConversationState = {
+			...createInitialConversationState(),
+			stage: "POST_BOOKING_QUALIFICATION",
+			booking,
+			contactConsentConfirmed: true,
+			bookingConfirmationDelivered: true,
+			qualificationEnabled: true,
+			qualificationConsent: "granted",
+		};
+		const executor = new BookingToolExecutor(service);
+		for (const [field, value] of [
+			["role", "РОП"],
+			["crm", "amoCRM"],
+		] as const) {
+			const request = {
+				name: "append_booking_qualification",
+				callId: `legacy-${field}`,
+				args: {
+					bookingId: booking.id,
+					idempotencyKey: `legacy-${field}-0001`,
+					patch: { [field]: value },
+					completion: "partial",
+				},
+			};
+			expect(
+				authorizeTool(state, conversationId, candidateMeetingSlots, request),
+			).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
+			expect(
+				await executor.execute(
+					state,
+					conversationId,
+					candidateMeetingSlots,
+					request,
+				),
+			).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
+		}
+		expect(service.domainEvents.map((event) => event.type)).toEqual([
+			"booking.created",
+		]);
+		expect(await service.findByConversationId(conversationId)).toMatchObject({
+			qualificationStatus: "none",
+		});
 	});
 
 	test("executor deduplicates identical callId and rejects changed replay", async () => {

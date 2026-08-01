@@ -34,60 +34,108 @@ const MPEG2_LAYER3_BITRATES_KBPS = [
 ] as const;
 const MPEG1_SAMPLE_RATES = [44_100, 48_000, 32_000] as const;
 
-/**
- * Lightweight transport-boundary check for at least one complete MPEG Layer III
- * frame. Decode/playback remains the browser or media tool's responsibility.
- */
-export function hasCompleteMpegLayer3Frame(bytes: Uint8Array): boolean {
-	for (let offset = 0; offset <= bytes.byteLength - 4; offset += 1) {
-		const byte0 = bytes[offset];
-		const byte1 = bytes[offset + 1];
-		const byte2 = bytes[offset + 2];
-		if (byte0 === undefined || byte1 === undefined || byte2 === undefined) {
-			continue;
-		}
-		if (byte0 !== 0xff || (byte1 & 0xe0) !== 0xe0) continue;
-
-		const versionBits = (byte1 >> 3) & 0x03;
-		const layerBits = (byte1 >> 1) & 0x03;
-		const bitrateIndex = (byte2 >> 4) & 0x0f;
-		const sampleRateIndex = (byte2 >> 2) & 0x03;
-		if (
-			versionBits === 0x01 ||
-			layerBits !== 0x01 ||
-			bitrateIndex === 0 ||
-			bitrateIndex === 0x0f ||
-			sampleRateIndex === 0x03
-		) {
-			continue;
-		}
-
-		const mpeg1 = versionBits === 0x03;
-		const bitrateKbps = (
-			mpeg1 ? MPEG1_LAYER3_BITRATES_KBPS : MPEG2_LAYER3_BITRATES_KBPS
-		)[bitrateIndex];
-		const mpeg1SampleRate = MPEG1_SAMPLE_RATES[sampleRateIndex];
-		if (bitrateKbps === undefined || mpeg1SampleRate === undefined) continue;
-
-		const sampleRate =
-			versionBits === 0x00
-				? mpeg1SampleRate / 4
-				: versionBits === 0x02
-					? mpeg1SampleRate / 2
-					: mpeg1SampleRate;
-		const padding = (byte2 >> 1) & 0x01;
-		const frameLength =
-			Math.floor(((mpeg1 ? 144 : 72) * bitrateKbps * 1_000) / sampleRate) +
-			padding;
-		if (offset + frameLength <= bytes.byteLength) return true;
+function ascii(bytes: Uint8Array, offset: number, value: string): boolean {
+	for (let index = 0; index < value.length; index += 1) {
+		if (bytes[offset + index] !== value.charCodeAt(index)) return false;
 	}
-	return false;
+	return true;
 }
 
-/** Structural MP3 bytes validation shared by provider and WS boundaries. */
+function id3v2End(bytes: Uint8Array): number | null {
+	if (!ascii(bytes, 0, "ID3")) return 0;
+	if (bytes.byteLength < 10) return null;
+	const flags = bytes[5] ?? 0;
+	const sizeBytes = [bytes[6], bytes[7], bytes[8], bytes[9]];
+	if (
+		sizeBytes.some(
+			(value): value is undefined =>
+				value === undefined || (value & 0x80) !== 0,
+		)
+	) {
+		return null;
+	}
+	const [size6, size7, size8, size9] = sizeBytes as [
+		number,
+		number,
+		number,
+		number,
+	];
+	const size = (((((size6 << 7) | size7) << 7) | size8) << 7) | size9;
+	const end = 10 + size + ((flags & 0x10) === 0 ? 0 : 10);
+	return end <= bytes.byteLength ? end : null;
+}
+
+function mpegLayer3FrameLength(
+	bytes: Uint8Array,
+	offset: number,
+): number | null {
+	const byte0 = bytes[offset];
+	const byte1 = bytes[offset + 1];
+	const byte2 = bytes[offset + 2];
+	if (byte0 === undefined || byte1 === undefined || byte2 === undefined) {
+		return null;
+	}
+	if (byte0 !== 0xff || (byte1 & 0xe0) !== 0xe0) return null;
+	const versionBits = (byte1 >> 3) & 0x03;
+	const layerBits = (byte1 >> 1) & 0x03;
+	const bitrateIndex = (byte2 >> 4) & 0x0f;
+	const sampleRateIndex = (byte2 >> 2) & 0x03;
+	if (
+		versionBits === 0x01 ||
+		layerBits !== 0x01 ||
+		bitrateIndex === 0 ||
+		bitrateIndex === 0x0f ||
+		sampleRateIndex === 0x03
+	) {
+		return null;
+	}
+	const mpeg1 = versionBits === 0x03;
+	const bitrateKbps = (
+		mpeg1 ? MPEG1_LAYER3_BITRATES_KBPS : MPEG2_LAYER3_BITRATES_KBPS
+	)[bitrateIndex];
+	const mpeg1SampleRate = MPEG1_SAMPLE_RATES[sampleRateIndex];
+	if (bitrateKbps === undefined || mpeg1SampleRate === undefined) return null;
+	const sampleRate =
+		versionBits === 0x00
+			? mpeg1SampleRate / 4
+			: versionBits === 0x02
+				? mpeg1SampleRate / 2
+				: mpeg1SampleRate;
+	const padding = (byte2 >> 1) & 0x01;
+	return (
+		Math.floor(((mpeg1 ? 144 : 72) * bitrateKbps * 1_000) / sampleRate) +
+		padding
+	);
+}
+
+/** Return true only when every byte belongs to one complete MP3 file. */
+export function isCompleteMp3File(bytes: Uint8Array): boolean {
+	let offset = id3v2End(bytes);
+	if (offset === null) return false;
+	let frames = 0;
+	while (offset < bytes.byteLength) {
+		if (
+			frames > 0 &&
+			bytes.byteLength - offset === 128 &&
+			ascii(bytes, offset, "TAG")
+		) {
+			offset = bytes.byteLength;
+			break;
+		}
+		const length = mpegLayer3FrameLength(bytes, offset);
+		if (length === null || length < 4 || offset + length > bytes.byteLength) {
+			return false;
+		}
+		offset += length;
+		frames += 1;
+	}
+	return frames > 0 && offset === bytes.byteLength;
+}
+
+/** Strict complete-file MP3 validation shared by provider and WS boundaries. */
 export const MpegAudioBytesSchema = NonEmptyUint8ArraySchema.refine(
-	hasCompleteMpegLayer3Frame,
-	{ message: "Expected at least one complete MPEG Layer III frame" },
+	isCompleteMp3File,
+	{ message: "Expected one complete MPEG Layer III file" },
 );
 
 export const SafeErrorCodeSchema = z.enum([

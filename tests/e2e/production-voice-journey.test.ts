@@ -42,6 +42,8 @@ import {
 	createDeterministicPcm16Fixture,
 	createDeterministicWavFixture,
 	createOpenRouterFixture,
+	createTestBookingContacts,
+	createTestMeetingSlot,
 } from "../../packages/test-fixtures/src";
 
 const appOrigin = "http://localhost:5173";
@@ -335,7 +337,9 @@ class ScriptedLuna implements BrainPort {
 					conversationId: input.conversationId,
 					idempotencyKey: "t30-booking-idempotency-key",
 					name: "Тестовый лид",
-					contacts: [{ channel: "email", value: "fixture@example.test" }],
+					contacts: createTestBookingContacts(),
+					company: "Example LLC",
+					meetingSlot: createTestMeetingSlot(),
 					consentConfirmed: true,
 				};
 				this.bookingInput = args;

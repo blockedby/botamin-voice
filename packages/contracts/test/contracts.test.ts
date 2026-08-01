@@ -26,6 +26,7 @@ import {
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
 	isCompleteMp3File,
+	MeetingSlotSchema,
 	MpegAudioBytesSchema,
 	QualificationPatchSchema,
 	ServerWsEventSchema,
@@ -43,6 +44,12 @@ const bookingId = "01J00000000000000000000001";
 const eventId = "01J00000000000000000000002";
 const foreignConversationId = "01J00000000000000000000009";
 const at = "2026-07-30T20:22:00.000Z";
+const meetingSlot = {
+	startAt: "2026-08-03T06:00:00.000Z",
+	endAt: "2026-08-03T06:20:00.000Z",
+	timeZone: "Europe/Moscow",
+	durationMinutes: 20,
+} as const;
 function createStructurallyValidMp3Frame(): Uint8Array {
 	const bytes = new Uint8Array(96);
 	bytes.set([0xff, 0xf3, 0x44, 0xc4]);
@@ -54,7 +61,12 @@ const bookingSnapshot = {
 	conversationId,
 	status: "booked",
 	name: "Александр",
-	contacts: [{ channel: "telegram", value: "@alex" }],
+	contacts: [
+		{ channel: "email", value: "alex@example.com" },
+		{ channel: "telegram", value: "@alex" },
+	],
+	company: "Example LLC",
+	meetingSlot,
 	qualificationStatus: "none",
 	createdAt: at,
 	updatedAt: at,
@@ -85,24 +97,81 @@ describe("shared contracts", () => {
 		).toBe(false);
 	});
 
-	test("validates a minimal booking and rejects missing consent", () => {
+	test("requires complete lead data, consent, and one structured meeting slot", () => {
 		const input = {
 			conversationId,
 			idempotencyKey: "turn-booking-0001",
 			name: "Александр",
-			contacts: [{ channel: "telegram", value: "@alex" }],
+			contacts: [
+				{ channel: "email", value: "alex@example.com" },
+				{ channel: "telegram", value: "@alex" },
+			],
+			company: "Example LLC",
+			meetingSlot,
 			consentConfirmed: true,
 		};
 
 		expect(CreateBookingInputSchema.safeParse(input).success).toBe(true);
+		for (const invalid of [
+			{ ...input, consentConfirmed: false },
+			{ ...input, company: undefined },
+			{ ...input, meetingSlot: undefined },
+			{ ...input, contacts: [{ channel: "email", value: "alex@example.com" }] },
+			{ ...input, contacts: [{ channel: "telegram", value: "@alex" }] },
+			{
+				...input,
+				contacts: [
+					{ channel: "email", value: "not-an-email" },
+					{ channel: "phone", value: "+79991234567" },
+				],
+			},
+		]) {
+			expect(CreateBookingInputSchema.safeParse(invalid).success).toBe(false);
+		}
+	});
+
+	test("validates canonical 20-minute Moscow weekday slots on the business grid", () => {
+		expect(MeetingSlotSchema.safeParse(meetingSlot).success).toBe(true);
 		expect(
-			CreateBookingInputSchema.safeParse({ ...input, consentConfirmed: false })
-				.success,
-		).toBe(false);
+			MeetingSlotSchema.safeParse({
+				...meetingSlot,
+				startAt: "2026-08-03T14:00:00.000Z",
+				endAt: "2026-08-03T14:20:00.000Z",
+			}).success,
+		).toBe(true);
+		for (const invalid of [
+			{
+				...meetingSlot,
+				startAt: "2026-08-01T06:00:00.000Z",
+				endAt: "2026-08-01T06:20:00.000Z",
+			},
+			{
+				...meetingSlot,
+				startAt: "2026-08-03T05:40:00.000Z",
+				endAt: "2026-08-03T06:00:00.000Z",
+			},
+			{
+				...meetingSlot,
+				startAt: "2026-08-03T14:20:00.000Z",
+				endAt: "2026-08-03T14:40:00.000Z",
+			},
+			{ ...meetingSlot, endAt: "2026-08-03T06:30:00.000Z" },
+			{ ...meetingSlot, startAt: "2026-08-03T06:00:00Z" },
+		]) {
+			expect(MeetingSlotSchema.safeParse(invalid).success).toBe(false);
+		}
 	});
 
 	test("allows an empty reusable patch only for skipped qualification input", () => {
 		expect(QualificationPatchSchema.safeParse({}).success).toBe(true);
+		expect(
+			QualificationPatchSchema.safeParse({ salesManagerCount: 25 }).success,
+		).toBe(true);
+		for (const salesManagerCount of [-1, 1.5, 10_001, "25"]) {
+			expect(
+				QualificationPatchSchema.safeParse({ salesManagerCount }).success,
+			).toBe(false);
+		}
 		for (const completion of ["partial", "complete"] as const) {
 			expect(
 				AppendQualificationInputSchema.safeParse({
@@ -164,7 +233,9 @@ describe("shared contracts", () => {
 				conversationId,
 				idempotencyKey: "turn-booking-replay",
 				name: "Александр",
-				contacts: [{ channel: "telegram", value: "@alex" }],
+				contacts: bookingSnapshot.contacts,
+				company: bookingSnapshot.company,
+				meetingSlot,
 				consentConfirmed: true,
 			},
 		};
@@ -667,7 +738,9 @@ describe("shared contracts", () => {
 				bookingId,
 				conversationId,
 				name: "Александр",
-				contacts: [{ channel: "telegram", value: "@alex" }],
+				contacts: bookingSnapshot.contacts,
+				company: bookingSnapshot.company,
+				meetingSlot,
 				status: "booked",
 				qualificationStatus: "none",
 			},

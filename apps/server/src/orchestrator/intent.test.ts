@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { BookingSnapshot } from "@botamin/contracts";
+import {
+	createTestBookingContacts,
+	createTestMeetingSlot,
+} from "../../../../packages/test-fixtures/src";
 import { classifyConservativeNegativeIntent } from "./orchestrator";
 import { createInitialConversationState } from "./state";
 
@@ -8,7 +12,9 @@ const booking: BookingSnapshot = {
 	conversationId: "01J00000000000000000000000",
 	status: "booked",
 	name: "Анна",
-	contacts: [{ channel: "telegram", value: "@anna" }],
+	contacts: createTestBookingContacts(),
+	company: "Example LLC",
+	meetingSlot: createTestMeetingSlot(),
 	qualificationStatus: "none",
 	createdAt: "2026-07-30T20:22:00.000Z",
 	updatedAt: "2026-07-30T20:22:00.000Z",

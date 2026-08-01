@@ -3,21 +3,23 @@ import {
 	AppendQualificationInputSchema,
 	type AppendQualificationResult,
 	AppendQualificationResultSchema,
+	BookingContactsSchema,
 	BookingCreatedEventSchema,
 	type BookingDomainEvent,
 	type BookingService,
 	type BookingSnapshot,
 	BookingSnapshotSchema,
 	BookingUpdatedEventSchema,
-	ContactSchema,
 	type CreateBookingInput,
 	CreateBookingInputSchema,
 	type CreateBookingResult,
 	CreateBookingResultSchema,
+	type MeetingSlot,
+	MeetingSlotSchema,
 	type QualificationPatch,
 	QualificationPatchSchema,
 } from "@botamin/contracts";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { DomainDatabase } from "../../db/database";
 import {
 	bookings,
@@ -32,7 +34,9 @@ import {
 	type Clock,
 	canonicalJson,
 	createEntityId,
+	generateCandidateMeetingSlots,
 	type IdFactory,
+	isMeetingSlotBookable,
 	requestHash,
 } from "./support";
 
@@ -75,16 +79,30 @@ interface CommittedOperation<T> {
 }
 
 function bookingSnapshot(row: BookingRow): BookingSnapshot {
+	if (
+		row.company === null ||
+		row.meetingStartAt === null ||
+		row.meetingEndAt === null ||
+		row.meetingTimeZone === null
+	) {
+		throw new BookingDomainError(
+			"BOOKING_VALIDATION_FAILED",
+			"Stored booking does not contain a complete internal meeting slot",
+		);
+	}
 	return BookingSnapshotSchema.parse({
 		id: row.id,
 		conversationId: row.conversationId,
 		status: row.status,
 		name: row.name,
-		contacts: ContactSchema.array().parse(JSON.parse(row.contactsJson)),
-		...(row.company === null ? {} : { company: row.company }),
-		...(row.preferredTimeText === null
-			? {}
-			: { preferredTimeText: row.preferredTimeText }),
+		contacts: BookingContactsSchema.parse(JSON.parse(row.contactsJson)),
+		company: row.company,
+		meetingSlot: MeetingSlotSchema.parse({
+			startAt: row.meetingStartAt,
+			endAt: row.meetingEndAt,
+			timeZone: row.meetingTimeZone,
+			durationMinutes: 20,
+		}),
 		qualification: QualificationPatchSchema.parse(
 			JSON.parse(row.qualificationJson),
 		),
@@ -113,6 +131,32 @@ export class SqliteBookingService implements BookingService {
 					now: this.now,
 				})
 			: undefined;
+	}
+
+	/**
+	 * Returns two deterministic internal candidates, excluding slots committed
+	 * at query time. This does not reserve a slot or assert external availability.
+	 */
+	async candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]> {
+		const now = this.now();
+		const unavailable = new Set<string>();
+		while (true) {
+			const candidates = generateCandidateMeetingSlots(now, unavailable);
+			const committed = this.database
+				.select({ startAt: bookings.meetingStartAt })
+				.from(bookings)
+				.where(
+					inArray(
+						bookings.meetingStartAt,
+						candidates.map((slot) => slot.startAt),
+					),
+				)
+				.all();
+			if (committed.length === 0) return candidates;
+			for (const row of committed) {
+				if (row.startAt !== null) unavailable.add(row.startAt);
+			}
+		}
 	}
 
 	async createBooking(input: CreateBookingInput): Promise<CreateBookingResult> {
@@ -145,6 +189,7 @@ export class SqliteBookingService implements BookingService {
 					.where(eq(bookings.conversationId, parsed.conversationId))
 					.get();
 				if (existing !== undefined) {
+					bookingSnapshot(existing);
 					const result = CreateBookingResultSchema.parse({
 						ok: true,
 						created: false,
@@ -167,7 +212,25 @@ export class SqliteBookingService implements BookingService {
 					return { result };
 				}
 
-				const timestamp = this.now().toISOString();
+				const now = this.now();
+				if (!isMeetingSlotBookable(parsed.meetingSlot, now)) {
+					throw new BookingDomainError(
+						"BOOKING_VALIDATION_FAILED",
+						"Meeting slot is not bookable for the current server clock",
+					);
+				}
+				const occupied = transaction
+					.select({ id: bookings.id })
+					.from(bookings)
+					.where(eq(bookings.meetingStartAt, parsed.meetingSlot.startAt))
+					.get();
+				if (occupied !== undefined) {
+					throw new BookingDomainError(
+						"BOOKING_VALIDATION_FAILED",
+						"Meeting slot is no longer available internally",
+					);
+				}
+				const timestamp = now.toISOString();
 				const bookingId = this.idFactory();
 				const eventId = this.idFactory();
 				transaction
@@ -178,12 +241,10 @@ export class SqliteBookingService implements BookingService {
 						status: "booked",
 						name: parsed.name,
 						contactsJson: canonicalJson(parsed.contacts),
-						...(parsed.company === undefined
-							? {}
-							: { company: parsed.company }),
-						...(parsed.preferredTimeText === undefined
-							? {}
-							: { preferredTimeText: parsed.preferredTimeText }),
+						company: parsed.company,
+						meetingStartAt: parsed.meetingSlot.startAt,
+						meetingEndAt: parsed.meetingSlot.endAt,
+						meetingTimeZone: parsed.meetingSlot.timeZone,
 						qualificationJson: "{}",
 						qualificationStatus: "none",
 						createdAt: timestamp,
@@ -201,12 +262,8 @@ export class SqliteBookingService implements BookingService {
 						conversationId: parsed.conversationId,
 						name: parsed.name,
 						contacts: parsed.contacts,
-						...(parsed.company === undefined
-							? {}
-							: { company: parsed.company }),
-						...(parsed.preferredTimeText === undefined
-							? {}
-							: { preferredTimeText: parsed.preferredTimeText }),
+						company: parsed.company,
+						meetingSlot: parsed.meetingSlot,
 						status: "booked",
 						qualificationStatus: "none",
 					},
@@ -278,6 +335,7 @@ export class SqliteBookingService implements BookingService {
 						"Qualification requires an existing booked booking",
 					);
 				}
+				bookingSnapshot(existing);
 				const current = QualificationPatchSchema.parse(
 					JSON.parse(existing.qualificationJson),
 				);

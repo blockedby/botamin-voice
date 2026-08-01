@@ -19,6 +19,10 @@ import {
 	type TtsSynthesisRequest,
 } from "@botamin/contracts";
 import {
+	createTestBookingContacts,
+	createTestMeetingSlot,
+} from "../../../../packages/test-fixtures/src";
+import {
 	ConversationOrchestrator,
 	createInitialConversationState,
 } from "../orchestrator";
@@ -212,6 +216,8 @@ class Bookings implements BookingService {
 				status: "booked",
 				name: input.name,
 				contacts: input.contacts,
+				company: input.company,
+				meetingSlot: input.meetingSlot,
 				qualification: {},
 				qualificationStatus: "none",
 				createdAt: now,
@@ -558,7 +564,9 @@ describe("gateway fake full WebSocket path", () => {
 						conversationId,
 						idempotencyKey: "booking-idempotency-0001",
 						name: "Александр",
-						contacts: [{ channel: "telegram", value: "@alex" }],
+						contacts: createTestBookingContacts(),
+						company: "Example LLC",
+						meetingSlot: createTestMeetingSlot(),
 						consentConfirmed: true,
 					},
 				},
@@ -611,7 +619,9 @@ describe("gateway fake full WebSocket path", () => {
 								conversationId,
 								idempotencyKey: "booking-consent-key-0001",
 								name: "Александр",
-								contacts: [{ channel: "telegram", value: "@alex" }],
+								contacts: createTestBookingContacts(),
+								company: "Example LLC",
+								meetingSlot: createTestMeetingSlot(),
 								consentConfirmed: true,
 							},
 						},

@@ -5,6 +5,10 @@ import {
 	ConversationStageSchema,
 } from "@botamin/contracts";
 import {
+	createTestBookingContacts,
+	createTestMeetingSlot,
+} from "../../../../packages/test-fixtures/src";
+import {
 	type ConversationEvent,
 	type ConversationState,
 	createInitialConversationState,
@@ -18,7 +22,9 @@ const booking: BookingSnapshot = {
 	conversationId,
 	status: "booked",
 	name: "Анна",
-	contacts: [{ channel: "email", value: "anna@example.com" }],
+	contacts: createTestBookingContacts(),
+	company: "Example LLC",
+	meetingSlot: createTestMeetingSlot(),
 	qualificationStatus: "none",
 	createdAt: "2026-07-30T20:22:00.000Z",
 	updatedAt: "2026-07-30T20:22:00.000Z",

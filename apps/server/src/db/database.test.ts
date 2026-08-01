@@ -55,7 +55,7 @@ function legacyDatabaseFixture() {
 }
 
 describe("domain database migrations", () => {
-	test("upgrades legacy idempotency scopes and adds outbox claim identity", () => {
+	test("upgrades legacy scopes and adds internal meeting slot constraints", () => {
 		const { database: legacy, filename } = legacyDatabaseFixture();
 		legacy
 			.insert(idempotencyKeys)
@@ -79,7 +79,65 @@ describe("domain database migrations", () => {
 			.all()
 			.map((column) => column.name);
 		expect(outboxColumns).toContain("claim_token");
+		const bookingColumns = upgraded.$client
+			.query<{ name: string }, []>("PRAGMA table_info(bookings)")
+			.all()
+			.map((column) => column.name);
+		expect(bookingColumns).toEqual(
+			expect.arrayContaining([
+				"meeting_start_at",
+				"meeting_end_at",
+				"meeting_timezone",
+			]),
+		);
+		const bookingIndexes = upgraded.$client
+			.query<{ name: string }, []>("PRAGMA index_list(bookings)")
+			.all()
+			.map((index) => index.name);
+		expect(bookingIndexes).toContain("bookings_meeting_start_unique");
 		closeDomainDatabase(upgraded);
+	});
+
+	test("fails closed instead of inventing meeting slots for legacy bookings", () => {
+		const { database: legacy, filename } = legacyDatabaseFixture();
+		legacy.$client.run(
+			`INSERT INTO conversations
+			 (id, status, stage, prompt_version, source, locale, qualification_enabled, consent_at, started_at)
+			 VALUES (?, 'active', 'BOOKED', ?, 'landing', 'ru-RU', 1, ?, ?)`,
+			[
+				"legacy-conversation",
+				"a".repeat(64),
+				"2026-07-30T20:22:00.000Z",
+				"2026-07-30T20:22:00.000Z",
+			],
+		);
+		legacy.$client.run(
+			`INSERT INTO bookings
+			 (id, conversation_id, name, contacts_json, created_at, updated_at)
+			 VALUES ('legacy-booking', 'legacy-conversation', 'Legacy', '[]', ?, ?)`,
+			["2026-07-30T20:22:00.000Z", "2026-07-30T20:22:00.000Z"],
+		);
+		closeDomainDatabase(legacy);
+
+		expect(() => openDomainDatabase({ filename })).toThrow(
+			"_booking_slot_migration_guard",
+		);
+		const unchanged = openDomainDatabase({
+			filename,
+			applyMigrations: false,
+		});
+		expect(
+			unchanged.$client
+				.query<{ value: number }, []>("SELECT count(*) AS value FROM bookings")
+				.get()?.value,
+		).toBe(1);
+		expect(
+			unchanged.$client
+				.query<{ name: string }, []>("PRAGMA table_info(bookings)")
+				.all()
+				.some((column) => column.name === "meeting_start_at"),
+		).toBe(false);
+		closeDomainDatabase(unchanged);
 	});
 
 	test("fails closed on legacy operation scopes without their subject", () => {

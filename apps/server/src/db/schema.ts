@@ -71,6 +71,11 @@ export const bookings = sqliteTable(
 		contactsJson: text("contacts_json").notNull(),
 		company: text("company"),
 		preferredTimeText: text("preferred_time_text"),
+		meetingStartAt: text("meeting_start_at"),
+		meetingEndAt: text("meeting_end_at"),
+		meetingTimeZone: text("meeting_timezone", {
+			enum: ["Europe/Moscow"],
+		}),
 		qualificationJson: text("qualification_json").notNull().default("{}"),
 		qualificationStatus: text("qualification_status", {
 			enum: ["none", "partial", "complete", "skipped"],
@@ -82,7 +87,14 @@ export const bookings = sqliteTable(
 	},
 	(table) => [
 		unique("bookings_conversation_unique").on(table.conversationId),
+		uniqueIndex("bookings_meeting_start_unique")
+			.on(table.meetingStartAt)
+			.where(sql`${table.meetingStartAt} IS NOT NULL`),
 		check("bookings_status_booked", sql`${table.status} = 'booked'`),
+		check(
+			"bookings_meeting_slot_complete",
+			sql`(${table.meetingStartAt} IS NULL AND ${table.meetingEndAt} IS NULL AND ${table.meetingTimeZone} IS NULL) OR (${table.meetingStartAt} IS NOT NULL AND ${table.meetingEndAt} IS NOT NULL AND ${table.meetingTimeZone} = 'Europe/Moscow')`,
+		),
 	],
 );
 

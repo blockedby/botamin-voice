@@ -5,6 +5,8 @@ import { join } from "node:path";
 import type { BrainDelta, CreateBookingInput } from "@botamin/contracts";
 import { count } from "drizzle-orm";
 import {
+	createTestBookingContacts,
+	createTestMeetingSlot,
 	FakeBrain,
 	FakeStt,
 	FakeTts,
@@ -71,7 +73,9 @@ describe("orchestrator with durable SQLite booking service", () => {
 			conversationId,
 			idempotencyKey: "sqlite-orchestrator-create-01",
 			name: "Мария",
-			contacts: [{ channel: "telegram", value: "@private_maria" }],
+			contacts: createTestBookingContacts(),
+			company: "Private Example LLC",
+			meetingSlot: createTestMeetingSlot(),
 			consentConfirmed: true,
 		};
 		const script: BrainDelta[] = [

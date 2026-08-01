@@ -14,6 +14,7 @@ import {
 	type SttTranscriptionRequest,
 	type TtsSynthesisRequest,
 } from "@botamin/contracts";
+import { createTestBookingContacts, createTestMeetingSlot } from "./booking";
 import {
 	FakeBookingService,
 	FakeBrain,
@@ -41,8 +42,9 @@ const bookingInput: CreateBookingInput = {
 	conversationId,
 	idempotencyKey: "booking-turn-0001",
 	name: "Александр",
-	contacts: [{ channel: "telegram", value: "@alex" }],
-	preferredTimeText: "завтра после 15:00",
+	contacts: createTestBookingContacts(),
+	company: "Example LLC",
+	meetingSlot: createTestMeetingSlot(),
 	consentConfirmed: true,
 };
 

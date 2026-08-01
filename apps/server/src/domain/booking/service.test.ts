@@ -18,9 +18,13 @@ import {
 } from "../../db/schema";
 import type { NamedLeadNotifier } from "../../notifiers/notifier";
 import { BookingDomainError, SqliteBookingService } from "./service";
+import { generateCandidateMeetingSlots } from "./support";
 
 const directories: string[] = [];
 const timestamp = "2026-07-30T20:22:00.000Z";
+const [meetingSlot, secondMeetingSlot] = generateCandidateMeetingSlots(
+	new Date("2099-01-01T00:00:00.000Z"),
+);
 const promptVersion = "a".repeat(64);
 
 function fixture(): {
@@ -54,9 +58,12 @@ function fixture(): {
 			conversationId,
 			idempotencyKey: "booking-attempt-0001",
 			name: "Александр",
-			contacts: [{ channel: "telegram", value: "@alex_private" }],
+			contacts: [
+				{ channel: "email", value: "alex@example.com" },
+				{ channel: "telegram", value: "@alex_private" },
+			],
 			company: "Private Example LLC",
-			preferredTimeText: "завтра после 15:00",
+			meetingSlot,
 			consentConfirmed: true,
 		},
 	};
@@ -95,6 +102,62 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("generates exactly two deterministic non-today Moscow candidates and skips committed slots", async () => {
+		const { database, input } = fixture();
+		const now = new Date(timestamp);
+		const expected = generateCandidateMeetingSlots(now);
+		const service = new SqliteBookingService(database, { now: () => now });
+
+		expect(await service.candidateMeetingSlots()).toEqual(expected);
+		await service.createBooking({ ...input, meetingSlot: expected[0] });
+		const afterCommit = await service.candidateMeetingSlots();
+
+		expect(afterCommit).toHaveLength(2);
+		expect(afterCommit[0]).toEqual(expected[1]);
+		expect(
+			afterCommit.every((slot) => slot.startAt !== expected[0].startAt),
+		).toBe(true);
+		expect(expected).toEqual(generateCandidateMeetingSlots(now));
+		expect(
+			generateCandidateMeetingSlots(new Date("2026-07-31T20:00:00.000Z")).map(
+				(slot) => slot.startAt,
+			),
+		).toEqual(["2026-08-03T06:00:00.000Z", "2026-08-03T06:20:00.000Z"]);
+		expect(expected[0].timeZone).toBe("Europe/Moscow");
+		expect(
+			new Date(expected[0].startAt).getTime() - now.getTime(),
+		).toBeGreaterThan(0);
+		closeDomainDatabase(database);
+	});
+
+	test("rejects incomplete leads and clock-invalid slots without creating a booking", async () => {
+		const { database, input } = fixture();
+		const now = new Date(timestamp);
+		const service = new SqliteBookingService(database, { now: () => now });
+		const todayInMoscow = {
+			startAt: "2026-07-30T06:00:00.000Z",
+			endAt: "2026-07-30T06:20:00.000Z",
+			timeZone: "Europe/Moscow" as const,
+			durationMinutes: 20 as const,
+		};
+
+		for (const invalid of [
+			{ ...input, company: undefined },
+			{ ...input, contacts: [{ channel: "email", value: "alex@example.com" }] },
+			{ ...input, meetingSlot: todayInMoscow },
+		]) {
+			await expect(
+				service.createBooking(invalid as CreateBookingInput),
+			).rejects.toMatchObject({
+				code: "BOOKING_VALIDATION_FAILED",
+			});
+		}
+		expect(
+			database.select({ value: count() }).from(bookings).get()?.value,
+		).toBe(0);
+		closeDomainDatabase(database);
+	});
+
 	test("returns the stable booking for key and conversation replays", async () => {
 		const { database, input, conversationId } = fixture();
 		const service = new SqliteBookingService(database);
@@ -115,9 +178,11 @@ describe("SQLite booking transaction", () => {
 			bookingId: created.bookingId,
 			created: false,
 		});
-		expect((await service.findByConversationId(conversationId))?.name).toBe(
-			"Александр",
-		);
+		expect(await service.findByConversationId(conversationId)).toMatchObject({
+			name: "Александр",
+			company: input.company,
+			meetingSlot: input.meetingSlot,
+		});
 		expect(
 			database.select({ value: count() }).from(bookings).get()?.value,
 		).toBe(1);
@@ -164,6 +229,7 @@ describe("SQLite booking transaction", () => {
 			...input,
 			conversationId: secondConversationId,
 			name: "Мария",
+			meetingSlot: secondMeetingSlot,
 		};
 		const second = await service.createBooking(secondInput);
 
@@ -214,6 +280,35 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("rejects a committed internal slot for a different conversation", async () => {
+		const { database, input } = fixture();
+		const secondConversationId = Bun.randomUUIDv7();
+		new ConversationStore(database).create({
+			id: secondConversationId,
+			stage: "COLLECT_BOOKING",
+			promptVersion,
+			source: "landing",
+			locale: "ru-RU",
+			qualificationEnabled: true,
+			consentAt: timestamp,
+			startedAt: timestamp,
+		});
+		const service = new SqliteBookingService(database);
+		await service.createBooking(input);
+
+		await expect(
+			service.createBooking({
+				...input,
+				conversationId: secondConversationId,
+				idempotencyKey: "booking-slot-conflict-02",
+			}),
+		).rejects.toMatchObject({ code: "BOOKING_VALIDATION_FAILED" });
+		expect(
+			database.select({ value: count() }).from(bookings).get()?.value,
+		).toBe(1);
+		closeDomainDatabase(database);
+	});
+
 	test("preserves booking and replay state across a process-style restart", async () => {
 		const { database, filename, input } = fixture();
 		const created = await new SqliteBookingService(database).createBooking(
@@ -222,9 +317,9 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 
 		const restarted = openDomainDatabase({ filename });
-		const replay = await new SqliteBookingService(restarted).createBooking(
-			input,
-		);
+		const replay = await new SqliteBookingService(restarted, {
+			now: () => new Date("2100-01-01T00:00:00.000Z"),
+		}).createBooking(input);
 		expect(replay).toMatchObject({
 			bookingId: created.bookingId,
 			created: false,
@@ -297,7 +392,10 @@ describe("SQLite booking transaction", () => {
 		const second = await service.appendQualification({
 			bookingId: created.bookingId,
 			idempotencyKey: "qualification-partial-02",
-			patch: { monthlyLeadVolume: "около 2000" },
+			patch: {
+				monthlyLeadVolume: "около 2000",
+				salesManagerCount: 12,
+			},
 			completion: "partial",
 		});
 		const skipped = await service.appendQualification({
@@ -308,7 +406,10 @@ describe("SQLite booking transaction", () => {
 		});
 		const snapshot = await service.findById(created.bookingId);
 
-		expect(second.updatedFields).toEqual(["monthlyLeadVolume"]);
+		expect(second.updatedFields).toEqual([
+			"monthlyLeadVolume",
+			"salesManagerCount",
+		]);
 		expect(skipped).toMatchObject({
 			bookingId: created.bookingId,
 			qualificationStatus: "skipped",
@@ -321,6 +422,7 @@ describe("SQLite booking transaction", () => {
 				role: "Head of Sales",
 				crm: "amoCRM",
 				monthlyLeadVolume: "около 2000",
+				salesManagerCount: 12,
 			},
 		});
 		closeDomainDatabase(database);
@@ -409,17 +511,27 @@ describe("SQLite booking transaction", () => {
 
 		expect(() =>
 			database.$client.run(
-				"INSERT INTO bookings (id, conversation_id, name, contacts_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+				"INSERT INTO bookings (id, conversation_id, name, contacts_json, company, meeting_start_at, meeting_end_at, meeting_timezone, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				[
 					Bun.randomUUIDv7(),
 					input.conversationId,
 					"Duplicate",
-					'[{"channel":"telegram","value":"@duplicate"}]',
+					'[{"channel":"email","value":"duplicate@example.com"},{"channel":"telegram","value":"@duplicate"}]',
+					"Duplicate LLC",
+					secondMeetingSlot.startAt,
+					secondMeetingSlot.endAt,
+					secondMeetingSlot.timeZone,
 					created.createdAt,
 					created.createdAt,
 				],
 			),
 		).toThrow("UNIQUE constraint failed");
+		expect(() =>
+			database.$client.run(
+				"UPDATE bookings SET meeting_start_at = '2099-01-05 06:00:00' WHERE id = ?",
+				[created.bookingId],
+			),
+		).toThrow("booking requires a valid internal meeting slot");
 		expect(() =>
 			database.$client.run(
 				"UPDATE bookings SET status = 'cancelled' WHERE id = ?",

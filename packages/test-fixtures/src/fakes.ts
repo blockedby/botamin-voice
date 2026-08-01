@@ -287,10 +287,8 @@ export class FakeBookingService implements BookingService {
 			status: "booked",
 			name: parsed.name,
 			contacts: parsed.contacts,
-			...(parsed.company === undefined ? {} : { company: parsed.company }),
-			...(parsed.preferredTimeText === undefined
-				? {}
-				: { preferredTimeText: parsed.preferredTimeText }),
+			company: parsed.company,
+			meetingSlot: parsed.meetingSlot,
 			qualificationStatus: "none",
 			createdAt: at,
 			updatedAt: at,
@@ -312,10 +310,8 @@ export class FakeBookingService implements BookingService {
 				conversationId: parsed.conversationId,
 				name: parsed.name,
 				contacts: parsed.contacts,
-				...(parsed.company === undefined ? {} : { company: parsed.company }),
-				...(parsed.preferredTimeText === undefined
-					? {}
-					: { preferredTimeText: parsed.preferredTimeText }),
+				company: parsed.company,
+				meetingSlot: parsed.meetingSlot,
 				status: "booked",
 				qualificationStatus: "none",
 			},

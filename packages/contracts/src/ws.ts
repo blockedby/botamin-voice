@@ -257,7 +257,7 @@ export const BookingUpdatedWsEventSchema = z
 			.object({
 				bookingId: EntityIdSchema,
 				qualificationStatus: z.enum(["partial", "complete", "skipped"]),
-				updatedFields: z.array(z.string().min(1)).max(11),
+				updatedFields: z.array(z.string().min(1)).max(12),
 				updatedAt: Rfc3339UtcSchema,
 			})
 			.strict(),

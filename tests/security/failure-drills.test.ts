@@ -22,6 +22,8 @@ import type {
 } from "../../packages/contracts/src";
 import {
 	createDeterministicWavFixture,
+	createTestBookingContacts,
+	createTestMeetingSlot,
 	FakeBrain,
 	FakeStt,
 } from "../../packages/test-fixtures/src";
@@ -73,7 +75,9 @@ describe("safe provider failure drills", () => {
 				conversationId,
 				idempotencyKey: `stt-provider-drill-${status}`,
 				name: "Мария",
-				contacts: [{ channel: "email", value: "private@example.com" }],
+				contacts: createTestBookingContacts(),
+				company: "Private Example LLC",
+				meetingSlot: createTestMeetingSlot(),
 				consentConfirmed: true,
 			});
 			const booking = await service.findByConversationId(conversationId);
@@ -171,7 +175,9 @@ describe("safe provider failure drills", () => {
 				conversationId,
 				idempotencyKey: `provider-drill-${status}-booking`,
 				name: "Мария",
-				contacts: [{ channel: "email", value: "private@example.com" }],
+				contacts: createTestBookingContacts(),
+				company: "Private Example LLC",
+				meetingSlot: createTestMeetingSlot(),
 				consentConfirmed: true,
 			};
 			const script: BrainDelta[] = [

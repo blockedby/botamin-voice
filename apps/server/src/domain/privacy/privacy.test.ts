@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { count } from "drizzle-orm";
+import { createTestMeetingSlot } from "../../../../../packages/test-fixtures/src";
 import { ConversationStore } from "../../db/conversation-store";
 import { closeDomainDatabase, openDomainDatabase } from "../../db/database";
 import {
@@ -35,6 +36,7 @@ describe("PII privacy services", () => {
 				contacts: [{ channel: "email", value: "alex@example.com" }],
 				user_text: "raw transcript",
 				contacts_json: '[{"value":"secret_handle"}]',
+				meetingSlot: createTestMeetingSlot(),
 				message:
 					"Call +7 999 123-45-67 or @alex_private; telegram secret_handle",
 			}),
@@ -45,6 +47,7 @@ describe("PII privacy services", () => {
 		expect(redacted).not.toContain("@alex_private");
 		expect(redacted).not.toContain("secret_handle");
 		expect(redacted).not.toContain("raw transcript");
+		expect(redacted).not.toContain("2099-01-05");
 		expect(redacted).toContain("[REDACTED]");
 	});
 
@@ -92,7 +95,12 @@ describe("PII privacy services", () => {
 			conversationId,
 			idempotencyKey: "retention-booking-0001",
 			name: "Александр",
-			contacts: [{ channel: "telegram", value: "@alex" }],
+			contacts: [
+				{ channel: "email", value: "alex@example.com" },
+				{ channel: "telegram", value: "@alex" },
+			],
+			company: "Private Company",
+			meetingSlot: createTestMeetingSlot(),
 			consentConfirmed: true,
 		});
 
@@ -160,8 +168,12 @@ describe("PII privacy services", () => {
 			conversationId,
 			idempotencyKey: "delete-booking-0001",
 			name: "Александр",
-			contacts: [{ channel: "email", value: "alex@example.com" }],
+			contacts: [
+				{ channel: "email", value: "alex@example.com" },
+				{ channel: "phone", value: "+79991234567" },
+			],
 			company: "Private Company",
+			meetingSlot: createTestMeetingSlot(),
 			consentConfirmed: true,
 		});
 		await service.appendQualification({

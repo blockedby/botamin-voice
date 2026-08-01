@@ -22,6 +22,13 @@
 			"when": 1785502802000,
 			"tag": "0002_transcript_retention_index",
 			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "6",
+			"when": 1785502803000,
+			"tag": "0003_internal_meeting_slots",
+			"breakpoints": true
 		}
 	]
 }

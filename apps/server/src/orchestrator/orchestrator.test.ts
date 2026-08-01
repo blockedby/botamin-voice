@@ -18,6 +18,8 @@ import type {
 } from "@botamin/contracts";
 import {
 	createDeterministicMp3Fixture,
+	createTestBookingContacts,
+	createTestMeetingSlot,
 	FakeBookingService,
 	FakeBrain,
 	FakeNotifier,
@@ -51,7 +53,9 @@ const bookingInput: CreateBookingInput = {
 	conversationId,
 	idempotencyKey: "booking-orchestrator-0001",
 	name: "Анна",
-	contacts: [{ channel: "email", value: "anna@example.com" }],
+	contacts: createTestBookingContacts(),
+	company: "Example LLC",
+	meetingSlot: createTestMeetingSlot(),
 	consentConfirmed: true,
 };
 

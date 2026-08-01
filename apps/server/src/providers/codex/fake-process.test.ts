@@ -11,6 +11,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrainDelta, BrainTurnInput } from "@botamin/contracts";
 import {
+	createTestBookingContacts,
+	createTestMeetingSlot,
+} from "../../../../../packages/test-fixtures/src";
+import {
 	assertStructuredOutputSchema,
 	BRAIN_ENVELOPE_OUTPUT_SCHEMA,
 	CodexAppServerBrain,
@@ -1031,7 +1035,9 @@ describe("Codex app-server brain with deterministic fake process", () => {
 					conversationId: CONVERSATION_ID,
 					status: "booked",
 					name: "Иван",
-					contacts: [{ channel: "telegram", value: "@ivan" }],
+					contacts: createTestBookingContacts(),
+					company: "Example LLC",
+					meetingSlot: createTestMeetingSlot(),
 					qualificationStatus: "none",
 					createdAt: "2026-07-30T20:22:00.000Z",
 					updatedAt: "2026-07-30T20:22:00.000Z",

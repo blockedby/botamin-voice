@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { CreateBookingInput } from "@botamin/contracts";
-import { FakeBookingService } from "../../../../packages/test-fixtures/src";
+import {
+	createTestBookingContacts,
+	createTestMeetingSlot,
+	FakeBookingService,
+} from "../../../../packages/test-fixtures/src";
 import { allowedActions, authorizeTool, BookingToolExecutor } from "./policy";
 import {
 	type ConversationState,
@@ -12,7 +16,9 @@ const input: CreateBookingInput = {
 	conversationId,
 	idempotencyKey: "booking-policy-0001",
 	name: "Анна",
-	contacts: [{ channel: "email", value: "anna@example.com" }],
+	contacts: createTestBookingContacts(),
+	company: "Example LLC",
+	meetingSlot: createTestMeetingSlot(),
 	consentConfirmed: true,
 };
 const request = {

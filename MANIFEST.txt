@@ -193,6 +193,7 @@ evals/src/generate-baseline.ts
 evals/src/scorer.ts
 evals/tests/scorer.test.ts
 evals/tsconfig.json
+evidence/T30-observed-local-voice-smoke-2026-07-31.md
 infra/Caddyfile
 infra/README.md
 infra/entrypoint.sh
@@ -256,6 +257,7 @@ scripts/compose-secret-files.sh
 scripts/deploy-local.sh
 scripts/deploy-production.sh
 scripts/device-auth.sh
+scripts/local-voice-e2e-smoke.ts
 scripts/materialize-compose-secrets.ts
 scripts/observability-report.ts
 scripts/openrouter-stt-smoke.ts
@@ -294,16 +296,17 @@ tasks/agents/A6-ops.md
 tasks/agents/A7-qa-integration.md
 tasks/tasks.yaml
 technical-spec.html
-tests/contracts/T30_REPLACE_reference_gateway_assembler.test.ts
 tests/contracts/external-smoke-gating.test.ts
 tests/contracts/materialize-compose-secrets.test.ts
 tests/contracts/openrouter-cross-component.test.ts
 tests/contracts/openrouter-provider-harness.test.ts
+tests/contracts/production-gateway-assembler.test.ts
 tests/contracts/typecheck-negative-control.ts
 tests/contracts/voice-data-leakage.test.ts
+tests/e2e/local-smoke-safety.test.ts
+tests/e2e/production-voice-journey.test.ts
 tests/fixtures/compose-dotenv.env
 tests/fixtures/compose-dotenv.yml
-tests/fixtures/reference-gateway-utterance-assembler.ts
 tests/security/failure-drills.test.ts
 tests/security/leakage-and-bundle.test.ts
 tests/security/observability-report.test.ts

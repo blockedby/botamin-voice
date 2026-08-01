@@ -601,7 +601,7 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			config: voiceConfig,
 			credentialHealth,
 			telemetry: (event) => {
-				if (event.status === 200) {
+				if (event.status === 200 && event.outcome === "success") {
 					timeline.push({
 						label: "tts.provider.complete",
 						at: performance.now(),

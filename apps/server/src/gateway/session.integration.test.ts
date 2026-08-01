@@ -529,7 +529,7 @@ describe("gateway fake full WebSocket path", () => {
 		}
 	});
 
-	test("rejects typed input after a terminal server state", async () => {
+	test("explicit typed refusal terminates without Luna, booking, or later selling", async () => {
 		const harness = createHarness({ tts: null });
 		const socket = new Socket();
 		await connect(harness.session, socket);
@@ -537,11 +537,21 @@ describe("gateway fake full WebSocket path", () => {
 			socket,
 			clientEvent("visitor.text.submit", {
 				sequence: 0,
-				text: "Нет спасибо, мне не интересно",
+				text: "Нет, я не заинтересован",
 			}),
 		);
 		await harness.session.drain();
 		expect(harness.orchestrator.state.stage).toBe("DECLINED");
+		expect(harness.brain.runs).toBe(0);
+		expect(harness.bookings.createCalls).toBe(0);
+		expect(
+			socket.events().filter((event) => event.type === "transcript.final"),
+		).toEqual([
+			expect.objectContaining({
+				payload: expect.objectContaining({ text: "Нет, я не заинтересован" }),
+			}),
+		]);
+
 		await harness.session.receive(
 			socket,
 			clientEvent("visitor.text.submit", { sequence: 1, text: "Поздно" }),
@@ -585,9 +595,9 @@ describe("gateway fake full WebSocket path", () => {
 		).toBe(true);
 	});
 
-	test("clear pre-booking refusal becomes DECLINED without brain or booking effects", async () => {
+	test("explicit spoken refusal terminates from transcript.final without Luna or booking", async () => {
 		const stt = new Stt();
-		stt.text = "Нет, спасибо, мне не интересно.";
+		stt.text = "Это не актуально, до свидания.";
 		const harness = createHarness({ stt, tts: null });
 		const socket = new Socket();
 		await connect(harness.session, socket);
@@ -596,6 +606,15 @@ describe("gateway fake full WebSocket path", () => {
 		expect(harness.brain.runs).toBe(0);
 		expect(harness.bookings.createCalls).toBe(0);
 		expect(
+			socket.events().filter((event) => event.type === "transcript.final"),
+		).toEqual([
+			expect.objectContaining({
+				payload: expect.objectContaining({
+					text: "Это не актуально, до свидания.",
+				}),
+			}),
+		]);
+		expect(
 			socket
 				.events()
 				.filter(
@@ -603,6 +622,33 @@ describe("gateway fake full WebSocket path", () => {
 						event.type === "state.changed" && event.payload.to === "DECLINED",
 				),
 		).toHaveLength(1);
+	});
+
+	test("ambiguous typed and spoken negatives remain non-terminal", async () => {
+		const typed = createHarness({ tts: null });
+		const typedSocket = new Socket();
+		await connect(typed.session, typedSocket);
+		await typed.session.receive(
+			typedSocket,
+			clientEvent("visitor.text.submit", {
+				sequence: 0,
+				text: "Нет, у нас нет CRM, расскажите об интеграции",
+			}),
+		);
+		await typed.session.drain();
+		expect(typed.orchestrator.state.stage).not.toBe("DECLINED");
+		expect(typed.brain.runs).toBe(1);
+		expect(typed.bookings.createCalls).toBe(0);
+
+		const stt = new Stt();
+		stt.text = "Не подходит по цене.";
+		const spoken = createHarness({ stt, tts: null });
+		const spokenSocket = new Socket();
+		await connect(spoken.session, spokenSocket);
+		await sendUtterance(spoken.session, spokenSocket);
+		expect(spoken.orchestrator.state.stage).not.toBe("DECLINED");
+		expect(spoken.brain.runs).toBe(1);
+		expect(spoken.bookings.createCalls).toBe(0);
 	});
 
 	test("STT failure emits no transcript and never invokes the brain", async () => {

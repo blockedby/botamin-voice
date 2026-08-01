@@ -226,6 +226,9 @@ export type ConservativeNegativeIntent =
 	| "qualification_decline"
 	| null;
 
+const PRE_BOOKING_REFUSAL_PATTERN =
+	/^(?:нет спасибо|нет(?: спасибо)? (?:мне |нам )?не интересно|нет(?: спасибо)? я не заинтересован(?:а|ы)?|спасибо (?:мне |нам )?не интересно|(?:мне |нам )?не интересно|(?:я )?не заинтересован(?:а|ы)?|(?:меня|нас) (?:это )?не интересует|(?:это|мне это|нам это) не актуально(?: до свидания)?|не нужно|не надо|отказываюсь|я отказываюсь|не хочу (?:продолжать|общаться|разговаривать|оставлять контакты|бронировать)|давайте (?:закончим|завершим)(?: разговор)?|прекратим разговор|до свидания)(?: пожалуйста)?$/u;
+
 /** High-precision refusal detection; objections and uncertain language stay put. */
 export function classifyConservativeNegativeIntent(
 	userText: string,
@@ -235,14 +238,13 @@ export function classifyConservativeNegativeIntent(
 	if (
 		!normalized ||
 		normalized.length > 160 ||
+		/[?？]/u.test(userText) ||
 		/(?:^|\s)(?:но|может|пока)(?:\s|$)/u.test(normalized)
 	) {
 		return null;
 	}
 	if (state.booking === null) {
-		return /^(?:нет спасибо|нет спасибо (?:мне )?не интересно|спасибо не интересно|мне не интересно|не нужно|не надо|отказываюсь|я отказываюсь|не хочу (?:продолжать|общаться|разговаривать|оставлять контакты|бронировать)|давайте (?:закончим|завершим)(?: разговор)?|прекратим разговор)(?: пожалуйста)?$/u.test(
-			normalized,
-		)
+		return PRE_BOOKING_REFUSAL_PATTERN.test(normalized)
 			? "pre_booking_refusal"
 			: null;
 	}

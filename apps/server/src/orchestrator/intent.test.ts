@@ -21,20 +21,39 @@ const booking: BookingSnapshot = {
 };
 
 describe("conservative negative intent", () => {
-	test("recognizes only clear pre-booking refusal", () => {
+	test("recognizes bounded, unambiguous pre-booking refusals", () => {
 		const state = {
 			...createInitialConversationState(),
 			stage: "VALUE" as const,
 		};
-		expect(
-			classifyConservativeNegativeIntent(
-				"Нет, спасибо, мне не интересно.",
-				state,
-			),
-		).toBe("pre_booking_refusal");
+		for (const refusal of [
+			"Нет, спасибо, мне не интересно.",
+			"Нет, я не заинтересован",
+			"Это не актуально, до свидания.",
+			"Я не заинтересована.",
+			"Нас это не интересует.",
+			"Давайте закончим разговор.",
+		]) {
+			expect(classifyConservativeNegativeIntent(refusal, state)).toBe(
+				"pre_booking_refusal",
+			);
+		}
+	});
+
+	test("does not treat objections, questions, or contextual negation as refusal", () => {
+		const state = {
+			...createInitialConversationState(),
+			stage: "VALUE" as const,
+		};
 		for (const ambiguous of [
+			"Не сейчас",
 			"Не уверен, что сейчас удобно",
+			"Не подходит по цене",
+			"Мне не интересно?",
+			"Это не актуально?",
 			"Нет времени сегодня, но расскажите подробнее",
+			"Нет, у нас нет CRM, расскажите об интеграции",
+			"Я не заинтересован в скидке, расскажите о продукте",
 			"Может быть позже",
 		]) {
 			expect(classifyConservativeNegativeIntent(ambiguous, state)).toBeNull();

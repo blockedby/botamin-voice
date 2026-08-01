@@ -112,6 +112,12 @@ const INITIAL_SNAPSHOT: BrowserVoiceSnapshot = {
 };
 
 /** Resolve a contract WS path without allowing the REST response to leave this origin. */
+export function effectiveCaptureDurationMs(
+	config: Pick<AudioClientConfig, "maxUtteranceMs" | "maxPcmBytes">,
+): number {
+	return Math.min(config.maxUtteranceMs, config.maxPcmBytes / 32);
+}
+
 export function resolveSameOriginWebSocketUrl(
 	wsPath: string,
 	baseUrl: string,
@@ -343,18 +349,26 @@ export class BrowserVoiceSession {
 		this.captureArmed = false;
 		capture.setAccepting(false);
 		this.setCaptureProgress(null);
+		const epoch = this.epoch;
+		const finish = capture.finish();
+		const previousCleanup = this.captureCleanup;
+		this.captureCleanup = Promise.allSettled([previousCleanup, finish]).then(
+			() => undefined,
+		);
 		try {
-			await capture.finish();
-			const accepted = this.controller.commit(
-				() => this.transport?.commit() ?? false,
-			);
-			if (!accepted) void this.beginCapture(this.epoch);
+			await finish;
+			if (!this.isCurrent(epoch)) return false;
+			const controller = this.controller;
+			const transport = this.transport;
+			if (!controller || !transport) return false;
+			const accepted = controller.commit(() => transport.commit());
+			if (!accepted) void this.beginCapture(epoch);
 			return accepted;
 		} catch {
-			this.setState(this.activeState("error"));
+			if (this.isCurrent(epoch)) this.setState(this.activeState("error"));
 			return false;
 		} finally {
-			this.committing = false;
+			if (this.epoch === epoch) this.committing = false;
 		}
 	}
 
@@ -488,10 +502,13 @@ export class BrowserVoiceSession {
 					attempt === this.captureAttempt &&
 					this.captureArmed
 				) {
+					const clientConfig = this.clientConfig;
 					this.setCaptureProgress({
 						acceptedPcmBytes: stats.bytes,
 						durationMs: stats.durationMs,
-						maxUtteranceMs: this.clientConfig?.maxUtteranceMs ?? 0,
+						maxUtteranceMs: clientConfig
+							? effectiveCaptureDurationMs(clientConfig)
+							: 0,
 					});
 				}
 			},
@@ -1046,12 +1063,12 @@ export class BrowserVoiceSession {
 	}
 
 	private resetCaptureProgress(): void {
-		const maxUtteranceMs = this.clientConfig?.maxUtteranceMs;
-		if (!maxUtteranceMs) return;
+		const clientConfig = this.clientConfig;
+		if (!clientConfig) return;
 		this.setCaptureProgress({
 			acceptedPcmBytes: 0,
 			durationMs: 0,
-			maxUtteranceMs,
+			maxUtteranceMs: effectiveCaptureDurationMs(clientConfig),
 		});
 	}
 

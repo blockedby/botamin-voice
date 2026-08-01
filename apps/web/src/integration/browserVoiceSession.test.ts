@@ -16,6 +16,7 @@ import type {
 } from "./browserVoiceSession";
 import {
 	BrowserVoiceSession,
+	effectiveCaptureDurationMs,
 	resolveSameOriginWebSocketUrl,
 } from "./browserVoiceSession";
 
@@ -79,6 +80,7 @@ class FakeCapture implements CaptureAdapter {
 		private readonly startError?: Error,
 		private readonly startGate?: Promise<void>,
 		private readonly stopGate?: Promise<void>,
+		private readonly finishGate?: Promise<void>,
 	) {}
 	async prepare(): Promise<void> {
 		this.prepareCalls += 1;
@@ -95,6 +97,7 @@ class FakeCapture implements CaptureAdapter {
 	async finish() {
 		this.finishCalls += 1;
 		this.active = false;
+		await this.finishGate;
 		return { bytes: 3_200, durationMs: 100, limitedBy: null } as const;
 	}
 	async stop(): Promise<void> {
@@ -223,6 +226,7 @@ function harness(
 		captureError?: Error;
 		firstCaptureGate?: Promise<void>;
 		firstCaptureStopGate?: Promise<void>;
+		firstCaptureFinishGate?: Promise<void>;
 		createSocketError?: Error;
 	} = {},
 ) {
@@ -253,6 +257,7 @@ function harness(
 				options.captureError,
 				captures.length === 0 ? options.firstCaptureGate : undefined,
 				captures.length === 0 ? options.firstCaptureStopGate : undefined,
+				captures.length === 0 ? options.firstCaptureFinishGate : undefined,
 			);
 			captures.push(capture);
 			return capture;
@@ -278,6 +283,21 @@ async function readySession(value = harness()) {
 }
 
 describe("production browser voice integration", () => {
+	test("derives countdown duration from the stricter server capture ceiling", () => {
+		expect(
+			effectiveCaptureDurationMs({
+				maxUtteranceMs: 60_000,
+				maxPcmBytes: 1_000_000,
+			}),
+		).toBe(31_250);
+		expect(
+			effectiveCaptureDurationMs({
+				maxUtteranceMs: 60_000,
+				maxPcmBytes: 1_920_000,
+			}),
+		).toBe(60_000);
+	});
+
 	test("requires consent before microphone, REST, or WebSocket effects", async () => {
 		const value = harness();
 		expect(
@@ -440,6 +460,31 @@ describe("production browser voice integration", () => {
 		).toHaveLength(1);
 		expect(value.session.getSnapshot().state.kind).toBe("processing");
 		expect(value.session.getSnapshot().captureProgress).toBeNull();
+	});
+
+	test("reset fences a commit whose capture finish is still pending", async () => {
+		let releaseFinish: () => void = () => undefined;
+		const finishGate = new Promise<void>((resolve) => {
+			releaseFinish = resolve;
+		});
+		const value = await readySession(
+			harness({ firstCaptureFinishGate: finishGate }),
+		);
+		value.capture.emit();
+		const committing = value.session.commit();
+		await flush();
+		expect(value.capture.finishCalls).toBe(1);
+
+		const resetting = value.session.reset();
+		await flush();
+		releaseFinish();
+
+		expect(await committing).toBe(false);
+		await resetting;
+		expect(value.session.getSnapshot().state).toEqual({ kind: "idle" });
+		expect(
+			sentJson(value.socket).filter((item) => item.type === "audio.commit"),
+		).toHaveLength(0);
 	});
 
 	test("projects sample-derived progress and auto-commits a capture limit exactly once", async () => {

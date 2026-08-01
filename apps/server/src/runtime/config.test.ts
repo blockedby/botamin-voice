@@ -31,7 +31,11 @@ describe("validated runtime configuration", () => {
 			model: "gpt-5.6-luna",
 			toolMode: "envelope",
 		});
-		expect(config.voice.stt.audioFormat).toBe("wav");
+		expect(config.voice.stt).toMatchObject({
+			audioFormat: "wav",
+			maxUtteranceMs: 60_000,
+			maxAudioBytes: 2_000_000,
+		});
 		expect(config.voice.tts.responseFormat).toBe("mp3");
 		expect(config.transcriptRetentionDays).toBe(30);
 		expect(config.maxPendingBrainTurns).toBe(6);

@@ -110,6 +110,8 @@ function sessionReady(seq = 1, resumeToken = "resume-token-0001") {
 				inputSampleRate: 16_000,
 				inputEncoding: "pcm16le",
 				chunkMs: 100,
+				maxUtteranceMs: 60_000,
+				maxPcmBytes: 1_920_000,
 				outputContentType: "audio/mpeg",
 				outputMode: "complete-phrase-segments",
 			},

@@ -292,8 +292,8 @@ function createHarness(
 			...options.persistence,
 		},
 		brainModel: "gpt-5.6-luna",
-		maxUtteranceMs: 30_000,
-		maxAudioBytes: 1_000_000,
+		maxUtteranceMs: 60_000,
+		maxAudioBytes: 2_000_000,
 		maxFrameBytes: 3_209,
 		maxJsonBytes: 8_192,
 		maxHistoryEvents: 128,
@@ -758,6 +758,17 @@ describe("gateway fake full WebSocket path", () => {
 			.events()
 			.find((event) => event.type === "session.ready");
 		expect(ready?.type).toBe("session.ready");
+		if (ready?.type === "session.ready") {
+			expect(ready.payload.clientConfig).toEqual({
+				inputSampleRate: 16_000,
+				inputEncoding: "pcm16le",
+				chunkMs: 100,
+				maxUtteranceMs: 60_000,
+				maxPcmBytes: 1_920_000,
+				outputContentType: "audio/mpeg",
+				outputMode: "complete-phrase-segments",
+			});
+		}
 		await sendUtterance(harness.session, first);
 		harness.session.detach(first);
 

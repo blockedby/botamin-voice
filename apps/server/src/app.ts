@@ -15,7 +15,7 @@ import {
 	resolveRequestSourceKey,
 	SourceAdmissionLimiter,
 } from "./gateway/admission";
-import type { GatewaySocket } from "./gateway/session";
+import { createAudioClientConfig, type GatewaySocket } from "./gateway/session";
 import type { RuntimeConfig } from "./runtime/config";
 import type { ServerRuntime } from "./runtime/runtime";
 
@@ -138,13 +138,10 @@ export function createServerApp(runtime: ServerRuntime): Hono<ServerAppEnv> {
 			wsUrl: `/ws/v1/conversations/${session.conversationId}`,
 			clientToken: session.takeClientToken(),
 			expiresAt: session.expiresAt.toISOString(),
-			clientConfig: {
-				inputSampleRate: 16_000,
-				inputEncoding: "pcm16le",
-				chunkMs: 100,
-				outputContentType: "audio/mpeg",
-				outputMode: "complete-phrase-segments",
-			},
+			clientConfig: createAudioClientConfig(
+				runtime.config.voice.stt.maxUtteranceMs,
+				runtime.config.voice.stt.maxAudioBytes,
+			),
 		});
 		return context.json(response, 201);
 	});

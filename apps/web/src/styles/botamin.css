@@ -344,6 +344,75 @@ button {
 	background: currentColor;
 }
 
+.utterance-countdown {
+	display: grid;
+	grid-template-columns: 3.8rem;
+	place-items: center;
+	width: 4.6rem;
+	color: var(--accent-dark);
+}
+
+.utterance-countdown-ring,
+.utterance-countdown-value {
+	grid-area: 1 / 1;
+}
+
+.utterance-countdown-ring {
+	width: 3.8rem;
+	height: 3.8rem;
+	fill: none;
+	stroke-width: 3;
+	transform: rotate(-90deg);
+}
+
+.utterance-countdown-track {
+	stroke: var(--line);
+}
+
+.utterance-countdown-progress {
+	stroke: currentColor;
+	stroke-dasharray: 100;
+	stroke-linecap: square;
+	transition: stroke-dashoffset 120ms linear;
+}
+
+.utterance-countdown-value {
+	display: flex;
+	align-items: baseline;
+	justify-content: center;
+	font-variant-numeric: tabular-nums;
+	line-height: 1;
+}
+
+.utterance-countdown-value strong {
+	font-size: 1.05rem;
+}
+
+.utterance-countdown-value small {
+	margin-inline-start: 0.12rem;
+	font-size: 0.52rem;
+	font-weight: 800;
+	text-transform: uppercase;
+}
+
+.utterance-countdown-label {
+	margin-top: 0.18rem;
+	color: var(--ink-soft);
+	font-size: 0.56rem;
+	font-weight: 700;
+	line-height: 1.15;
+	text-align: center;
+}
+
+.utterance-countdown.is-warning {
+	color: var(--danger);
+}
+
+.utterance-countdown.is-warning .utterance-countdown-label {
+	color: currentColor;
+	font-weight: 850;
+}
+
 .tone-neutral {
 	color: var(--ink-soft);
 }
@@ -1213,6 +1282,10 @@ button {
 		scroll-behavior: auto;
 		transition-duration: 0.01ms;
 	}
+
+	.utterance-countdown-progress {
+		transition: none;
+	}
 }
 
 @media (forced-colors: active) {
@@ -1226,5 +1299,18 @@ button {
 	.status-orbit span,
 	.cadence span {
 		background: currentColor;
+	}
+
+	.utterance-countdown,
+	.utterance-countdown.is-warning {
+		color: CanvasText;
+	}
+
+	.utterance-countdown-track {
+		stroke: GrayText;
+	}
+
+	.utterance-countdown-progress {
+		stroke: CanvasText;
 	}
 }

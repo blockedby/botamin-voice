@@ -524,6 +524,8 @@ describe("shared contracts", () => {
 			inputSampleRate: 16_000,
 			inputEncoding: "pcm16le",
 			chunkMs: 100,
+			maxUtteranceMs: 60_000,
+			maxPcmBytes: 1_920_000,
 			outputContentType: "audio/mpeg",
 			outputMode: "complete-phrase-segments",
 		};
@@ -532,6 +534,8 @@ describe("shared contracts", () => {
 			{ ...config, outputContentType: "audio/wav" },
 			{ ...config, outputMode: "streaming-chunks" },
 			{ ...config, inputSampleRate: 24_000 },
+			{ ...config, maxUtteranceMs: 60_001, maxPcmBytes: 1_920_034 },
+			{ ...config, maxPcmBytes: 1_919_999 },
 			{ ...config, outputSampleRate: 24_000 },
 		]) {
 			expect(AudioClientConfigSchema.safeParse(invalid).success).toBe(false);

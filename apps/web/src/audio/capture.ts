@@ -55,7 +55,9 @@ export interface AudioCaptureOptions {
 	apis: AudioCaptureApis;
 	maxDurationMs?: number;
 	maxBytes?: number;
+	acceptingInitially?: boolean;
 	onFrame(frame: Uint8Array): void;
+	onProgress?(stats: CaptureStats): void;
 	onLimit?(reason: CaptureLimitReason): void;
 }
 
@@ -69,8 +71,8 @@ export const AUDIO_WORKLET_PROCESSOR_NAME = "botamin-pcm-capture";
 export const AUDIO_WORKLET_MODULE_URL =
 	"/assets/botamin-pcm-capture-worklet.js";
 
-const DEFAULT_MAX_DURATION_MS = 30_000;
-const DEFAULT_MAX_BYTES = 1_000_000;
+const DEFAULT_MAX_DURATION_MS = 60_000;
+const DEFAULT_MAX_BYTES = 2_000_000;
 
 /** Byte/sample accounting guard; it never retains the utterance itself. */
 export class PcmUtteranceBudget {
@@ -147,23 +149,28 @@ export class AudioWorkletCapture {
 	private node: CaptureWorkletNodeLike | null = null;
 	private resampler: StreamingLinearResampler | null = null;
 	private readonly batcher = new Pcm16FrameBatcher();
-	private readonly budget: PcmUtteranceBudget;
+	private budget: PcmUtteranceBudget;
 	private active = false;
 	private completed = false;
+	private accepting: boolean;
 	private limitedBy: CaptureLimitReason | null = null;
+	private lastProgressBytes = 0;
 
 	constructor(private readonly options: AudioCaptureOptions) {
 		this.budget = new PcmUtteranceBudget(
 			options.maxDurationMs,
 			options.maxBytes,
 		);
+		this.accepting = options.acceptingInitially ?? true;
 	}
 
-	async start(): Promise<void> {
+	/** Acquire consented microphone media without accepting utterance samples yet. */
+	async prepare(): Promise<void> {
 		if (this.active) throw new Error("Audio capture is already active");
 		if (this.completed) {
 			throw new Error("Audio capture instances are single-utterance");
 		}
+		if (this.stream) return;
 		try {
 			this.stream = await this.options.apis.getUserMedia({
 				audio: {
@@ -173,6 +180,30 @@ export class AudioWorkletCapture {
 				},
 			});
 			this.throwIfStoppedDuringStart();
+		} catch (error) {
+			await this.cleanup();
+			throw error;
+		}
+	}
+
+	configureLimits(maxDurationMs: number, maxBytes: number): void {
+		if (this.active || this.budget.stats.bytes > 0) {
+			throw new Error(
+				"Audio capture limits cannot change after capture starts",
+			);
+		}
+		this.budget = new PcmUtteranceBudget(maxDurationMs, maxBytes);
+	}
+
+	async start(): Promise<void> {
+		if (this.active) throw new Error("Audio capture is already active");
+		if (this.completed) {
+			throw new Error("Audio capture instances are single-utterance");
+		}
+		try {
+			await this.prepare();
+			const stream = this.stream;
+			if (!stream) throw new Error("Audio capture media is unavailable");
 			this.context = this.options.apis.createAudioContext({
 				sampleRate: TARGET_SAMPLE_RATE,
 			});
@@ -200,7 +231,7 @@ export class AudioWorkletCapture {
 			);
 			this.node.port.onmessage = (event) =>
 				this.receiveWorkletBlock(event.data);
-			this.source = this.context.createMediaStreamSource(this.stream);
+			this.source = this.context.createMediaStreamSource(stream);
 			this.source.connect(this.node);
 			await this.context.resume?.();
 			this.throwIfStoppedDuringStart();
@@ -213,13 +244,26 @@ export class AudioWorkletCapture {
 
 	/** Public for a fake worklet adapter; production samples arrive via the port. */
 	receiveWorkletBlock(data: unknown): void {
-		if (!this.active || !(data instanceof Float32Array) || !this.resampler) {
+		if (
+			!this.active ||
+			!this.accepting ||
+			!(data instanceof Float32Array) ||
+			!this.resampler
+		) {
 			return;
 		}
 		const samples = this.resampler.push(data);
 		const result = this.budget.accept(pcm16Bytes(float32ToPcm16(samples)));
 		for (const frame of this.batcher.push(result.accepted)) {
 			this.options.onFrame(frame);
+		}
+		const stats = this.budget.stats;
+		if (
+			stats.bytes - this.lastProgressBytes >= 3_200 ||
+			result.limitedBy !== null
+		) {
+			this.lastProgressBytes = stats.bytes;
+			this.options.onProgress?.(stats);
 		}
 		if (result.limitedBy !== null) {
 			this.limitedBy = result.limitedBy;
@@ -248,6 +292,10 @@ export class AudioWorkletCapture {
 		for (const track of this.stream?.getTracks() ?? []) {
 			track.enabled = !muted;
 		}
+	}
+
+	setAccepting(accepting: boolean): void {
+		this.accepting = accepting;
 	}
 
 	get isActive(): boolean {

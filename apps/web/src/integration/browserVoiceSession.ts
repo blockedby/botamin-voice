@@ -1,4 +1,5 @@
 import {
+	type AudioClientConfig,
 	type ConversationStage,
 	CreateConversationRequestSchema,
 	CreateConversationResponseSchema,
@@ -16,6 +17,7 @@ import {
 } from "../audio/playback";
 import type {
 	FinalTranscriptEntry,
+	VoiceCaptureProgress,
 	VoiceConsent,
 	VoiceUiState,
 } from "../components/voiceTypes";
@@ -38,18 +40,23 @@ export interface BrowserVoiceSnapshot {
 	state: VoiceUiState;
 	transcript: readonly FinalTranscriptEntry[];
 	muted: boolean;
+	captureProgress: VoiceCaptureProgress | null;
 }
 
 export interface CaptureAdapter {
+	prepare(): Promise<void>;
+	configureLimits(maxDurationMs: number, maxBytes: number): void;
 	start(): Promise<void>;
 	finish(): Promise<CaptureStats>;
 	stop(): Promise<void>;
 	setMuted(muted: boolean): void;
+	setAccepting(accepting: boolean): void;
 	readonly isActive: boolean;
 }
 
 export interface CaptureFactoryOptions {
 	onFrame(frame: Uint8Array): void;
+	onProgress(stats: CaptureStats): void;
 	onLimit(): void;
 }
 
@@ -94,6 +101,7 @@ const INITIAL_SNAPSHOT: BrowserVoiceSnapshot = {
 	state: { kind: "idle" },
 	transcript: [],
 	muted: false,
+	captureProgress: null,
 };
 
 /** Resolve a contract WS path without allowing the REST response to leave this origin. */
@@ -127,6 +135,7 @@ export class BrowserVoiceSession {
 	private playback: PlaybackAdapter | null = null;
 	private abortController: AbortController | null = null;
 	private conversationId: string | null = null;
+	private clientConfig: AudioClientConfig | null = null;
 	private bookingId: string | null = null;
 	private qualificationStatus: "none" | "partial" | "complete" | "skipped" =
 		"none";
@@ -174,10 +183,12 @@ export class BrowserVoiceSession {
 		this.sessionEstablished = false;
 		this.textOnlyGenerationPending = null;
 		this.terminalFailurePending = false;
+		this.clientConfig = null;
 		this.setSnapshot({
 			state: { kind: "connecting" },
 			transcript: [],
 			muted: false,
+			captureProgress: null,
 		});
 		this.controller = new VoiceSessionController(initialVoiceState, (state) =>
 			this.projectControllerState(state),
@@ -189,13 +200,7 @@ export class BrowserVoiceSession {
 			const capture = this.createCapture(epoch, captureAttempt);
 			this.capture = capture;
 			this.captureStarting = true;
-			try {
-				await capture.start();
-			} finally {
-				if (captureAttempt === this.captureAttempt) {
-					this.captureStarting = false;
-				}
-			}
+			await capture.prepare();
 			if (
 				!this.isCurrent(epoch) ||
 				captureAttempt !== this.captureAttempt ||
@@ -204,7 +209,6 @@ export class BrowserVoiceSession {
 				await capture.stop();
 				return false;
 			}
-			capture.setMuted(this.snapshot.muted);
 
 			const request = CreateConversationRequestSchema.parse({
 				source: "landing",
@@ -236,9 +240,31 @@ export class BrowserVoiceSession {
 				return false;
 			}
 			this.conversationId = created.conversationId;
+			this.clientConfig = created.clientConfig;
 			if (new Date(created.expiresAt).getTime() <= this.now().getTime()) {
 				throw new Error("Conversation response is already expired");
 			}
+			capture.configureLimits(
+				created.clientConfig.maxUtteranceMs,
+				created.clientConfig.maxPcmBytes,
+			);
+			try {
+				await capture.start();
+			} finally {
+				if (captureAttempt === this.captureAttempt) {
+					this.captureStarting = false;
+				}
+			}
+			if (
+				!this.isCurrent(epoch) ||
+				captureAttempt !== this.captureAttempt ||
+				this.capture !== capture
+			) {
+				await capture.stop();
+				return false;
+			}
+			capture.setMuted(this.snapshot.muted);
+			capture.setAccepting(false);
 			const socketUrl = resolveSameOriginWebSocketUrl(
 				created.wsUrl,
 				this.factories.baseUrl,
@@ -301,6 +327,8 @@ export class BrowserVoiceSession {
 		const capture = this.capture;
 		this.capture = null;
 		this.captureArmed = false;
+		capture.setAccepting(false);
+		this.setCaptureProgress(null);
 		try {
 			await capture.finish();
 			const accepted = this.controller.commit(
@@ -401,6 +429,19 @@ export class BrowserVoiceSession {
 					this.transport?.sendPcmFrame(frame);
 				}
 			},
+			onProgress: (stats) => {
+				if (
+					this.isCurrent(epoch) &&
+					attempt === this.captureAttempt &&
+					this.captureArmed
+				) {
+					this.setCaptureProgress({
+						acceptedPcmBytes: stats.bytes,
+						durationMs: stats.durationMs,
+						maxUtteranceMs: this.clientConfig?.maxUtteranceMs ?? 0,
+					});
+				}
+			},
 			onLimit: () => {
 				if (
 					this.isCurrent(epoch) &&
@@ -466,6 +507,13 @@ export class BrowserVoiceSession {
 			const capture = this.createCapture(epoch, attempt);
 			this.capture = capture;
 			try {
+				const clientConfig = this.clientConfig;
+				if (!clientConfig)
+					throw new Error("Audio client config is unavailable");
+				capture.configureLimits(
+					clientConfig.maxUtteranceMs,
+					clientConfig.maxPcmBytes,
+				);
 				await capture.start();
 				if (
 					!this.isCurrent(epoch) ||
@@ -477,7 +525,9 @@ export class BrowserVoiceSession {
 					return;
 				}
 				capture.setMuted(this.snapshot.muted);
+				capture.setAccepting(true);
 				this.captureArmed = true;
+				this.resetCaptureProgress();
 				this.controller?.beginListening();
 				this.setState(this.activeState("listening"));
 			} catch (error) {
@@ -509,6 +559,15 @@ export class BrowserVoiceSession {
 		await this.releaseResources("client_error", true);
 		if (!this.disposed && this.epoch === cleanupEpoch) {
 			this.setState({ kind: "error" });
+		}
+	}
+
+	private async failClientConfig(epoch: number): Promise<void> {
+		if (!this.isCurrent(epoch)) return;
+		const cleanupEpoch = epoch + 1;
+		await this.releaseResources("client_error", true);
+		if (!this.disposed && this.epoch === cleanupEpoch) {
+			this.setState(this.activeState("error"));
 		}
 	}
 
@@ -560,11 +619,19 @@ export class BrowserVoiceSession {
 		if (!this.isCurrent(epoch) || !this.controller) return;
 		switch (event.type) {
 			case "session.ready": {
+				if (
+					!sameAudioClientConfig(this.clientConfig, event.payload.clientConfig)
+				) {
+					void this.failClientConfig(epoch);
+					break;
+				}
 				this.sessionEstablished = true;
 				const capture = this.capture;
 				if (capture?.isActive && this.transport?.beginUtterance()) {
 					this.captureArmed = true;
 					capture.setMuted(this.snapshot.muted);
+					capture.setAccepting(true);
+					this.resetCaptureProgress();
 				} else if (capture) {
 					this.capture = null;
 					void capture.stop();
@@ -850,6 +917,7 @@ export class BrowserVoiceSession {
 			this.notifyConversationStop(conversationId, reason);
 		}
 		this.conversationId = null;
+		this.clientConfig = null;
 	}
 
 	private notifyConversationStop(
@@ -887,7 +955,29 @@ export class BrowserVoiceSession {
 	}
 
 	private setState(state: VoiceUiState): void {
-		this.setSnapshot({ ...this.snapshot, state });
+		this.setSnapshot({
+			...this.snapshot,
+			state,
+			captureProgress:
+				state.kind === "listening" || state.kind === "qualification"
+					? this.snapshot.captureProgress
+					: null,
+		});
+	}
+
+	private resetCaptureProgress(): void {
+		const maxUtteranceMs = this.clientConfig?.maxUtteranceMs;
+		if (!maxUtteranceMs) return;
+		this.setCaptureProgress({
+			acceptedPcmBytes: 0,
+			durationMs: 0,
+			maxUtteranceMs,
+		});
+	}
+
+	private setCaptureProgress(progress: VoiceCaptureProgress | null): void {
+		if (progress === this.snapshot.captureProgress) return;
+		this.setSnapshot({ ...this.snapshot, captureProgress: progress });
 	}
 
 	private setSnapshot(snapshot: BrowserVoiceSnapshot): void {
@@ -903,6 +993,22 @@ export class BrowserVoiceSession {
 	private now(): Date {
 		return this.factories.now?.() ?? new Date();
 	}
+}
+
+function sameAudioClientConfig(
+	left: AudioClientConfig | null,
+	right: AudioClientConfig,
+): boolean {
+	return (
+		left !== null &&
+		left.inputSampleRate === right.inputSampleRate &&
+		left.inputEncoding === right.inputEncoding &&
+		left.chunkMs === right.chunkMs &&
+		left.maxUtteranceMs === right.maxUtteranceMs &&
+		left.maxPcmBytes === right.maxPcmBytes &&
+		left.outputContentType === right.outputContentType &&
+		left.outputMode === right.outputMode
+	);
 }
 
 function isPermissionDenied(error: unknown): boolean {
@@ -930,7 +1036,9 @@ export function createBrowserVoiceSession(): BrowserVoiceSession {
 		createCapture: (options) =>
 			new AudioWorkletCapture({
 				apis: createBrowserAudioCaptureApis(),
+				acceptingInitially: false,
 				onFrame: options.onFrame,
+				onProgress: options.onProgress,
 				onLimit: options.onLimit,
 			}),
 		createPlayback: (options) =>

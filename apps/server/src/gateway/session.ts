@@ -7,6 +7,7 @@ import {
 	decodeBinaryAudioFrame,
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
+	type AudioClientConfig,
 	type KnownFacts,
 	type SafeErrorCode,
 	type ServerWsEvent,
@@ -17,15 +18,32 @@ import type {
 	ConversationOrchestrator,
 	OrchestratorEvent,
 } from "../orchestrator/orchestrator";
-import { PcmUtteranceAssembler, PcmUtteranceError } from "./wav";
+import {
+	PcmUtteranceAssembler,
+	PcmUtteranceError,
+	WAV_HEADER_BYTES,
+} from "./wav";
 
-const CLIENT_CONFIG = Object.freeze({
-	inputSampleRate: 16_000 as const,
-	inputEncoding: "pcm16le" as const,
-	chunkMs: 100 as const,
-	outputContentType: "audio/mpeg" as const,
-	outputMode: "complete-phrase-segments" as const,
-});
+export function createAudioClientConfig(
+	maxUtteranceMs: number,
+	maxAudioBytes: number,
+): AudioClientConfig {
+	const durationPcmBytes = Math.floor(maxUtteranceMs * 32);
+	const audioPcmBytes = Math.max(0, maxAudioBytes - WAV_HEADER_BYTES);
+	const boundedPcmBytes = Math.min(durationPcmBytes, audioPcmBytes);
+	const maxPcmBytes = boundedPcmBytes - (boundedPcmBytes % 2);
+	return {
+		inputSampleRate: 16_000,
+		inputEncoding: "pcm16le",
+		chunkMs: 100,
+		maxUtteranceMs,
+		maxPcmBytes,
+		outputContentType: "audio/mpeg",
+		outputMode: "complete-phrase-segments",
+	};
+}
+
+const CLIENT_CONFIG = Object.freeze(createAudioClientConfig(60_000, 2_000_000));
 
 export interface GatewaySocket {
 	send(data: string | Uint8Array): void;
@@ -111,6 +129,7 @@ export class GatewaySession {
 	readonly #idFactory: () => string;
 	readonly #now: () => Date;
 	readonly #metrics: ObservabilityMetrics | undefined;
+	readonly #clientConfig: AudioClientConfig;
 	readonly #assemblerLimits: {
 		maxUtteranceMs: number;
 		maxAudioBytes: number;
@@ -170,6 +189,10 @@ export class GatewaySession {
 			options.tokenFactory?.() ?? randomBytes(32).toString("base64url");
 		this.#initialClientToken = initialToken;
 		this.#resumeTokenHash = createHash("sha256").update(initialToken).digest();
+		this.#clientConfig = createAudioClientConfig(
+			options.maxUtteranceMs,
+			options.maxAudioBytes,
+		);
 		this.#assemblerLimits = {
 			maxUtteranceMs: options.maxUtteranceMs,
 			maxAudioBytes: options.maxAudioBytes,
@@ -378,7 +401,7 @@ export class GatewaySession {
 				{
 					state: this.#orchestrator.state.stage,
 					resumeToken: token,
-					clientConfig: CLIENT_CONFIG,
+					clientConfig: this.#clientConfig,
 				},
 				false,
 			);

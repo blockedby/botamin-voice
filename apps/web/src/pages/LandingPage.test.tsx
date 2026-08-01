@@ -12,6 +12,7 @@ const idleVoice: VoiceDemoProps = {
 	consent: { voiceProcessing: true, contactProcessing: true },
 	transcript: [],
 	muted: false,
+	captureProgress: null,
 	onConsentChange: noop,
 	onStart: noop,
 	onCommit: noop,

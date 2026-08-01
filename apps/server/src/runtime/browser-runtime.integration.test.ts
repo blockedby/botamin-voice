@@ -45,6 +45,8 @@ const safeFallback =
 class BrowserCapture implements CaptureAdapter {
 	active = false;
 	constructor(readonly options: CaptureFactoryOptions) {}
+	async prepare(): Promise<void> {}
+	configureLimits(): void {}
 	async start(): Promise<void> {
 		this.active = true;
 	}
@@ -56,6 +58,7 @@ class BrowserCapture implements CaptureAdapter {
 		this.active = false;
 	}
 	setMuted(): void {}
+	setAccepting(): void {}
 	get isActive(): boolean {
 		return this.active;
 	}

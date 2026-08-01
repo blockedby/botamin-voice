@@ -111,6 +111,8 @@ async function waitFor(
 class FixtureCapture implements CaptureAdapter {
 	active = false;
 	constructor(private readonly options: CaptureFactoryOptions) {}
+	async prepare(): Promise<void> {}
+	configureLimits(): void {}
 	async start(): Promise<void> {
 		this.active = true;
 	}
@@ -122,6 +124,7 @@ class FixtureCapture implements CaptureAdapter {
 		this.active = false;
 	}
 	setMuted(): void {}
+	setAccepting(): void {}
 	get isActive(): boolean {
 		return this.active;
 	}

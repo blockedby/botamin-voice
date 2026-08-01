@@ -24,6 +24,7 @@ export function App({ createSession = createBrowserVoiceSession }: AppProps) {
 		state: { kind: "idle" },
 		transcript: [],
 		muted: false,
+		captureProgress: null,
 	}));
 	const [consent, setConsent] = useState<VoiceConsent>(INITIAL_CONSENT);
 
@@ -47,6 +48,7 @@ export function App({ createSession = createBrowserVoiceSession }: AppProps) {
 				consent,
 				transcript: snapshot.transcript,
 				muted: snapshot.muted,
+				captureProgress: snapshot.captureProgress,
 				onConsentChange: setConsent,
 				onStart: () => {
 					void session?.start(consent);

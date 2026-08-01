@@ -66,10 +66,13 @@ class FakeSocket implements WebSocketLike {
 
 class FakeCapture implements CaptureAdapter {
 	active = false;
+	accepting = false;
+	prepareCalls = 0;
 	startCalls = 0;
 	finishCalls = 0;
 	stopCalls = 0;
 	muted = false;
+	limits: { maxDurationMs: number; maxBytes: number } | null = null;
 
 	constructor(
 		readonly options: CaptureFactoryOptions,
@@ -77,10 +80,16 @@ class FakeCapture implements CaptureAdapter {
 		private readonly startGate?: Promise<void>,
 		private readonly stopGate?: Promise<void>,
 	) {}
-	async start(): Promise<void> {
-		this.startCalls += 1;
+	async prepare(): Promise<void> {
+		this.prepareCalls += 1;
 		await this.startGate;
 		if (this.startError) throw this.startError;
+	}
+	configureLimits(maxDurationMs: number, maxBytes: number): void {
+		this.limits = { maxDurationMs, maxBytes };
+	}
+	async start(): Promise<void> {
+		this.startCalls += 1;
 		this.active = true;
 	}
 	async finish() {
@@ -96,11 +105,20 @@ class FakeCapture implements CaptureAdapter {
 	setMuted(muted: boolean): void {
 		this.muted = muted;
 	}
+	setAccepting(accepting: boolean): void {
+		this.accepting = accepting;
+	}
 	get isActive(): boolean {
 		return this.active;
 	}
 	emit(frame = new Uint8Array([0, 0])): void {
 		this.options.onFrame(frame);
+	}
+	progress(bytes: number, durationMs: number): void {
+		this.options.onProgress({ bytes, durationMs, limitedBy: null });
+	}
+	limit(): void {
+		this.options.onLimit();
 	}
 }
 
@@ -169,6 +187,8 @@ function response() {
 			inputSampleRate: 16_000,
 			inputEncoding: "pcm16le",
 			chunkMs: 100,
+			maxUtteranceMs: 60_000,
+			maxPcmBytes: 1_920_000,
 			outputContentType: "audio/mpeg",
 			outputMode: "complete-phrase-segments",
 		},
@@ -280,7 +300,7 @@ describe("production browser voice integration", () => {
 		const starting = value.session.start(consent);
 
 		expect(value.captures).toHaveLength(1);
-		expect(value.captures[0]?.startCalls).toBe(1);
+		expect(value.captures[0]?.prepareCalls).toBe(1);
 		expect(value.requests).toHaveLength(0);
 		expect(value.sockets).toHaveLength(0);
 
@@ -302,6 +322,33 @@ describe("production browser voice integration", () => {
 		capture.emit(new Uint8Array([1, 0]));
 		expect(socket.sent.some((item) => item instanceof Uint8Array)).toBe(true);
 		await value.session.stop();
+	});
+
+	test("fails closed when session.ready drifts from the REST audio limits", async () => {
+		const value = harness();
+		expect(await value.session.start(consent)).toBe(true);
+		const socket = value.sockets[0] as FakeSocket;
+		const capture = value.captures[0] as FakeCapture;
+		socket.open();
+		socket.server({
+			...sessionReady(),
+			payload: {
+				...sessionReady().payload,
+				clientConfig: {
+					...response().clientConfig,
+					maxUtteranceMs: 59_000,
+					maxPcmBytes: 1_888_000,
+				},
+			},
+		});
+		await flush();
+		await flush();
+
+		expect(capture.active).toBe(false);
+		expect(capture.accepting).toBe(false);
+		expect(socket.closed).toBe(true);
+		expect(value.session.getSnapshot().captureProgress).toBeNull();
+		expect(value.session.getSnapshot().state).toEqual({ kind: "error" });
 	});
 
 	test("initial microphone denial has zero REST/WS effects and no live capture", async () => {
@@ -359,6 +406,15 @@ describe("production browser voice integration", () => {
 		});
 		expect(value.sockets).toHaveLength(1);
 		expect(value.capture.startCalls).toBe(1);
+		expect(value.capture.limits).toEqual({
+			maxDurationMs: 60_000,
+			maxBytes: 1_920_000,
+		});
+		expect(value.session.getSnapshot().captureProgress).toEqual({
+			acceptedPcmBytes: 0,
+			durationMs: 0,
+			maxUtteranceMs: 60_000,
+		});
 		expect(sentJson(value.socket)[0]).toMatchObject({
 			type: "client.hello",
 			payload: {
@@ -382,6 +438,34 @@ describe("production browser voice integration", () => {
 		expect(
 			sentJson(value.socket).filter((item) => item.type === "audio.commit"),
 		).toHaveLength(1);
+		expect(value.session.getSnapshot().state.kind).toBe("processing");
+		expect(value.session.getSnapshot().captureProgress).toBeNull();
+	});
+
+	test("projects sample-derived progress and auto-commits a capture limit exactly once", async () => {
+		const value = await readySession();
+		value.capture.emit();
+		value.capture.progress(1_600_000, 50_000);
+		expect(value.session.getSnapshot().captureProgress).toEqual({
+			acceptedPcmBytes: 1_600_000,
+			durationMs: 50_000,
+			maxUtteranceMs: 60_000,
+		});
+
+		value.session.toggleMute();
+		value.capture.progress(1_603_200, 50_100);
+		expect(value.session.getSnapshot().captureProgress?.durationMs).toBe(
+			50_100,
+		);
+		value.capture.limit();
+		value.capture.limit();
+		await flush();
+
+		expect(value.capture.finishCalls).toBe(1);
+		expect(
+			sentJson(value.socket).filter((item) => item.type === "audio.commit"),
+		).toHaveLength(1);
+		expect(value.session.getSnapshot().captureProgress).toBeNull();
 		expect(value.session.getSnapshot().state.kind).toBe("processing");
 	});
 
@@ -547,6 +631,11 @@ describe("production browser voice integration", () => {
 		await flush();
 		expect(value.captures).toHaveLength(2);
 		expect(value.session.getSnapshot().state.kind).toBe("listening");
+		expect(value.session.getSnapshot().captureProgress).toEqual({
+			acceptedPcmBytes: 0,
+			durationMs: 0,
+			maxUtteranceMs: 60_000,
+		});
 		expect(value.session.getSnapshot().transcript.at(-1)?.text).toBe(
 			"Текст остаётся доступен",
 		);

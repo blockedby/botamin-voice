@@ -9,11 +9,14 @@
  * script never synthesizes provider speech input and emits aggregate evidence.
  */
 import {
+	AtomicServerAudioSegmentFrameSchema,
 	BINARY_AUDIO_FRAME_KIND,
 	CreateConversationResponseSchema,
 	decodeBinaryAudioFrame,
 	encodeBinaryAudioFrame,
+	isCompleteMp3File,
 	ServerWsEventSchema,
+	StopConversationResponseSchema,
 } from "../packages/contracts/src";
 import { createDeterministicPcm16Fixture } from "../packages/test-fixtures/src";
 
@@ -30,6 +33,9 @@ const counts = {
 	audioSegments: 0,
 	audioDone: 0,
 	responseMp3Bytes: 0,
+	playbackReady: 0,
+	browserNeutralDecodeStarts: 0,
+	strictPlaybackReadyValidations: 0,
 	playbackStarted: 0,
 };
 let booking = false;
@@ -178,20 +184,378 @@ function pushTiming(name: string): void {
 function boundedTimeoutMs(): number {
 	const raw = Bun.env.BOTAMIN_VOICE_E2E_TIMEOUT_MS;
 	if (!raw || !/^\d+$/u.test(raw)) return 120_000;
-	return Math.min(300_000, Math.max(5_000, Number(raw)));
+	return Math.min(300_000, Math.max(250, Number(raw)));
+}
+
+class OverallDeadline {
+	readonly controller = new AbortController();
+	readonly signal = this.controller.signal;
+	readonly #timer: ReturnType<typeof setTimeout>;
+
+	constructor(timeoutMs: number) {
+		this.#timer = setTimeout(
+			() => this.controller.abort(new Error("overall deadline exceeded")),
+			timeoutMs,
+		);
+	}
+
+	async wait<T>(promise: Promise<T>): Promise<T> {
+		if (this.signal.aborted) throw this.signal.reason;
+		return new Promise<T>((resolve, reject) => {
+			const aborted = () => reject(this.signal.reason);
+			this.signal.addEventListener("abort", aborted, { once: true });
+			promise.then(
+				(value) => {
+					this.signal.removeEventListener("abort", aborted);
+					resolve(value);
+				},
+				(error) => {
+					this.signal.removeEventListener("abort", aborted);
+					reject(error);
+				},
+			);
+		});
+	}
+
+	dispose(): void {
+		clearTimeout(this.#timer);
+	}
+}
+
+type ServerEvent = ReturnType<typeof ServerWsEventSchema.parse>;
+type AudioSegmentEvent = Extract<ServerEvent, { type: "audio.segment" }>;
+
+interface ActiveTurn {
+	readonly promise: Promise<void>;
+	resolve(): void;
+	reject(error: unknown): void;
+	finalTurnId: string | null;
+	generationId: string | null;
+	textDone: boolean;
+	audioDone: boolean;
+	segmentCount: number;
+	playbackStarted: number;
+	pendingAudio?: AudioSegmentEvent;
+}
+
+interface DecodeContext {
+	readonly destination: unknown;
+	decodeAudioData(bytes: ArrayBuffer): Promise<unknown>;
+	createBufferSource(): {
+		buffer: unknown;
+		connect(destination: unknown): void;
+		disconnect?(): void;
+		start(when?: number): void;
+		stop?(when?: number): void;
+	};
+	resume?(): Promise<void>;
+	close?(): Promise<void>;
+}
+
+async function validatePlaybackReadyMp3(bytes: Uint8Array): Promise<void> {
+	if (!isCompleteMp3File(bytes)) throw new Error("incomplete MP3 file");
+	const scope = globalThis as unknown as {
+		AudioContext?: new () => DecodeContext;
+		webkitAudioContext?: new () => DecodeContext;
+	};
+	const Context = scope.AudioContext ?? scope.webkitAudioContext;
+	if (!Context) {
+		counts.strictPlaybackReadyValidations += 1;
+		counts.playbackReady += 1;
+		pushTiming("playback.ready.strict-complete-mp3");
+		return;
+	}
+	const context = new Context();
+	try {
+		const exact = bytes.slice();
+		const decoded = await context.decodeAudioData(exact.buffer);
+		await context.resume?.();
+		const source = context.createBufferSource();
+		source.buffer = decoded;
+		source.connect(context.destination);
+		source.start(0);
+		source.stop?.(0);
+		source.disconnect?.();
+		counts.browserNeutralDecodeStarts += 1;
+		counts.playbackReady += 1;
+		pushTiming("playback.ready.decode-start");
+	} finally {
+		await context.close?.();
+	}
 }
 
 let socket: WebSocket | null = null;
 let conversationId: string | null = null;
 let args: Arguments | null = null;
+let deadline: OverallDeadline | null = null;
+let failureReason: string | undefined;
+let candidatePassed = false;
+let shuttingDown = false;
+let activeTurn: ActiveTurn | null = null;
+let readySettled = false;
+let fatalError: unknown;
+let clientSequence = 0;
+let lastServerSequence = -1;
+const completedTurnIds = new Set<string>();
+const completedGenerationIds = new Set<string>();
+
+let readyResolve = (): void => undefined;
+let readyReject = (_error: unknown): void => undefined;
+const ready = new Promise<void>((resolve, reject) => {
+	readyResolve = resolve;
+	readyReject = reject;
+});
+let socketClosedResolve = (): void => undefined;
+const socketClosed = new Promise<void>((resolve) => {
+	socketClosedResolve = resolve;
+});
+
+function fail(error: unknown): void {
+	fatalError ??= error;
+	readyReject(error);
+	activeTurn?.reject(error);
+}
+
+function requireCurrentGeneration(event: {
+	payload: { generationId: string };
+}): ActiveTurn {
+	const turn = activeTurn;
+	if (!turn?.finalTurnId) throw new Error("generation without final");
+	const generationId = event.payload.generationId;
+	if (completedGenerationIds.has(generationId)) {
+		throw new Error("stale generation");
+	}
+	turn.generationId ??= generationId;
+	if (turn.generationId !== generationId) {
+		throw new Error("mismatched generation");
+	}
+	return turn;
+}
+
+function resolveCompletedTurn(turn: ActiveTurn): void {
+	if (
+		activeTurn !== turn ||
+		!turn.finalTurnId ||
+		!turn.generationId ||
+		!turn.textDone ||
+		!turn.audioDone ||
+		turn.pendingAudio ||
+		turn.segmentCount < 1 ||
+		turn.playbackStarted !== turn.segmentCount
+	) {
+		return;
+	}
+	completedTurnIds.add(turn.finalTurnId);
+	completedGenerationIds.add(turn.generationId);
+	activeTurn = null;
+	turn.resolve();
+}
+
+async function processServerMessage(data: unknown): Promise<void> {
+	if (shuttingDown) return;
+	if (typeof data !== "string") {
+		const bytes =
+			data instanceof ArrayBuffer
+				? new Uint8Array(data)
+				: ArrayBuffer.isView(data)
+					? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+					: null;
+		const turn = activeTurn;
+		const pending = turn?.pendingAudio;
+		if (!bytes || !turn || !pending) throw new Error("unpaired audio");
+		const atomic = AtomicServerAudioSegmentFrameSchema.parse({
+			metadata: pending.payload,
+			rawFrame: bytes,
+		});
+		const frame = decodeBinaryAudioFrame(atomic.rawFrame);
+		if (!isCompleteMp3File(frame.payload)) throw new Error("incomplete MP3");
+		await validatePlaybackReadyMp3(frame.payload);
+		if (activeTurn !== turn || turn.pendingAudio !== pending) {
+			throw new Error("stale audio decode");
+		}
+		delete turn.pendingAudio;
+		turn.segmentCount += 1;
+		turn.playbackStarted += 1;
+		counts.audioSegments += 1;
+		counts.responseMp3Bytes += frame.payload.byteLength;
+		counts.playbackStarted += 1;
+		pushTiming("playback.started");
+		socket?.send(
+			JSON.stringify({
+				v: 1,
+				type: "playback.started",
+				conversationId,
+				at: new Date().toISOString(),
+				payload: { generationId: pending.payload.generationId },
+			}),
+		);
+		resolveCompletedTurn(turn);
+		return;
+	}
+	if (activeTurn?.pendingAudio) throw new Error("non-adjacent audio pair");
+	const event = ServerWsEventSchema.parse(JSON.parse(data));
+	if (
+		event.conversationId !== conversationId ||
+		event.seq <= lastServerSequence
+	) {
+		throw new Error("stale or mismatched server event");
+	}
+	lastServerSequence = event.seq;
+	eventTypes.set(event.type, (eventTypes.get(event.type) ?? 0) + 1);
+	switch (event.type) {
+		case "session.ready":
+			if (readySettled || activeTurn)
+				throw new Error("duplicate session ready");
+			readySettled = true;
+			timings["session.ready"] ??= elapsed();
+			readyResolve();
+			break;
+		case "transcript.final": {
+			const turn = activeTurn;
+			if (
+				!turn ||
+				turn.finalTurnId ||
+				completedTurnIds.has(event.payload.turnId)
+			) {
+				throw new Error("zero, double, or stale final");
+			}
+			turn.finalTurnId = event.payload.turnId;
+			counts.transcriptFinal += 1;
+			pushTiming("transcript.final.gateway-receipt");
+			break;
+		}
+		case "assistant.text.delta":
+			requireCurrentGeneration(event);
+			pushTiming("assistant.text.delta.gateway-receipt");
+			break;
+		case "assistant.text.done": {
+			const turn = requireCurrentGeneration(event);
+			if (turn.textDone) throw new Error("duplicate text done");
+			turn.textDone = true;
+			counts.textDone += 1;
+			pushTiming("assistant.text.done.gateway-receipt");
+			resolveCompletedTurn(turn);
+			break;
+		}
+		case "audio.segment": {
+			const turn = requireCurrentGeneration(event);
+			if (turn.audioDone || turn.pendingAudio) {
+				throw new Error("invalid audio metadata order");
+			}
+			if (event.payload.sequence !== turn.segmentCount) {
+				throw new Error("non-contiguous audio sequence");
+			}
+			turn.pendingAudio = event;
+			pushTiming("audio.segment.metadata-receipt");
+			break;
+		}
+		case "assistant.audio.done": {
+			const turn = requireCurrentGeneration(event);
+			if (turn.audioDone || turn.pendingAudio || turn.segmentCount < 1) {
+				throw new Error("invalid audio done");
+			}
+			turn.audioDone = true;
+			counts.audioDone += 1;
+			pushTiming("assistant.audio.done.gateway-receipt");
+			resolveCompletedTurn(turn);
+			break;
+		}
+		case "assistant.interrupted":
+			requireCurrentGeneration(event);
+			throw new Error("unexpected interruption");
+		case "booking.created":
+			booking = true;
+			break;
+		case "booking.updated":
+		case "state.changed":
+		case "session.capacity_warning":
+		case "server.pong":
+			break;
+		case "error":
+			throw new Error("server error");
+	}
+}
+
+function newTurn(): ActiveTurn {
+	let resolve = (): void => undefined;
+	let reject = (_error: unknown): void => undefined;
+	const promise = new Promise<void>((turnResolve, turnReject) => {
+		resolve = turnResolve;
+		reject = turnReject;
+	});
+	return {
+		promise,
+		resolve,
+		reject,
+		finalTurnId: null,
+		generationId: null,
+		textDone: false,
+		audioDone: false,
+		segmentCount: 0,
+		playbackStarted: 0,
+	};
+}
+
+async function cleanup(): Promise<void> {
+	if (!args || !conversationId || !deadline) return;
+	const cleanupArgs = args;
+	const cleanupConversationId = conversationId;
+	const cleanupDeadline = deadline;
+	phase = "shutdown";
+	shuttingDown = true;
+	const stopRest = (async () => {
+		const response = await cleanupDeadline.wait(
+			fetch(
+				new URL(
+					`/api/v1/conversations/${encodeURIComponent(cleanupConversationId)}/stop`,
+					cleanupArgs.serverUrl,
+				),
+				{
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						origin: cleanupArgs.origin,
+					},
+					body: JSON.stringify({ reason: "user_requested" }),
+					signal: cleanupDeadline.signal,
+				},
+			),
+		);
+		if (response.status !== 200) throw new Error("stop failed");
+		const stopped = StopConversationResponseSchema.parse(
+			await cleanupDeadline.wait(response.json()),
+		);
+		if (stopped.conversationId !== cleanupConversationId) {
+			throw new Error("stop response mismatch");
+		}
+	})();
+	if (socket && socket.readyState === WebSocket.OPEN) {
+		socket.send(
+			JSON.stringify({
+				v: 1,
+				type: "session.stop",
+				conversationId,
+				at: new Date().toISOString(),
+				payload: { reason: "user_requested" },
+			}),
+		);
+	}
+	try {
+		socket?.close(1000, "smoke complete");
+	} catch {
+		// A peer close can win the shutdown race.
+	}
+	if (!socket || socket.readyState === WebSocket.CLOSED) socketClosedResolve();
+	await cleanupDeadline.wait(Promise.all([stopRest, socketClosed]));
+}
 
 try {
 	args = readArguments(process.argv.slice(2));
 	const utterances = await loadPcm(args);
+	deadline = new OverallDeadline(boundedTimeoutMs());
 	phase = "conversation_create";
-	const createdResponse = await fetch(
-		new URL("/api/v1/conversations", args.serverUrl),
-		{
+	const createdResponse = await deadline.wait(
+		fetch(new URL("/api/v1/conversations", args.serverUrl), {
 			method: "POST",
 			headers: {
 				"content-type": "application/json",
@@ -203,59 +567,19 @@ try {
 				qualificationEnabled: true,
 				consent: { voiceProcessing: true, contactProcessing: true },
 			}),
-		},
+			signal: deadline.signal,
+		}),
 	);
 	if (createdResponse.status !== 201) throw new Error("create failed");
 	const created = CreateConversationResponseSchema.parse(
-		await createdResponse.json(),
+		await deadline.wait(createdResponse.json()),
 	);
 	conversationId = created.conversationId;
 
 	phase = "websocket";
 	const wsUrl = new URL(created.wsUrl, args.serverUrl);
 	wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-	let readyResolve = (): void => undefined;
-	let readyReject = (_error: unknown): void => undefined;
-	const ready = new Promise<void>((resolve, reject) => {
-		readyResolve = resolve;
-		readyReject = reject;
-	});
-	let turnResolve = (): void => undefined;
-	let turnReject = (_error: unknown): void => undefined;
-	let waitingForTurn = false;
-	let turnGenerationId: string | null = null;
-	let lastCompletedGenerationId: string | null = null;
-	let turnTextDone = false;
-	let turnAudioDone = false;
-	let turnPlaybackStarted = false;
-	const matchesTurnGeneration = (generationId: string): boolean => {
-		if (!waitingForTurn || generationId === lastCompletedGenerationId) {
-			return false;
-		}
-		turnGenerationId ??= generationId;
-		return turnGenerationId === generationId;
-	};
-	const resolveCompletedTurn = (): void => {
-		if (
-			waitingForTurn &&
-			turnTextDone &&
-			turnAudioDone &&
-			turnPlaybackStarted
-		) {
-			waitingForTurn = false;
-			lastCompletedGenerationId = turnGenerationId;
-			turnResolve();
-		}
-	};
-	let pendingAudio:
-		| {
-				generationId: string;
-				sequence: number;
-				byteLength: number;
-		  }
-		| undefined;
-	let clientSequence = 0;
-
+	let messageQueue = Promise.resolve();
 	socket = new WebSocket(wsUrl, {
 		headers: { Origin: args.origin },
 	} as never);
@@ -279,131 +603,36 @@ try {
 			}),
 		);
 	};
-	socket.onerror = () => {
-		readyReject(new Error("websocket failed"));
-		if (waitingForTurn) turnReject(new Error("turn websocket failed"));
-	};
+	socket.onerror = () => fail(new Error("websocket failed"));
 	socket.onclose = () => {
-		if (waitingForTurn) turnReject(new Error("websocket closed"));
+		socketClosedResolve();
+		if (!shuttingDown) fail(new Error("websocket closed"));
 	};
 	socket.onmessage = (raw) => {
-		if (typeof raw.data !== "string") {
-			const bytes =
-				raw.data instanceof ArrayBuffer
-					? new Uint8Array(raw.data)
-					: ArrayBuffer.isView(raw.data)
-						? new Uint8Array(
-								raw.data.buffer,
-								raw.data.byteOffset,
-								raw.data.byteLength,
-							)
-						: null;
-			if (!bytes || !pendingAudio) {
-				turnReject(new Error("unpaired audio"));
-				return;
-			}
-			const frame = decodeBinaryAudioFrame(bytes);
-			if (
-				frame.kind !== BINARY_AUDIO_FRAME_KIND.serverMp3Segment ||
-				frame.sequence !== pendingAudio.sequence ||
-				frame.payload.byteLength !== pendingAudio.byteLength
-			) {
-				turnReject(new Error("invalid audio pair"));
-				return;
-			}
-			if (!matchesTurnGeneration(pendingAudio.generationId)) {
-				turnReject(new Error("stale audio pair"));
-				return;
-			}
-			counts.responseMp3Bytes += frame.payload.byteLength;
-			counts.playbackStarted += 1;
-			turnPlaybackStarted = true;
-			pushTiming("playback.started");
-			socket?.send(
-				JSON.stringify({
-					v: 1,
-					type: "playback.started",
-					conversationId: created.conversationId,
-					at: new Date().toISOString(),
-					payload: { generationId: pendingAudio.generationId },
-				}),
-			);
-			pendingAudio = undefined;
-			resolveCompletedTurn();
-			return;
-		}
-		let event: ReturnType<typeof ServerWsEventSchema.parse>;
-		try {
-			event = ServerWsEventSchema.parse(JSON.parse(raw.data));
-		} catch {
-			turnReject(new Error("invalid server event"));
-			return;
-		}
-		eventTypes.set(event.type, (eventTypes.get(event.type) ?? 0) + 1);
-		switch (event.type) {
-			case "session.ready":
-				timings["session.ready"] ??= elapsed();
-				readyResolve();
-				break;
-			case "transcript.final":
-				counts.transcriptFinal += 1;
-				pushTiming("transcript.final");
-				break;
-			case "assistant.text.delta":
-				if (matchesTurnGeneration(event.payload.generationId)) {
-					timings.firstTextDelta ??= elapsed();
-				}
-				break;
-			case "assistant.text.done":
-				counts.textDone += 1;
-				if (matchesTurnGeneration(event.payload.generationId)) {
-					turnTextDone = true;
-					pushTiming("assistant.text.done");
-					resolveCompletedTurn();
-				}
-				break;
-			case "audio.segment":
-				if (!matchesTurnGeneration(event.payload.generationId)) break;
-				counts.audioSegments += 1;
-				timings.firstAudioSegment ??= elapsed();
-				pendingAudio = {
-					generationId: event.payload.generationId,
-					sequence: event.payload.sequence,
-					byteLength: event.payload.byteLength,
-				};
-				break;
-			case "assistant.audio.done":
-				counts.audioDone += 1;
-				if (matchesTurnGeneration(event.payload.generationId)) {
-					turnAudioDone = true;
-					pushTiming("assistant.audio.done");
-					resolveCompletedTurn();
-				}
-				break;
-			case "booking.created":
-				booking = true;
-				break;
-		}
+		messageQueue = messageQueue
+			.then(() => processServerMessage(raw.data))
+			.catch((error) => fail(error));
 	};
+	deadline.signal.addEventListener(
+		"abort",
+		() => {
+			fail(deadline?.signal.reason);
+			try {
+				socket?.close(1000, "deadline");
+			} catch {
+				// The deadline also aborts both fetches and pending waits.
+			}
+		},
+		{ once: true },
+	);
 
-	await Promise.race([
-		ready,
-		Bun.sleep(boundedTimeoutMs()).then(() => {
-			throw new Error("ready timeout");
-		}),
-	]);
+	await deadline.wait(ready);
+	if (fatalError) throw fatalError;
 
 	phase = "turns";
 	for (const pcm of utterances) {
-		turnGenerationId = null;
-		turnTextDone = false;
-		turnAudioDone = false;
-		turnPlaybackStarted = false;
-		const turn = new Promise<void>((resolve, reject) => {
-			turnResolve = resolve;
-			turnReject = reject;
-			waitingForTurn = true;
-		});
+		const turn = newTurn();
+		activeTurn = turn;
 		for (let offset = 0; offset < pcm.byteLength; offset += 3_200) {
 			socket.send(
 				encodeBinaryAudioFrame({
@@ -415,7 +644,7 @@ try {
 			clientSequence += 1;
 		}
 		counts.commits += 1;
-		pushTiming("audio.commit");
+		pushTiming("audio.commit.client-send");
 		socket.send(
 			JSON.stringify({
 				v: 1,
@@ -425,58 +654,41 @@ try {
 				payload: {},
 			}),
 		);
-		await Promise.race([
-			turn,
-			Bun.sleep(boundedTimeoutMs()).then(() => {
-				throw new Error("turn timeout");
-			}),
-		]);
+		await deadline.wait(turn.promise);
+		if (fatalError) throw fatalError;
 	}
-
+	await deadline.wait(messageQueue);
+	if (fatalError) throw fatalError;
 	if (
+		activeTurn ||
 		counts.transcriptFinal !== counts.commits ||
 		counts.textDone !== counts.commits ||
 		counts.audioDone !== counts.commits ||
-		counts.playbackStarted !== counts.commits ||
-		pendingAudio !== undefined
+		counts.audioSegments < counts.commits ||
+		counts.playbackReady !== counts.audioSegments ||
+		counts.playbackStarted !== counts.audioSegments
 	) {
 		throw new Error("incomplete journey");
 	}
-
-	phase = "shutdown";
-	timings.total = elapsed();
-	socket.send(
-		JSON.stringify({
-			v: 1,
-			type: "session.stop",
-			conversationId: created.conversationId,
-			at: new Date().toISOString(),
-			payload: { reason: "user_requested" },
-		}),
-	);
-	await Bun.sleep(20);
-	report("passed");
+	candidatePassed = true;
 } catch {
-	timings.total = elapsed();
-	report("failed", `${phase}_failed`);
-	process.exitCode = 1;
+	failureReason = deadline?.signal.aborted
+		? "deadline_exceeded"
+		: `${phase}_failed`;
 } finally {
 	try {
-		socket?.close(1000, "smoke complete");
+		await cleanup();
 	} catch {
-		// Already closed.
+		candidatePassed = false;
+		failureReason = deadline?.signal.aborted
+			? "deadline_exceeded"
+			: "shutdown_failed";
 	}
-	if (args && conversationId) {
-		await fetch(
-			new URL(
-				`/api/v1/conversations/${encodeURIComponent(conversationId)}/stop`,
-				args.serverUrl,
-			),
-			{
-				method: "POST",
-				headers: { "content-type": "application/json", origin: args.origin },
-				body: JSON.stringify({ reason: "user_requested" }),
-			},
-		).catch(() => undefined);
-	}
+	timings.total = elapsed();
+	deadline?.dispose();
+	report(
+		candidatePassed && !failureReason ? "passed" : "failed",
+		failureReason,
+	);
+	if (!candidatePassed || failureReason) process.exitCode = 1;
 }

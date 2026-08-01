@@ -16,6 +16,12 @@ import {
 } from "../../apps/server/src/db";
 import { SqliteBookingService } from "../../apps/server/src/domain/booking";
 import type { NamedLeadNotifier } from "../../apps/server/src/notifiers/notifier";
+import {
+	loadOpenRouterVoiceConfig,
+	OpenRouterCredentialHealth,
+	OpenRouterSttAdapter,
+} from "../../apps/server/src/providers/openrouter/stt";
+import { OpenRouterTtsAdapter } from "../../apps/server/src/providers/openrouter/tts";
 import { createProductionRuntime } from "../../apps/server/src/runtime/runtime";
 import type {
 	CaptureAdapter,
@@ -43,12 +49,16 @@ const apiKey = "credential-free-fixture-key";
 const consent = { voiceProcessing: true, contactProcessing: true } as const;
 
 type TimelineLabel =
-	| "audio.commit"
-	| "stt.request"
-	| "transcript.final"
-	| "brain.first"
-	| "tts.request"
-	| "tts.complete"
+	| "audio.commit.client-send"
+	| "stt.provider.request"
+	| "stt.provider.complete"
+	| "transcript.final.client-receipt"
+	| "brain.delta.first"
+	| "tts.provider.request"
+	| "tts.provider.complete"
+	| "audio.metadata.client-receipt"
+	| "audio.binary.client-receipt"
+	| "audio.segment.client-paired"
 	| "playback.started"
 	| "playback.completed";
 
@@ -143,6 +153,10 @@ class VerifyingPlayback implements PlaybackAdapter {
 		}
 		this.bufferedSegmentCount = 1;
 		this.received.push(segment.bytes.slice());
+		this.timeline.push({
+			label: "audio.segment.client-paired",
+			at: performance.now(),
+		});
 		this.timeline.push({ label: "playback.started", at: performance.now() });
 		this.options.onStarted(segment);
 		// Model real playback long enough for the already-buffered text/audio-done
@@ -192,6 +206,12 @@ class ObservedSocket implements WebSocketLike {
 		this.native.onclose = () => this.onclose?.();
 		this.native.onerror = (event) => this.onerror?.(event);
 		this.native.onmessage = (event) => {
+			if (typeof event.data !== "string") {
+				this.timeline.push({
+					label: "audio.binary.client-receipt",
+					at: performance.now(),
+				});
+			}
 			if (typeof event.data === "string") {
 				try {
 					const message = JSON.parse(event.data) as {
@@ -205,13 +225,13 @@ class ObservedSocket implements WebSocketLike {
 						);
 						if (message.type === "transcript.final") {
 							this.timeline.push({
-								label: "transcript.final",
+								label: "transcript.final.client-receipt",
 								at: performance.now(),
 							});
 						}
 						if (message.type === "audio.segment") {
 							this.timeline.push({
-								label: "tts.complete",
+								label: "audio.metadata.client-receipt",
 								at: performance.now(),
 							});
 						}
@@ -243,7 +263,10 @@ class ObservedSocket implements WebSocketLike {
 		if (typeof data === "string") {
 			try {
 				if ((JSON.parse(data) as { type?: string }).type === "audio.commit") {
-					this.timeline.push({ label: "audio.commit", at: performance.now() });
+					this.timeline.push({
+						label: "audio.commit.client-send",
+						at: performance.now(),
+					});
 				}
 			} catch {
 				// The production server rejects malformed client JSON.
@@ -270,7 +293,17 @@ class ScriptedLuna implements BrainPort {
 
 	async *runTurn(input: BrainTurnInput): AsyncIterable<BrainDelta> {
 		this.inputs.push(input);
-		this.timeline.push({ label: "brain.first", at: performance.now() });
+		let firstDelta = true;
+		const observed = (delta: BrainDelta): BrainDelta => {
+			if (firstDelta) {
+				firstDelta = false;
+				this.timeline.push({
+					label: "brain.delta.first",
+					at: performance.now(),
+				});
+			}
+			return delta;
+		};
 		const complete = (nextStage?: BrainTurnInput["stage"]): BrainDelta => ({
 			type: "turn.completed",
 			turnId: input.turnId,
@@ -286,15 +319,15 @@ class ScriptedLuna implements BrainPort {
 
 		switch (input.stage) {
 			case "GREETING":
-				yield speech("Короткий тестовый ответ.");
+				yield observed(speech("Короткий тестовый ответ."));
 				yield complete("DISCOVERY");
 				return;
 			case "DISCOVERY":
-				yield speech("Обсудим задачу.");
+				yield observed(speech("Обсудим задачу."));
 				yield complete("BOOKING_OFFER");
 				return;
 			case "BOOKING_OFFER":
-				yield speech("Соберём минимальные данные.");
+				yield observed(speech("Соберём минимальные данные."));
 				yield complete("COLLECT_BOOKING");
 				return;
 			case "COLLECT_BOOKING": {
@@ -316,21 +349,23 @@ class ScriptedLuna implements BrainPort {
 						args,
 					},
 				};
-				yield request;
+				yield observed(request);
 				// Same call and payload is a deterministic model/provider replay.
 				yield request;
 				yield complete("BOOKED");
 				return;
 			}
 			case "BOOKED":
-				yield speech("Дополнительный вопрос только после сохранения.");
+				yield observed(
+					speech("Дополнительный вопрос только после сохранения."),
+				);
 				yield complete("POST_BOOKING_QUALIFICATION");
 				return;
 			case "POST_BOOKING_QUALIFICATION": {
 				this.qualificationToolStages.push(input.stage);
 				if (!input.booking)
 					throw new Error("booking must precede qualification");
-				yield {
+				yield observed({
 					type: "tool.request",
 					turnId: input.turnId,
 					generationId: input.generationId,
@@ -344,12 +379,12 @@ class ScriptedLuna implements BrainPort {
 							completion: "complete",
 						},
 					},
-				};
+				});
 				yield complete("COMPLETE");
 				return;
 			}
 			default:
-				yield complete();
+				yield observed(complete());
 		}
 	}
 
@@ -506,55 +541,84 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			],
 			onRequest: ({ endpoint }) => {
 				timeline.push({
-					label: endpoint === "chat" ? "stt.request" : "tts.request",
+					label:
+						endpoint === "chat"
+							? "stt.provider.request"
+							: "tts.provider.request",
 					at: performance.now(),
 				});
 			},
 		});
 		const providerServer = provider.startServer();
+		const runtimeEnv = {
+			APP_ORIGIN: appOrigin,
+			AUTO_MIGRATE: "true",
+			DATABASE_URL: `file:${databasePath}`,
+			MIGRATIONS_DIR: resolve("drizzle"),
+			BRAIN_PROVIDER: "codex-subscription",
+			CODEX_MODEL: "gpt-5.6-luna",
+			CODEX_EFFORT: "low",
+			CODEX_HOME: codexHome,
+			CODEX_CWD: promptDir,
+			PROMPT_RUNTIME_DIR: promptDir,
+			CODEX_TOOL_MODE: "envelope",
+			CODEX_MAX_CONCURRENT_TURNS: "2",
+			MAX_ACTIVE_CONVERSATIONS: "2",
+			MAX_ACTIVE_CONVERSATIONS_PER_SOURCE: "2",
+			MAX_CONCURRENT_BRAIN_TURNS: "2",
+			MAX_PENDING_BRAIN_TURNS: "2",
+			MAX_CONVERSATION_CREATES_PER_SOURCE: "10",
+			STT_PROVIDER: "openrouter",
+			TTS_PROVIDER: "openrouter",
+			OPENROUTER_API_KEY: apiKey,
+			OPENROUTER_BASE_URL: `http://127.0.0.1:${providerServer.port}/api/v1`,
+			OPENROUTER_STT_AUDIO_FORMAT: "wav",
+			OPENROUTER_STT_LANGUAGE: "ru",
+			OPENROUTER_TTS_RESPONSE_FORMAT: "mp3",
+			STT_RETRY_BASE_MS: "0",
+			STT_MAX_RETRIES: "1",
+			TTS_RETRY_BASE_MS: "0",
+			TTS_MAX_RETRIES: "0",
+			TTS_TEXT_ONLY_FALLBACK: "true",
+			STT_TEXT_ONLY_INPUT_FALLBACK: "false",
+			STORE_RAW_AUDIO: "false",
+		};
+		const voiceConfig = loadOpenRouterVoiceConfig(runtimeEnv);
+		const credentialHealth = new OpenRouterCredentialHealth();
+		const stt = new OpenRouterSttAdapter({
+			config: voiceConfig,
+			credentialHealth,
+			telemetry: (event) => {
+				if (event.status === 200) {
+					timeline.push({
+						label: "stt.provider.complete",
+						at: performance.now(),
+					});
+				}
+			},
+		});
+		const tts = new OpenRouterTtsAdapter({
+			config: voiceConfig,
+			credentialHealth,
+			telemetry: (event) => {
+				if (event.status === 200) {
+					timeline.push({
+						label: "tts.provider.complete",
+						at: performance.now(),
+					});
+				}
+			},
+		});
 		const brain = new ScriptedLuna(timeline);
 		const notifier = new RecordingNotifier();
-		const runtime = await createProductionRuntime(
-			{
-				APP_ORIGIN: appOrigin,
-				AUTO_MIGRATE: "true",
-				DATABASE_URL: `file:${databasePath}`,
-				MIGRATIONS_DIR: resolve("drizzle"),
-				BRAIN_PROVIDER: "codex-subscription",
-				CODEX_MODEL: "gpt-5.6-luna",
-				CODEX_EFFORT: "low",
-				CODEX_HOME: codexHome,
-				CODEX_CWD: promptDir,
-				PROMPT_RUNTIME_DIR: promptDir,
-				CODEX_TOOL_MODE: "envelope",
-				CODEX_MAX_CONCURRENT_TURNS: "2",
-				MAX_ACTIVE_CONVERSATIONS: "2",
-				MAX_ACTIVE_CONVERSATIONS_PER_SOURCE: "2",
-				MAX_CONCURRENT_BRAIN_TURNS: "2",
-				MAX_PENDING_BRAIN_TURNS: "2",
-				MAX_CONVERSATION_CREATES_PER_SOURCE: "10",
-				STT_PROVIDER: "openrouter",
-				TTS_PROVIDER: "openrouter",
-				OPENROUTER_API_KEY: apiKey,
-				OPENROUTER_BASE_URL: `http://127.0.0.1:${providerServer.port}/api/v1`,
-				OPENROUTER_STT_AUDIO_FORMAT: "wav",
-				OPENROUTER_STT_LANGUAGE: "ru",
-				OPENROUTER_TTS_RESPONSE_FORMAT: "mp3",
-				STT_RETRY_BASE_MS: "0",
-				STT_MAX_RETRIES: "1",
-				TTS_RETRY_BASE_MS: "0",
-				TTS_MAX_RETRIES: "0",
-				TTS_TEXT_ONLY_FALLBACK: "true",
-				STT_TEXT_ONLY_INPUT_FALLBACK: "false",
-				STORE_RAW_AUDIO: "false",
-			},
-			{
-				brain,
-				notifier,
-				outboxPollIntervalMs: 5,
-				retentionIntervalMs: 60_000,
-			},
-		);
+		const runtime = await createProductionRuntime(runtimeEnv, {
+			brain,
+			stt,
+			tts,
+			notifier,
+			outboxPollIntervalMs: 5,
+			retentionIntervalMs: 60_000,
+		});
 		const app = createServerApp(runtime);
 		const server = Bun.serve({
 			port: 0,
@@ -620,7 +684,7 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			// Booking turn: one commit/final/brain, duplicate model call replay,
 			// one durable booking, and unavailable TTS with retained visible text.
 			const commitsBeforeBooking = timeline.filter(
-				(entry) => entry.label === "audio.commit",
+				(entry) => entry.label === "audio.commit.client-send",
 			).length;
 			const finalsBeforeBooking = countSpeaker(happy.browser, "visitor");
 			const brainsBeforeBooking = brain.inputs.length;
@@ -638,8 +702,8 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				"booking turn did not retain text after TTS failure",
 			);
 			expect(
-				timeline.filter((entry) => entry.label === "audio.commit").length -
-					commitsBeforeBooking,
+				timeline.filter((entry) => entry.label === "audio.commit.client-send")
+					.length - commitsBeforeBooking,
 			).toBe(1);
 			expect(countSpeaker(happy.browser, "visitor") - finalsBeforeBooking).toBe(
 				1,
@@ -805,25 +869,46 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				if (value === undefined) throw new Error("missing timing boundary");
 				return value;
 			};
-			const commitAt = requireTiming("audio.commit", 2);
-			const firstSttRequestAt = requireTiming("stt.request", 2);
-			const retrySttRequestAt = requireTiming("stt.request", 3);
-			const finalAt = requireTiming("transcript.final", 2);
-			const brainAt = requireTiming("brain.first", 2);
-			const ttsRequestAt = requireTiming("tts.request", 2);
-			const ttsCompleteAt = requireTiming("tts.complete", 1);
+			const commitAt = requireTiming("audio.commit.client-send", 2);
+			const firstSttRequestAt = requireTiming("stt.provider.request", 2);
+			const retrySttRequestAt = requireTiming("stt.provider.request", 3);
+			const sttCompleteAt = requireTiming("stt.provider.complete", 2);
+			const finalReceiptAt = requireTiming(
+				"transcript.final.client-receipt",
+				2,
+			);
+			const brainDeltaAt = requireTiming("brain.delta.first", 2);
+			const ttsRequestAt = requireTiming("tts.provider.request", 2);
+			const ttsCompleteAt = requireTiming("tts.provider.complete", 1);
+			const metadataReceiptAt = requireTiming(
+				"audio.metadata.client-receipt",
+				1,
+			);
+			const binaryReceiptAt = requireTiming("audio.binary.client-receipt", 1);
+			const pairedAt = requireTiming("audio.segment.client-paired", 1);
 			const playbackStartedAt = requireTiming("playback.started", 1);
 			const playbackCompletedAt = requireTiming("playback.completed", 1);
-			expect(commitAt <= firstSttRequestAt).toBe(true);
-			expect(firstSttRequestAt <= retrySttRequestAt).toBe(true);
-			// The server can start Luna before the browser receives the final event;
-			// both boundaries must still follow the provider's final response.
-			expect(retrySttRequestAt <= finalAt).toBe(true);
-			expect(retrySttRequestAt <= brainAt).toBe(true);
-			expect(brainAt <= ttsRequestAt).toBe(true);
-			expect(ttsRequestAt <= ttsCompleteAt).toBe(true);
-			expect(ttsCompleteAt <= playbackStartedAt).toBe(true);
-			expect(playbackStartedAt <= playbackCompletedAt).toBe(true);
+			const duration = (start: number, end: number): number => {
+				const measured = end - start;
+				expect(measured).toBeGreaterThanOrEqual(0);
+				return measured;
+			};
+			duration(commitAt, firstSttRequestAt);
+			duration(firstSttRequestAt, retrySttRequestAt);
+			duration(retrySttRequestAt, sttCompleteAt);
+			// Gateway delivery and Luna consumption race after the provider final;
+			// they are separate honest boundaries rather than a fabricated order.
+			duration(sttCompleteAt, finalReceiptAt);
+			duration(sttCompleteAt, brainDeltaAt);
+			duration(brainDeltaAt, ttsRequestAt);
+			duration(ttsRequestAt, ttsCompleteAt);
+			duration(ttsCompleteAt, metadataReceiptAt);
+			duration(metadataReceiptAt, binaryReceiptAt);
+			duration(binaryReceiptAt, pairedAt);
+			duration(pairedAt, playbackStartedAt);
+			expect(
+				duration(playbackStartedAt, playbackCompletedAt),
+			).toBeGreaterThanOrEqual(80);
 		} finally {
 			await failed?.browser.dispose();
 			await happy.browser.dispose();

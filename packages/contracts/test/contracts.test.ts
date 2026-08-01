@@ -25,6 +25,8 @@ import {
 	decodeBinaryAudioFrame,
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
+	isCompleteMp3File,
+	MpegAudioBytesSchema,
 	QualificationPatchSchema,
 	ServerWsEventSchema,
 	STT_CONTRACT_MAX_AUDIO_BYTES,
@@ -397,6 +399,22 @@ describe("shared contracts", () => {
 			expect(TtsSynthesisRequestDataSchema.safeParse(invalid).success).toBe(
 				false,
 			);
+		}
+	});
+
+	test("shares strict whole-file MP3 validation across provider and transport boundaries", () => {
+		const complete = createStructurallyValidMp3Frame();
+		expect(isCompleteMp3File(complete)).toBe(true);
+		expect(MpegAudioBytesSchema.safeParse(complete).success).toBe(true);
+		for (const invalid of [
+			new Uint8Array([0xff]),
+			new TextEncoder().encode("not-an-mp3"),
+			Uint8Array.from([0, ...complete]),
+			Uint8Array.from([...complete, 0]),
+			complete.slice(0, -1),
+		]) {
+			expect(isCompleteMp3File(invalid)).toBe(false);
+			expect(MpegAudioBytesSchema.safeParse(invalid).success).toBe(false);
 		}
 	});
 

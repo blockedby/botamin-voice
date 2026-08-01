@@ -1,12 +1,40 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+	BINARY_AUDIO_FRAME_KIND,
+	encodeBinaryAudioFrame,
+} from "../../packages/contracts/src";
+import { createDeterministicMp3Fixture } from "../../packages/test-fixtures/src";
 
 const root = join(import.meta.dir, "../..");
 const script = "scripts/local-voice-e2e-smoke.ts";
+const appOrigin = "http://localhost:5173";
+const conversationId = "01J00000000000000000000000";
+const at = "2026-07-30T20:22:00.000Z";
 
-async function run(env: Record<string, string | undefined>) {
-	const child = Bun.spawn(["bun", "run", script], {
+type LoopbackMode =
+	| "valid-two-segment"
+	| "one-byte"
+	| "non-mp3"
+	| "zero-final"
+	| "double-final"
+	| "stale-final"
+	| "mismatched-generation"
+	| "stalled-create"
+	| "stalled-stop";
+
+interface SmokeOutput {
+	status: "passed" | "failed" | "not_run";
+	reason?: string;
+	counts: Record<string, number>;
+}
+
+async function run(
+	env: Record<string, string | undefined>,
+	args: string[] = [],
+) {
+	const child = Bun.spawn(["bun", "run", script, ...args], {
 		cwd: root,
 		env: { ...Bun.env, ...env },
 		stdout: "pipe",
@@ -18,6 +46,222 @@ async function run(env: Record<string, string | undefined>) {
 		new Response(child.stderr).text(),
 	]);
 	return { exitCode, stdout, stderr };
+}
+
+function jsonEvent(
+	sequence: number,
+	type: string,
+	payload: Record<string, unknown>,
+): string {
+	return JSON.stringify({
+		v: 1,
+		conversationId,
+		seq: sequence,
+		at,
+		type,
+		payload,
+	});
+}
+
+async function runLoopback(mode: LoopbackMode, fixtureTurns = 1) {
+	let createRequests = 0;
+	let stopRequests = 0;
+	let stopWsMessages = 0;
+	let playbackAcks = 0;
+	let sequence = 0;
+	let commits = 0;
+	const firstTurnId = "01J00000000000000000000001";
+	const mp3 = createDeterministicMp3Fixture();
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch(request, bunServer) {
+			const url = new URL(request.url);
+			if (
+				request.method === "POST" &&
+				url.pathname === "/api/v1/conversations"
+			) {
+				createRequests += 1;
+				if (mode === "stalled-create") {
+					return new Promise<Response>(() => undefined);
+				}
+				return Response.json(
+					{
+						conversationId,
+						wsUrl: `/ws/v1/conversations/${conversationId}`,
+						clientToken: "loopback-client-token-at-least-32-characters",
+						expiresAt: "2099-07-30T20:22:00.000Z",
+						clientConfig: {
+							inputSampleRate: 16_000,
+							inputEncoding: "pcm16le",
+							chunkMs: 100,
+							outputContentType: "audio/mpeg",
+							outputMode: "complete-phrase-segments",
+						},
+					},
+					{ status: 201 },
+				);
+			}
+			if (
+				request.method === "POST" &&
+				url.pathname === `/api/v1/conversations/${conversationId}/stop`
+			) {
+				stopRequests += 1;
+				if (mode === "stalled-stop") {
+					return new Promise<Response>(() => undefined);
+				}
+				return Response.json({ conversationId, stopped: true });
+			}
+			if (
+				url.pathname === `/ws/v1/conversations/${conversationId}` &&
+				bunServer.upgrade(request)
+			) {
+				return undefined;
+			}
+			return new Response("not found", { status: 404 });
+		},
+		websocket: {
+			message(ws, raw) {
+				if (typeof raw !== "string") return;
+				const event = JSON.parse(raw) as { type?: string };
+				if (event.type === "playback.started") {
+					playbackAcks += 1;
+					return;
+				}
+				if (event.type === "session.stop") {
+					stopWsMessages += 1;
+					ws.close(1000, "stopped");
+					return;
+				}
+				if (event.type === "client.hello") {
+					ws.send(
+						jsonEvent(++sequence, "session.ready", {
+							state: "GREETING",
+							resumeToken: "rotated-loopback-token-at-least-32-characters",
+							clientConfig: {
+								inputSampleRate: 16_000,
+								inputEncoding: "pcm16le",
+								chunkMs: 100,
+								outputContentType: "audio/mpeg",
+								outputMode: "complete-phrase-segments",
+							},
+						}),
+					);
+					return;
+				}
+				if (event.type !== "audio.commit") return;
+				commits += 1;
+				if (mode === "zero-final") return;
+				const turnId =
+					mode === "stale-final" && commits === 2
+						? firstTurnId
+						: commits === 1
+							? firstTurnId
+							: "01J00000000000000000000011";
+				const generationId =
+					commits === 1
+						? "01J00000000000000000000002"
+						: "01J00000000000000000000012";
+				ws.send(
+					jsonEvent(++sequence, "transcript.final", { turnId, text: "ok" }),
+				);
+				if (mode === "double-final") {
+					ws.send(
+						jsonEvent(++sequence, "transcript.final", {
+							turnId: "01J00000000000000000000021",
+							text: "duplicate",
+						}),
+					);
+					return;
+				}
+				if (mode === "stale-final" && commits === 2) return;
+				ws.send(
+					jsonEvent(++sequence, "assistant.text.delta", {
+						generationId,
+						text: "answer",
+					}),
+				);
+				ws.send(
+					jsonEvent(++sequence, "assistant.text.done", {
+						generationId,
+						fullText: "answer",
+					}),
+				);
+				const metadataGeneration =
+					mode === "mismatched-generation"
+						? "01J00000000000000000000022"
+						: generationId;
+				const segmentTotal = mode === "valid-two-segment" ? 2 : 1;
+				for (let segment = 0; segment < segmentTotal; segment += 1) {
+					const payload =
+						mode === "one-byte"
+							? new Uint8Array([0xff])
+							: mode === "non-mp3"
+								? new TextEncoder().encode("not-an-mp3")
+								: mp3;
+					ws.send(
+						jsonEvent(++sequence, "audio.segment", {
+							generationId: metadataGeneration,
+							segmentId:
+								segment === 0
+									? "01J00000000000000000000003"
+									: "01J00000000000000000000004",
+							sequence: segment,
+							contentType: "audio/mpeg",
+							byteLength: payload.byteLength,
+							final: true,
+						}),
+					);
+					ws.send(
+						encodeBinaryAudioFrame({
+							kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+							sequence: segment,
+							payload,
+						}),
+					);
+				}
+				if (
+					mode !== "one-byte" &&
+					mode !== "non-mp3" &&
+					mode !== "mismatched-generation"
+				) {
+					ws.send(
+						jsonEvent(++sequence, "assistant.audio.done", { generationId }),
+					);
+				}
+			},
+		},
+	});
+	const started = performance.now();
+	try {
+		const result = await run(
+			{
+				BOTAMIN_EXTERNAL_VOICE_E2E: "1",
+				BOTAMIN_VOICE_E2E_TIMEOUT_MS: "300",
+			},
+			[
+				"--server-url",
+				`http://127.0.0.1:${server.port}`,
+				"--origin",
+				appOrigin,
+				"--fixture-turns",
+				String(fixtureTurns),
+			],
+		);
+		const lines = result.stdout.trim().split("\n");
+		expect(lines).toHaveLength(1);
+		return {
+			...result,
+			output: JSON.parse(lines[0] as string) as SmokeOutput,
+			elapsedMs: performance.now() - started,
+			createRequests,
+			stopRequests,
+			stopWsMessages,
+			playbackAcks,
+		};
+	} finally {
+		server.stop(true);
+	}
 }
 
 describe("T30 opt-in local voice smoke safety", () => {
@@ -63,5 +307,73 @@ describe("T30 opt-in local voice smoke safety", () => {
 		expect(source).toContain("BOTAMIN_EXTERNAL_VOICE_E2E");
 		expect(source).toContain("--pcm");
 		expect(source).toContain("--fixture");
+	});
+
+	test("one turn with two adjacent complete MP3 segments is validated, started, acknowledged, and cleaned up", async () => {
+		const result = await runLoopback("valid-two-segment");
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.output.status).toBe("passed");
+		expect(result.output.counts).toMatchObject({
+			commits: 1,
+			transcriptFinal: 1,
+			textDone: 1,
+			audioSegments: 2,
+			audioDone: 1,
+			playbackReady: 2,
+			playbackStarted: 2,
+		});
+		expect(result.playbackAcks).toBe(2);
+		expect(result.stopWsMessages).toBe(1);
+		expect(result.stopRequests).toBe(1);
+	});
+
+	test("one-byte and non-MP3 payloads never acknowledge playback and exit nonzero", async () => {
+		for (const mode of ["one-byte", "non-mp3"] as const) {
+			const result = await runLoopback(mode);
+			expect(result.exitCode).toBe(1);
+			expect(result.output.status).toBe("failed");
+			expect(result.output.counts.playbackStarted).toBe(0);
+			expect(result.playbackAcks).toBe(0);
+		}
+	});
+
+	test("per-commit state rejects zero, double, stale, and generation-mismatched finals", async () => {
+		for (const item of [
+			{ mode: "zero-final", turns: 1 },
+			{ mode: "double-final", turns: 1 },
+			{ mode: "stale-final", turns: 2 },
+			{ mode: "mismatched-generation", turns: 1 },
+		] as const) {
+			const result = await runLoopback(item.mode, item.turns);
+			expect(result.exitCode).toBe(1);
+			expect(result.output.status).toBe("failed");
+		}
+	});
+
+	test("one overall deadline bounds a stalled create and emits one safe failure", async () => {
+		const result = await runLoopback("stalled-create");
+		expect(result.exitCode).toBe(1);
+		expect(result.output).toMatchObject({
+			status: "failed",
+			reason: "deadline_exceeded",
+		});
+		expect(result.stdout).not.toContain('"status":"passed"');
+		expect(result.elapsedMs).toBeLessThan(2_000);
+		expect(result.createRequests).toBe(1);
+		expect(result.stopRequests).toBe(0);
+	});
+
+	test("a stalled REST stop prevents pass and remains inside the same overall deadline", async () => {
+		const result = await runLoopback("stalled-stop");
+		expect(result.exitCode).toBe(1);
+		expect(result.output).toMatchObject({
+			status: "failed",
+			reason: "deadline_exceeded",
+		});
+		expect(result.stdout).not.toContain('"status":"passed"');
+		expect(result.elapsedMs).toBeLessThan(2_000);
+		expect(result.stopWsMessages).toBe(1);
+		expect(result.stopRequests).toBe(1);
 	});
 });

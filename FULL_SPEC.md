@@ -319,7 +319,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 ## 9. Release sequencing boundary
 
-`0.5.0-local-rc.1` is accepted only for local hosting on a trusted owner machine. Chrome desktop/mobile and local Compose evidence can close local gates, but cannot close WebKit, target-VPS resource behavior, DNS, public TLS/WSS, or target-host paid-smoke gates. The internal booking remains deliberately different from a real calendar event.
+`0.5.0-local-rc.2` is accepted only for local hosting on a trusted owner machine. Chrome desktop/mobile and local Compose evidence can close local gates, but cannot close WebKit, target-VPS resource behavior, DNS, public TLS/WSS, or target-host paid-smoke gates. The internal booking remains deliberately different from a real calendar event.
 
 
 <div class="page-break"></div>
@@ -1851,7 +1851,7 @@ Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` �
 
 ![Deployment](diagrams/05-deployment.svg)
 
-Release `0.5.0-local-rc.1` uses this topology on one trusted local machine at `http://localhost:5173`. A target VPS, DNS, public TLS/WSS and target-host smokes are later gates and are not implied by local readiness.
+Release `0.5.0-local-rc.2` uses this topology on one trusted local machine at `http://localhost:5173`. A target VPS, DNS, public TLS/WSS and target-host smokes are later gates and are not implied by local readiness.
 
 Один `docker-compose.yml`, ровно два application-path сервиса рекомендуются:
 
@@ -2645,14 +2645,14 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ## 10. Acceptance checklist P0
 
-### Local release candidate `0.5.0-local-rc.1`
+### Local release candidate `0.5.0-local-rc.2`
 
-- [x] Integrated implementation baseline contains PRs #6–#21.
-- [x] Fresh deterministic release-commit suite passes 433 tests across 54 files with no failures and 3,788 assertions before and after `bun run build`; command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md).
-- [x] Product landing, CTA/consent, AI identity, Botamin use cases, refusal behavior, booking order/idempotency, safe provider failures, barge-in, prompt loading, envelope mode, and sandbox boundaries have deterministic coverage.
-- [x] Chrome desktop/mobile local acceptance covers landing, consent, permission-denied safe state, no fetch/WebSocket before mic permission, and no horizontal overflow.
-- [x] Owner-observed real local OpenRouter/Luna evidence records one complete turn and a five-turn journey with exactly one booking and one sent outbox event; see [`../evidence/T30-observed-local-voice-smoke-2026-07-31.md`](evidence/T30-observed-local-voice-smoke-2026-07-31.md).
-- [x] `scripts/deploy-local.sh` was observed completing with read-only file secrets, healthy app/Caddy, and all dependency readiness checks ready at `http://localhost:5173`.
+- [x] The candidate extends the merged PR #24 baseline with the 60-second capture, typed conversation, scheduled booking, qualification, prompt, migration-compatibility, and refusal slices.
+- [x] Fresh deterministic release-candidate suite passes 484 tests across 56 files with no failures and 4,104 assertions; command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md).
+- [x] Product landing, CTA/consent, AI identity, 60-second sample-derived countdown, typed and spoken turns, strict supplied-slot booking, explicit refusal behavior, booking order/idempotency, safe provider failures, barge-in, prompt loading, envelope mode, and sandbox boundaries have deterministic coverage.
+- [x] Chrome local acceptance covers the strict-CSP worklet, visible countdown, typed refusal, permission-denied recovery, terminal behavior, and no horizontal overflow at 780 px and 390 px; Firefox headless rendered the 390 px page without CSP/runtime errors.
+- [x] A fresh bounded real local smoke completed one OpenRouter STT → Luna → OpenRouter TTS turn with one final transcript, one final answer, two decoder-accepted MP3 segments, and no booking. Earlier five-turn booking evidence remains in [`../evidence/T30-observed-local-voice-smoke-2026-07-31.md`](evidence/T30-observed-local-voice-smoke-2026-07-31.md).
+- [x] `scripts/deploy-local.sh` completed from the candidate tree with read-only file secrets, migration, healthy app/Caddy, 60-second/2 MB runtime limits, and all dependency readiness checks ready at `http://localhost:5173`.
 - [x] Compose contains only app and Caddy in the P0 application path; the OpenRouter key stays backend-only, and text-only TTS degradation is environment-configurable without rebuilding.
 - [x] Backup/restore/rollback scripts, permission/checksum/integrity guards, readiness loops, and key-remount ordering pass credential-free deterministic validation and are documented for the owner.
 
@@ -2921,7 +2921,7 @@ DoD:
 **Владелец:** A0 или release integrator  
 **Зависимости:** T31, T32.
 
-**Current label:** `0.5.0-local-rc.1`.
+**Current label:** `0.5.0-local-rc.2`.
 
 - local P0 gates green on the integrated PR #21 baseline;
 - `scripts/deploy-local.sh` observed ready at `http://localhost:5173` with file-backed secrets;
@@ -3209,22 +3209,22 @@ VoiceOrchestrator
 
 # 11. Local release candidate and handoff
 
-**Release label:** `0.5.0-local-rc.1`
+**Release label:** `0.5.0-local-rc.2`
 
-**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.1`
+**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.2`
 
-**Tag state:** recommendation only; no tag is created or pushed by T40.
+**Tag state:** recommendation only until the validated candidate is merged.
 
 **Scope:** local hosting on one trusted machine. This is not a target-VPS or public TLS release.
 
 ## Local P0 checklist
 
-- [x] Integrated implementation baseline is current through PRs #6–#21.
-- [x] Fresh deterministic release-commit suite passed 433 tests across 54 files with 0 failures and 3,788 assertions before and after `bun run build`.
-- [x] Typecheck, lint/format, build, deterministic spec generation, validator, and the current 317-file checksum set passed.
-- [x] The committed [T30 owner-observed artifact](evidence/T30-observed-local-voice-smoke-2026-07-31.md) records a real local OpenRouter/Luna one-turn path and a five-turn path with exactly one booked row and one sent outbox event.
-- [x] `scripts/deploy-local.sh` was observed succeeding with mode-`0600` materialized files mounted read-only; app and Caddy were healthy and dependency readiness reported all checks ready.
-- [x] Chrome desktop/mobile acceptance was observed for landing, consent, microphone-permission denial, safe denied state, no fetch/WebSocket before microphone permission, and no horizontal overflow.
+- [x] The candidate extends the merged PR #24 baseline with the 60-second capture, typed conversation, scheduled booking, qualification, prompt, migration-compatibility, and refusal slices.
+- [x] Fresh deterministic release-candidate suite passed 484 tests across 56 files with 0 failures and 4,104 assertions.
+- [x] Typecheck, lint/format, build, deterministic spec/eval generation, validator, and the regenerated manifest/checksum set passed.
+- [x] The committed [T30 owner-observed artifact](evidence/T30-observed-local-voice-smoke-2026-07-31.md) retains the earlier five-turn booking evidence; a fresh bounded candidate smoke completed one OpenRouter STT → Luna → OpenRouter TTS turn with decoder-accepted MP3 and no booking.
+- [x] `scripts/deploy-local.sh` completed from the candidate tree with mode-`0600` materialized files mounted read-only; migration, app/Caddy health, 60-second/2 MB runtime limits, and all dependency readiness checks passed.
+- [x] Chrome accepted the strict-CSP worklet, countdown, typed refusal and 780/390 px overflow checks; Firefox headless rendered the 390 px page without CSP/runtime errors.
 - [x] The local URL, file-backed secret workflow, device auth, readiness, metrics, recovery, and paid opt-in boundaries are documented below.
 - [ ] WebKit playback and complete journey acceptance — later gate, unobserved.
 - [ ] Target VPS deploy, DNS, TLS/WSS, and target-host paid smokes — later gate, unobserved.

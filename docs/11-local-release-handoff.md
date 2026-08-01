@@ -1,21 +1,21 @@
 # 11. Local release candidate and handoff
 
-**Release label:** `0.5.0-local-rc.1`
+**Release label:** `0.5.0-local-rc.2`
 
-**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.1`
+**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.2`
 
-**Tag state:** recommendation only; no tag is created or pushed by T40.
+**Tag state:** recommendation only until the validated candidate is merged.
 
 **Scope:** local hosting on one trusted machine. This is not a target-VPS or public TLS release.
 
 ## Local P0 checklist
 
-- [x] Integrated implementation baseline is current through PRs #6–#21.
-- [x] Fresh deterministic release-commit suite passed 433 tests across 54 files with 0 failures and 3,788 assertions before and after `bun run build`.
-- [x] Typecheck, lint/format, build, deterministic spec generation, validator, and the current 317-file checksum set passed.
-- [x] The committed [T30 owner-observed artifact](../evidence/T30-observed-local-voice-smoke-2026-07-31.md) records a real local OpenRouter/Luna one-turn path and a five-turn path with exactly one booked row and one sent outbox event.
-- [x] `scripts/deploy-local.sh` was observed succeeding with mode-`0600` materialized files mounted read-only; app and Caddy were healthy and dependency readiness reported all checks ready.
-- [x] Chrome desktop/mobile acceptance was observed for landing, consent, microphone-permission denial, safe denied state, no fetch/WebSocket before microphone permission, and no horizontal overflow.
+- [x] The candidate extends the merged PR #24 baseline with the 60-second capture, typed conversation, scheduled booking, qualification, prompt, migration-compatibility, and refusal slices.
+- [x] Fresh deterministic release-candidate suite passed 484 tests across 56 files with 0 failures and 4,104 assertions.
+- [x] Typecheck, lint/format, build, deterministic spec/eval generation, validator, and the regenerated manifest/checksum set passed.
+- [x] The committed [T30 owner-observed artifact](../evidence/T30-observed-local-voice-smoke-2026-07-31.md) retains the earlier five-turn booking evidence; a fresh bounded candidate smoke completed one OpenRouter STT → Luna → OpenRouter TTS turn with decoder-accepted MP3 and no booking.
+- [x] `scripts/deploy-local.sh` completed from the candidate tree with mode-`0600` materialized files mounted read-only; migration, app/Caddy health, 60-second/2 MB runtime limits, and all dependency readiness checks passed.
+- [x] Chrome accepted the strict-CSP worklet, countdown, typed refusal and 780/390 px overflow checks; Firefox headless rendered the 390 px page without CSP/runtime errors.
 - [x] The local URL, file-backed secret workflow, device auth, readiness, metrics, recovery, and paid opt-in boundaries are documented below.
 - [ ] WebKit playback and complete journey acceptance — later gate, unobserved.
 - [ ] Target VPS deploy, DNS, TLS/WSS, and target-host paid smokes — later gate, unobserved.

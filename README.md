@@ -6,7 +6,7 @@
 
 **Spec version:** `0.5-demo`
 
-**Local release candidate:** `0.5.0-local-rc.1`
+**Local release candidate:** `0.5.0-local-rc.2`
 
 **Current release scope:** local hosting first; target VPS, public TLS/WSS, and WebKit acceptance are later gates.
 

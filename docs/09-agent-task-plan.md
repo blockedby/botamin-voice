@@ -232,7 +232,7 @@ DoD:
 **Владелец:** A0 или release integrator  
 **Зависимости:** T31, T32.
 
-**Current label:** `0.5.0-local-rc.1`.
+**Current label:** `0.5.0-local-rc.2`.
 
 - local P0 gates green on the integrated PR #21 baseline;
 - `scripts/deploy-local.sh` observed ready at `http://localhost:5173` with file-backed secrets;

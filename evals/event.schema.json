@@ -30,6 +30,7 @@
 			"items": {
 				"enum": [
 					"booking_offer",
+					"discovery_context",
 					"booking_accepted",
 					"contact_consent_granted",
 					"booking_confirmation",
@@ -53,7 +54,8 @@
 		"bookingId": { "type": "string" },
 		"status": { "type": "string" },
 		"service": { "type": "string" },
-		"payload": {}
+		"payload": {},
+		"inputMode": { "enum": ["typed", "spoken"] }
 	},
 	"allOf": [
 		{

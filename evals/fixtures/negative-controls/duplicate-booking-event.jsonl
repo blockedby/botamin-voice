@@ -1,7 +1,7 @@
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":1,"type":"stage","stage":"GREETING"}
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":3,"type":"tts_input","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}
-{"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":4,"type":"message","role":"user","text":"Нужна демо, оставлю контакт."}
+{"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":4,"type":"message","role":"user","text":"Нужна демо по входящим, оставлю контакты.","semantics":["discovery_context"]}
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":5,"type":"stage","stage":"DISCOVERY"}
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":6,"type":"stage","stage":"VALUE"}
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":7,"type":"message","role":"assistant","text":"Хорошо, сначала сохраним минимальный следующий шаг."}
@@ -11,10 +11,10 @@
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":11,"type":"tts_input","text":"Похоже, сценарий стоит разобрать на демонстрации. Зафиксировать следующий шаг с коллегой?"}
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":12,"type":"message","role":"user","text":"Да, давайте.","semantics":["booking_accepted"]}
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":13,"type":"stage","stage":"COLLECT_BOOKING"}
-{"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":14,"type":"message","role":"assistant","text":"Назовите, пожалуйста, имя и один удобный контакт."}
-{"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":15,"type":"tts_input","text":"Назовите, пожалуйста, имя и один удобный контакт."}
-{"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":16,"type":"message","role":"user","text":"Вера, @vera_sales, согласна.","semantics":["contact_consent_granted"]}
-{"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":17,"type":"tool_call","name":"create_booking","callId":"call_1"}
+{"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":14,"type":"message","role":"assistant","text":"Можно выбрать один из двух вариантов: 15 сентября 2030 года, 10:00 по Москве или 16 сентября 2030 года, 15:00 по Москве. Какой подходит?"}
+{"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":15,"type":"tts_input","text":"Можно выбрать один из двух вариантов: 15 сентября 2030 года, 10:00 по Москве или 16 сентября 2030 года, 15:00 по Москве. Какой подходит?"}
+{"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":16,"type":"message","role":"user","text":"Выбираю 15 сентября 2030 года, 10:00 по Москве. Я Вера, компания Стабильный Лид, рабочий email vera@stable.example, Telegram @vera_sales; даю согласие на обработку.","semantics":["contact_consent_granted"],"inputMode":"spoken"}
+{"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":17,"type":"tool_call","name":"create_booking","callId":"call_1","payload":{"name":"Вера","company":"Стабильный Лид","contacts":[{"channel":"email","value":"vera@stable.example"},{"channel":"telegram","value":"@vera_sales"}],"preferredTimeText":"15 сентября 2030 года, 10:00 по Москве","consentConfirmed":true}}
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":18,"type":"domain_event","name":"booking.created","bookingId":"bkg_fixture","callId":"call_1"}
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":19,"type":"domain_event","name":"booking.created","bookingId":"bkg_fixture","callId":"call_1"}
 {"schemaVersion":1,"scenarioId":"notifier-outage-booking-persists","sequence":20,"type":"provider_event","service":"notifier","status":"unavailable"}

@@ -67,6 +67,9 @@ async function buildArtifact(): Promise<object> {
 	const inputPaths = [
 		"evals/src/scorer.ts",
 		"evals/src/generate-baseline.ts",
+		"evals/tests/scorer.test.ts",
+		"evals/event.schema.json",
+		"evals/scenario.schema.json",
 		"evals/policy.json",
 		"evals/scenarios/scenarios.json",
 		"evals/fixtures/passing-transcripts.jsonl",
@@ -76,13 +79,19 @@ async function buildArtifact(): Promise<object> {
 		),
 	];
 	const promptPaths = [
-		"prompts/booking.md",
+		"prompts/system.md",
+		"prompts/product.md",
 		"prompts/conversation-policy.md",
 		"prompts/objections.md",
-		"prompts/product.md",
+		"prompts/booking.md",
 		"prompts/qualification.md",
 		"prompts/speech-style.md",
-		"prompts/system.md",
+		"knowledge/botamin-overview.md",
+		"knowledge/use-cases.md",
+		"knowledge/cases.md",
+		"knowledge/faq.md",
+		"knowledge/allowed-claims.md",
+		"knowledge/prohibited-claims.md",
 	];
 	return {
 		schemaVersion: 1,
@@ -97,9 +106,9 @@ async function buildArtifact(): Promise<object> {
 		},
 		providerCalls: 0,
 		credentialsRequired: false,
-		promptTuningClaimed: false,
+		promptTuningClaimed: true,
 		prompt: {
-			changedByT31: false,
+			sourceChangedByProactivePromptTask: true,
 			sourceSha256: await sha256(promptPaths),
 		},
 		inputsSha256: await sha256(inputPaths),

@@ -40,6 +40,20 @@
 					"enum": ["inbound", "outbound", "reactivation", "system"]
 				},
 				"description": { "type": "string", "minLength": 1 },
+				"serverContext": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["slotCandidates"],
+					"properties": {
+						"slotCandidates": {
+							"type": "array",
+							"minItems": 2,
+							"maxItems": 2,
+							"uniqueItems": true,
+							"items": { "type": "string", "minLength": 1 }
+						}
+					}
+				},
 				"expected": {
 					"type": "object",
 					"additionalProperties": false,

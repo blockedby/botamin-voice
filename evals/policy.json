@@ -2,6 +2,17 @@
 	"schemaVersion": 1,
 	"caseClaims": [
 		{
+			"id": "user-brief-revenue-10-15m-monthly",
+			"source": "knowledge/cases.md#пользовательский-бриф-botamin--рост-выручки-компаний",
+			"textPattern": "10\\s*(?:[-–—]|до)\\s*15\\s+миллион(?:а|ов)?\\s+руб(?:лей|ля|ль)?\\s+в\\s+месяц",
+			"requiredPatterns": [
+				"пользовательск(?:ом|ий)\\s+брифе?\\s+Botamin",
+				"помог\\s+компаниям\\s+увеличить\\s+выручку",
+				"не\\s+гарантия,\\s*прогноз\\s+или\\s+переносимый\\s+результат"
+			],
+			"numericValues": ["10m-rub-month", "15m-rub-month"]
+		},
+		{
 			"id": "maintrassy-qualified-15",
 			"source": "knowledge/cases.md#главтрассы--голосовой-outbound",
 			"textPattern": "15\\s*(?:%|процент(?:ов|а|ах|ами|у)?)",

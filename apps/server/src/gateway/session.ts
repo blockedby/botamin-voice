@@ -1,13 +1,13 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { BookingService } from "@botamin/contracts";
 import {
+	type AudioClientConfig,
 	BINARY_AUDIO_FRAME_KIND,
 	ClientHelloEventSchema,
 	ClientWsEventSchema,
 	decodeBinaryAudioFrame,
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
-	type AudioClientConfig,
 	type KnownFacts,
 	type SafeErrorCode,
 	type ServerWsEvent,

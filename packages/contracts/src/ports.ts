@@ -7,12 +7,14 @@ import {
 import type {
 	BookingDomainEvent,
 	BookingSnapshot,
+	MeetingSlot,
 	QualificationPatch,
 } from "./domain";
 import {
 	BookingSnapshotSchema,
 	ConversationStageSchema,
 	KnownFactsSchema,
+	MeetingSlotSchema,
 } from "./domain";
 import type {
 	AppendQualificationInput,
@@ -33,6 +35,76 @@ export const TtsHealthSchema = z.enum(["ready", "degraded", "unavailable"]);
 
 export const BrainToolModeSchema = z.enum(["dynamic", "envelope"]);
 
+const MOSCOW_WEEKDAYS = [
+	"воскресенье",
+	"понедельник",
+	"вторник",
+	"среда",
+	"четверг",
+	"пятница",
+	"суббота",
+] as const;
+const MOSCOW_OFFSET_MS = 3 * 60 * 60_000;
+
+export const SchedulingCandidateSchema = z
+	.object({
+		meetingSlot: MeetingSlotSchema,
+		displayLabel: z
+			.string()
+			.min(1)
+			.max(200)
+			.regex(
+				/^\d{2} [а-яё]+ \d{4}, (?:воскресенье|понедельник|вторник|среда|четверг|пятница|суббота), \d{2}:\d{2}–\d{2}:\d{2} \(МСК, Europe\/Moscow\)$/u,
+			),
+	})
+	.strict();
+
+export const SchedulingContextSchema = z
+	.object({
+		currentInstant: z.iso
+			.datetime({ offset: false })
+			.refine((value) => new Date(value).toISOString() === value, {
+				message: "Expected a canonical current UTC instant",
+			}),
+		moscowLocalDate: z.iso.date(),
+		moscowWeekday: z.enum(MOSCOW_WEEKDAYS),
+		candidateMeetingSlots: z.tuple([
+			SchedulingCandidateSchema,
+			SchedulingCandidateSchema,
+		]),
+	})
+	.strict()
+	.superRefine((context, refinement) => {
+		const local = new Date(
+			new Date(context.currentInstant).getTime() + MOSCOW_OFFSET_MS,
+		);
+		const expectedDate = `${String(local.getUTCFullYear()).padStart(4, "0")}-${String(local.getUTCMonth() + 1).padStart(2, "0")}-${String(local.getUTCDate()).padStart(2, "0")}`;
+		if (context.moscowLocalDate !== expectedDate) {
+			refinement.addIssue({
+				code: "custom",
+				path: ["moscowLocalDate"],
+				message: "Moscow date must match the current instant",
+			});
+		}
+		if (context.moscowWeekday !== MOSCOW_WEEKDAYS[local.getUTCDay()]) {
+			refinement.addIssue({
+				code: "custom",
+				path: ["moscowWeekday"],
+				message: "Moscow weekday must match the current instant",
+			});
+		}
+		if (
+			context.candidateMeetingSlots[0].meetingSlot.startAt ===
+			context.candidateMeetingSlots[1].meetingSlot.startAt
+		) {
+			refinement.addIssue({
+				code: "custom",
+				path: ["candidateMeetingSlots"],
+				message: "Candidates must be unique",
+			});
+		}
+	});
+
 export const BrainTurnInputSchema = z
 	.object({
 		conversationId: EntityIdSchema,
@@ -43,6 +115,7 @@ export const BrainTurnInputSchema = z
 		stage: ConversationStageSchema,
 		knownFacts: KnownFactsSchema,
 		booking: BookingSnapshotSchema.nullable(),
+		schedulingContext: SchedulingContextSchema,
 		allowedActions: z.array(BrainActionNameSchema).max(2),
 		promptVersion: z.string().regex(/^[a-f0-9]{64}$/i),
 	})
@@ -152,6 +225,8 @@ export const TtsAudioSegmentSchema = z
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type BrainToolMode = z.infer<typeof BrainToolModeSchema>;
 export type BrainTurnInput = z.infer<typeof BrainTurnInputSchema>;
+export type SchedulingCandidate = z.infer<typeof SchedulingCandidateSchema>;
+export type SchedulingContext = z.infer<typeof SchedulingContextSchema>;
 export type BrainDelta = z.infer<typeof BrainDeltaSchema>;
 export type SttTranscriptionRequestData = z.infer<
 	typeof SttTranscriptionRequestDataSchema
@@ -216,6 +291,8 @@ export interface BookingRepository {
 }
 
 export interface BookingService {
+	/** Two current internal candidates; this is not an external availability claim. */
+	candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]>;
 	/** Commits booking.created before this promise resolves. */
 	createBooking(input: CreateBookingInput): Promise<CreateBookingResult>;
 

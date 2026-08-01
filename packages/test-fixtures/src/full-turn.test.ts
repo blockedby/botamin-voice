@@ -14,7 +14,11 @@ import {
 	type SttTranscriptionRequest,
 	type TtsSynthesisRequest,
 } from "@botamin/contracts";
-import { createTestBookingContacts, createTestMeetingSlot } from "./booking";
+import {
+	createTestBookingContacts,
+	createTestMeetingSlot,
+	createTestSchedulingContext,
+} from "./booking";
 import {
 	FakeBookingService,
 	FakeBrain,
@@ -108,6 +112,7 @@ describe("fake full turn", () => {
 			stage: "COLLECT_BOOKING",
 			knownFacts: { useCases: [], painPoints: [], objections: [] },
 			booking: null,
+			schedulingContext: createTestSchedulingContext(),
 			allowedActions: ["create_booking"],
 			promptVersion: "a".repeat(64),
 		};
@@ -123,6 +128,10 @@ describe("fake full turn", () => {
 						stage: turn.stage,
 						sessionConversationId: conversationId,
 						currentBooking: null,
+						candidateMeetingSlots:
+							turn.schedulingContext.candidateMeetingSlots.map(
+								(candidate) => candidate.meetingSlot,
+							),
 						input: delta.tool.args,
 					});
 					await bookings.createBooking(delta.tool.args);
@@ -154,6 +163,9 @@ describe("fake full turn", () => {
 			stage: "COLLECT_BOOKING",
 			sessionConversationId: conversationId,
 			currentBooking: committedBooking,
+			candidateMeetingSlots: turn.schedulingContext.candidateMeetingSlots.map(
+				(candidate) => candidate.meetingSlot,
+			),
 			input: bookingInput,
 		});
 		const exactReplay = await bookings.createBooking(bookingInput);
@@ -171,6 +183,9 @@ describe("fake full turn", () => {
 			stage: "COLLECT_BOOKING",
 			sessionConversationId: conversationId,
 			currentBooking: committedBooking,
+			candidateMeetingSlots: turn.schedulingContext.candidateMeetingSlots.map(
+				(candidate) => candidate.meetingSlot,
+			),
 			input: replayInput,
 		});
 		const replay = await bookings.createBooking(replayInput);

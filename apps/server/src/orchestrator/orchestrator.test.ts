@@ -396,6 +396,58 @@ describe("atomic transcript intake", () => {
 		expect(brain.runs).toBe(0);
 	});
 
+	test("candidate retrieval failure fails closed before Luna or create_booking", async () => {
+		const brain = new FakeBrain(bookingScript());
+		const bookings = new FakeBookingService({
+			candidateMeetingSlots: async () => {
+				throw new Error("private candidate database failure");
+			},
+		});
+		const { orchestrator } = fixture({ brain, bookings });
+
+		const events = await collect(orchestrator.acceptAudioCommit(commit()));
+
+		expect(brain.turns).toHaveLength(0);
+		expect(bookings.domainEvents).toHaveLength(0);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "degraded",
+				provider: "brain",
+				code: "DB_UNAVAILABLE",
+			}),
+		);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "state.changed",
+				to: "ERROR",
+				errorCode: "DB_UNAVAILABLE",
+			}),
+		);
+		expect(JSON.stringify(events)).not.toContain(
+			"private candidate database failure",
+		);
+	});
+
+	test("invalid candidate formatting input fails closed without fabricated slots", async () => {
+		const brain = new FakeBrain(bookingScript());
+		const slot = createTestMeetingSlot();
+		const bookings = new FakeBookingService({
+			candidateMeetingSlots: () => [slot, slot],
+		});
+		const { orchestrator } = fixture({ brain, bookings });
+
+		const events = await collect(orchestrator.acceptAudioCommit(commit()));
+
+		expect(brain.turns).toHaveLength(0);
+		expect(bookings.domainEvents).toHaveLength(0);
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "degraded",
+				code: "DB_UNAVAILABLE",
+			}),
+		);
+	});
+
 	test("STT failure invokes no brain, tool, notifier, or TTS", async () => {
 		class BrokenStt implements SttPort {
 			async transcribe(): Promise<SttTranscriptionResult> {
@@ -1102,6 +1154,9 @@ describe("booking and tool timeline", () => {
 		});
 		const delegate = new FakeBookingService();
 		class DelayedBookingService implements BookingService {
+			async candidateMeetingSlots() {
+				return delegate.candidateMeetingSlots();
+			}
 			async createBooking(input: CreateBookingInput) {
 				executionStarted();
 				await gate;

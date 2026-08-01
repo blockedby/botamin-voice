@@ -120,6 +120,18 @@ const QUALIFICATION_OUTPUT_PROPERTIES = {
 	notes: nullable({ type: "string", minLength: 1, maxLength: 1500 }),
 } as const;
 
+const MEETING_SLOT_OUTPUT_SCHEMA = {
+	type: "object",
+	additionalProperties: false,
+	required: ["startAt", "endAt", "timeZone", "durationMinutes"],
+	properties: {
+		startAt: { type: "string" },
+		endAt: { type: "string" },
+		timeZone: { const: "Europe/Moscow" },
+		durationMinutes: { const: 20 },
+	},
+} as const;
+
 const CREATE_BOOKING_OUTPUT_INPUT_SCHEMA = {
 	type: "object",
 	additionalProperties: false,
@@ -129,7 +141,7 @@ const CREATE_BOOKING_OUTPUT_INPUT_SCHEMA = {
 		"name",
 		"contacts",
 		"company",
-		"preferredTimeText",
+		"meetingSlot",
 		"consentConfirmed",
 	],
 	properties: {
@@ -138,16 +150,12 @@ const CREATE_BOOKING_OUTPUT_INPUT_SCHEMA = {
 		name: { type: "string", minLength: 1, maxLength: 120 },
 		contacts: {
 			type: "array",
-			minItems: 1,
+			minItems: 2,
 			maxItems: 3,
 			items: CONTACT_SCHEMA,
 		},
-		company: nullable({ type: "string", minLength: 1, maxLength: 200 }),
-		preferredTimeText: nullable({
-			type: "string",
-			minLength: 1,
-			maxLength: 500,
-		}),
+		company: { type: "string", minLength: 1, maxLength: 200 },
+		meetingSlot: MEETING_SLOT_OUTPUT_SCHEMA,
 		consentConfirmed: { const: true },
 	},
 } as const;
@@ -483,6 +491,7 @@ export class CodexAppServerBrain implements BrainPort {
 				stage: input.stage,
 				knownFacts: input.knownFacts,
 				booking: input.booking,
+				schedulingContext: input.schedulingContext,
 				allowedActions: input.allowedActions,
 				promptVersion: input.promptVersion,
 			});
@@ -829,7 +838,8 @@ export class CodexAppServerBrain implements BrainPort {
 					});
 					if (
 						request.success &&
-						active.input.allowedActions.includes(request.data.name)
+						active.input.allowedActions.includes(request.data.name) &&
+						usesSuppliedMeetingSlot(active.input, request.data)
 					)
 						active.queue.push({
 							type: "tool.request",
@@ -897,7 +907,8 @@ export class CodexAppServerBrain implements BrainPort {
 		});
 		if (
 			!request.success ||
-			!active.input.allowedActions.includes(request.data.name)
+			!active.input.allowedActions.includes(request.data.name) ||
+			!usesSuppliedMeetingSlot(active.input, request.data)
 		) {
 			this.failDynamicTurn(active);
 			throw new Error("Dynamic tool call rejected by policy");
@@ -1106,8 +1117,6 @@ function normalizeStructuredEnvelope(
 		payload.conversationId = input.conversationId;
 		payload.idempotencyKey = envelopeIdempotencyKey(action.type, input.turnId);
 		payload.consentConfirmed = input.allowedActions.includes(action.type);
-		for (const key of ["company", "preferredTimeText"])
-			if (payload[key] === null) delete payload[key];
 	}
 	if (action.type === "append_booking_qualification") {
 		// An absent committed booking deliberately produces an invalid envelope;
@@ -1122,6 +1131,21 @@ function normalizeStructuredEnvelope(
 		}
 	}
 	return result;
+}
+
+function usesSuppliedMeetingSlot(
+	input: BrainTurnInput,
+	request: ToolRequest,
+): boolean {
+	if (request.name !== "create_booking") return true;
+	const requested = request.args.meetingSlot;
+	return input.schedulingContext.candidateMeetingSlots.some(
+		({ meetingSlot }) =>
+			meetingSlot.startAt === requested.startAt &&
+			meetingSlot.endAt === requested.endAt &&
+			meetingSlot.timeZone === requested.timeZone &&
+			meetingSlot.durationMinutes === requested.durationMinutes,
+	);
 }
 
 function envelopeCallId(turnId: string): string {
@@ -1141,10 +1165,6 @@ function envelopeIdempotencyKey(
 function normalizeDynamicToolArguments(tool: string, value: unknown): unknown {
 	if (!isRecord(value)) return value;
 	const result = { ...value };
-	if (tool === "create_booking") {
-		for (const key of ["company", "preferredTimeText"])
-			if (result[key] === null) delete result[key];
-	}
 	if (tool === "append_booking_qualification" && isRecord(result.patch)) {
 		const patch = { ...result.patch };
 		result.patch = patch;

@@ -121,6 +121,7 @@ export const BookingToolExecutionSchema = z
 				stage: z.literal("COLLECT_BOOKING"),
 				sessionConversationId: EntityIdSchema,
 				currentBooking: BookingSnapshotSchema.nullable(),
+				candidateMeetingSlots: z.tuple([MeetingSlotSchema, MeetingSlotSchema]),
 				input: CreateBookingInputSchema,
 			})
 			.strict(),
@@ -136,6 +137,31 @@ export const BookingToolExecutionSchema = z
 	])
 	.superRefine((command, context) => {
 		if (command.type === "create_booking") {
+			const candidateStarts = command.candidateMeetingSlots.map(
+				(slot) => slot.startAt,
+			);
+			if (new Set(candidateStarts).size !== 2) {
+				context.addIssue({
+					code: "custom",
+					message: "Candidate meeting slots must be unique",
+					path: ["candidateMeetingSlots"],
+				});
+			}
+			if (
+				!command.candidateMeetingSlots.some(
+					(slot) =>
+						slot.startAt === command.input.meetingSlot.startAt &&
+						slot.endAt === command.input.meetingSlot.endAt &&
+						slot.timeZone === command.input.meetingSlot.timeZone &&
+						slot.durationMinutes === command.input.meetingSlot.durationMinutes,
+				)
+			) {
+				context.addIssue({
+					code: "custom",
+					message: "Booking must use a supplied candidate meeting slot",
+					path: ["input", "meetingSlot"],
+				});
+			}
 			if (command.input.conversationId !== command.sessionConversationId) {
 				context.addIssue({
 					code: "custom",

@@ -284,6 +284,7 @@ export async function createProductionRuntime(
 					maxCharsPerSession: config.voice.tts.maxCharsPerSession,
 				},
 				metrics,
+				now,
 			});
 			persistence.create({
 				id: conversationId,

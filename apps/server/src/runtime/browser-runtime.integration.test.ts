@@ -103,9 +103,11 @@ describe("browser-to-production-runtime terminal ERROR cleanup", () => {
 		await chmod(agents, 0o444);
 
 		const brainReleased: string[] = [];
+		const brainInputs: BrainTurnInput[] = [];
 		const brain: BrainPort & { close(): Promise<void> } = {
 			createThread: async () => "fake-thread",
 			async *runTurn(input: BrainTurnInput): AsyncIterable<BrainDelta> {
+				brainInputs.push(input);
 				yield {
 					type: "error",
 					turnId: input.turnId,
@@ -131,7 +133,7 @@ describe("browser-to-production-runtime terminal ERROR cleanup", () => {
 				return {
 					conversationId: request.conversationId,
 					turnId: request.turnId,
-					text: "Проверьте безопасное завершение",
+					text: "Сегодня воскресенье, предложи встречу на сегодня",
 					final: true,
 				};
 			},
@@ -175,7 +177,12 @@ describe("browser-to-production-runtime terminal ERROR cleanup", () => {
 				STT_TEXT_ONLY_INPUT_FALLBACK: "false",
 				STORE_RAW_AUDIO: "false",
 			},
-			{ brain, stt, tts },
+			{
+				brain,
+				stt,
+				tts,
+				now: () => new Date("2099-01-08T09:00:00.000Z"),
+			},
 		);
 		const app = createServerApp(runtime);
 		const server = Bun.serve({
@@ -258,6 +265,20 @@ describe("browser-to-production-runtime terminal ERROR cleanup", () => {
 			).toBe(true);
 			expect(brainReleased).toEqual([failedConversationId]);
 			expect(ttsReset).toEqual([failedConversationId]);
+			expect(brainInputs).toHaveLength(1);
+			expect(brainInputs[0]).toMatchObject({
+				userText: "Сегодня воскресенье, предложи встречу на сегодня",
+				schedulingContext: {
+					currentInstant: "2099-01-08T09:00:00.000Z",
+					moscowLocalDate: "2099-01-08",
+					moscowWeekday: "четверг",
+				},
+			});
+			expect(
+				brainInputs[0]?.schedulingContext.candidateMeetingSlots.map(
+					(candidate) => candidate.meetingSlot.startAt,
+				),
+			).toEqual(["2099-01-09T06:00:00.000Z", "2099-01-09T06:20:00.000Z"]);
 
 			const replacement = await runtimeFetch("/api/v1/conversations", {
 				method: "POST",

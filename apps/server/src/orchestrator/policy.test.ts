@@ -12,6 +12,10 @@ import {
 } from "./state";
 
 const conversationId = "01J00000000000000000000000";
+const candidateMeetingSlots = [
+	createTestMeetingSlot(),
+	createTestMeetingSlot(1),
+] as const;
 const input: CreateBookingInput = {
 	conversationId,
 	idempotencyKey: "booking-policy-0001",
@@ -40,10 +44,20 @@ describe("allowed action and tool authorization policy", () => {
 		expect(allowedActions(collectionState(false))).toEqual([]);
 		expect(allowedActions(collectionState(true))).toEqual(["create_booking"]);
 		expect(
-			authorizeTool(collectionState(false), conversationId, request),
+			authorizeTool(
+				collectionState(false),
+				conversationId,
+				candidateMeetingSlots,
+				request,
+			),
 		).toMatchObject({ ok: false, code: "ACTION_NOT_ALLOWED_IN_STATE" });
 		expect(
-			authorizeTool(collectionState(true), conversationId, request),
+			authorizeTool(
+				collectionState(true),
+				conversationId,
+				candidateMeetingSlots,
+				request,
+			),
 		).toMatchObject({ ok: true });
 	});
 
@@ -56,23 +70,57 @@ describe("allowed action and tool authorization policy", () => {
 			},
 		};
 		expect(
-			authorizeTool(collectionState(), conversationId, mismatch),
+			authorizeTool(
+				collectionState(),
+				conversationId,
+				candidateMeetingSlots,
+				mismatch,
+			),
 		).toMatchObject({ ok: false, code: "ACTION_NOT_ALLOWED_IN_STATE" });
 
-		const beforeBooking = authorizeTool(collectionState(), conversationId, {
-			name: "append_booking_qualification",
-			callId: "call-qualification-1",
-			args: {
-				bookingId: "01J00000000000000000000001",
-				idempotencyKey: "qualification-0001",
-				patch: { role: "РОП" },
-				completion: "partial",
+		const beforeBooking = authorizeTool(
+			collectionState(),
+			conversationId,
+			candidateMeetingSlots,
+			{
+				name: "append_booking_qualification",
+				callId: "call-qualification-1",
+				args: {
+					bookingId: "01J00000000000000000000001",
+					idempotencyKey: "qualification-0001",
+					patch: { role: "РОП" },
+					completion: "partial",
+				},
 			},
-		});
+		);
 		expect(beforeBooking).toMatchObject({
 			ok: false,
 			code: "ACTION_NOT_ALLOWED_IN_STATE",
 		});
+	});
+
+	test("rejects a structurally valid meeting slot not supplied for the active turn", () => {
+		const nonCandidate = {
+			...request,
+			args: {
+				...request.args,
+				meetingSlot: {
+					startAt: "2099-01-06T06:00:00.000Z",
+					endAt: "2099-01-06T06:20:00.000Z",
+					timeZone: "Europe/Moscow" as const,
+					durationMinutes: 20 as const,
+				},
+			},
+		};
+
+		expect(
+			authorizeTool(
+				collectionState(),
+				conversationId,
+				candidateMeetingSlots,
+				nonCandidate,
+			),
+		).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
 	});
 
 	test("qualification is allowed only after confirmation and explicit consent", async () => {
@@ -104,17 +152,24 @@ describe("allowed action and tool authorization policy", () => {
 		const first = await executor.execute(
 			collectionState(),
 			conversationId,
+			candidateMeetingSlots,
 			request,
 		);
 		const replay = await executor.execute(
 			collectionState(),
 			conversationId,
+			candidateMeetingSlots,
 			request,
 		);
-		const conflict = await executor.execute(collectionState(), conversationId, {
-			...request,
-			args: { ...request.args, name: "Другое имя" },
-		});
+		const conflict = await executor.execute(
+			collectionState(),
+			conversationId,
+			candidateMeetingSlots,
+			{
+				...request,
+				args: { ...request.args, name: "Другое имя" },
+			},
+		);
 
 		expect(first).toMatchObject({
 			ok: true,

@@ -102,9 +102,9 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 	});
 
-	test("generates exactly two deterministic non-today Moscow candidates and skips committed slots", async () => {
+	test("generates exactly two closest candidates for 2025-01-09 Thursday and skips committed slots", async () => {
 		const { database, input } = fixture();
-		const now = new Date(timestamp);
+		const now = new Date("2025-01-09T09:00:00.000Z");
 		const expected = generateCandidateMeetingSlots(now);
 		const service = new SqliteBookingService(database, { now: () => now });
 
@@ -118,11 +118,15 @@ describe("SQLite booking transaction", () => {
 			afterCommit.every((slot) => slot.startAt !== expected[0].startAt),
 		).toBe(true);
 		expect(expected).toEqual(generateCandidateMeetingSlots(now));
+		expect(expected.map((slot) => slot.startAt)).toEqual([
+			"2025-01-10T06:00:00.000Z",
+			"2025-01-10T06:20:00.000Z",
+		]);
 		expect(
-			generateCandidateMeetingSlots(new Date("2026-07-31T20:00:00.000Z")).map(
+			generateCandidateMeetingSlots(new Date("2025-01-10T20:00:00.000Z")).map(
 				(slot) => slot.startAt,
 			),
-		).toEqual(["2026-08-03T06:00:00.000Z", "2026-08-03T06:20:00.000Z"]);
+		).toEqual(["2025-01-13T06:00:00.000Z", "2025-01-13T06:20:00.000Z"]);
 		expect(expected[0].timeZone).toBe("Europe/Moscow");
 		expect(
 			new Date(expected[0].startAt).getTime() - now.getTime(),

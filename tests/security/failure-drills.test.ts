@@ -171,13 +171,16 @@ describe("safe provider failure drills", () => {
 				consentAt: "2026-07-31T00:00:00.000Z",
 				startedAt: "2026-07-31T00:00:00.000Z",
 			});
+			const bookingService = new SqliteBookingService(database, {
+				notifierKind: "webhook",
+			});
 			const bookingInput: CreateBookingInput = {
 				conversationId,
 				idempotencyKey: `provider-drill-${status}-booking`,
 				name: "Мария",
 				contacts: createTestBookingContacts(),
 				company: "Private Example LLC",
-				meetingSlot: createTestMeetingSlot(),
+				meetingSlot: (await bookingService.candidateMeetingSlots())[0],
 				consentConfirmed: true,
 			};
 			const script: BrainDelta[] = [
@@ -217,9 +220,7 @@ describe("safe provider failure drills", () => {
 				promptVersion,
 				stt: new FakeStt({ text: "Сохраните контакт" }),
 				brain: new FakeBrain(script),
-				bookings: new SqliteBookingService(database, {
-					notifierKind: "webhook",
-				}),
+				bookings: bookingService,
 				tts,
 				initialState: {
 					...createInitialConversationState(),

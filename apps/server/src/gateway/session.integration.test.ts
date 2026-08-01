@@ -10,6 +10,7 @@ import {
 	type CreateBookingInput,
 	type CreateBookingResult,
 	decodeBinaryAudioFrame,
+	type MeetingSlot,
 	encodeBinaryAudioFrame,
 	ServerWsEventSchema,
 	type SttPort,
@@ -207,6 +208,9 @@ class FirstBlockingTts implements TtsPort {
 class Bookings implements BookingService {
 	createCalls = 0;
 	snapshot: BookingSnapshot | null = null;
+	async candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]> {
+		return [createTestMeetingSlot(), createTestMeetingSlot(1)];
+	}
 	async createBooking(input: CreateBookingInput): Promise<CreateBookingResult> {
 		this.createCalls += 1;
 		if (!this.snapshot) {

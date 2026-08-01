@@ -4,6 +4,7 @@ import type {
 	BrainPort,
 	BrainTurnInput,
 	KnownFacts,
+	MeetingSlot,
 	SafeErrorCode,
 	SttPort,
 	SttTranscriptionResult,
@@ -114,6 +115,8 @@ export interface ConversationOrchestratorOptions {
 	speechBudgets?: SpeechBudgetOptions;
 	createId?: () => string;
 	metrics?: ObservabilityMetrics;
+	/** Server wall clock shared with production booking candidate generation. */
+	now?: () => Date;
 }
 
 export interface AudioCommitInput {
@@ -270,6 +273,7 @@ export class ConversationOrchestrator {
 	readonly #stt: SttPort;
 	readonly #brain: BrainPort;
 	readonly #tts: TtsPort | null;
+	readonly #bookings: BookingService;
 	readonly #tools: BookingToolExecutor;
 	readonly #sttTurns = new AtomicSttTurnGate();
 	readonly #generations = new GenerationCoordinator();
@@ -278,6 +282,11 @@ export class ConversationOrchestrator {
 	readonly #chunkerOptions: SpeechChunkerOptions;
 	readonly #createId: () => string;
 	readonly #metrics: ObservabilityMetrics | undefined;
+	readonly #now: () => Date;
+	readonly #activeCandidateMeetingSlots = new Map<
+		string,
+		{ turnId: string; candidates: [MeetingSlot, MeetingSlot] }
+	>();
 	readonly #pendingDynamicEvents = new Map<string, OrchestratorEvent[]>();
 	readonly #deferredDomainEvents: Array<
 		Extract<
@@ -305,6 +314,7 @@ export class ConversationOrchestrator {
 		this.#stt = options.stt;
 		this.#brain = options.brain;
 		this.#tts = options.tts ?? null;
+		this.#bookings = options.bookings;
 		this.#tools = new BookingToolExecutor(options.bookings);
 		this.#threadId = options.threadId;
 		this.#state =
@@ -318,6 +328,7 @@ export class ConversationOrchestrator {
 		this.#budgets = new SpeechBudgetGuard(options.speechBudgets);
 		this.#createId = options.createId ?? (() => Bun.randomUUIDv7());
 		this.#metrics = options.metrics;
+		this.#now = options.now ?? (() => new Date());
 		if (this.#state.stage === "DISCONNECTED") this.#sttTurns.suspend();
 		else if (isTerminalStage(this.#state.stage)) this.#sttTurns.close();
 	}
@@ -357,10 +368,14 @@ export class ConversationOrchestrator {
 		request: ToolRequest,
 		input: BrainTurnInput,
 	): Promise<{ ok: boolean }> => {
+		const activeCandidates = this.#activeCandidateMeetingSlots.get(
+			input.generationId,
+		);
 		if (
 			input.conversationId !== this.conversationId ||
 			!this.#canProcessTurns() ||
-			!this.#generations.accept(input.generationId, input.turnId)
+			!this.#generations.accept(input.generationId, input.turnId) ||
+			activeCandidates?.turnId !== input.turnId
 		) {
 			return { ok: false };
 		}
@@ -368,6 +383,7 @@ export class ConversationOrchestrator {
 			input.generationId,
 			input.turnId,
 			request,
+			activeCandidates.candidates,
 		);
 		if (outcome.publishable) {
 			this.#pendingDynamicEvents.set(input.generationId, [
@@ -534,6 +550,7 @@ export class ConversationOrchestrator {
 					() => undefined,
 				)
 			: Promise.resolve();
+		this.#activeCandidateMeetingSlots.clear();
 		this.#pendingDynamicEvents.clear();
 		this.#pendingDynamicResponses.clear();
 		this.#deferredDomainEvents.length = 0;
@@ -662,12 +679,15 @@ export class ConversationOrchestrator {
 		let suppressModelSpeech = false;
 		let toolSettledThisTurn = false;
 		let brainFailure: Extract<BrainDelta, { type: "error" }> | undefined;
+		let schedulingReady = false;
 		try {
-			this.#threadId ??= await this.#brain.createThread(this.conversationId);
+			const now = this.#now();
+			const candidateMeetingSlots =
+				await this.#bookings.candidateMeetingSlots();
 			if (!this.#generations.accept(input.generationId, input.turnId)) return;
 			const context = buildBrainContext({
 				conversationId: this.conversationId,
-				threadId: this.#threadId,
+				...(this.#threadId ? { threadId: this.#threadId } : {}),
 				turnId: input.turnId,
 				generationId: input.generationId,
 				userText: input.userText,
@@ -676,7 +696,16 @@ export class ConversationOrchestrator {
 				booking: this.#state.booking,
 				allowedActions: allowedActions(this.#state),
 				promptVersion: this.#promptVersion,
+				now,
+				candidateMeetingSlots,
 			});
+			schedulingReady = true;
+			this.#activeCandidateMeetingSlots.set(input.generationId, {
+				turnId: input.turnId,
+				candidates: candidateMeetingSlots,
+			});
+			this.#threadId ??= await this.#brain.createThread(this.conversationId);
+			if (!this.#generations.accept(input.generationId, input.turnId)) return;
 
 			// Exactly one BrainPort.runTurn call per accepted final transcript.
 			for await (const delta of this.#brain.runTurn(context, active.signal)) {
@@ -751,6 +780,9 @@ export class ConversationOrchestrator {
 						input.generationId,
 						input.turnId,
 						delta.tool,
+						context.schedulingContext.candidateMeetingSlots.map(
+							(candidate) => candidate.meetingSlot,
+						) as [MeetingSlot, MeetingSlot],
 					);
 					toolSettledThisTurn = true;
 					for (const event of outcome.events) yield event;
@@ -856,8 +888,10 @@ export class ConversationOrchestrator {
 				turnId: input.turnId,
 				generationId: input.generationId,
 				error: {
-					code: "BRAIN_PROTOCOL_ERROR",
-					message: "Brain turn failed",
+					code: schedulingReady ? "BRAIN_PROTOCOL_ERROR" : "DB_UNAVAILABLE",
+					message: schedulingReady
+						? "Brain turn failed"
+						: "Scheduling context is unavailable",
 					retryable: true,
 				},
 			};
@@ -971,6 +1005,7 @@ export class ConversationOrchestrator {
 		generationId: string,
 		turnId: string,
 		request: ToolRequest,
+		candidateMeetingSlots: [MeetingSlot, MeetingSlot],
 	): Promise<ToolOutcome> {
 		if (
 			!this.#canProcessTurns() ||
@@ -993,6 +1028,7 @@ export class ConversationOrchestrator {
 			execution = await this.#tools.execute(
 				this.#state,
 				this.conversationId,
+				candidateMeetingSlots,
 				request,
 			);
 		} catch (error) {
@@ -1320,6 +1356,7 @@ export class ConversationOrchestrator {
 		};
 		if (audioProduced)
 			yield { type: "audio.done", generationId: permit.generationId };
+		this.#activeCandidateMeetingSlots.delete(permit.generationId);
 		this.#pendingDynamicEvents.delete(permit.generationId);
 		this.#pendingDynamicResponses.delete(permit.generationId);
 	}
@@ -1336,6 +1373,7 @@ export class ConversationOrchestrator {
 			text: visible.join(" ").trim(),
 		};
 		if (audioProduced) yield { type: "audio.done", generationId };
+		this.#activeCandidateMeetingSlots.delete(generationId);
 		this.#pendingDynamicEvents.delete(generationId);
 		this.#pendingDynamicResponses.delete(generationId);
 		this.#generations.finish(generationId);
@@ -1371,6 +1409,7 @@ export class ConversationOrchestrator {
 		const interrupted = this.#generations.interrupt(active.generationId);
 		if (!interrupted) return Promise.resolve();
 		this.#prefetch.abortAll();
+		this.#activeCandidateMeetingSlots.delete(active.generationId);
 		this.#pendingDynamicEvents.delete(active.generationId);
 		this.#pendingDynamicResponses.delete(active.generationId);
 		const threadId = this.#threadId;

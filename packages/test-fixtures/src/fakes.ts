@@ -10,6 +10,7 @@ import {
 	type BrainPort,
 	type BrainTurnInput,
 	CreateBookingInputSchema,
+	type MeetingSlot,
 	type CreateBookingResult,
 	MpegAudioBytesSchema,
 	type Notifier,
@@ -24,6 +25,7 @@ import {
 	type TtsPort,
 	type TtsSynthesisRequest,
 } from "@botamin/contracts";
+import { createTestMeetingSlot } from "./booking";
 import { createDeterministicMp3Fixture } from "./mp3";
 
 const HEALTHY: ProviderHealth = { status: "healthy" };
@@ -223,6 +225,9 @@ export interface FakeBookingOptions {
 	bookingId?: () => string;
 	createdEventId?: () => string;
 	updatedEventId?: () => string;
+	candidateMeetingSlots?: () =>
+		| [MeetingSlot, MeetingSlot]
+		| Promise<[MeetingSlot, MeetingSlot]>;
 }
 
 export class FakeBookingService implements BookingService {
@@ -250,7 +255,14 @@ export class FakeBookingService implements BookingService {
 			bookingId: options.bookingId ?? nextEntityId,
 			createdEventId: options.createdEventId ?? nextEntityId,
 			updatedEventId: options.updatedEventId ?? nextEntityId,
+			candidateMeetingSlots:
+				options.candidateMeetingSlots ??
+				(() => [createTestMeetingSlot(), createTestMeetingSlot(1)]),
 		};
+	}
+
+	async candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]> {
+		return this.#options.candidateMeetingSlots();
 	}
 
 	async createBooking(input: unknown): Promise<CreateBookingResult> {

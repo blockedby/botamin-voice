@@ -43,7 +43,6 @@ import {
 	createDeterministicWavFixture,
 	createOpenRouterFixture,
 	createTestBookingContacts,
-	createTestMeetingSlot,
 } from "../../packages/test-fixtures/src";
 
 const appOrigin = "http://localhost:5173";
@@ -342,7 +341,8 @@ class ScriptedLuna implements BrainPort {
 					name: "Тестовый лид",
 					contacts: createTestBookingContacts(),
 					company: "Example LLC",
-					meetingSlot: createTestMeetingSlot(),
+					meetingSlot:
+						input.schedulingContext.candidateMeetingSlots[0].meetingSlot,
 					consentConfirmed: true,
 				};
 				this.bookingInput = args;

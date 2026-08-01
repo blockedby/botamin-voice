@@ -43,7 +43,7 @@ describe("server-owned Moscow brain context", () => {
 					durationMinutes: 20,
 				},
 				displayLabel:
-					"10 января 2025, пятница, 09:00–09:20 (МСК, Europe/Moscow)",
+					"10 января 2025 года, пятница, 09:00–09:20 по Москве",
 			},
 			{
 				meetingSlot: {
@@ -53,7 +53,7 @@ describe("server-owned Moscow brain context", () => {
 					durationMinutes: 20,
 				},
 				displayLabel:
-					"10 января 2025, пятница, 09:20–09:40 (МСК, Europe/Moscow)",
+					"10 января 2025 года, пятница, 09:20–09:40 по Москве",
 			},
 		]);
 	});

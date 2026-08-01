@@ -22,12 +22,12 @@ export function createTestSchedulingContext(): SchedulingContext {
 			{
 				meetingSlot: createTestMeetingSlot(),
 				displayLabel:
-					"05 января 2099, понедельник, 09:00–09:20 (МСК, Europe/Moscow)",
+					"05 января 2099 года, понедельник, 09:00–09:20 по Москве",
 			},
 			{
 				meetingSlot: createTestMeetingSlot(1),
 				displayLabel:
-					"05 января 2099, понедельник, 09:20–09:40 (МСК, Europe/Moscow)",
+					"05 января 2099 года, понедельник, 09:20–09:40 по Москве",
 			},
 		],
 	};

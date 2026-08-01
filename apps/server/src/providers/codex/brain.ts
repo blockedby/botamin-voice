@@ -95,6 +95,11 @@ const QUALIFICATION_OUTPUT_PROPERTIES = {
 		minLength: 1,
 		maxLength: 100,
 	}),
+	salesManagerCount: nullable({
+		type: "integer",
+		minimum: 0,
+		maximum: 10_000,
+	}),
 	currentChannels: nullable({
 		type: "array",
 		maxItems: 10,

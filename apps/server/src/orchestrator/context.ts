@@ -79,8 +79,8 @@ function time(value: Date): string {
 function displayLabel(slot: MeetingSlot): string {
 	const start = inMoscow(new Date(slot.startAt));
 	const end = inMoscow(new Date(slot.endAt));
-	const date = `${String(start.getUTCDate()).padStart(2, "0")} ${MONTHS[start.getUTCMonth()]} ${start.getUTCFullYear()}`;
-	return `${date}, ${WEEKDAYS[start.getUTCDay()]}, ${time(start)}–${time(end)} (МСК, Europe/Moscow)`;
+	const date = `${String(start.getUTCDate()).padStart(2, "0")} ${MONTHS[start.getUTCMonth()]} ${start.getUTCFullYear()} года`;
+	return `${date}, ${WEEKDAYS[start.getUTCDay()]}, ${time(start)}–${time(end)} по Москве`;
 }
 
 export function buildSchedulingContext(

@@ -177,6 +177,7 @@ function dynamicToolCallParams(
 							industry: null,
 							companySize: null,
 							monthlyLeadVolume: null,
+							salesManagerCount: null,
 							currentChannels: null,
 							crm: null,
 							currentProcess: null,
@@ -1161,6 +1162,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 							industry: null,
 							companySize: null,
 							monthlyLeadVolume: null,
+							salesManagerCount: 8,
 							currentChannels: null,
 							crm: null,
 							currentProcess: null,
@@ -1199,7 +1201,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 			throw new Error("Expected normalized qualification request");
 		expect(request.tool.args).toMatchObject({
 			bookingId: BOOKING_ID,
-			patch: { role: "Основатель" },
+			patch: { role: "Основатель", salesManagerCount: 8 },
 			completion: "complete",
 		});
 		expect(request.tool.args.idempotencyKey).not.toBe("tiny");
@@ -1237,6 +1239,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 						industry: null,
 						companySize: null,
 						monthlyLeadVolume: null,
+						salesManagerCount: null,
 						currentChannels: null,
 						crm: null,
 						currentProcess: null,

@@ -185,7 +185,7 @@ describe("shared contracts", () => {
 				candidateMeetingSlots: candidateMeetingSlots.map((slot) => ({
 					meetingSlot: slot,
 					displayLabel:
-						"03 августа 2026, понедельник, 09:00–09:20 (МСК, Europe/Moscow)",
+						"03 августа 2026 года, понедельник, 09:00–09:20 по Москве",
 				})),
 			},
 			allowedActions: ["create_booking"],

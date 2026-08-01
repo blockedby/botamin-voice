@@ -50,7 +50,7 @@ export const REQUIRED_POLICY_SENTENCES: Readonly<
 		"Ясный отказ от предложения о следующем шаге сразу останавливает продажу.",
 	],
 	"prompts/booking.md": [
-		"Только после согласия пользователя server context должен предоставить ровно два конкретных slot candidates.",
+		"Только после согласия пользователя используй ровно два кандидата из `schedulingContext.candidateMeetingSlots`.",
 		"известно имя и компания;",
 		"есть рабочий email и хотя бы один дополнительный контакт: телефон или Telegram;",
 	],

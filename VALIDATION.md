@@ -45,7 +45,7 @@ active retired-provider/retired-STT scan: 0 matches; superseded correction exclu
 docker compose config --quiet: passed with safe /dev/null secret defaults
 shell syntax: all scripts/*.sh and infra/entrypoint.sh passed
 scripts/test-compose-file-secrets.sh: passed read-only rotated-inode remount engine smoke
-CHECKSUMS.sha256: 316 files verified after T40 artifact regeneration
+CHECKSUMS.sha256: 317 files verified after release artifact regeneration
 git diff --check: passed
 ```
 

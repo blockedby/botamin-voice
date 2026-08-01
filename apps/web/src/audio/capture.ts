@@ -48,8 +48,7 @@ export interface AudioCaptureApis {
 		name: string,
 		options: AudioWorkletNodeOptions,
 	): CaptureWorkletNodeLike;
-	createWorkletModuleUrl(source: string): string;
-	revokeWorkletModuleUrl(url: string): void;
+	readonly workletModuleUrl: string;
 }
 
 export interface AudioCaptureOptions {
@@ -67,22 +66,8 @@ export interface CaptureStats {
 }
 
 export const AUDIO_WORKLET_PROCESSOR_NAME = "botamin-pcm-capture";
-export const AUDIO_WORKLET_SOURCE = `
-class BotaminPcmCapture extends AudioWorkletProcessor {
-  process(inputs) {
-    const channels = inputs[0];
-    if (!channels || channels.length === 0 || channels[0].length === 0) return true;
-    const mono = new Float32Array(channels[0].length);
-    for (let channel = 0; channel < channels.length; channel += 1) {
-      const values = channels[channel];
-      for (let index = 0; index < mono.length; index += 1) mono[index] += values[index] / channels.length;
-    }
-    this.port.postMessage(mono, [mono.buffer]);
-    return true;
-  }
-}
-registerProcessor("${AUDIO_WORKLET_PROCESSOR_NAME}", BotaminPcmCapture);
-`;
+export const AUDIO_WORKLET_MODULE_URL =
+	"/assets/botamin-pcm-capture-worklet.js";
 
 const DEFAULT_MAX_DURATION_MS = 30_000;
 const DEFAULT_MAX_BYTES = 1_000_000;
@@ -179,7 +164,6 @@ export class AudioWorkletCapture {
 		if (this.completed) {
 			throw new Error("Audio capture instances are single-utterance");
 		}
-		let moduleUrl: string | null = null;
 		try {
 			this.stream = await this.options.apis.getUserMedia({
 				audio: {
@@ -196,9 +180,9 @@ export class AudioWorkletCapture {
 			if (!this.context.audioWorklet) {
 				throw new Error("AudioWorklet is unavailable");
 			}
-			moduleUrl =
-				this.options.apis.createWorkletModuleUrl(AUDIO_WORKLET_SOURCE);
-			await this.context.audioWorklet.addModule(moduleUrl);
+			await this.context.audioWorklet.addModule(
+				this.options.apis.workletModuleUrl,
+			);
 			this.throwIfStoppedDuringStart();
 			this.node = this.options.apis.createWorkletNode(
 				this.context,
@@ -224,10 +208,6 @@ export class AudioWorkletCapture {
 		} catch (error) {
 			await this.cleanup();
 			throw error;
-		} finally {
-			if (moduleUrl !== null) {
-				this.options.apis.revokeWorkletModuleUrl(moduleUrl);
-			}
 		}
 	}
 
@@ -321,10 +301,6 @@ export function createBrowserAudioCaptureApis(): AudioCaptureApis {
 				name,
 				options,
 			) as unknown as CaptureWorkletNodeLike,
-		createWorkletModuleUrl: (source) =>
-			URL.createObjectURL(
-				new Blob([source], { type: "application/javascript" }),
-			),
-		revokeWorkletModuleUrl: (url) => URL.revokeObjectURL(url),
+		workletModuleUrl: AUDIO_WORKLET_MODULE_URL,
 	};
 }

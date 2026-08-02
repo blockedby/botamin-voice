@@ -146,20 +146,20 @@ describe("server-owned contextual Moscow slots", () => {
 		expect(localTimes(slots).every((time) => time < "16:00")).toBe(true);
 	});
 
-	test("uses broader policy fallback only after an evening band is occupied", () => {
+	test("rolls to the next weekday when the requested evening band is occupied", () => {
 		const eveningBand = ["16:00", "16:20", "16:40", "17:00"].map((time) => {
 			const [hour, minute] = time.split(":").map(Number);
 			return new Date(
 				Date.UTC(2025, 0, 10, (hour as number) - 3, minute),
 			).toISOString();
 		});
-		const fallback = generateCandidateMeetingSlots(
+		const rolled = generateCandidateMeetingSlots(
 			thursday,
 			eveningBand,
 			"evening",
 		);
-		expect(fallback).toHaveLength(2);
-		expect(localTimes(fallback).every((time) => time < "16:00")).toBe(true);
+		expect(localTimes(rolled)).toEqual(["16:00", "17:00"]);
+		expect(rolled[0].startAt).toBe("2025-01-13T13:00:00.000Z");
 	});
 
 	test("maps an exact 23:00 request to policy-safe evening alternatives", () => {

@@ -305,10 +305,10 @@ function selectMinutesForDay(
 	const inBand = available.filter(
 		(minute) => minute >= policy.band[0] && minute <= policy.band[1],
 	);
-	return (
-		closestPair(inBand, policy.anchors, true) ??
-		closestPair(available, policy.anchors, true)
-	);
+	// A stated time-of-day preference is a hard proposal band. If that band
+	// cannot supply two starts on this weekday, roll forward instead of
+	// contradicting the visitor with unrelated times.
+	return closestPair(inBand, policy.anchors, true);
 }
 
 /**

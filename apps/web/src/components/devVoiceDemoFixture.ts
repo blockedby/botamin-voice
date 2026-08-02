@@ -43,7 +43,7 @@ function stateForPreview(requested: PreviewState): VoiceUiState {
 			kind: "qualification",
 			bookingOutcome: "committed",
 			questionNumber: 2,
-			questionCount: 4,
+			questionCount: 2,
 		};
 	}
 	if (requested === "reconnecting") {

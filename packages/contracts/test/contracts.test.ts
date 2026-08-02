@@ -326,6 +326,30 @@ describe("shared contracts", () => {
 		).toBe(true);
 	});
 
+	test("requires complete snapshots and events to contain both qualification fields", () => {
+		expect(
+			BookingSnapshotSchema.safeParse({
+				...bookingSnapshot,
+				qualification: { monthlyLeadVolume: "около 240" },
+				qualificationStatus: "complete",
+			}).success,
+		).toBe(false);
+		expect(
+			BookingDomainEventSchema.safeParse({
+				v: 1,
+				type: "booking.updated",
+				eventId,
+				occurredAt: at,
+				data: {
+					bookingId,
+					conversationId,
+					qualificationStatus: "complete",
+					qualification: { salesManagerCount: 8 },
+				},
+			}).success,
+		).toBe(false);
+	});
+
 	test("keeps empty qualification snapshots and skipped events valid", () => {
 		expect(
 			BookingSnapshotSchema.safeParse({
@@ -447,6 +471,19 @@ describe("shared contracts", () => {
 
 		expect(hello.type).toBe("client.hello");
 		expect(created.type).toBe("booking.created");
+		expect(
+			ServerWsEventSchema.safeParse({
+				...created,
+				type: "booking.updated",
+				payload: {
+					bookingId,
+					qualificationStatus: "partial",
+					updatedFields: ["salesManagerCount"],
+					qualificationFields: ["salesManagerCount"],
+					updatedAt: at,
+				},
+			}).success,
+		).toBe(true);
 	});
 
 	test("freezes atomic STT request data and its TypeScript-only AbortSignal boundary", async () => {

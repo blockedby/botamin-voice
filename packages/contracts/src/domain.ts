@@ -155,6 +155,12 @@ export const QualificationStatusSchema = z.enum([
 	"skipped",
 ]);
 
+export const QualificationFieldSchema = z.enum([
+	"monthlyLeadVolume",
+	"salesManagerCount",
+]);
+export const QUALIFICATION_FIELDS = QualificationFieldSchema.options;
+
 export const QualificationPatchSchema = z
 	.object({
 		monthlyLeadVolume: z.string().trim().min(1).max(100).optional(),
@@ -196,6 +202,36 @@ export const KnownFactsSchema = z
 	})
 	.strict();
 
+export function collectedQualificationFields(
+	qualification: QualificationPatch,
+): Array<z.infer<typeof QualificationFieldSchema>> {
+	return QUALIFICATION_FIELDS.filter(
+		(field) => qualification[field] !== undefined,
+	);
+}
+
+export function qualificationStatusFor(
+	qualification: QualificationPatch,
+	emptyStatus: "none" | "skipped" = "none",
+): z.infer<typeof QualificationStatusSchema> {
+	const fieldCount = collectedQualificationFields(qualification).length;
+	if (fieldCount === QUALIFICATION_FIELDS.length) return "complete";
+	if (fieldCount > 0) return "partial";
+	return emptyStatus;
+}
+
+function qualificationStatusMatches(
+	qualification: QualificationPatch | undefined,
+	status: z.infer<typeof QualificationStatusSchema>,
+): boolean {
+	return (
+		qualificationStatusFor(
+			qualification ?? {},
+			status === "skipped" ? "skipped" : "none",
+		) === status
+	);
+}
+
 export const BookingSnapshotSchema = z
 	.object({
 		id: EntityIdSchema,
@@ -210,7 +246,21 @@ export const BookingSnapshotSchema = z
 		createdAt: Rfc3339UtcSchema,
 		updatedAt: Rfc3339UtcSchema,
 	})
-	.strict();
+	.strict()
+	.superRefine((booking, context) => {
+		if (
+			!qualificationStatusMatches(
+				booking.qualification,
+				booking.qualificationStatus,
+			)
+		) {
+			context.addIssue({
+				code: "custom",
+				message: "Qualification status must match the collected fields",
+				path: ["qualificationStatus"],
+			});
+		}
+	});
 
 const BookingCreatedDataSchema = z
 	.object({
@@ -242,7 +292,21 @@ const BookingUpdatedDataSchema = z
 		qualificationStatus: z.enum(["partial", "complete", "skipped"]),
 		qualification: QualificationPatchSchema.optional(),
 	})
-	.strict();
+	.strict()
+	.superRefine((update, context) => {
+		if (
+			!qualificationStatusMatches(
+				update.qualification,
+				update.qualificationStatus,
+			)
+		) {
+			context.addIssue({
+				code: "custom",
+				message: "Qualification status must match the collected fields",
+				path: ["qualificationStatus"],
+			});
+		}
+	});
 
 export const BookingUpdatedEventSchema = z
 	.object({
@@ -269,5 +333,6 @@ export type ConversationStatus = z.infer<typeof ConversationStatusSchema>;
 export type KnownFacts = z.infer<typeof KnownFactsSchema>;
 export type MeetingSlot = z.infer<typeof MeetingSlotSchema>;
 export type MeetingTimePreference = z.infer<typeof MeetingTimePreferenceSchema>;
+export type QualificationField = z.infer<typeof QualificationFieldSchema>;
 export type QualificationPatch = z.infer<typeof QualificationPatchSchema>;
 export type QualificationStatus = z.infer<typeof QualificationStatusSchema>;

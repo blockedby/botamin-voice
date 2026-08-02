@@ -26,7 +26,7 @@ export type ConversationEvent =
 	| { type: "booking_committed"; booking: BookingSnapshot }
 	| { type: "booking_confirmation_delivered" }
 	| { type: "qualification_consent_granted" }
-	| { type: "qualification_consent_declined" }
+	| { type: "qualification_consent_declined"; booking?: BookingSnapshot }
 	| { type: "qualification_updated"; booking: BookingSnapshot }
 	| { type: "qualification_completed" }
 	| { type: "complete" }
@@ -66,8 +66,6 @@ export const TRANSITION_TABLE = [
 	["OBJECTION", "objection_resolved", "VALUE"],
 	["OBJECTION", "booking_offered", "BOOKING_OFFER"],
 	["BOOKING_OFFER", "booking_accepted", "COLLECT_BOOKING"],
-	["POST_BOOKING_QUALIFICATION", "qualification_completed", "COMPLETE"],
-	["POST_BOOKING_QUALIFICATION", "complete", "COMPLETE"],
 	["BOOKED", "complete", "COMPLETE"],
 ] as const satisfies ReadonlyArray<
 	readonly [ConversationStage, ConversationEventType, ConversationStage]
@@ -266,6 +264,21 @@ export function transition(
 		};
 	}
 
+	if (event.type === "qualification_completed") {
+		if (
+			state.stage !== "POST_BOOKING_QUALIFICATION" ||
+			!state.booking ||
+			(state.booking.qualificationStatus !== "complete" &&
+				state.booking.qualificationStatus !== "skipped")
+		) {
+			return failure(
+				"INVALID_TRANSITION",
+				"Qualification cannot complete until both fields are stored or it is skipped",
+			);
+		}
+		return withStage(state, "COMPLETE");
+	}
+
 	if (event.type === "qualification_updated") {
 		if (
 			state.stage !== "POST_BOOKING_QUALIFICATION" ||
@@ -282,7 +295,11 @@ export function transition(
 	}
 
 	if (event.type === "qualification_consent_declined") {
-		if (state.stage !== "BOOKED" || !state.booking) {
+		if (
+			(state.stage !== "BOOKED" &&
+				state.stage !== "POST_BOOKING_QUALIFICATION") ||
+			!state.booking
+		) {
 			return failure(
 				"BOOKING_REQUIRED",
 				"Qualification decline requires a committed booking",
@@ -294,11 +311,22 @@ export function transition(
 				"Booking must be confirmed before qualification refusal",
 			);
 		}
+		if (
+			event.booking &&
+			(event.booking.id !== state.booking.id ||
+				event.booking.conversationId !== state.booking.conversationId)
+		) {
+			return failure(
+				"BOOKING_MISMATCH",
+				"Qualification refusal must preserve the committed booking identity",
+			);
+		}
 		return {
 			ok: true,
 			state: {
 				...state,
 				stage: "COMPLETE",
+				booking: event.booking ?? state.booking,
 				qualificationConsent: "declined",
 			},
 		};

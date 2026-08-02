@@ -488,7 +488,7 @@ test("qualification detection is limited to monthly inbound leads and explicit s
 		"Что сейчас является главным узким местом?",
 		"Когда вы хотите запустить пилот?",
 		"Сколько попыток контакта сейчас допускает ваш процесс?",
-		"Можно задать один необязательный вопрос?",
+		"Можно задать два коротких вопроса?",
 	]) {
 		assert.equal(
 			isQualificationQuestion(text),
@@ -601,7 +601,7 @@ test("qualification ordering and field limits use content plus durable evidence"
 	);
 	assert.ok(confirmation);
 	confirmation.text =
-		"Данные не сохранены во внутренней брони. Можно задать один необязательный вопрос?";
+		"Данные не сохранены во внутренней брони. Можно задать два коротких вопроса?";
 	const confirmationCodes = codesFor(contradictoryConfirmation);
 	assert.ok(confirmationCodes.has("semantic_content_contradiction"));
 	assert.ok(confirmationCodes.has("qualification_before_confirmation"));

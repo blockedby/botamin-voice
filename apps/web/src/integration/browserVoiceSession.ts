@@ -3,6 +3,7 @@ import {
 	type ConversationStage,
 	CreateConversationRequestSchema,
 	CreateConversationResponseSchema,
+	type QualificationField,
 	type ServerWsEvent,
 } from "@botamin/contracts";
 import {
@@ -154,6 +155,7 @@ export class BrowserVoiceSession {
 	private pendingTypedText: string | null = null;
 	private qualificationStatus: "none" | "partial" | "complete" | "skipped" =
 		"none";
+	private qualificationFields: QualificationField[] = [];
 	private readonly completedAssistantGenerations = new Set<string>();
 	private consent: VoiceConsent | null = null;
 	private epoch = 0;
@@ -195,6 +197,7 @@ export class BrowserVoiceSession {
 		this.conversationStage = null;
 		this.pendingTypedText = null;
 		this.qualificationStatus = "none";
+		this.qualificationFields = [];
 		this.completedAssistantGenerations.clear();
 		this.captureArmed = false;
 		this.sessionEstablished = false;
@@ -802,15 +805,19 @@ export class BrowserVoiceSession {
 			case "booking.created":
 				this.bookingId = event.payload.bookingId;
 				this.qualificationStatus = event.payload.qualificationStatus;
+				this.qualificationFields = [];
 				this.setState({ kind: "booked" });
 				break;
 			case "booking.updated":
 				if (event.payload.bookingId !== this.bookingId) break;
 				this.qualificationStatus = event.payload.qualificationStatus;
+				this.qualificationFields = [...event.payload.qualificationFields];
 				if (event.payload.qualificationStatus === "partial") {
 					this.setState({
 						kind: "qualification",
 						bookingOutcome: "committed",
+						questionNumber: 2,
+						questionCount: 2,
 					});
 				} else {
 					this.setState({
@@ -890,9 +897,16 @@ export class BrowserVoiceSession {
 				break;
 			case "POST_BOOKING_QUALIFICATION":
 				if (this.bookingId) {
+					const answered = this.qualificationFields.length;
 					this.setState({
 						kind: "qualification",
 						bookingOutcome: "committed",
+						...(answered < 2
+							? {
+									questionNumber: answered === 0 ? 1 : 2,
+									questionCount: 2 as const,
+								}
+							: {}),
 					});
 				}
 				break;

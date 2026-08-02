@@ -5,6 +5,7 @@ import {
 	BookingSnapshotSchema,
 	ConversationStageSchema,
 	MeetingSlotSchema,
+	QualificationFieldSchema,
 	QualificationPatchSchema,
 } from "./domain";
 
@@ -58,7 +59,7 @@ export const AppendQualificationResultSchema = z
 		ok: z.literal(true),
 		bookingId: EntityIdSchema,
 		qualificationStatus: z.enum(["partial", "complete", "skipped"]),
-		updatedFields: z.array(z.string().min(1)).max(12),
+		updatedFields: z.array(QualificationFieldSchema).max(2),
 		updatedAt: Rfc3339UtcSchema,
 	})
 	.strict();

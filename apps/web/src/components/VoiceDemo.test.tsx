@@ -70,9 +70,9 @@ describe("VoiceDemo state semantics", () => {
 				kind: "qualification",
 				bookingOutcome: "committed",
 				questionNumber: 2,
-				questionCount: 5,
+				questionCount: 2,
 			},
-			"Дополнительный вопрос 2 из 5",
+			"Необязательный вопрос 2 из 2",
 		],
 		[
 			{
@@ -273,7 +273,7 @@ describe("VoiceDemo controls and transcript", () => {
 				kind: "qualification",
 				bookingOutcome: "committed",
 				questionNumber: 2,
-				questionCount: 4,
+				questionCount: 2,
 			}),
 		).toEqual({
 			kind: "complete",
@@ -332,8 +332,8 @@ describe("VoiceDemo controls and transcript", () => {
 		const html = renderVoice({ kind: "booked" });
 		expect(html).toContain("Лид и следующий шаг записаны");
 		expect(html).toContain("Это не календарная встреча");
-		expect(html).toContain("дополнительные вопросы");
-		expect(html).toContain("необязательными");
+		expect(html).toContain("дополнительных вопроса");
+		expect(html).toContain("необязательны");
 		expect(html).toContain("Завершить разговор");
 	});
 
@@ -351,7 +351,7 @@ describe("VoiceDemo controls and transcript", () => {
 				kind: "qualification",
 				bookingOutcome: "committed",
 				questionNumber: 2,
-				questionCount: 4,
+				questionCount: 2,
 			},
 			{ transcript },
 		);
@@ -381,7 +381,7 @@ describe("VoiceDemo controls and transcript", () => {
 		expect(bookedLive.match(/Лид и следующий шаг записаны/g)?.length).toBe(1);
 		expect(bookedLive).toContain("Это не календарная встреча");
 		expect(liveRegionContent(qualification)).toContain(
-			"Дополнительный вопрос 2 из 4",
+			"Необязательный вопрос 2 из 2",
 		);
 		expect(liveRegionContent(disconnected)).toContain("Связь прервана");
 		expect(liveRegionContent(audioError)).toContain("Продолжаем текстом");

@@ -430,6 +430,71 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("derives partial or complete from merged fields regardless of model claim or order", async () => {
+		const { database, input } = fixture();
+		const service = new SqliteBookingService(database);
+		const created = await service.createBooking(input);
+
+		const maliciousComplete = await service.appendQualification({
+			bookingId: created.bookingId,
+			idempotencyKey: "qualification-malicious-complete-one",
+			patch: { salesManagerCount: 7 },
+			completion: "complete",
+		});
+		expect(maliciousComplete.qualificationStatus).toBe("partial");
+		expect(await service.findById(created.bookingId)).toMatchObject({
+			status: "booked",
+			qualificationStatus: "partial",
+			qualification: { salesManagerCount: 7 },
+		});
+
+		const completedDespitePartialClaim = await service.appendQualification({
+			bookingId: created.bookingId,
+			idempotencyKey: "qualification-reverse-order-complete",
+			patch: { monthlyLeadVolume: "около 500" },
+			completion: "partial",
+		});
+		expect(completedDespitePartialClaim.qualificationStatus).toBe("complete");
+		expect(await service.findById(created.bookingId)).toMatchObject({
+			status: "booked",
+			qualificationStatus: "complete",
+			qualification: {
+				monthlyLeadVolume: "около 500",
+				salesManagerCount: 7,
+			},
+		});
+		closeDomainDatabase(database);
+	});
+
+	test("persists both fields supplied at once and replays without a duplicate update", async () => {
+		const { database, input } = fixture();
+		const service = new SqliteBookingService(database);
+		const created = await service.createBooking(input);
+		const appendInput = {
+			bookingId: created.bookingId,
+			idempotencyKey: "qualification-both-at-once",
+			patch: { monthlyLeadVolume: "1200", salesManagerCount: 14 },
+			completion: "partial" as const,
+		};
+
+		const first = await service.appendQualification(appendInput);
+		const replay = await service.appendQualification(appendInput);
+		expect(first).toEqual(replay);
+		expect(first).toMatchObject({
+			qualificationStatus: "complete",
+			updatedFields: ["monthlyLeadVolume", "salesManagerCount"],
+		});
+		expect(
+			database.select({ value: count() }).from(domainEvents).get()?.value,
+		).toBe(2);
+		expect(await service.findById(created.bookingId)).toMatchObject({
+			status: "booked",
+			qualificationStatus: "complete",
+			qualification: appendInput.patch,
+		});
+		closeDomainDatabase(database);
+	});
+
 	test("reads and normalizes a populated legacy qualification row on append", async () => {
 		const { database, input, conversationId } = fixture();
 		const service = new SqliteBookingService(database);
@@ -442,7 +507,8 @@ describe("SQLite booking transaction", () => {
 					crm: "amoCRM",
 					monthlyLeadVolume: "около 700",
 				}),
-				qualificationStatus: "partial",
+				// Legacy versions could mark one field complete; reads normalize it.
+				qualificationStatus: "complete",
 			})
 			.where(eq(bookings.id, created.bookingId))
 			.run();

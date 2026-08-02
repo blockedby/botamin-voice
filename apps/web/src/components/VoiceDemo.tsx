@@ -113,8 +113,8 @@ export function getVoiceStatePresentation(
 				label: "Уточняем контекст",
 				detail:
 					state.questionNumber && state.questionCount
-						? `Дополнительный вопрос ${state.questionNumber} из ${state.questionCount}. Можно остановиться в любой момент.`
-						: "Дополнительные вопросы необязательны. Можно остановиться в любой момент.",
+						? `Необязательный вопрос ${state.questionNumber} из ${state.questionCount}. Можно остановиться в любой момент.`
+						: "Два дополнительных вопроса необязательны. Можно остановиться в любой момент.",
 				tone: "active",
 			};
 		case "complete":
@@ -462,8 +462,8 @@ function StateActions(props: VoiceDemoProps) {
 		return (
 			<div className="qualification-choice">
 				<p id="qualification-offer">
-					Лид уже записан. Если агент предложит дополнительные вопросы, они
-					останутся необязательными.
+					Лид уже записан. Два коротких дополнительных вопроса необязательны:
+					можно отказаться до первого или остановиться после него.
 				</p>
 				<ControlButton onClick={props.onStop}>Завершить разговор</ControlButton>
 			</div>

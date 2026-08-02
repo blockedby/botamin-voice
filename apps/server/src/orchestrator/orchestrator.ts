@@ -6,13 +6,17 @@ import type {
 	KnownFacts,
 	MeetingSlot,
 	MeetingTimePreference,
+	QualificationField,
 	SafeErrorCode,
 	SttPort,
 	SttTranscriptionResult,
 	ToolRequest,
 	TtsPort,
 } from "@botamin/contracts";
-import { TtsAudioSegmentSchema } from "@botamin/contracts";
+import {
+	collectedQualificationFields,
+	TtsAudioSegmentSchema,
+} from "@botamin/contracts";
 import { parseMeetingTimePreference } from "../domain/booking";
 import type { ObservabilityMetrics } from "../observability";
 import { buildBrainContext } from "./context";
@@ -60,7 +64,9 @@ export type OrchestratorEvent =
 			generationId: string;
 			bookingId: string;
 			qualificationStatus: "partial" | "complete" | "skipped";
-			updatedFields: string[];
+			updatedFields: QualificationField[];
+			qualificationFields: QualificationField[];
+			updatedAt: string;
 	  }
 	| {
 			type: "tool.result";
@@ -158,15 +164,17 @@ interface ToolOutcome {
 }
 
 const BOOKING_CONFIRMATION_WITH_QUESTION =
-	"Всё получила и зафиксировала. Календарная встреча пока не создана: коллега свяжется по указанному контакту. Можно задать один необязательный вопрос?";
+	"Всё получила и зафиксировала. Календарная встреча пока не создана: коллега свяжется по указанному контакту. Можно задать два коротких вопроса?";
 const BOOKING_CONFIRMATION_ONLY =
 	"Всё получила и зафиксировала. Календарная встреча пока не создана: коллега свяжется по указанному контакту.";
 const BOOKING_FAILURE =
 	"Не получилось сохранить данные, поэтому я не буду подтверждать бронь. Проверьте контакт и попробуйте ещё раз.";
 const QUALIFICATION_FAILURE =
 	"Основные данные уже сохранены. Дополнительные ответы сейчас не удалось обновить, и на этом можно закончить.";
-const QUALIFICATION_PARTIAL_CONFIRMATION =
-	"Дополнительные ответы сохранены. Можно продолжить или закончить на этом.";
+const MONTHLY_LEAD_VOLUME_QUESTION =
+	"Сколько входящих лидов приходит за месяц?";
+const SALES_MANAGER_COUNT_QUESTION =
+	"Сколько менеджеров по продажам работает в вашей команде?";
 const QUALIFICATION_COMPLETE_CONFIRMATION =
 	"Дополнительные ответы сохранены. Спасибо, на этом всё.";
 const QUALIFICATION_SKIPPED_CONFIRMATION =
@@ -191,10 +199,31 @@ function isTerminalStage(stage: ConversationState["stage"]): boolean {
 	return TERMINAL_STAGES.has(stage);
 }
 
+function missingQualificationQuestion(
+	booking: NonNullable<ConversationState["booking"]>,
+): string | null {
+	const collected = new Set(
+		collectedQualificationFields(booking.qualification ?? {}),
+	);
+	if (!collected.has("monthlyLeadVolume")) {
+		return MONTHLY_LEAD_VOLUME_QUESTION;
+	}
+	if (!collected.has("salesManagerCount")) {
+		return SALES_MANAGER_COUNT_QUESTION;
+	}
+	return null;
+}
+
 function qualificationConfirmation(
 	status: "partial" | "complete" | "skipped",
+	booking: NonNullable<ConversationState["booking"]>,
 ): string {
-	if (status === "partial") return QUALIFICATION_PARTIAL_CONFIRMATION;
+	if (status === "partial") {
+		const question = missingQualificationQuestion(booking);
+		return question
+			? `Дополнительный ответ сохранён. ${question}`
+			: QUALIFICATION_COMPLETE_CONFIRMATION;
+	}
 	if (status === "complete") return QUALIFICATION_COMPLETE_CONFIRMATION;
 	return QUALIFICATION_SKIPPED_CONFIRMATION;
 }
@@ -258,7 +287,7 @@ export function classifyConservativeNegativeIntent(
 			: null;
 	}
 	if (state.stage === "POST_BOOKING_QUALIFICATION") {
-		return /^(?:(?:не хочу|не буду) (?:отвечать|продолжать)(?: на)?|не задавайте|давайте (?:закончим|завершим|пропустим)|пропустим)(?: дополнительные вопросы| опрос| квалификацию)?(?: пожалуйста)?$/u.test(
+		return /^(?:нет(?: спасибо)?|(?:(?:не хочу|не буду) (?:отвечать|продолжать)(?: на)?|не задавайте|давайте (?:закончим|завершим|пропустим)|пропустим)(?: дополнительные вопросы| опрос| квалификацию)?(?: пожалуйста)?)$/u.test(
 			normalized,
 		)
 			? "qualification_decline"
@@ -582,9 +611,24 @@ export class ConversationOrchestrator {
 		);
 		if (negativeIntent) {
 			const from = this.#state.stage;
+			let refusalBooking = this.#state.booking;
+			let refusalUpdate:
+				| Extract<OrchestratorEvent, { type: "booking.updated" }>
+				| undefined;
+			if (negativeIntent === "qualification_decline" && refusalBooking) {
+				const persisted = await this.#persistQualificationRefusal(
+					input.turnId,
+					input.generationId,
+				);
+				refusalBooking = persisted.booking;
+				refusalUpdate = persisted.event;
+			}
 			const declined = this.apply(
-				negativeIntent === "qualification_decline" && from === "BOOKED"
-					? { type: "qualification_consent_declined" }
+				negativeIntent === "qualification_decline"
+					? {
+							type: "qualification_consent_declined",
+							...(refusalBooking ? { booking: refusalBooking } : {}),
+						}
 					: { type: "clear_refusal" },
 			);
 			if (declined.ok) {
@@ -596,6 +640,7 @@ export class ConversationOrchestrator {
 					turnId: input.turnId,
 					text: input.userText,
 				};
+				if (refusalUpdate) yield refusalUpdate;
 				yield { type: "text.delta", generationId: input.generationId, text };
 				yield { type: "text.done", generationId: input.generationId, text };
 				yield {
@@ -608,6 +653,16 @@ export class ConversationOrchestrator {
 				return;
 			}
 		}
+
+		if (
+			this.#state.stage === "BOOKED" &&
+			this.#state.bookingConfirmationDelivered &&
+			hasExplicitQualificationConsent(input.userText)
+		) {
+			yield* this.#acceptQualificationConsent(input);
+			return;
+		}
+
 		let active: ReturnType<GenerationCoordinator["start"]>["active"];
 		try {
 			active = this.#generations.start(input.generationId, input.turnId).active;
@@ -781,7 +836,6 @@ export class ConversationOrchestrator {
 					const stageEvent = this.#applyBrainStageProposal(
 						input.generationId,
 						toolSettledThisTurn ? undefined : delta.nextStage,
-						input.userText,
 					);
 					if (stageEvent) yield stageEvent;
 					continue;
@@ -951,10 +1005,96 @@ export class ConversationOrchestrator {
 		yield* this.#finishGeneration(input.generationId, visible, audioProduced);
 	}
 
+	async *#acceptQualificationConsent(input: {
+		turnId: string;
+		generationId: string;
+		userText: string;
+	}): AsyncGenerator<OrchestratorEvent> {
+		try {
+			this.#generations.start(input.generationId, input.turnId);
+		} catch {
+			yield {
+				type: "ignored",
+				generationId: input.generationId,
+				source: "generation",
+			};
+			return;
+		}
+		yield {
+			type: "transcript.final",
+			turnId: input.turnId,
+			text: input.userText,
+		};
+		const from = this.#state.stage;
+		const granted = this.apply({ type: "qualification_consent_granted" });
+		if (!granted.ok || !this.#state.booking) return;
+		yield {
+			type: "state.changed",
+			generationId: input.generationId,
+			from,
+			to: "POST_BOOKING_QUALIFICATION",
+			reason: "explicit_qualification_consent",
+		};
+		const question = missingQualificationQuestion(this.#state.booking);
+		if (!question) return;
+		const visible: string[] = [];
+		const rendered = yield* this.#renderPhrase(input, question);
+		if (rendered.visibleText) visible.push(rendered.visibleText);
+		yield* this.#finishGeneration(
+			input.generationId,
+			visible,
+			rendered.audioProduced,
+		);
+	}
+
+	async #persistQualificationRefusal(
+		turnId: string,
+		generationId: string,
+	): Promise<{
+		booking: NonNullable<ConversationState["booking"]>;
+		event?: Extract<OrchestratorEvent, { type: "booking.updated" }>;
+	}> {
+		const current = this.#state.booking;
+		if (!current) throw new Error("Qualification refusal requires a booking");
+		if (
+			collectedQualificationFields(current.qualification ?? {}).length > 0 ||
+			current.qualificationStatus === "skipped"
+		) {
+			return { booking: current };
+		}
+		try {
+			const result = await this.#bookings.appendQualification({
+				bookingId: current.id,
+				idempotencyKey: `qualification-refusal-${turnId}`,
+				patch: {},
+				completion: "skipped",
+			});
+			const booking = await this.#bookings.findByConversationId(
+				this.conversationId,
+			);
+			if (!booking || booking.id !== current.id) return { booking: current };
+			return {
+				booking,
+				event: {
+					type: "booking.updated",
+					generationId,
+					bookingId: booking.id,
+					qualificationStatus: result.qualificationStatus,
+					updatedFields: result.updatedFields,
+					qualificationFields: collectedQualificationFields(
+						booking.qualification ?? {},
+					),
+					updatedAt: booking.updatedAt,
+				},
+			};
+		} catch {
+			return { booking: current };
+		}
+	}
+
 	#applyBrainStageProposal(
 		generationId: string,
 		nextStage: ConversationState["stage"] | undefined,
-		userText: string,
 	): Extract<OrchestratorEvent, { type: "state.changed" }> | null {
 		const from = this.#state.stage;
 		if (!nextStage || nextStage === from) return null;
@@ -981,11 +1121,6 @@ export class ConversationOrchestrator {
 				break;
 			case "BOOKING_OFFER->COLLECT_BOOKING":
 				event = { type: "booking_accepted" };
-				break;
-			case "BOOKED->POST_BOOKING_QUALIFICATION":
-				if (hasExplicitQualificationConsent(userText)) {
-					event = { type: "qualification_consent_granted" };
-				}
 				break;
 		}
 		if (!event) return null;
@@ -1134,6 +1269,10 @@ export class ConversationOrchestrator {
 					bookingId: execution.value.result.bookingId,
 					qualificationStatus: execution.value.result.qualificationStatus,
 					updatedFields: execution.value.result.updatedFields,
+					qualificationFields: collectedQualificationFields(
+						execution.value.booking.qualification ?? {},
+					),
+					updatedAt: execution.value.booking.updatedAt,
 				});
 				if (
 					execution.value.result.qualificationStatus === "complete" ||
@@ -1191,14 +1330,16 @@ export class ConversationOrchestrator {
 						: "qualification_updated",
 			});
 		}
-		const serverResponse =
-			execution.value.name === "create_booking"
-				? execution.value.replayedCall
-					? undefined
-					: this.#state.qualificationEnabled
-						? BOOKING_CONFIRMATION_WITH_QUESTION
-						: BOOKING_CONFIRMATION_ONLY
-				: qualificationConfirmation(execution.value.result.qualificationStatus);
+		const serverResponse = execution.value.replayedCall
+			? undefined
+			: execution.value.name === "create_booking"
+				? this.#state.qualificationEnabled
+					? BOOKING_CONFIRMATION_WITH_QUESTION
+					: BOOKING_CONFIRMATION_ONLY
+				: qualificationConfirmation(
+						execution.value.result.qualificationStatus,
+						execution.value.booking,
+					);
 		return {
 			execution,
 			events,

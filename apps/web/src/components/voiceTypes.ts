@@ -14,8 +14,8 @@ export type VoiceUiState =
 	| {
 			kind: "qualification";
 			bookingOutcome: "committed";
-			questionNumber?: number;
-			questionCount?: number;
+			questionNumber?: 1 | 2;
+			questionCount?: 2;
 	  }
 	| {
 			kind: "complete";

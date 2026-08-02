@@ -14,6 +14,14 @@
 
 ## 2. Unit tests
 
+### Proactive static greeting
+
+- committed product-owned asset is one bounded complete MP3 at fixed same-origin path;
+- controller makes exactly one automatic attempt per mounted page lifecycle and exposes no REST/WS/mic/provider/session capabilities;
+- autoplay `NotAllowedError` and media error render `Включить приветствие`; retry occurs only on user action;
+- real session start and final unmount pause/reset/release audio; StrictMode-style resubscribe does not replay;
+- fixed copy/generation input contains no visitor data; explicit admin script requires opt-in and is not part of visitor runtime.
+
 ### State machine
 
 Table-driven cases:
@@ -47,13 +55,21 @@ Table-driven cases:
 
 - one booking per conversation и one booking per non-null `meeting_start_at`;
 - required name/company/working-email/phone-or-Telegram/consent/structured slot validation;
-- exactly two deterministic candidates, Moscow weekday/non-today/09:00–17:00 20-minute grid;
+- exactly two deterministic candidates, all 20 minutes, Moscow weekday/non-today/09:00–17:00 20-minute grid;
+- no-preference default is one morning plus one evening candidate;
+- typed/spoken Russian morning/day/second-half/evening variants refresh identical scheduling context;
+- selected band gives two in-band options roughly one hour apart, moves around occupied starts, and rolls to a later weekday when the band cannot supply a pair;
+- explicit rejection excludes the rejected band; ambiguous phrases do not mutate preference;
+- context/prompt presents candidates as two current alternatives, never exhaustive global availability;
 - non-candidate, stale and internally occupied slots rejected;
 - migration preserves legacy rows with null meeting fields and does not invent slots; modern snapshot use fails closed;
 - same idempotency key/same payload → same result;
 - same key/different payload → conflict;
-- qualification patch merges monthly inbound volume and integer `salesManagerCount`;
-- empty patch rejected;
+- exact post-confirmation consent question precedes qualification and same-turn booking envelope cannot grant consent;
+- deterministic question order is monthly inbound leads then integer `salesManagerCount`, one at a time;
+- qualification patch merges either field; both-at-once completes, one field remains partial, and model completion claims cannot override persisted truth;
+- zero-answer refusal is skipped; refusal after one answer preserves partial; booking remains booked;
+- empty patch rejected except server-owned explicit-refusal skip operation;
 - notifier failure не rolls back booking;
 - PII redaction.
 
@@ -119,14 +135,17 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 ## 4. Integration tests
 
+- landing entry attempts only the fixed same-origin proactive MP3; before both consents there are zero conversation REST requests, sockets, capture/mic objects, provider calls, or sessions; session start stops greeting;
 - bounded PCM16 chunks → `audio.commit` → gateway-produced validated WAV → atomic `SttPort` request → fake OpenRouter already-WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
 - sample-derived capture progress/countdown uses accepted PCM16 bytes and stricter server duration/byte ceiling, then auto-commits exactly once;
 - bounded monotonic `visitor.text.submit` clears uncommitted audio, suppresses pending duplicates, retains sequence on rejection, emits server final once, and follows the same brain/state/tool/persistence path as speech;
 - typed composer is stage-gated, and booking form renders only from server-owned `COLLECT_BOOKING`, never transcript wording;
 - real SQLite transaction + fake notifier;
-- Luna receives server-owned current Moscow date/day and exactly two structured candidates with validated labels;
+- Luna receives server-owned current Moscow date/day, parsed preference/rejection and exactly two structured candidates with validated labels;
+- typed and spoken preference turns produce matching refreshed context; rejected band is absent;
 - booking tool call accepts only one active candidate inside brain turn;
-- booking event and user-facing confirmation appear before qualification consent/question/audio;
+- booking event and user-facing confirmation with exact `Можно задать два коротких вопроса?` appear before qualification consent/question/audio;
+- explicit consent bypasses a model turn and deterministically asks leads first; partial then asks manager count; both-at-once completes; zero/one-answer refusal preserves skipped/partial booking truth;
 - reconnect with same conversation;
 - barge-in while OpenRouter requests/complete segments are in flight;
 - brain process restart;
@@ -137,18 +156,18 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 Playwright with synthetic audio fixture:
 
-1. load landing;
-2. click CTA;
-3. mock/allow mic;
+1. load landing and verify one immediate same-origin proactive MP3 attempt with no conversation REST/WS/mic/provider/session;
+2. exercise autoplay success and blocked/error `Включить приветствие`, then verify CTA/session start stops greeting;
+3. click CTA, provide both consents, and mock/allow mic;
 4. stream fixture PCM;
 5. observe listening/processing states and then exactly one `transcript.final`;
 6. receive assistant text and ordered complete MP3 segment events;
 7. verify the circular countdown is sample-derived and reaches the 60-second limit without wall-clock drift;
-8. submit a normal typed final turn and then use the in-chat booking form only at `COLLECT_BOOKING`;
-9. choose one of exactly two server-labeled Moscow slots and complete required name/company/email/phone-or-Telegram/consent data;
-10. see booked UI and verify no external calendar/invitation claim;
-11. consent to or skip the two-field qualification;
-12. verify backend DB/event payload.
+8. submit typed and spoken time-of-day preferences and verify refreshed pairs: default morning+evening, selected in-band roughly hour-apart, rejected band absent;
+9. use the in-chat booking form only at `COLLECT_BOOKING`, choose one of exactly two server-labeled current Moscow alternatives, and complete required name/company/email/phone-or-Telegram/consent data;
+10. see booked UI and verify no external calendar/invitation or exhaustive availability claim;
+11. verify exact two-question consent, deterministic leads→manager order, both-at-once completion, and zero/one-answer refusal outcomes;
+12. verify backend DB/event payload keeps booking `booked`.
 
 Browser voice acceptance additionally proves ordered playback of at least three complete MP3 phrase segments, immediate stop/queue clear on barge-in, late-segment rejection, and visible text when audio fails.
 
@@ -278,18 +297,18 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ## 10. Acceptance checklist P0
 
-### Local release candidate `0.5.0-local-rc.2`
+### Local release candidate `0.5.0-local-rc.3`
 
-- [x] The candidate extends the merged PR #24 baseline with the 60-second capture, typed conversation, scheduled booking, qualification, prompt, migration-compatibility, and refusal slices.
-- [x] Fresh deterministic release-candidate suite passes 484 tests across 56 files with no failures and 4,104 assertions; command evidence is recorded in [`../VALIDATION.md`](../VALIDATION.md).
-- [x] Product landing, CTA/consent, AI identity, 60-second sample-derived countdown, typed and spoken turns, strict supplied-slot booking, explicit refusal behavior, booking order/idempotency, safe provider failures, barge-in, prompt loading, envelope mode, and sandbox boundaries have deterministic coverage.
-- [x] Chrome local acceptance covers the strict-CSP worklet, visible countdown, typed refusal, permission-denied recovery, terminal behavior, and no horizontal overflow at 780 px and 390 px; Firefox headless rendered the 390 px page without CSP/runtime errors.
-- [x] A fresh bounded real local smoke completed one OpenRouter STT → Luna → OpenRouter TTS turn with one final transcript, one final answer, two decoder-accepted MP3 segments, and no booking. Earlier five-turn booking evidence remains in [`../evidence/T30-observed-local-voice-smoke-2026-07-31.md`](../evidence/T30-observed-local-voice-smoke-2026-07-31.md).
-- [x] `scripts/deploy-local.sh` completed from the candidate tree with read-only file secrets, migration, healthy app/Caddy, 60-second/2 MB runtime limits, and all dependency readiness checks ready at `http://localhost:5173`.
-- [x] Compose contains only app and Caddy in the P0 application path; the OpenRouter key stays backend-only, and text-only TTS degradation is environment-configurable without rebuilding.
-- [x] Backup/restore/rollback scripts, permission/checksum/integrity guards, readiness loops, and key-remount ordering pass credential-free deterministic validation and are documented for the owner.
+RC3 is a candidate, not an accepted release. RC2 evidence may inform rollback but does not close RC3 gates. Record final command counts, checksum counts, SHA, browser observations, deployment observations, and paid-provider observations only in the parent-owned final evidence after those checks actually run.
 
-Checked local gates do not imply target-host or cross-browser production acceptance. Local provider observations are not repeated by default checks.
+- [ ] Run the fresh credential-free deterministic suite and record its actual result/counts without copying RC2 numbers.
+- [ ] Run typecheck, lint/format checks, build, `scripts/build-spec.sh`, `scripts/validate-spec.py`, required stale searches, and `git diff --check`; record exact commands/results.
+- [ ] Confirm changed docs and generated spec describe the committed code/contracts/tests for proactive greeting, contextual candidates, and deterministic two-question qualification; keep active prompts/code/assets/tests/evals unchanged for this documentation candidate.
+- [ ] Run local Chrome acceptance for immediate greeting success plus blocked/error fallback, zero pre-consent REST/WS/mic/provider/session, greeting stop on session start, typed/spoken scheduling refresh, booking, and skipped/partial/complete qualification. Run Firefox/WebKit only when explicitly included and report each browser separately.
+- [ ] Run `scripts/deploy-local.sh` from the final RC3 tree and collect app/Caddy migration/readiness evidence; do not infer it from RC2.
+- [ ] With explicit owner approval, run bounded OpenRouter STT/TTS/Codex smoke(s) and report safe actual evidence. Default tests/spec validation do not spend provider usage.
+- [ ] Verify backup/restore/rollback procedure and retain `botamin-voice:0.5.0-local-rc.2` as the prior rollback image before recommending `v0.5.0-local-rc.3`.
+- [ ] Parent updates `MANIFEST.txt`, `CHECKSUMS.sha256`, and `VALIDATION.md` with final evidence; this documentation change does not modify them.
 
 ### Later target release gates — not closed by local RC
 
@@ -302,17 +321,16 @@ Checked local gates do not imply target-host or cross-browser production accepta
 
 A real calendar event is intentionally out of scope rather than an unchecked release gate. The product stores an internal booking and notification outbox event only.
 
-## 11. Release evidence bundle
+## 11. Candidate evidence bundle
 
-The local RC bundle contains:
+The parent acceptance pass should add, after fresh observation:
 
-- final commit SHA and exact uncreated tag recommendation;
-- deterministic test/type/lint/build/spec/validator/checksum results;
-- current MANIFEST/checksum file count;
-- credential-free Compose config, shell/wrapper, and file-secret engine checks;
-- redacted owner-observed T30 one-turn and five-turn real local path evidence;
-- local Compose health/readiness and Chrome desktop/mobile acceptance observations supplied for T40;
-- deployment, backup, restore, key rotation, stop, and rollback commands;
+- final commit SHA and uncreated `v0.5.0-local-rc.3` recommendation;
+- actual deterministic test/type/lint/build/spec/validator results and separately generated checksum evidence;
+- credential-free Compose config, shell/wrapper, and file-secret checks;
+- browser results labeled by engine/viewport;
+- deploy/readiness results and any explicitly approved paid-provider results;
+- preserved RC2 rollback image and matching DB-backup guidance;
 - known limitations and explicit WebKit/VPS/TLS blockers.
 
 Target-VPS compose/health/preflight/provider evidence and benchmark-grade latency remain a later evidence bundle; they must not be inferred from this local release candidate.

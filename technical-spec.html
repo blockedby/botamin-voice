@@ -240,7 +240,9 @@ Conversation value map</a></li>
 <li><a href="#критический-путь-turn" id="toc-критический-путь-turn">3.
 Критический путь turn</a>
 <ul>
-<li><a href="#порядок" id="toc-порядок">Порядок</a></li>
+<li><a href="#pre-session-entry" id="toc-pre-session-entry">Pre-session
+entry</a></li>
+<li><a href="#post-consent-turn-order" id="toc-post-consent-turn-order">Post-consent turn order</a></li>
 </ul></li>
 <li><a href="#latency-design" id="toc-latency-design">4. Latency
 design</a>
@@ -275,6 +277,8 @@ design и prompt architecture</a>
 <li><a href="#conversation-policy-по-stages" id="toc-conversation-policy-по-stages">3. Conversation policy по
 stages</a>
 <ul>
+<li><a href="#pre-consent-static-greeting" id="toc-pre-consent-static-greeting">PRE-CONSENT STATIC
+GREETING</a></li>
 <li><a href="#greeting" id="toc-greeting">GREETING</a></li>
 <li><a href="#discovery" id="toc-discovery">DISCOVERY</a></li>
 <li><a href="#value" id="toc-value">VALUE</a></li>
@@ -495,6 +499,7 @@ triggers</a></li>
 strategy</a></li>
 <li><a href="#unit-tests" id="toc-unit-tests">2. Unit tests</a>
 <ul>
+<li><a href="#proactive-static-greeting" id="toc-proactive-static-greeting">Proactive static greeting</a></li>
 <li><a href="#state-machine-1" id="toc-state-machine-1">State
 machine</a></li>
 <li><a href="#prompt-compiler" id="toc-prompt-compiler">Prompt
@@ -536,12 +541,13 @@ Latency/load test</a>
 tests</a></li>
 <li><a href="#acceptance-checklist-p0" id="toc-acceptance-checklist-p0">10. Acceptance checklist P0</a>
 <ul>
-<li><a href="#local-release-candidate-0.5.0-local-rc.2" id="toc-local-release-candidate-0.5.0-local-rc.2">Local release
-candidate <code>0.5.0-local-rc.2</code></a></li>
+<li><a href="#local-release-candidate-0.5.0-local-rc.3" id="toc-local-release-candidate-0.5.0-local-rc.3">Local release
+candidate <code>0.5.0-local-rc.3</code></a></li>
 <li><a href="#later-target-release-gates-not-closed-by-local-rc" id="toc-later-target-release-gates-not-closed-by-local-rc">Later target
 release gates — not closed by local RC</a></li>
 </ul></li>
-<li><a href="#release-evidence-bundle" id="toc-release-evidence-bundle">11. Release evidence bundle</a></li>
+<li><a href="#candidate-evidence-bundle" id="toc-candidate-evidence-bundle">11. Candidate evidence
+bundle</a></li>
 </ul></li>
 <li><a href="#параллельный-план-задач-для-агентов" id="toc-параллельный-план-задач-для-агентов">09. Параллельный план задач
 для агентов</a>
@@ -648,7 +654,8 @@ subscription на продукт</a></li>
 <li><a href="#local-release-candidate-and-handoff" id="toc-local-release-candidate-and-handoff">11. Local release candidate
 and handoff</a>
 <ul>
-<li><a href="#local-p0-checklist" id="toc-local-p0-checklist">Local P0
+<li><a href="#rc3-scope" id="toc-rc3-scope">RC3 scope</a></li>
+<li><a href="#local-p0-candidate-checklist" id="toc-local-p0-candidate-checklist">Local P0 candidate
 checklist</a></li>
 <li><a href="#prerequisites-and-secure-bootstrap" id="toc-prerequisites-and-secure-bootstrap">Prerequisites and secure
 bootstrap</a></li>
@@ -990,9 +997,17 @@ Document</h1>
 </thead>
 <tbody>
 <tr>
+<td>US-000</td>
+<td>Как посетитель, я сразу слышу короткое представление продукта</td>
+<td>при entry выполняется одна попытка committed same-origin MP3 без
+REST/WS/mic/provider/session; blocked/error даёт
+<code>Включить приветствие</code></td>
+</tr>
+<tr>
 <td>US-001</td>
 <td>Как посетитель, я запускаю разговор одной кнопкой</td>
-<td>после двух consents запрашивается mic permission, UI показывает
+<td>proactive greeting останавливается; только после двух consents
+запрашивается mic permission и создаётся session, UI показывает
 состояние</td>
 </tr>
 <tr>
@@ -1036,21 +1051,26 @@ discovery-вопроса до мягкого предложения следую
 <tr>
 <td>US-008</td>
 <td>Я соглашаюсь на встречу</td>
-<td>агент предлагает ровно два server-supplied слота, собирает
-обязательные данные и вызывает <code>create_booking</code> с выбранным
-кандидатом</td>
+<td>агент предлагает ровно два текущих server-supplied слота, не выдавая
+их за всю глобальную доступность; предпочтение части дня обновляет пару,
+после чего агент собирает обязательные данные и вызывает
+<code>create_booking</code> с выбранным кандидатом</td>
 </tr>
 <tr>
 <td>US-009</td>
 <td>После брони я могу ответить на два доп. вопроса</td>
-<td>после confirmation и consent месячный inbound volume и integer
-<code>salesManagerCount</code> патчат ту же бронь</td>
+<td>после commit, confirmation и точного вопроса
+<code>Можно задать два коротких вопроса?</code> explicit consent
+запускает monthly inbound volume, затем integer
+<code>salesManagerCount</code>; оба ответа одной репликой тоже
+допустимы</td>
 </tr>
 <tr>
 <td>US-010</td>
 <td>Я могу отказаться от квалификации</td>
-<td>бронь остаётся <code>booked</code>, диалог корректно
-завершается</td>
+<td>без ответов статус <code>skipped</code>, после одного ответа
+<code>partial</code>; бронь в обоих случаях остаётся
+<code>booked</code>, диалог корректно завершается</td>
 </tr>
 <tr>
 <td>US-011</td>
@@ -1150,9 +1170,9 @@ privileges, кроме явно зарегистрированных домен�
 конфигурацией; стартовый профиль Luna использует минимальный уровень,
 который проходит quality evals.</li>
 <li><strong>FR-BRAIN-009:</strong> каждый turn получает server-owned
-<code>currentInstant</code>, текущую московскую дату и день недели, а
-также ровно два structured meeting candidates с server-generated Russian
-<code>displayLabel</code>.</li>
+<code>currentInstant</code>, текущую московскую дату и день недели,
+parsed time-of-day preference/rejection и ровно два structured meeting
+candidates с server-generated Russian <code>displayLabel</code>.</li>
 <li><strong>FR-BRAIN-010:</strong> cadence умеренно проактивен: один
 вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting
 offer, без повторного давления после ясного отказа.</li>
@@ -1163,29 +1183,41 @@ offer, без повторного давления после ясного от
 <code>conversationId</code>, имя, компания, рабочий email, телефон или
 Telegram, <code>consentConfirmed=true</code> и structured
 <code>meetingSlot</code>.</li>
-<li><strong>FR-BOOK-002:</strong> server выдаёт ровно два уникальных
-внутренних кандидата длительностью 20 минут в
+<li><strong>FR-BOOK-002:</strong> server всегда выдаёт ровно два
+уникальных внутренних кандидата длительностью 20 минут в
 <code>Europe/Moscow</code>: будни, дата строго позже server-owned
 московского today, старты по 20-минутной сетке от 09:00 до 17:00
-включительно.</li>
-<li><strong>FR-BOOK-003:</strong> <code>create_booking</code> разрешён
+включительно. Без preference это одна утренняя и одна вечерняя
+альтернатива.</li>
+<li><strong>FR-BOOK-003:</strong> bounded Russian parser одинаково
+обрабатывает typed/spoken явные предпочтения <code>morning</code>,
+<code>daytime</code>, <code>second_half</code>, <code>evening</code> и
+одно явное rejection. Выбранная часть дня даёт два in-band варианта
+примерно в часе друг от друга; если пара занята, server ищет ближайшую
+in-band пару и при необходимости переносит предложение на следующий
+подходящий будний день. Rejection исключает отклонённую часть дня.</li>
+<li><strong>FR-BOOK-004:</strong> два candidates — только текущие
+внутренние альтернативы, не exhaustive/global availability claim. Они
+исключают committed internal starts без external availability API.</li>
+<li><strong>FR-BOOK-005:</strong> <code>create_booking</code> разрешён
 только в <code>COLLECT_BOOKING</code>; выбранный
 <code>meetingSlot</code> обязан byte-for-field совпасть с одним из двух
 candidates активного turn. Non-candidate, stale, occupied или уже не
 bookable slot отклоняется.</li>
-<li><strong>FR-BOOK-004:</strong> <code>create_booking</code> атомарен и
+<li><strong>FR-BOOK-006:</strong> <code>create_booking</code> атомарен и
 идемпотентен по <code>conversationId</code>/<code>idempotencyKey</code>;
 уникальны conversation и non-null internal
 <code>meeting_start_at</code>.</li>
-<li><strong>FR-BOOK-005:</strong> успешный tool всегда возвращает
+<li><strong>FR-BOOK-007:</strong> успешный tool всегда возвращает
 стабильный <code>bookingId</code>.</li>
-<li><strong>FR-BOOK-006:</strong> committed <code>booking.created</code>
-и user-facing confirmation предшествуют consent на qualification и
-первому qualification question.</li>
-<li><strong>FR-BOOK-007:</strong> backend сохраняет внутреннюю бронь и
+<li><strong>FR-BOOK-008:</strong> committed <code>booking.created</code>
+и user-facing confirmation с точным consent-вопросом
+<code>Можно задать два коротких вопроса?</code> предшествуют consent на
+qualification и первому qualification question.</li>
+<li><strong>FR-BOOK-009:</strong> backend сохраняет внутреннюю бронь и
 outbox event, но не создаёт внешнее calendar event/invitation, не
 вызывает external availability API и не создаёт CRM record.</li>
-<li><strong>FR-BOOK-008:</strong> in-chat form показывается только по
+<li><strong>FR-BOOK-010:</strong> in-chat form показывается только по
 server-owned <code>COLLECT_BOOKING</code>, валидирует
 name/company/working email/phone-or-Telegram и сериализует данные как
 обычную visitor typed turn; форма не вызывает tool и не подтверждает
@@ -1199,20 +1231,30 @@ confirmation.</li>
 <li><strong>FR-QUAL-002:</strong> пользователь отдельно и явно
 соглашается на дополнительные вопросы; booking action envelope того же
 turn не может выдать это согласие.</li>
-<li><strong>FR-QUAL-003:</strong> conversational collection ограничен
-двумя полями: <code>monthlyLeadVolume</code> только для месячного объёма
-входящих лидов и <code>salesManagerCount</code> как integer
-<code>0..10000</code>.</li>
-<li><strong>FR-QUAL-004:</strong> оба поля необязательны и могут
-сохраняться partial patch-операцией; остальные legacy schema fields не
-являются вопросами текущего flow.</li>
-<li><strong>FR-QUAL-005:</strong> disconnect/decline переводит
-qualification в <code>partial</code> или <code>skipped</code>, но
-booking остаётся <code>booked</code>.</li>
+<li><strong>FR-QUAL-003:</strong> server детерминированно спрашивает по
+одному: сначала месячный объём входящих лидов
+(<code>monthlyLeadVolume</code>), затем число менеджеров продаж
+(<code>salesManagerCount</code>) как integer <code>0..10000</code>.
+Модель не может изменить порядок или досрочно объявить completion.</li>
+<li><strong>FR-QUAL-004:</strong> оба поля необязательны для booking и
+могут сохраняться partial patch-операцией; qualification получает
+<code>complete</code> только при наличии обоих. Если пользователь
+сообщает оба одновременно, оба сохраняются и flow завершается. Остальные
+legacy schema fields не являются вопросами текущего flow.</li>
+<li><strong>FR-QUAL-005:</strong> explicit refusal без ответов даёт
+<code>skipped</code>; refusal после одного ответа сохраняет
+<code>partial</code>; disconnect/failure не отменяет committed booking,
+которая остаётся <code>booked</code>.</li>
 <li><strong>FR-QUAL-006:</strong> повторный patch идемпотентен.</li>
 </ul>
 <h3 id="landing-and-ux">4.5 Landing and UX</h3>
 <ul>
+<li><strong>FR-WEB-000:</strong> при entry выполняется ровно одна
+automatic playback attempt committed product-owned same-origin MP3. До
+двух consents запрещены conversation REST, WS, mic, provider и session
+effects; blocked/error показывает native button
+<code>Включить приветствие</code>, а session start немедленно
+останавливает и освобождает audio.</li>
 <li><strong>FR-WEB-001:</strong> above-the-fold объясняет продукт и
 содержит один primary CTA.</li>
 <li><strong>FR-WEB-002:</strong> до запуска голоса показывается понятное
@@ -1231,6 +1273,10 @@ transcript wording.</li>
 <li><strong>FR-WEB-006:</strong> mobile viewport поддерживается.</li>
 <li><strong>FR-WEB-007:</strong> при voice failure пользователю не
 показываются stack traces/provider details.</li>
+<li><strong>FR-WEB-008:</strong> proactive MP3 содержит только
+фиксированный product copy без visitor data. Его замена выполняется
+отдельным explicit admin opt-in OpenRouter generation script и
+commit-ится как static asset; runtime visit не генерирует greeting.</li>
 </ul>
 <h2 id="p1-и-p2">5. P1 и P2</h2>
 <h3 id="p1">P1</h3>
@@ -1370,9 +1416,11 @@ degradation;</li>
 <p>Метрики качества продаж нельзя интерпретировать без объёма трафика и
 human review выборки.</p>
 <h2 id="release-sequencing-boundary">9. Release sequencing boundary</h2>
-<p><code>0.5.0-local-rc.2</code> is accepted only for local hosting on a
-trusted owner machine. Chrome desktop/mobile and local Compose evidence
-can close local gates, but cannot close WebKit, target-VPS resource
+<p><code>0.5.0-local-rc.3</code> is a local-only candidate for one
+trusted owner machine. Candidate acceptance still requires the fresh
+steps in docs 08/11; prior RC2 observations are not evidence that RC3
+browser, deploy, or provider gates ran. Local Chrome/Compose evidence,
+when freshly collected, cannot close WebKit, target-VPS resource
 behavior, DNS, public TLS/WSS, or target-host paid-smoke gates. The
 internal booking remains deliberately different from a real calendar
 event.</p>
@@ -1555,8 +1603,13 @@ narrative</h2>
 <p>Показывать 2–3 коротких карточки с источником и контекстом, без
 перегруза цифрами.</p>
 <h3 id="блок-5.-voice-demo">Блок 5. Voice demo</h3>
-<p>Sticky/inline widget с transcript, статусом и одной главной
-кнопкой.</p>
+<p>Sticky/inline widget с transcript, статусом и одной главной кнопкой.
+При входе он один раз пытается проиграть committed product-owned
+same-origin MP3-приветствие. Это product preview, а не voice session: до
+consent нет conversation REST/WS, microphone или provider call. Если
+autoplay заблокирован или media не загрузилось, показывается
+<code>Включить приветствие</code>; запуск разговора останавливает
+приветствие.</p>
 <h3 id="блок-6.-trust-and-limits">Блок 6. Trust and limits</h3>
 <ul>
 <li>данные не попадают в публичный чат;</li>
@@ -1588,13 +1641,13 @@ narrative</h2>
 <tbody>
 <tr>
 <td>Visit</td>
-<td>понять ценность</td>
+<td>понять ценность и услышать короткий static product greeting</td>
 <td><code>landing.viewed</code></td>
-<td>неясный оффер</td>
+<td>autoplay blocked → явная <code>Включить приветствие</code></td>
 </tr>
 <tr>
 <td>Voice start</td>
-<td>снять страх mic</td>
+<td>получить оба consent до session/mic/provider path</td>
 <td><code>conversation.started</code></td>
 <td>permission denied</td>
 </tr>
@@ -1691,19 +1744,30 @@ manager count</td>
 не более двух discovery-вопросов до краткого мягкого предложения
 demo/встречи. После ясного отказа предложение не повторяется.</p>
 <p>После согласия агент предлагает ровно два labeled candidates из
-server context. Новая внутренняя бронь требует name, company, working
-email, phone or Telegram, consent и один выбранный structured 20-minute
-<code>Europe/Moscow</code> slot. Внешний календарь и external
-availability API отсутствуют.</p>
-<p>Квалификация начинается только после committed booking, user-facing
-confirmation и отдельного consent. Она ограничена двумя необязательными
-вопросами:</p>
-<ul>
+server context и не называет их всей доступностью. Без предпочтения
+server даёт одну утреннюю и одну вечернюю альтернативу. Typed и spoken
+русские формулировки про утро, день, вторую половину дня или вечер
+обновляют контекст: выбранная часть дня даёт два in-band варианта
+примерно в часе друг от друга, occupied band переносится на следующий
+подходящий будний день, а явный rejection исключает отклонённую часть.
+Все варианты — 20 минут, будни, не сегодня, старты 09:00–17:00 по
+Москве. Новая внутренняя бронь требует name, company, working email,
+phone or Telegram, consent и один текущий candidate. Внешний календарь и
+external availability API отсутствуют.</p>
+<p>Квалификация начинается только после committed booking и user-facing
+confirmation с точным вопросом
+<code>Можно задать два коротких вопроса?</code>. После отдельного явного
+consent server задаёт по одному и в фиксированном порядке:</p>
+<ol type="1">
 <li>месячный объём <strong>входящих</strong> лидов
 (<code>monthlyLeadVolume</code>);</li>
 <li>явное целое число менеджеров продаж
 (<code>salesManagerCount</code>).</li>
-</ul>
+</ol>
+<p><code>complete</code> возможен только при обоих значениях; ответ на
+оба сразу допустим. Отказ без ответов даёт <code>skipped</code>, после
+одного — <code>partial</code>; внутренняя бронь остаётся
+<code>booked</code>.</p>
 <h2 id="контентные-риски">9. Контентные риски</h2>
 <ul>
 <li>Сайт и Telegram — маркетинговые источники; кейсы нуждаются в
@@ -1739,12 +1803,19 @@ native Bun <code>fetch</code>;</li>
 <li><strong>Bun backend</strong> — владелец state, tools, credentials,
 voice budgets и persistence.</li>
 </ul>
-<p>Действующий pipeline: <strong>browser PCM16 chunks →
+<p>До этого pipeline существует отдельный pre-consent path: page entry
+делает одну <code>HTMLAudio</code> playback attempt committed
+same-origin <code>/assets/botamin-proactive-greeting.mp3</code>. Он не
+создаёт conversation, REST/WS, microphone, provider call или session;
+blocked/error переводит UI к <code>Включить приветствие</code>, а
+session start останавливает/release-ит audio.</p>
+<p>Действующий post-consent pipeline: <strong>browser PCM16 chunks →
 gateway/utterance assembler bounds mono PCM16 and emits one validated
 WAV → atomic <code>audio/wav</code> SttPort request → OpenRouter
 audio-input chat completion final transcript → Codex/Luna → OpenRouter
 TTS complete MP3 segment</strong>. Один OpenRouter key остаётся только
-на backend и авторизует оба voice endpoint.</p>
+на backend и авторизует оба voice endpoint. Static proactive MP3 не
+входит в этот runtime pipeline.</p>
 <p>Это отличается от end-to-end speech-to-speech: добавляется один
 orchestration layer, зато используется уже оплаченная Codex subscription
 и мозг можно заменить без переделки audio UI.</p>
@@ -1752,7 +1823,11 @@ orchestration layer, зато используется уже оплаченна
 <h3 id="react-client">React client</h3>
 <p>Ответственность:</p>
 <ul>
-<li>mic permission;</li>
+<li>ровно одна immediate entry attempt fixed same-origin proactive MP3
+без session/network capabilities кроме same-origin asset fetch;</li>
+<li>truthful <code>Включить приветствие</code> fallback после autoplay
+block/media error и release greeting при session start;</li>
+<li>mic permission только после обоих consents;</li>
 <li>AudioWorklet capture;</li>
 <li>resample browser audio до mono PCM16 16 kHz;</li>
 <li>отправка бинарных PCM16 чанков около 100 ms;</li>
@@ -1773,7 +1848,9 @@ duration по stricter duration/byte ceiling;</li>
 жива.</li>
 </ul>
 <p>Клиент не знает OpenRouter или Codex credentials и не вызывает
-providers напрямую.</p>
+providers напрямую. До consent он также не вызывает conversation REST/WS
+и не запрашивает microphone; static asset delivery не является
+provider/session traffic.</p>
 <h3 id="bun-api-websocket-gateway">Bun API / WebSocket gateway</h3>
 <p>Ответственность:</p>
 <ul>
@@ -1795,8 +1872,12 @@ suppression;</li>
 <p>Источник истины для:</p>
 <ul>
 <li>текущего stage;</li>
-<li>server-owned current Moscow date/day и ровно двух structured/labeled
+<li>server-owned current Moscow date/day, bounded typed/spoken Russian
+time-of-day preference/rejection и ровно двух structured/labeled
 internal meeting candidates;</li>
+<li>refresh candidate context при выборе
+<code>morning</code>/<code>daytime</code>/<code>second_half</code>/<code>evening</code>
+или explicit rejection;</li>
 <li>разрешённых actions, включая rejection любого create-booking slot
 вне active candidate tuple;</li>
 <li>qualification gating по committed booking, delivered confirmation и
@@ -1899,8 +1980,18 @@ safe IDs, но не spoken text, PII, key или audio.</li>
 <li>генерирует ровно два deterministic internal 20-minute candidates
 после текущей московской даты, только по будням и по 20-minute grid с
 09:00 до 17:00 starts;</li>
+<li>без preference выбирает одну утреннюю и одну вечернюю
+альтернативу;</li>
+<li>для selected
+<code>morning</code>/<code>daytime</code>/<code>second_half</code>/<code>evening</code>
+выбирает две in-band точки примерно в часе друг от друга; если occupied
+starts не оставляют такую пару, ищет ближайшую допустимую пару и при
+необходимости переносит обе на следующий будний день;</li>
+<li>для одного explicit rejection исключает rejected band и формирует
+две альтернативы из оставшихся policy bands;</li>
 <li>исключает уже committed internal start times без external
-calendar/availability API;</li>
+calendar/availability API и никогда не представляет tuple как
+exhaustive/global availability;</li>
 <li>валидирует name, company, working email, phone or Telegram, consent
 и structured <code>Europe/Moscow</code> slot;</li>
 <li>повторно проверяет slot по текущему server clock и отклоняет
@@ -1912,6 +2003,10 @@ transaction;</li>
 <li>обновляет qualification patch для существующей committed booking;
 confirmation/consent gating до вызова сервиса принадлежит
 orchestrator/tool policy;</li>
+<li>вычисляет qualification truth из сохранённых полей:
+zero+refusal=<code>skipped</code>, one=<code>partial</code>,
+both=<code>complete</code>; booking status остаётся
+<code>booked</code>;</li>
 <li>пишет event outbox;</li>
 <li>никогда не удаляет booking из-за incomplete qualification.</li>
 </ul>
@@ -1927,7 +2022,23 @@ retry/outbox.</p>
 <img role="img" aria-label="Turn sequence" src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+CjwhRE9DVFlQRSBzdmcgUFVCTElDICItLy9XM0MvL0RURCBTVkcgMS4xLy9FTiIKICJodHRwOi8vd3d3LnczLm9yZy9HcmFwaGljcy9TVkcvMS4xL0RURC9zdmcxMS5kdGQiPgo8IS0tIEdlbmVyYXRlZCBieSBncmFwaHZpeiB2ZXJzaW9uIDEzLjEuMiAoMjAyNTA4MDguMjMyMCkKIC0tPgo8IS0tIFRpdGxlOiBHIFBhZ2VzOiAxIC0tPgo8c3ZnIHdpZHRoPSIxMTI4cHQiIGhlaWdodD0iNDY5cHQiCiB2aWV3Qm94PSIwLjAwIDAuMDAgMTEyOC4wMCA0NjkuMDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgeG1sbnM6eGxpbms9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkveGxpbmsiPgo8ZyBpZD0iZ3JhcGgwIiBjbGFzcz0iZ3JhcGgiIHRyYW5zZm9ybT0ic2NhbGUoMSAxKSByb3RhdGUoMCkgdHJhbnNsYXRlKDE4IDQ1MC44OCkiPgo8dGl0bGU+RzwvdGl0bGU+Cjxwb2x5Z29uIGZpbGw9IndoaXRlIiBzdHJva2U9Im5vbmUiIHBvaW50cz0iLTE4LDE4IC0xOCwtNDUwLjg4IDExMDkuNjMsLTQ1MC44OCAxMTA5LjYzLDE4IC0xOCwxOCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1NDUuODEiIHk9Ii00MTAuODgiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIyMC4wMCI+0JrRgNC40YLQuNGH0LXRgdC60LjQuSDQv9GD0YLRjCDQvtC00L3QvtCz0L4g0LPQvtC70L7RgdC+0LLQvtCz0L4gdHVybjwvdGV4dD4KPCEtLSBiIC0tPgo8ZyBpZD0ibm9kZTEiIGNsYXNzPSJub2RlIj4KPHRpdGxlPmI8L3RpdGxlPgo8cGF0aCBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjMzAzNDNiIiBkPSJNNzkuNzMsLTI0NS4wN0M3OS43MywtMjQ1LjA3IDEyLC0yNDUuMDcgMTIsLTI0NS4wNyA2LC0yNDUuMDcgMCwtMjM5LjA3IDAsLTIzMy4wNyAwLC0yMzMuMDcgMCwtMjIwLjExIDAsLTIyMC4xMSAwLC0yMTQuMTEgNiwtMjA4LjExIDEyLC0yMDguMTEgMTIsLTIwOC4xMSA3OS43MywtMjA4LjExIDc5LjczLC0yMDguMTEgODUuNzMsLTIwOC4xMSA5MS43MywtMjE0LjExIDkxLjczLC0yMjAuMTEgOTEuNzMsLTIyMC4xMSA5MS43MywtMjMzLjA3IDkxLjczLC0yMzMuMDcgOTEuNzMsLTIzOS4wNyA4NS43MywtMjQ1LjA3IDc5LjczLC0yNDUuMDciLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNDUuODYiIHk9Ii0yMjkuNTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+QnJvd3NlcjwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNDUuODYiIHk9Ii0yMTcuNTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+TWljIC8gcGxheWJhY2s8L3RleHQ+CjwvZz4KPCEtLSBnIC0tPgo8ZyBpZD0ibm9kZTIiIGNsYXNzPSJub2RlIj4KPHRpdGxlPmc8L3RpdGxlPgo8cGF0aCBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjMzAzNDNiIiBkPSJNNDA2Ljg2LC0zMDYuMDdDNDA2Ljg2LC0zMDYuMDcgMzY3LjkyLC0zMDYuMDcgMzY3LjkyLC0zMDYuMDcgMzYxLjkyLC0zMDYuMDcgMzU1LjkyLC0zMDAuMDcgMzU1LjkyLC0yOTQuMDcgMzU1LjkyLC0yOTQuMDcgMzU1LjkyLC0yODEuMTEgMzU1LjkyLC0yODEuMTEgMzU1LjkyLC0yNzUuMTEgMzYxLjkyLC0yNjkuMTEgMzY3LjkyLC0yNjkuMTEgMzY3LjkyLC0yNjkuMTEgNDA2Ljg2LC0yNjkuMTEgNDA2Ljg2LC0yNjkuMTEgNDEyLjg2LC0yNjkuMTEgNDE4Ljg2LC0yNzUuMTEgNDE4Ljg2LC0yODEuMTEgNDE4Ljg2LC0yODEuMTEgNDE4Ljg2LC0yOTQuMDcgNDE4Ljg2LC0yOTQuMDcgNDE4Ljg2LC0zMDAuMDcgNDEyLjg2LC0zMDYuMDcgNDA2Ljg2LC0zMDYuMDciLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzg3LjM5IiB5PSItMjkwLjU5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPkJ1biBXUzwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzg3LjM5IiB5PSItMjc4LjU5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPmdhdGV3YXk8L3RleHQ+CjwvZz4KPCEtLSBiJiM0NTsmZ3Q7ZyAtLT4KPGcgaWQ9ImVkZ2UxIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5iJiM0NTsmZ3Q7ZzwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik04My42NSwtMjQ1LjQzQzk2LjM2LC0yNTEuMTggMTEwLjg5LC0yNTYuOTUgMTI0LjczLC0yNjAuNTkgMjAxLjc2LC0yODAuODUgMjk1LjI4LC0yODYuMDQgMzQ3LjA3LC0yODcuMjgiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIzNDYuNzEsLTI4OS44IDM1My45NiwtMjg3LjQzIDM0Ni44MiwtMjg0Ljc2IDM0Ni43MSwtMjg5LjgiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMjEzLjgyIiB5PSItMjg3LjY0IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+MSDCtyBib3VuZGVkIFBDTTE2IGNodW5rcyArIGF1ZGlvLmNvbW1pdDwvdGV4dD4KPC9nPgo8IS0tIG8gLS0+CjxnIGlkPSJub2RlNCIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+bzwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik03MzcuNiwtMTIyLjU5QzczNy42LC0xMjIuNTkgNjc3Ljk1LC0xMjIuNTkgNjc3Ljk1LC0xMjIuNTkgNjcxLjk1LC0xMjIuNTkgNjY1Ljk1LC0xMTYuNTkgNjY1Ljk1LC0xMTAuNTkgNjY1Ljk1LC0xMTAuNTkgNjY1Ljk1LC05OC41OSA2NjUuOTUsLTk4LjU5IDY2NS45NSwtOTIuNTkgNjcxLjk1LC04Ni41OSA2NzcuOTUsLTg2LjU5IDY3Ny45NSwtODYuNTkgNzM3LjYsLTg2LjU5IDczNy42LC04Ni41OSA3NDMuNiwtODYuNTkgNzQ5LjYsLTkyLjU5IDc0OS42LC05OC41OSA3NDkuNiwtOTguNTkgNzQ5LjYsLTExMC41OSA3NDkuNiwtMTEwLjU5IDc0OS42LC0xMTYuNTkgNzQzLjYsLTEyMi41OSA3MzcuNiwtMTIyLjU5Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjcwNy43NyIgeT0iLTEwMS41OSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5PcmNoZXN0cmF0b3I8L3RleHQ+CjwvZz4KPCEtLSBiJiM0NTsmZ3Q7byAtLT4KPGcgaWQ9ImVkZ2UxNCIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+YiYjNDU7Jmd0O288L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBzdHJva2UtZGFzaGFycmF5PSIxLDUiIGQ9Ik05Mi4xNSwtMjI4LjYzQzEwMi44MywtMjI5LjAzIDExNC4xOCwtMjI5LjM4IDEyNC43MywtMjI5LjU5IDM0MC4xMiwtMjMzLjczIDQwMy4xMSwtMjM3LjA3IDYwNC41LC0xNjAuNTkgNjI3LjQ2LC0xNTEuODcgNjUxLjYyLC0xMzguODQgNjcwLjY5LC0xMjcuNTUiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSI2NzEuOTcsLTEyOS43MiA2NzYuODQsLTEyMy44NSA2NjkuMzcsLTEyNS40IDY3MS45NywtMTI5LjcyIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjM4Ny4zOSIgeT0iLTIzMC44NiIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjguMDAiPmJhcmdlJiM0NTtpbjogc3RvcCArIGludGVycnVwdDwvdGV4dD4KPC9nPgo8IS0tIGcmIzQ1OyZndDtiIC0tPgo8ZyBpZD0iZWRnZTkiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPmcmIzQ1OyZndDtiPC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTM1Ni42NywtMjY4LjczQzM0MS4yNCwtMjU5LjkyIDMyMS43MiwtMjUwLjIzIDMwMi45MSwtMjQ0Ljk5IDIzNS4xMywtMjI2LjEgMTUzLjU4LC0yMjMuNTEgMTAxLjAxLC0yMjQuMyIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjEwMS4wMSwtMjIxLjc4IDkzLjg1LC0yMjQuNDQgMTAxLjEsLTIyNi44MiAxMDEuMDEsLTIyMS43OCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIyMTMuODIiIHk9Ii0yNDcuMzkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj45IMK3IGdlbmVyYXRpb25JZCArIG9yZGVyZWQgTVAzPC90ZXh0Pgo8L2c+CjwhLS0gcyAtLT4KPGcgaWQ9Im5vZGUzIiBjbGFzcz0ibm9kZSI+Cjx0aXRsZT5zPC90aXRsZT4KPHBhdGggZmlsbD0id2hpdGUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTc0OC45OCwtMzcwLjA3Qzc0OC45OCwtMzcwLjA3IDY2Ni41NywtMzcwLjA3IDY2Ni41NywtMzcwLjA3IDY2MC41NywtMzcwLjA3IDY1NC41NywtMzY0LjA3IDY1NC41NywtMzU4LjA3IDY1NC41NywtMzU4LjA3IDY1NC41NywtMzQ1LjExIDY1NC41NywtMzQ1LjExIDY1NC41NywtMzM5LjExIDY2MC41NywtMzMzLjExIDY2Ni41NywtMzMzLjExIDY2Ni41NywtMzMzLjExIDc0OC45OCwtMzMzLjExIDc0OC45OCwtMzMzLjExIDc1NC45OCwtMzMzLjExIDc2MC45OCwtMzM5LjExIDc2MC45OCwtMzQ1LjExIDc2MC45OCwtMzQ1LjExIDc2MC45OCwtMzU4LjA3IDc2MC45OCwtMzU4LjA3IDc2MC45OCwtMzY0LjA3IDc1NC45OCwtMzcwLjA3IDc0OC45OCwtMzcwLjA3Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjcwNy43NyIgeT0iLTM1NC41OSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5PcGVuUm91dGVyIFNUVDwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNzA3Ljc3IiB5PSItMzQyLjU5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPmNoYXQvY29tcGxldGlvbnM8L3RleHQ+CjwvZz4KPCEtLSBnJiM0NTsmZ3Q7cyAtLT4KPGcgaWQ9ImVkZ2UyIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5nJiM0NTsmZ3Q7czwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0zOTkuMDgsLTMwNi4zM0M0MTIuNzUsLTMyOC4xNiA0MzguNjcsLTM2My4xIDQ3MS44OCwtMzc3LjU5IDUyOS4yOSwtNDAyLjY0IDYwMS43NiwtMzg4LjU3IDY1MC45MiwtMzczLjEyIi8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNjUxLjU1LC0zNzUuNTYgNjU3LjYyLC0zNzAuOTUgNjUwLC0zNzAuNzcgNjUxLjU1LC0zNzUuNTYiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTM4LjE5IiB5PSItMzkzLjY4IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+MiDCtyBvbmUgYmFzZTY0IFdBViBpbnB1dF9hdWRpbzwvdGV4dD4KPC9nPgo8IS0tIGcmIzQ1OyZndDtzIC0tPgo8ZyBpZD0iZWRnZTE2IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5nJiM0NTsmZ3Q7czwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHN0cm9rZS1kYXNoYXJyYXk9IjEsNSIgZD0iTTQxMi44MiwtMzA2LjUzQzQyOC43MSwtMzE3LjcyIDQ1MC40MSwtMzMwLjk2IDQ3MS44OCwtMzM3LjU5IDUyOC44MywtMzU1LjE4IDU5Ny4xOCwtMzU3LjI3IDY0NS40MiwtMzU1LjgxIi8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNjQ1LjQyLC0zNTguMzMgNjUyLjUyLC0zNTUuNTUgNjQ1LjI0LC0zNTMuMjkgNjQ1LjQyLC0zNTguMzMiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTM4LjE5IiB5PSItMzU4LjQiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj5BYm9ydFNpZ25hbCArIHN0YWxlJiM0NTt0dXJuIGRyb3A8L3RleHQ+CjwvZz4KPCEtLSBnJiM0NTsmZ3Q7byAtLT4KPGcgaWQ9ImVkZ2U0IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5nJiM0NTsmZ3Q7bzwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik00MTguOTgsLTI3NC41OEM0MzQuNjQsLTI2OC4xOSA0NTQuMDksLTI2MC42NyA0NzEuODgsLTI1NC45OSA1MjkuNzcsLTIzNi40NyA1NTIuNjcsLTI1My4zNCA2MDQuNSwtMjIxLjU5IDY0Mi4zNiwtMTk4LjQgNjczLjgsLTE1Ni42OSA2OTEuNDMsLTEyOS44NCIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjY5My4zNiwtMTMxLjUxIDY5NS4xMywtMTI0LjA5IDY4OS4xMiwtMTI4Ljc4IDY5My4zNiwtMTMxLjUxIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjUzOC4xOSIgeT0iLTI1Ny4zOSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjguMDAiPjQgwrcgY3VycmVudCBmaW5hbCB1c2VyIHR1cm48L3RleHQ+CjwvZz4KPCEtLSBzJiM0NTsmZ3Q7ZyAtLT4KPGcgaWQ9ImVkZ2UzIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5zJiM0NTsmZ3Q7ZzwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik02NTQuMDksLTMzOC4zMkM2MzguMTksLTMzNC40OCA2MjAuNjcsLTMzMC40IDYwNC41LC0zMjYuOTkgNTQzLjA2LC0zMTQuMDEgNDcxLjI1LC0zMDEuNDIgNDI3LjgzLC0yOTQuMSIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjQyOC40MywtMjkxLjY0IDQyMC45MiwtMjkyLjk0IDQyNy42LC0yOTYuNjEgNDI4LjQzLC0yOTEuNjQiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTM4LjE5IiB5PSItMzI5LjM5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+MyDCtyBvbmUgZmluYWwgdHJhbnNjcmlwdDwvdGV4dD4KPC9nPgo8IS0tIGwgLS0+CjxnIGlkPSJub2RlNSIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+bDwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0xMDczLjY2LC05My41OUMxMDczLjY2LC05My41OSAxMDA2Ljg3LC05My41OSAxMDA2Ljg3LC05My41OSAxMDAwLjg3LC05My41OSA5OTQuODcsLTg3LjU5IDk5NC44NywtODEuNTkgOTk0Ljg3LC04MS41OSA5OTQuODcsLTY5LjU5IDk5NC44NywtNjkuNTkgOTk0Ljg3LC02My41OSAxMDAwLjg3LC01Ny41OSAxMDA2Ljg3LC01Ny41OSAxMDA2Ljg3LC01Ny41OSAxMDczLjY2LC01Ny41OSAxMDczLjY2LC01Ny41OSAxMDc5LjY2LC01Ny41OSAxMDg1LjY2LC02My41OSAxMDg1LjY2LC02OS41OSAxMDg1LjY2LC02OS41OSAxMDg1LjY2LC04MS41OSAxMDg1LjY2LC04MS41OSAxMDg1LjY2LC04Ny41OSAxMDc5LjY2LC05My41OSAxMDczLjY2LC05My41OSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIxMDQwLjI3IiB5PSItNzIuNTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+Q29kZXggKyBMdW5hPC90ZXh0Pgo8L2c+CjwhLS0gbyYjNDU7Jmd0O2wgLS0+CjxnIGlkPSJlZGdlNSIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+byYjNDU7Jmd0O2w8L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBkPSJNNzQ5Ljk2LC0xMDAuOTdDODA5LjU4LC05NS43NCA5MTkuOTYsLTg2LjA2IDk4NS43OSwtODAuMjgiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSI5ODUuNzcsLTgyLjgxIDk5Mi43MiwtNzkuNjcgOTg1LjMzLC03Ny43OSA5ODUuNzcsLTgyLjgxIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9Ijg4My40OCIgeT0iLTk3LjYxIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+NSDCtyB0dXJuL3N0YXJ0ICsgY29tcGFjdCBzdGF0ZTwvdGV4dD4KPC9nPgo8IS0tIG8mIzQ1OyZndDtsIC0tPgo8ZyBpZD0iZWRnZTEzIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5vJiM0NTsmZ3Q7bDwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHN0cm9rZS1kYXNoYXJyYXk9IjUsMiIgZD0iTTcxNy41NiwtMTIzLjAxQzczMi4yOSwtMTUxLjQ3IDc2NC45NiwtMjA1LjA4IDgxMS4wNCwtMjI2LjU5IDg2OS4zOSwtMjUzLjgxIDkwMC40NiwtMjU5LjMxIDk1NS45MSwtMjI2LjU5IDEwMDEuNDMsLTE5OS43MiAxMDIzLjgxLC0xMzguMSAxMDMzLjMyLC0xMDIuNDMiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIxMDM1LjczLC0xMDMuMTcgMTAzNS4wNSwtOTUuNTggMTAzMC44NCwtMTAxLjk0IDEwMzUuNzMsLTEwMy4xNyIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI4ODMuNDgiIHk9Ii0yNTEuNTEiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj50b29sIHJlc3VsdDwvdGV4dD4KPC9nPgo8IS0tIG8mIzQ1OyZndDtsIC0tPgo8ZyBpZD0iZWRnZTE1IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5vJiM0NTsmZ3Q7bDwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHN0cm9rZS1kYXNoYXJyYXk9IjEsNSIgZD0iTTcyNC4yNiwtMTIyLjg2Qzc0Mi41OSwtMTQyLjkzIDc3NS4xOSwtMTczLjk5IDgxMS4wNCwtMTg2LjU5IDg3MS43OSwtMjA3LjkzIDg5OC4zMSwtMjE1LjM2IDk1NS45MSwtMTg2LjU5IDk5MS4wOCwtMTY5LjAyIDEwMTUuMjcsLTEyOC43NyAxMDI4LjIsLTEwMS44OCIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjEwMzAuNDEsLTEwMy4xIDEwMzEuMTUsLTk1LjUxIDEwMjUuODMsLTEwMC45OCAxMDMwLjQxLC0xMDMuMSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI4ODMuNDgiIHk9Ii0yMDcuODgiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj50dXJuL2ludGVycnVwdDwvdGV4dD4KPC9nPgo8IS0tIGQgLS0+CjxnIGlkPSJub2RlNiIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+ZDwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik04NC45OSwtMTc0LjMxQzg0Ljk5LC0xNzYuMTIgNjcuNDUsLTE3Ny41OSA0NS44NiwtMTc3LjU5IDI0LjI3LC0xNzcuNTkgNi43NCwtMTc2LjEyIDYuNzQsLTE3NC4zMSA2Ljc0LC0xNzQuMzEgNi43NCwtMTQ0Ljg2IDYuNzQsLTE0NC44NiA2Ljc0LC0xNDMuMDUgMjQuMjcsLTE0MS41OSA0NS44NiwtMTQxLjU5IDY3LjQ1LC0xNDEuNTkgODQuOTksLTE0My4wNSA4NC45OSwtMTQ0Ljg2IDg0Ljk5LC0xNDQuODYgODQuOTksLTE3NC4zMSA4NC45OSwtMTc0LjMxIi8+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTg0Ljk5LC0xNzQuMzFDODQuOTksLTE3Mi41MSA2Ny40NSwtMTcxLjA0IDQ1Ljg2LC0xNzEuMDQgMjQuMjcsLTE3MS4wNCA2Ljc0LC0xNzIuNTEgNi43NCwtMTc0LjMxIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjQ1Ljg2IiB5PSItMTU2LjU5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPkJvb2tpbmcgREI8L3RleHQ+CjwvZz4KPCEtLSBvJiM0NTsmZ3Q7ZCAtLT4KPGcgaWQ9ImVkZ2UxMSIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+byYjNDU7Jmd0O2Q8L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBzdHJva2UtZGFzaGFycmF5PSI1LDIiIGQ9Ik02NjUuNzcsLTEwNi44OUM1NzAuNTcsLTExMi40MyAzMjcuMjYsLTEyNy42NyAxMjQuNzMsLTE0OS41OSAxMTQuNzcsLTE1MC42NiAxMDQuMTIsLTE1MS45NSA5My45OCwtMTUzLjIzIi8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iOTMuNzIsLTE1MC43MiA4Ni44OSwtMTU0LjE0IDk0LjM2LC0xNTUuNzIgOTMuNzIsLTE1MC43MiIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzODcuMzkiIHk9Ii0xMzIuMDgiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj4xMCDCtyBjcmVhdGUgLyBwYXRjaDwvdGV4dD4KPC9nPgo8IS0tIHQgLS0+CjxnIGlkPSJub2RlNyIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+dDwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0xMDc5LjYzLC0yNDguMDdDMTA3OS42MywtMjQ4LjA3IDEwMDAuOTEsLTI0OC4wNyAxMDAwLjkxLC0yNDguMDcgOTk0LjkxLC0yNDguMDcgOTg4LjkxLC0yNDIuMDcgOTg4LjkxLC0yMzYuMDcgOTg4LjkxLC0yMzYuMDcgOTg4LjkxLC0yMjMuMTEgOTg4LjkxLC0yMjMuMTEgOTg4LjkxLC0yMTcuMTEgOTk0LjkxLC0yMTEuMTEgMTAwMC45MSwtMjExLjExIDEwMDAuOTEsLTIxMS4xMSAxMDc5LjYzLC0yMTEuMTEgMTA3OS42MywtMjExLjExIDEwODUuNjMsLTIxMS4xMSAxMDkxLjYzLC0yMTcuMTEgMTA5MS42MywtMjIzLjExIDEwOTEuNjMsLTIyMy4xMSAxMDkxLjYzLC0yMzYuMDcgMTA5MS42MywtMjM2LjA3IDEwOTEuNjMsLTI0Mi4wNyAxMDg1LjYzLC0yNDguMDcgMTA3OS42MywtMjQ4LjA3Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjEwNDAuMjciIHk9Ii0yMzIuNTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+T3BlblJvdXRlciBUVFM8L3RleHQ+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjEwNDAuMjciIHk9Ii0yMjAuNTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+bmF0aXZlIEJ1biBmZXRjaDwvdGV4dD4KPC9nPgo8IS0tIG8mIzQ1OyZndDt0IC0tPgo8ZyBpZD0iZWRnZTciIGNsYXNzPSJlZGdlIj4KPHRpdGxlPm8mIzQ1OyZndDt0PC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTc0OC40NSwtMTIyLjk0Qzc2Ny4xNCwtMTMxLjA0IDc4OS45MiwtMTQwLjE3IDgxMS4wNCwtMTQ2LjU5IDg3My45LC0xNjUuNjggODk1LjA0LC0xNTEuMjYgOTU1LjkxLC0xNzUuOTkgOTc0LjQsLTE4My41IDk5My4yNSwtMTk1LjIxIDEwMDguMzQsLTIwNS43NyIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjEwMDYuNzUsLTIwNy43MyAxMDE0LjA3LC0yMDkuODcgMTAwOS42OCwtMjAzLjYzIDEwMDYuNzUsLTIwNy43MyIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI4ODMuNDgiIHk9Ii0xNzguMzkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj43IMK3IHNhbml0aXplZCBwaHJhc2UgwrcgSFRUUCBQT1NUPC90ZXh0Pgo8L2c+CjwhLS0gbyYjNDU7Jmd0O3QgLS0+CjxnIGlkPSJlZGdlMTciIGNsYXNzPSJlZGdlIj4KPHRpdGxlPm8mIzQ1OyZndDt0PC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgc3Ryb2tlLWRhc2hhcnJheT0iMSw1IiBkPSJNNzUwLjA2LC0xMDYuMzRDODEwLjg3LC0xMDkuNTEgOTIxLjA4LC0xMTcuNjUgOTU1LjkxLC0xMzUuOTkgOTg1LjE4LC0xNTEuNDEgMTAwOS4wOSwtMTgxLjU0IDEwMjMuNjgsLTIwMy40NiIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjEwMjEuNTIsLTIwNC43NSAxMDI3LjU0LC0yMDkuNDMgMTAyNS43NSwtMjAyLjAyIDEwMjEuNTIsLTIwNC43NSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI4ODMuNDgiIHk9Ii0xMzguMzkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj5BYm9ydFNpZ25hbCArIHN0YWxlJiM0NTtnZW5lcmF0aW9uIGRyb3A8L3RleHQ+CjwvZz4KPCEtLSBsJiM0NTsmZ3Q7byAtLT4KPGcgaWQ9ImVkZ2U2IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5sJiM0NTsmZ3Q7bzwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0xMDIwLjk4LC01Ny4zQzEwMDUuMjUsLTQyLjk0IDk4MS4xNSwtMjQuMDggOTU1LjkxLC0xNS45OSA4OTQuNiwzLjY4IDg3MS4zNyw2LjUxIDgxMS4wNCwtMTUuOTkgNzc3LjA4LC0yOC42NSA3NDYuOTEsLTU4LjI0IDcyOC4yOSwtNzkuNzUiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSI3MjYuNDYsLTc4LjAxIDcyMy43NCwtODUuMTQgNzMwLjMxLC04MS4yNiA3MjYuNDYsLTc4LjAxIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9Ijg4My40OCIgeT0iLTE4LjM5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+NiDCtyBhZ2VudE1lc3NhZ2UgZGVsdGE8L3RleHQ+CjwvZz4KPCEtLSBsJiM0NTsmZ3Q7byAtLT4KPGcgaWQ9ImVkZ2UxMCIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+bCYjNDU7Jmd0O288L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBzdHJva2UtZGFzaGFycmF5PSI1LDIiIGQ9Ik05OTQuNzIsLTY4Ljc3Qzk0OC40NCwtNjIuOTMgODc0LjEzLC01Ny4wNCA4MTEuMDQsLTY3Ljk5IDc5My4xNiwtNzEuMDkgNzc0LjI3LC03Ny4wMyA3NTcuNjUsLTgzLjI0Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNzU3LjA2LC04MC43NyA3NTEuMjUsLTg1LjcgNzU4Ljg3LC04NS40NyA3NTcuMDYsLTgwLjc3Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9Ijg4My40OCIgeT0iLTcwLjM5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+dG9vbCByZXF1ZXN0PC90ZXh0Pgo8L2c+CjwhLS0gZCYjNDU7Jmd0O28gLS0+CjxnIGlkPSJlZGdlMTIiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPmQmIzQ1OyZndDtvPC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgc3Ryb2tlLWRhc2hhcnJheT0iNSwyIiBkPSJNODUuNDEsLTE2MC45OEMxNzYuNDYsLTE2My41OSA0MTEuNzIsLTE2Ni4yNyA2MDQuNSwtMTMzLjU5IDYyMi4wMSwtMTMwLjYyIDY0MC44MSwtMTI1Ljc4IDY1Ny40NSwtMTIwLjkxIi8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNjU4LjE3LC0xMjMuMzIgNjY0LjM0LC0xMTguODQgNjU2LjcyLC0xMTguNDkgNjU4LjE3LC0xMjMuMzIiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzg3LjM5IiB5PSItMTYxLjU0IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+dG9vbCByZXN1bHQgKyBldmVudDwvdGV4dD4KPC9nPgo8IS0tIHQmIzQ1OyZndDtnIC0tPgo8ZyBpZD0iZWRnZTgiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPnQmIzQ1OyZndDtnPC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTEwMDIuNDQsLTI0OC4zOEM5ODguMjYsLTI1NC43MiA5NzEuNjksLTI2MS4wNyA5NTUuOTEsLTI2NC41OSA3NjEuOTIsLTMwNy43NiA1MjEuNjQsLTI5Ny4yMSA0MjguMTgsLTI5MC43NyIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjQyOC4zNiwtMjg4LjI2IDQyMSwtMjkwLjI2IDQyOCwtMjkzLjI4IDQyOC4zNiwtMjg4LjI2Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjcwNy43NyIgeT0iLTI5OC45MSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjguMDAiPjggwrcgY29tcGxldGUgYXVkaW8vbXBlZyBzZWdtZW50PC90ZXh0Pgo8L2c+CjwvZz4KPC9zdmc+Cg==" alt="Turn sequence" />
 <figcaption aria-hidden="true">Turn sequence</figcaption>
 </figure>
-<h3 id="порядок">Порядок</h3>
+<h3 id="pre-session-entry">Pre-session entry</h3>
+<ol type="1">
+<li>Browser монтирует greeting controller и немедленно ровно один раз
+вызывает playback фиксированного same-origin MP3.</li>
+<li>Autoplay block или media error не запускает alternate
+network/provider path: UI показывает <code>Включить приветствие</code>,
+и повтор возможен только по user action.</li>
+<li>До обоих consents не создаются
+conversation/WS/microphone/provider/session. При старте настоящей
+session greeting немедленно pause/reset/release.</li>
+</ol>
+<p>Asset создаётся отдельно от visitor runtime: admin явно запускает
+opt-in <code>scripts/generate-proactive-greeting.ts</code>, script
+синтезирует фиксированный product copy через OpenRouter, валидирует
+bounded complete MP3 и заменяет committed asset. В asset нет visitor
+input/data; обычный entry никогда его не генерирует.</p>
+<h3 id="post-consent-turn-order">Post-consent turn order</h3>
 <ol type="1">
 <li>Browser отправляет примерно 100 ms PCM16 chunks; gateway/utterance
 assembler собирает их в bounded utterance.</li>
@@ -1942,11 +2053,12 @@ adapter повторно валидирует/bounds already-WAV request, base64
 <code>visitor.text.submit</code> очищает uncommitted microphone bytes и
 создаёт такой же final turn без STT; до server
 <code>transcript.final</code> typed input не считается принятым.</li>
-<li>Orchestrator добавляет stage, known facts, booking status,
-server-owned current Moscow date/day и ровно два structured candidates с
+<li>Orchestrator одинаково парсит typed/spoken final text на bounded
+Russian time-of-day preference/rejection, refresh-ит candidates, затем
+добавляет stage, known facts, booking status, server-owned current
+Moscow date/day, preference state и ровно два structured candidates с
 generated <code>displayLabel</code>; Codex thread получает
-<code>turn/start</code> ровно один раз независимо от typed/spoken
-origin.</li>
+<code>turn/start</code> ровно один раз независимо от input origin.</li>
 <li>Text deltas проходят PII-safe sanitizer и bounded phrase
 chunker.</li>
 <li>Законченная короткая фраза отправляется в OpenRouter TTS; один
@@ -2007,28 +2119,30 @@ capability check;</li>
 <span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>    currentInstant<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
 <span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    moscowLocalDate<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
 <span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    moscowWeekday<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    candidateMeetingSlots<span class="op">:</span> [</span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>      { meetingSlot<span class="op">:</span> MeetingSlot<span class="op">;</span> displayLabel<span class="op">:</span> <span class="dt">string</span> }<span class="op">,</span></span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>      { meetingSlot<span class="op">:</span> MeetingSlot<span class="op">;</span> displayLabel<span class="op">:</span> <span class="dt">string</span> }</span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    ]<span class="op">;</span></span>
-<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>  }<span class="op">;</span></span>
-<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>  allowedActions<span class="op">:</span> BrainActionName[]<span class="op">;</span></span>
-<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>  promptVersion<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> BrainDelta {</span>
-<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>  type<span class="op">:</span> <span class="st">&quot;speech.delta&quot;</span> <span class="op">|</span> <span class="st">&quot;tool.request&quot;</span> <span class="op">|</span> <span class="st">&quot;turn.completed&quot;</span> <span class="op">|</span> <span class="st">&quot;error&quot;</span><span class="op">;</span></span>
-<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>  text<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
-<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>  tool<span class="op">?:</span> { name<span class="op">:</span> BrainActionName<span class="op">;</span> callId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> args<span class="op">:</span> <span class="dt">unknown</span> }<span class="op">;</span></span>
-<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>  error<span class="op">?:</span> { code<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> retryable<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span> message<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
-<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>}</span>
-<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> BrainPort {</span>
-<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>  <span class="fu">createThread</span>(conversationId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">&gt;;</span></span>
-<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>  <span class="fu">runTurn</span>(input<span class="op">:</span> BrainTurnInput<span class="op">,</span> signal<span class="op">:</span> AbortSignal)<span class="op">:</span> AsyncIterable<span class="op">&lt;</span>BrainDelta<span class="op">&gt;;</span></span>
-<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>  <span class="fu">interrupt</span>(threadId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> turnId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
-<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>  <span class="fu">health</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ProviderHealth<span class="op">&gt;;</span></span>
-<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    timeOfDayPreference<span class="op">:</span> <span class="st">&quot;none&quot;</span> <span class="op">|</span> <span class="st">&quot;morning&quot;</span> <span class="op">|</span> <span class="st">&quot;daytime&quot;</span> <span class="op">|</span> <span class="st">&quot;second_half&quot;</span> <span class="op">|</span> <span class="st">&quot;evening&quot;</span><span class="op">;</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    rejectedTimeOfDayPreferences<span class="op">:</span> <span class="bu">Array</span><span class="op">&lt;</span><span class="st">&quot;morning&quot;</span> <span class="op">|</span> <span class="st">&quot;daytime&quot;</span> <span class="op">|</span> <span class="st">&quot;second_half&quot;</span> <span class="op">|</span> <span class="st">&quot;evening&quot;</span><span class="op">&gt;;</span> <span class="co">// max 1</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    candidateMeetingSlots<span class="op">:</span> [</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>      { meetingSlot<span class="op">:</span> MeetingSlot<span class="op">;</span> displayLabel<span class="op">:</span> <span class="dt">string</span> }<span class="op">,</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>      { meetingSlot<span class="op">:</span> MeetingSlot<span class="op">;</span> displayLabel<span class="op">:</span> <span class="dt">string</span> }</span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    ]<span class="op">;</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>  }<span class="op">;</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>  allowedActions<span class="op">:</span> BrainActionName[]<span class="op">;</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>  promptVersion<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> BrainDelta {</span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>  type<span class="op">:</span> <span class="st">&quot;speech.delta&quot;</span> <span class="op">|</span> <span class="st">&quot;tool.request&quot;</span> <span class="op">|</span> <span class="st">&quot;turn.completed&quot;</span> <span class="op">|</span> <span class="st">&quot;error&quot;</span><span class="op">;</span></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>  text<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>  tool<span class="op">?:</span> { name<span class="op">:</span> BrainActionName<span class="op">;</span> callId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> args<span class="op">:</span> <span class="dt">unknown</span> }<span class="op">;</span></span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>  error<span class="op">?:</span> { code<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> retryable<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span> message<span class="op">:</span> <span class="dt">string</span> }<span class="op">;</span></span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> BrainPort {</span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>  <span class="fu">createThread</span>(conversationId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">&gt;;</span></span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>  <span class="fu">runTurn</span>(input<span class="op">:</span> BrainTurnInput<span class="op">,</span> signal<span class="op">:</span> AbortSignal)<span class="op">:</span> AsyncIterable<span class="op">&lt;</span>BrainDelta<span class="op">&gt;;</span></span>
+<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a>  <span class="fu">interrupt</span>(threadId<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> turnId<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
+<span id="cb2-38"><a href="#cb2-38" aria-hidden="true" tabindex="-1"></a>  <span class="fu">health</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ProviderHealth<span class="op">&gt;;</span></span>
+<span id="cb2-39"><a href="#cb2-39" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <h2 id="provider-neutral-sttport">6. Provider-neutral SttPort</h2>
 <div class="sourceCode" id="cb3"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">export type</span> SttTranscriptionRequest <span class="op">=</span> {</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  conversationId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
@@ -2308,6 +2422,13 @@ design и prompt architecture</h1>
 </blockquote>
 <h2 id="поведенческие-правила-p0">2. Поведенческие правила P0</h2>
 <ul>
+<li>до consent отдельный static greeting один раз пытается произнести
+фиксированный product copy; это не conversation turn и не запуск
+session;</li>
+<li>при autoplay block/error показывать
+<code>Включить приветствие</code>, не заявляя, что звук прозвучал;</li>
+<li>session start останавливает static greeting до REST/WS/mic/provider
+flow;</li>
 <li>представиться как AI-продавец Botamin;</li>
 <li>не маскироваться под человека;</li>
 <li>одна реплика обычно 1–3 коротких предложения;</li>
@@ -2327,11 +2448,28 @@ STT;</li>
 один state/tool flow;</li>
 <li>booking confirmation произносить только после committed tool
 success;</li>
-<li>qualification начинается только после confirmation и отдельного
-согласия и содержит максимум два целевых вопроса.</li>
+<li>после confirmation задать точно
+<code>Можно задать два коротких вопроса?</code> и не считать booking
+action envelope согласием;</li>
+<li>qualification начинается только после отдельного явного согласия:
+server спрашивает leads, затем manager count, по одному; completion
+только при обоих.</li>
 </ul>
 <h2 id="conversation-policy-по-stages">3. Conversation policy по
 stages</h2>
+<h3 id="pre-consent-static-greeting">PRE-CONSENT STATIC GREETING</h3>
+<p>На entry browser немедленно и ровно один раз пытается проиграть
+committed same-origin
+<code>/assets/botamin-proactive-greeting.mp3</code> с фиксированным
+product copy. До consent этот controller не имеет conversation REST/WS,
+microphone, provider или session capabilities.
+<code>NotAllowedError</code>/media error раскрывает только user-action
+fallback <code>Включить приветствие</code>; начало real session
+останавливает и освобождает MP3.</p>
+<p>Asset не содержит visitor data: администратор отдельно и явно
+запускает opt-in OpenRouter generation script для фиксированного текста,
+проверяет MP3 и commit-ит результат. Runtime visitor не инициирует
+генерацию.</p>
 <h3 id="greeting">GREETING</h3>
 <p>Цель: быстро объяснить формат.</p>
 <p>Пример:</p>
@@ -2374,8 +2512,16 @@ demo/встречи. Если intent очевиден раньше, перехо
 <h3 id="collect_booking">COLLECT_BOOKING</h3>
 <p>После согласия назвать ровно два
 <code>schedulingContext.candidateMeetingSlots</code> по их
-server-generated <code>displayLabel</code>. Не вычислять и не
+server-generated <code>displayLabel</code>. Это две текущие внутренние
+альтернативы, а не вся глобальная доступность. Не вычислять и не
 переформатировать дату, день недели, время или доступность.</p>
+<p>Без предпочтения server даёт один morning и один evening candidate.
+Явная typed/spoken русская формулировка про утро, день, вторую половину
+дня или вечер обновляет context и даёт два in-band варианта примерно в
+часе друг от друга; при занятости server переносит пару на следующий
+подходящий будний день. Явный отказ от части дня исключает эту часть.
+Все варианты: 20 минут, будни, не сегодня, starts 09:00–17:00 по
+Москве.</p>
 <p>Обязательный набор:</p>
 <ol type="1">
 <li>имя;</li>
@@ -2394,19 +2540,31 @@ candidate;</li>
 <h3 id="booked">BOOKED</h3>
 <p>После <code>create_booking</code>:</p>
 <blockquote>
-<p>Внутренняя бронь на выбранное время зафиксирована. Внешнее
-календарное событие или приглашение не создавалось; коллега сможет
-связаться по сохранённому контакту. Можно задать ещё два необязательных
+<p>Всё получила и зафиксировала. Календарная встреча пока не создана:
+коллега свяжется по указанному контакту. Можно задать два коротких
 вопроса?</p>
 </blockquote>
-<p>Формулировку про отсутствие календаря можно сделать менее технической
-в production copy, но нельзя утверждать обратное.</p>
+<p>Последнее предложение — точный consent-вопрос current server
+contract. Формулировку про отсутствие календаря можно сделать менее
+технической только вместе с изменением server-authored contract/tests;
+нельзя утверждать, что external event уже создан.</p>
 <h3 id="post_booking_qualification">POST_BOOKING_QUALIFICATION</h3>
-<p>Только после committed booking, user-facing confirmation и отдельного
-явного consent спросить по одному: месячный объём входящих лидов
-(<code>monthlyLeadVolume</code>) и целое число менеджеров продаж
-(<code>salesManagerCount</code>). Оба поля необязательны; после
-содержательного ответа допустим partial patch. Другие поля расширенной
+<p>Только после committed booking, user-facing confirmation и точного
+consent-вопроса <code>Можно задать два коротких вопроса?</code>
+отдельное явное согласие открывает qualification. Server, а не модель,
+детерминированно задаёт по одному:</p>
+<ol type="1">
+<li><code>Сколько входящих лидов приходит за месяц?</code> →
+<code>monthlyLeadVolume</code>;</li>
+<li><code>Сколько менеджеров по продажам работает в вашей команде?</code>
+→ integer <code>salesManagerCount</code>.</li>
+</ol>
+<p>В обычном ходе второй вопрос появляется только после первого ответа.
+Если пользователь сразу сообщает оба значения, сохранить оба и
+завершить. <code>complete</code> разрешён только при обоих полях; отказ
+без ответов даёт <code>skipped</code>, после одного — сохраняет
+<code>partial</code>. Оба поля необязательны для уже committed booking,
+которая всегда остаётся <code>booked</code>. Другие поля расширенной
 legacy schema не входят в текущий conversational flow.</p>
 <h3 id="complete">COMPLETE</h3>
 <p>Коротко повторить результат и завершить без нового CTA.</p>
@@ -2437,30 +2595,32 @@ legacy schema не входят в текущий conversational flow.</p>
 <span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;currentInstant&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-02T08:00:00.000Z&quot;</span><span class="fu">,</span></span>
 <span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;moscowLocalDate&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-02&quot;</span><span class="fu">,</span></span>
 <span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;moscowWeekday&quot;</span><span class="fu">:</span> <span class="st">&quot;воскресенье&quot;</span><span class="fu">,</span></span>
-<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;candidateMeetingSlots&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
-<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span></span>
-<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;meetingSlot&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;startAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:00:00.000Z&quot;</span><span class="fu">,</span></span>
-<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;endAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:20:00.000Z&quot;</span><span class="fu">,</span></span>
-<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;timeZone&quot;</span><span class="fu">:</span> <span class="st">&quot;Europe/Moscow&quot;</span><span class="fu">,</span></span>
-<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;durationMinutes&quot;</span><span class="fu">:</span> <span class="dv">20</span></span>
-<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>        <span class="fu">},</span></span>
-<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;displayLabel&quot;</span><span class="fu">:</span> <span class="st">&quot;03 августа 2026 года, понедельник, 09:00–09:20 по Москве&quot;</span></span>
-<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>      <span class="fu">}</span><span class="ot">,</span></span>
-<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span></span>
-<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;meetingSlot&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;startAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:20:00.000Z&quot;</span><span class="fu">,</span></span>
-<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;endAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:40:00.000Z&quot;</span><span class="fu">,</span></span>
-<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;timeZone&quot;</span><span class="fu">:</span> <span class="st">&quot;Europe/Moscow&quot;</span><span class="fu">,</span></span>
-<span id="cb11-31"><a href="#cb11-31" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;durationMinutes&quot;</span><span class="fu">:</span> <span class="dv">20</span></span>
-<span id="cb11-32"><a href="#cb11-32" aria-hidden="true" tabindex="-1"></a>        <span class="fu">},</span></span>
-<span id="cb11-33"><a href="#cb11-33" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;displayLabel&quot;</span><span class="fu">:</span> <span class="st">&quot;03 августа 2026 года, понедельник, 09:20–09:40 по Москве&quot;</span></span>
-<span id="cb11-34"><a href="#cb11-34" aria-hidden="true" tabindex="-1"></a>      <span class="fu">}</span></span>
-<span id="cb11-35"><a href="#cb11-35" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
-<span id="cb11-36"><a href="#cb11-36" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
-<span id="cb11-37"><a href="#cb11-37" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;allowedActions&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;create_booking&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
-<span id="cb11-38"><a href="#cb11-38" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;userText&quot;</span><span class="fu">:</span> <span class="st">&quot;Подойдёт первый вариант&quot;</span></span>
-<span id="cb11-39"><a href="#cb11-39" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;timeOfDayPreference&quot;</span><span class="fu">:</span> <span class="st">&quot;none&quot;</span><span class="fu">,</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;rejectedTimeOfDayPreferences&quot;</span><span class="fu">:</span> <span class="ot">[]</span><span class="fu">,</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;candidateMeetingSlots&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;meetingSlot&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;startAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:00:00.000Z&quot;</span><span class="fu">,</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;endAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T06:20:00.000Z&quot;</span><span class="fu">,</span></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;timeZone&quot;</span><span class="fu">:</span> <span class="st">&quot;Europe/Moscow&quot;</span><span class="fu">,</span></span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;durationMinutes&quot;</span><span class="fu">:</span> <span class="dv">20</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>        <span class="fu">},</span></span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;displayLabel&quot;</span><span class="fu">:</span> <span class="st">&quot;03 августа 2026 года, понедельник, 09:00–09:20 по Москве&quot;</span></span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>      <span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span></span>
+<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;meetingSlot&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;startAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T13:00:00.000Z&quot;</span><span class="fu">,</span></span>
+<span id="cb11-31"><a href="#cb11-31" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;endAt&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-08-03T13:20:00.000Z&quot;</span><span class="fu">,</span></span>
+<span id="cb11-32"><a href="#cb11-32" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;timeZone&quot;</span><span class="fu">:</span> <span class="st">&quot;Europe/Moscow&quot;</span><span class="fu">,</span></span>
+<span id="cb11-33"><a href="#cb11-33" aria-hidden="true" tabindex="-1"></a>          <span class="dt">&quot;durationMinutes&quot;</span><span class="fu">:</span> <span class="dv">20</span></span>
+<span id="cb11-34"><a href="#cb11-34" aria-hidden="true" tabindex="-1"></a>        <span class="fu">},</span></span>
+<span id="cb11-35"><a href="#cb11-35" aria-hidden="true" tabindex="-1"></a>        <span class="dt">&quot;displayLabel&quot;</span><span class="fu">:</span> <span class="st">&quot;03 августа 2026 года, понедельник, 16:00–16:20 по Москве&quot;</span></span>
+<span id="cb11-36"><a href="#cb11-36" aria-hidden="true" tabindex="-1"></a>      <span class="fu">}</span></span>
+<span id="cb11-37"><a href="#cb11-37" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb11-38"><a href="#cb11-38" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb11-39"><a href="#cb11-39" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;allowedActions&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;create_booking&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb11-40"><a href="#cb11-40" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;userText&quot;</span><span class="fu">:</span> <span class="st">&quot;Подойдёт первый вариант&quot;</span></span>
+<span id="cb11-41"><a href="#cb11-41" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p>Codex thread сохраняет естественную историю; compact state страхует
 от drift и упрощает resume.</p>
 <h2 id="prompt-files">6. Prompt files</h2>
@@ -2492,11 +2652,11 @@ knowledge-файлы; исходный repository туда не монтируе
 <li>при <code>thread/start</code> проверяет, что
 <code>instructionSources</code> содержит ожидаемый
 <code>AGENTS.md</code>;</li>
-<li>перед каждым <code>turn/start</code> добавляет compact
-machine-generated context envelope: stage, known facts, booking
-snapshot, server-owned current Moscow date/day, ровно два
-structured/labeled candidates, allowed actions и финальный текст
-пользователя независимо от typed/spoken origin;</li>
+<li>перед каждым <code>turn/start</code> одинаково разбирает
+typed/spoken preference/rejection и добавляет compact machine-generated
+context envelope: stage, known facts, booking snapshot, server-owned
+current Moscow date/day, preference state, ровно два structured/labeled
+current candidates, allowed actions и финальный текст пользователя;</li>
 <li>логирует только version/hash, не весь prompt;</li>
 <li>поддерживает hot reload только в development: новый prompt version
 применяется к новым conversations, а активные сохраняют исходную
@@ -2532,14 +2692,19 @@ MP3 response; cross-model fallback в P0 отсутствует.</p>
 <li>consent подтверждён server-side.</li>
 </ul>
 <p>Backend сверяет выбранный <code>meetingSlot</code> с обоими active
-candidates и отклоняет любой non-candidate/stale/occupied slot. Это
-внутренняя 20-minute бронь без external calendar event, invitation или
-availability API.</p>
+candidates и отклоняет любой non-candidate/stale/occupied slot. Tuple не
+означает exhaustive availability: preference/rejection refresh заменяет
+обе текущие альтернативы. Это внутренняя 20-minute бронь без external
+calendar event, invitation или availability API.</p>
 <h3 id="append_booking_qualification"><code>append_booking_qualification</code></h3>
 <p>LLM вызывает только после committed <code>bookingId</code>,
-user-facing confirmation и отдельного qualification consent. Текущий
-flow патчит только <code>monthlyLeadVolume</code> и integer
-<code>salesManagerCount</code>; patch может быть частичным.</p>
+user-facing confirmation и отдельного explicit qualification consent.
+Server задаёт monthly leads первым и manager count вторым, а status
+выводит из фактически сохранённых полей, не из заявления модели:
+one=<code>partial</code>, both=<code>complete</code>; empty
+refusal=<code>skipped</code>. Текущий flow патчит только
+<code>monthlyLeadVolume</code> и integer <code>salesManagerCount</code>;
+оба значения одной репликой разрешены.</p>
 <p>Backend возвращает safe result:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;ok&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
@@ -2637,10 +2802,11 @@ Telegram и выбирает первый slot; consent уже подтверж�
 context.</li>
 <li>Backend: валидирует candidate и commit-ит
 <code>booking.created</code> без внешнего календарного события.</li>
-<li>Агент: подтверждает внутреннюю бронь; просит разрешение максимум на
-два доп. вопроса.</li>
-<li>Пользователь: соглашается и сообщает месячный объём входящих лидов и
-целое число менеджеров продаж.</li>
+<li>Server-authored confirmation: подтверждает внутреннюю бронь и точно
+спрашивает <code>Можно задать два коротких вопроса?</code>.</li>
+<li>Пользователь: явно соглашается; server задаёт вопрос про месячный
+объём входящих лидов. Пользователь может сразу сообщить и целое число
+менеджеров продаж, тогда оба поля сохраняются за один turn.</li>
 <li>Backend: <code>booking.updated</code>.</li>
 <li>Агент: кратко суммирует и завершает.</li>
 </ol>
@@ -2676,10 +2842,20 @@ PII.</li>
 server MP3 phrase payload; arbitrary provider network chunks никогда не
 публикуются как playable audio.</li>
 <li>Tool handlers не доступны как публичные HTTP endpoints.</li>
+<li>Proactive greeting не является API/session contract: page entry
+делает один same-origin GET/playback static MP3, без conversation
+REST/WS/mic/provider/session до обоих consents. Blocked/error fallback —
+<code>Включить приветствие</code>; session start прекращает static
+playback.</li>
+<li>Committed proactive MP3 содержит только fixed product copy без
+visitor data. Его может заменить только explicit admin opt-in OpenRouter
+generation script; visitor runtime его не синтезирует.</li>
 </ul>
 <h2 id="rest-endpoints">2. REST endpoints</h2>
 <h3 id="post-apiv1conversations"><code>POST /api/v1/conversations</code></h3>
-<p>Создать сессию.</p>
+<p>Создать сессию. Browser не вызывает endpoint, пока
+<code>voiceProcessing</code> и <code>contactProcessing</code> не
+подтверждены; proactive static greeting не создаёт conversation.</p>
 <p>Request:</p>
 <div class="sourceCode" id="cb14"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;source&quot;</span><span class="fu">:</span> <span class="st">&quot;landing&quot;</span><span class="fu">,</span></span>
@@ -3196,38 +3372,33 @@ or notifier.</p>
 <span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>  createdAt<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
 <span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>}<span class="op">;</span></span></code></pre></div>
 <h3 id="append_booking_qualification-1"><code>append_booking_qualification</code></h3>
-<div class="sourceCode" id="cb23"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Storage contract retains these optional fields for compatibility. Current</span></span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="co">// conversation policy collects only monthlyLeadVolume (monthly inbound leads)</span></span>
-<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="co">// and integer salesManagerCount after committed booking, confirmation, and consent.</span></span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> QualificationPatchSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
-<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>  role<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">200</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>  industry<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">200</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>  companySize<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">100</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>  monthlyLeadVolume<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">100</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>  salesManagerCount<span class="op">:</span> z<span class="op">.</span><span class="fu">number</span>()<span class="op">.</span><span class="fu">int</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">0</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">10000</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>  currentChannels<span class="op">:</span> z<span class="op">.</span><span class="fu">array</span>(z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">80</span>))<span class="op">.</span><span class="fu">max</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>  crm<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">120</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>  currentProcess<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">1000</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>  pains<span class="op">:</span> z<span class="op">.</span><span class="fu">array</span>(z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">300</span>))<span class="op">.</span><span class="fu">max</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>  desiredUseCase<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">500</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>  timeline<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">200</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>  notes<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">max</span>(<span class="dv">1500</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
-<span id="cb23-17"><a href="#cb23-17" aria-hidden="true" tabindex="-1"></a>})<span class="op">.</span><span class="fu">strict</span>()<span class="op">;</span></span>
-<span id="cb23-18"><a href="#cb23-18" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb23-19"><a href="#cb23-19" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> AppendQualificationInputSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
-<span id="cb23-20"><a href="#cb23-20" aria-hidden="true" tabindex="-1"></a>  bookingId<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">10</span>)<span class="op">,</span></span>
-<span id="cb23-21"><a href="#cb23-21" aria-hidden="true" tabindex="-1"></a>  idempotencyKey<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">128</span>)<span class="op">,</span></span>
-<span id="cb23-22"><a href="#cb23-22" aria-hidden="true" tabindex="-1"></a>  patch<span class="op">:</span> QualificationPatchSchema<span class="op">,</span></span>
-<span id="cb23-23"><a href="#cb23-23" aria-hidden="true" tabindex="-1"></a>  completion<span class="op">:</span> z<span class="op">.</span><span class="fu">enum</span>([<span class="st">&quot;partial&quot;</span><span class="op">,</span> <span class="st">&quot;complete&quot;</span><span class="op">,</span> <span class="st">&quot;skipped&quot;</span>])<span class="op">.</span><span class="fu">default</span>(<span class="st">&quot;partial&quot;</span>)<span class="op">,</span></span>
-<span id="cb23-24"><a href="#cb23-24" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<div class="sourceCode" id="cb23"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Active write contract is exactly the two optional RC3 fields.</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> QualificationPatchSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>  monthlyLeadVolume<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">trim</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">1</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">100</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  salesManagerCount<span class="op">:</span> z<span class="op">.</span><span class="fu">number</span>()<span class="op">.</span><span class="fu">int</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">0</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">10000</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>})<span class="op">.</span><span class="fu">strict</span>()<span class="op">;</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> AppendQualificationInputSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>  bookingId<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">10</span>)<span class="op">,</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>  idempotencyKey<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">10</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">128</span>)<span class="op">,</span></span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>  patch<span class="op">:</span> QualificationPatchSchema<span class="op">,</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>  completion<span class="op">:</span> z<span class="op">.</span><span class="fu">enum</span>([<span class="st">&quot;partial&quot;</span><span class="op">,</span> <span class="st">&quot;complete&quot;</span><span class="op">,</span> <span class="st">&quot;skipped&quot;</span>])<span class="op">.</span><span class="fu">default</span>(<span class="st">&quot;partial&quot;</span>)<span class="op">,</span></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
 <p>Result:</p>
 <div class="sourceCode" id="cb24"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> AppendQualificationResult <span class="op">=</span> {</span>
 <span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>  ok<span class="op">:</span> <span class="kw">true</span><span class="op">;</span></span>
 <span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>  bookingId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
 <span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>  qualificationStatus<span class="op">:</span> <span class="st">&quot;partial&quot;</span> <span class="op">|</span> <span class="st">&quot;complete&quot;</span> <span class="op">|</span> <span class="st">&quot;skipped&quot;</span><span class="op">;</span></span>
-<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>  updatedFields<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>  updatedFields<span class="op">:</span> <span class="bu">Array</span><span class="op">&lt;</span><span class="st">&quot;monthlyLeadVolume&quot;</span> <span class="op">|</span> <span class="st">&quot;salesManagerCount&quot;</span><span class="op">&gt;;</span></span>
 <span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>  updatedAt<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
 <span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>}<span class="op">;</span></span></code></pre></div>
+<p>Server выводит status из persisted truth: оба поля →
+<code>complete</code>, одно → <code>partial</code>, zero-field explicit
+refusal → <code>skipped</code>. Model-provided <code>completion</code>
+не может объявить complete без обоих полей. Оба ответа могут прийти
+одним turn/patch. Legacy rows могут физически содержать старые
+qualification keys; read-normalization отбрасывает их, а active write
+schema выше их не принимает.</p>
 <h2 id="domain-policy-до-tool-execution">6. Domain policy до tool
 execution</h2>
 <div class="sourceCode" id="cb25"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="cf">switch</span> (tool<span class="op">.</span><span class="at">name</span>) {</span>
@@ -3247,13 +3418,27 @@ execution</h2>
 <span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
 <p>LLM-provided <code>conversationId</code>, <code>bookingId</code>,
 slot и consent сверяются с server-side session; нельзя доверять им как
-единственному источнику. Server перед каждым Luna turn строит
-<code>schedulingContext</code> из собственного clock: canonical
-<code>currentInstant</code>, <code>moscowLocalDate</code>,
-<code>moscowWeekday</code> и tuple ровно из двух
-<code>{ meetingSlot, displayLabel }</code>. Tool execution повторно
-отвергает slot вне tuple; BookingService повторно отвергает
-now-non-bookable или internally occupied start.</p>
+единственному источнику. После booking commit и delivered confirmation
+server задаёт точный consent-вопрос
+<code>Можно задать два коротких вопроса?</code>; grant возможен только
+из последующей explicit user turn. Затем server задаёт monthly leads
+первым и manager count вторым, по одному; отказ завершает как
+<code>skipped</code> или сохраняет <code>partial</code>, не меняя
+<code>booking.status=booked</code>.</p>
+<p>Server перед каждым Luna turn строит <code>schedulingContext</code>
+из собственного clock: canonical <code>currentInstant</code>,
+<code>moscowLocalDate</code>, <code>moscowWeekday</code>,
+<code>timeOfDayPreference</code>, максимум один
+<code>rejectedTimeOfDayPreferences</code> и tuple ровно из двух
+<code>{ meetingSlot, displayLabel }</code>. Bounded Russian parser
+одинаково применяет typed/spoken morning/day/second-half/evening
+wording. Default tuple — morning + evening; selected preference даёт два
+in-band starts примерно через час и переносит пару на следующий weekday,
+если текущий band occupied; rejection исключает band. Каждый slot — 20
+минут, weekday, не сегодня, start на 20-minute grid 09:00–17:00 MSK.
+Tuple — текущие internal alternatives, не all/global availability. Tool
+execution повторно отвергает slot вне tuple; BookingService повторно
+отвергает now-non-bookable или internally occupied start.</p>
 <h2 id="sqlite-model">7. SQLite model</h2>
 <h3 id="conversations"><code>conversations</code></h3>
 <table>
@@ -3406,11 +3591,12 @@ bookings</td>
 <td><code>qualification_json</code></td>
 <td>default <code>{}</code>; active flow writes only monthly inbound
 <code>monthlyLeadVolume</code> and integer
-<code>salesManagerCount</code></td>
+<code>salesManagerCount</code>; legacy keys normalize away on read</td>
 </tr>
 <tr>
 <td><code>qualification_status</code></td>
-<td>none/partial/complete/skipped</td>
+<td>none/partial/complete/skipped; complete iff both active fields,
+partial iff one, skipped on zero-answer refusal</td>
 </tr>
 <tr>
 <td><code>created_at</code>, <code>updated_at</code></td>
@@ -3474,7 +3660,11 @@ COMMIT</code></pre>
 <li>отправить WS <code>booking.created</code>;</li>
 <li>notifier worker публикует payload;</li>
 <li>assistant получает safe tool result;</li>
-<li>только потом orchestrator разрешает qualification stage.</li>
+<li>server-authored confirmation сообщает, что calendar event не создан,
+и точно спрашивает <code>Можно задать два коротких вопроса?</code>;</li>
+<li>только subsequent explicit consent открывает qualification и первый
+deterministic leads question; booking остаётся committed при
+skip/partial/failure.</li>
 </ol>
 <h2 id="notification-payloads">9. Notification payloads</h2>
 <h3 id="created">Created</h3>
@@ -3621,10 +3811,12 @@ operations</h1>
 <img role="img" aria-label="Deployment" src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+CjwhRE9DVFlQRSBzdmcgUFVCTElDICItLy9XM0MvL0RURCBTVkcgMS4xLy9FTiIKICJodHRwOi8vd3d3LnczLm9yZy9HcmFwaGljcy9TVkcvMS4xL0RURC9zdmcxMS5kdGQiPgo8IS0tIEdlbmVyYXRlZCBieSBncmFwaHZpeiB2ZXJzaW9uIDEzLjEuMiAoMjAyNTA4MDguMjMyMCkKIC0tPgo8IS0tIFRpdGxlOiBHIFBhZ2VzOiAxIC0tPgo8c3ZnIHdpZHRoPSI5MzFwdCIgaGVpZ2h0PSI2MThwdCIKIHZpZXdCb3g9IjAuMDAgMC4wMCA5MzEuMDAgNjE4LjAwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIj4KPGcgaWQ9ImdyYXBoMCIgY2xhc3M9ImdyYXBoIiB0cmFuc2Zvcm09InNjYWxlKDEgMSkgcm90YXRlKDApIHRyYW5zbGF0ZSgxOCA2MDAuMTYpIj4KPHRpdGxlPkc8L3RpdGxlPgo8cG9seWdvbiBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSJub25lIiBwb2ludHM9Ii0xOCwxOCAtMTgsLTYwMC4xNiA5MTIuNjEsLTYwMC4xNiA5MTIuNjEsMTggLTE4LDE4Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjQ0Ny4zIiB5PSItNTYwLjE2IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMjAuMDAiPkRlcGxveW1lbnQgdG9wb2xvZ3kgwrcg0L7QtNC90LAgVlBTPC90ZXh0Pgo8ZyBpZD0iY2x1c3QxIiBjbGFzcz0iY2x1c3RlciI+Cjx0aXRsZT5jbHVzdGVyX3ZwczwvdGl0bGU+CjxwYXRoIGZpbGw9IiNmOGZhZmMiIHN0cm9rZT0iIzljYTNhZiIgc3Ryb2tlLWRhc2hhcnJheT0iNSwyIiBkPSJNMjAsLThDMjAsLTggNDQwLC04IDQ0MCwtOCA0NDYsLTggNDUyLC0xNCA0NTIsLTIwIDQ1MiwtMjAgNDUyLC00NTguMDMgNDUyLC00NTguMDMgNDUyLC00NjQuMDMgNDQ2LC00NzAuMDMgNDQwLC00NzAuMDMgNDQwLC00NzAuMDMgMjAsLTQ3MC4wMyAyMCwtNDcwLjAzIDE0LC00NzAuMDMgOCwtNDY0LjAzIDgsLTQ1OC4wMyA4LC00NTguMDMgOCwtMjAgOCwtMjAgOCwtMTQgMTQsLTggMjAsLTgiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMjMwIiB5PSItNDQ4LjAzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMjAuMDAiPlRydXN0ZWQgVlBTIMK3IGRvY2tlciBjb21wb3NlPC90ZXh0Pgo8L2c+CjwhLS0gaW50ZXJuZXQgLS0+CjxnIGlkPSJub2RlMSIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+aW50ZXJuZXQ8L3RpdGxlPgo8ZWxsaXBzZSBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjMzAzNDNiIiBjeD0iMzA2IiBjeT0iLTUzMS41IiByeD0iNzkuODIiIHJ5PSIxOC42NyIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzMDYiIHk9Ii01MjguNSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5JbnRlcm5ldCAvIGJyb3dzZXI8L3RleHQ+CjwvZz4KPCEtLSBjYWRkeSAtLT4KPGcgaWQ9Im5vZGUyIiBjbGFzcz0ibm9kZSI+Cjx0aXRsZT5jYWRkeTwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0zNDUuOTIsLTQzMC4wM0MzNDUuOTIsLTQzMC4wMyAyNjYuMDgsLTQzMC4wMyAyNjYuMDgsLTQzMC4wMyAyNjAuMDgsLTQzMC4wMyAyNTQuMDgsLTQyNC4wMyAyNTQuMDgsLTQxOC4wMyAyNTQuMDgsLTQxOC4wMyAyNTQuMDgsLTQwMy42MyAyNTQuMDgsLTQwMy42MyAyNTQuMDgsLTM5Ny42MyAyNjAuMDgsLTM5MS42MyAyNjYuMDgsLTM5MS42MyAyNjYuMDgsLTM5MS42MyAzNDUuOTIsLTM5MS42MyAzNDUuOTIsLTM5MS42MyAzNTEuOTIsLTM5MS42MyAzNTcuOTIsLTM5Ny42MyAzNTcuOTIsLTQwMy42MyAzNTcuOTIsLTQwMy42MyAzNTcuOTIsLTQxOC4wMyAzNTcuOTIsLTQxOC4wMyAzNTcuOTIsLTQyNC4wMyAzNTEuOTIsLTQzMC4wMyAzNDUuOTIsLTQzMC4wMyIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzMDYiIHk9Ii00MTMuODMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+Y2FkZHkgY29udGFpbmVyPC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzMDYiIHk9Ii00MDEuODMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+OjgwLzo0NDMgwrcgVExTPC90ZXh0Pgo8L2c+CjwhLS0gaW50ZXJuZXQmIzQ1OyZndDtjYWRkeSAtLT4KPGcgaWQ9ImVkZ2U3IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5pbnRlcm5ldCYjNDU7Jmd0O2NhZGR5PC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTMwNiwtNTEyLjQ3QzMwNiwtNDkzLjA3IDMwNiwtNDYxLjk3IDMwNiwtNDM5LjQ3Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iMzA4LjYzLC00MzkuNTggMzA2LC00MzIuMDggMzAzLjM4LC00MzkuNTggMzA4LjYzLC00MzkuNTgiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzMyLjEzIiB5PSItNDgwLjczIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOS4wMCI+SFRUUFMvV1NTPC90ZXh0Pgo8L2c+CjwhLS0gYXBwIC0tPgo8ZyBpZD0ibm9kZTMiIGNsYXNzPSJub2RlIj4KPHRpdGxlPmFwcDwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0zMjAuNzEsLTMyNS42M0MzMjAuNzEsLTMyNS42MyAxOTMuMjksLTMyNS42MyAxOTMuMjksLTMyNS42MyAxODcuMjksLTMyNS42MyAxODEuMjksLTMxOS42MyAxODEuMjksLTMxMy42MyAxODEuMjksLTMxMy42MyAxODEuMjksLTI5OS4yMyAxODEuMjksLTI5OS4yMyAxODEuMjksLTI5My4yMyAxODcuMjksLTI4Ny4yMyAxOTMuMjksLTI4Ny4yMyAxOTMuMjksLTI4Ny4yMyAzMjAuNzEsLTI4Ny4yMyAzMjAuNzEsLTI4Ny4yMyAzMjYuNzEsLTI4Ny4yMyAzMzIuNzEsLTI5My4yMyAzMzIuNzEsLTI5OS4yMyAzMzIuNzEsLTI5OS4yMyAzMzIuNzEsLTMxMy42MyAzMzIuNzEsLTMxMy42MyAzMzIuNzEsLTMxOS42MyAzMjYuNzEsLTMyNS42MyAzMjAuNzEsLTMyNS42MyIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIyNTciIHk9Ii0zMDkuNDMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+YXBwIGNvbnRhaW5lcjwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMjU3IiB5PSItMjk3LjQzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPkJ1biBzZXJ2ZXIgKyBzdGF0aWMgUmVhY3Q8L3RleHQ+CjwvZz4KPCEtLSBjYWRkeSYjNDU7Jmd0O2FwcCAtLT4KPGcgaWQ9ImVkZ2UxIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5jYWRkeSYjNDU7Jmd0O2FwcDwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0yOTcuMjQsLTM5MS41MkMyODkuNTUsLTM3NS40NiAyNzguMjgsLTM1MS45IDI2OS42MiwtMzMzLjgxIi8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iMjcyLjE3LC0zMzMuMDYgMjY2LjU3LC0zMjcuNDIgMjY3LjQ0LC0zMzUuMzIgMjcyLjE3LC0zMzMuMDYiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzA3LjcxIiB5PSItMzU5LjUzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOS4wMCI+SFRUUC9XU1M8L3RleHQ+CjwvZz4KPCEtLSBjYWRkeWRhdGEgLS0+CjxnIGlkPSJub2RlOCIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+Y2FkZHlkYXRhPC90aXRsZT4KPHBhdGggZmlsbD0id2hpdGUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTQ0My43MSwtMzI4LjAzQzQ0My43MSwtMzMwLjY4IDQyNS45MSwtMzMyLjgzIDQwNCwtMzMyLjgzIDM4Mi4wOSwtMzMyLjgzIDM2NC4yOSwtMzMwLjY4IDM2NC4yOSwtMzI4LjAzIDM2NC4yOSwtMzI4LjAzIDM2NC4yOSwtMjg0LjgzIDM2NC4yOSwtMjg0LjgzIDM2NC4yOSwtMjgyLjE4IDM4Mi4wOSwtMjgwLjAzIDQwNCwtMjgwLjAzIDQyNS45MSwtMjgwLjAzIDQ0My43MSwtMjgyLjE4IDQ0My43MSwtMjg0LjgzIDQ0My43MSwtMjg0LjgzIDQ0My43MSwtMzI4LjAzIDQ0My43MSwtMzI4LjAzIi8+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTQ0My43MSwtMzI4LjAzQzQ0My43MSwtMzI1LjM4IDQyNS45MSwtMzIzLjIzIDQwNCwtMzIzLjIzIDM4Mi4wOSwtMzIzLjIzIDM2NC4yOSwtMzI1LjM4IDM2NC4yOSwtMzI4LjAzIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjQwNCIgeT0iLTMwOS40MyIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5jYWRkeSYjNDU7ZGF0YTwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNDA0IiB5PSItMjk3LjQzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPmNlcnRpZmljYXRlczwvdGV4dD4KPC9nPgo8IS0tIGNhZGR5JiM0NTsmZ3Q7Y2FkZHlkYXRhIC0tPgo8ZyBpZD0iZWRnZTYiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPmNhZGR5JiM0NTsmZ3Q7Y2FkZHlkYXRhPC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTMyOS43MSwtMzg1LjA2QzM0Mi44MiwtMzcxLjM1IDM1OS4yNywtMzU0LjE3IDM3My4zNSwtMzM5LjQ1Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iMzI3Ljk2LC0zODMuMDkgMzI0LjY3LC0zOTAuMzIgMzMxLjc1LC0zODYuNzIgMzI3Ljk2LC0zODMuMDkiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIzNzUuMiwtMzQxLjMyIDM3OC40OSwtMzM0LjA5IDM3MS40LC0zMzcuNjkgMzc1LjIsLTM0MS4zMiIvPgo8L2c+CjwhLS0gY29kZXggLS0+CjxnIGlkPSJub2RlNCIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+Y29kZXg8L3RpdGxlPgo8cG9seWdvbiBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjMzAzNDNiIiBwb2ludHM9IjEyNi4xNywtMTgzLjE5IDE1LjgzLC0xODMuMTkgMTUuODMsLTE3OS4xOSAxMS44MywtMTc5LjE5IDExLjgzLC0xNzUuMTkgMTUuODMsLTE3NS4xOSAxNS44MywtMTUyLjc5IDExLjgzLC0xNTIuNzkgMTEuODMsLTE0OC43OSAxNS44MywtMTQ4Ljc5IDE1LjgzLC0xNDQuNzkgMTI2LjE3LC0xNDQuNzkgMTI2LjE3LC0xODMuMTkiLz4KPHBvbHlsaW5lIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMwMzQzYiIgcG9pbnRzPSIxNS44MywtMTc5LjE5IDE5LjgzLC0xNzkuMTkgMTkuODMsLTE3NS4xOSAxNS44MywtMTc1LjE5Ii8+Cjxwb2x5bGluZSBmaWxsPSJub25lIiBzdHJva2U9IiMzMDM0M2IiIHBvaW50cz0iMTUuODMsLTE1Mi43OSAxOS44MywtMTUyLjc5IDE5LjgzLC0xNDguNzkgMTUuODMsLTE0OC43OSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI3MSIgeT0iLTE2Ni45OSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5jaGlsZCBwcm9jZXNzPC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI3MSIgeT0iLTE1NC45OSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5jb2RleCBhcHAmIzQ1O3NlcnZlcjwvdGV4dD4KPC9nPgo8IS0tIGFwcCYjNDU7Jmd0O2NvZGV4IC0tPgo8ZyBpZD0iZWRnZTIiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPmFwcCYjNDU7Jmd0O2NvZGV4PC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTIwOC42NywtMjgyLjY5QzE5NC4xMywtMjc1LjAxIDE3OC40NywtMjY1Ljg3IDE2NSwtMjU2LjAzIDEzOC4yNiwtMjM2LjQ4IDExMS40OCwtMjA5LjY3IDkzLjM5LC0xOTAuMjEiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIyMDcuMjcsLTI4NC45MiAyMTUuMTQsLTI4Ni4wNCAyMDkuNjgsLTI4MC4yNiAyMDcuMjcsLTI4NC45MiIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9Ijk1LjUsLTE4OC42MyA4OC40OSwtMTg0Ljg4IDkxLjY0LC0xOTIuMTggOTUuNSwtMTg4LjYzIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjE5MSIgeT0iLTIzNy4xMyIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjkuMDAiPkpTT05MIHN0ZGlvPC90ZXh0Pgo8L2c+CjwhLS0gc3FsaXRlIC0tPgo8ZyBpZD0ibm9kZTUiIGNsYXNzPSJub2RlIj4KPHRpdGxlPnNxbGl0ZTwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0yMzkuNTgsLTE4NS41OUMyMzkuNTgsLTE4OC4yNCAyMjEuMzksLTE5MC4zOSAxOTksLTE5MC4zOSAxNzYuNjEsLTE5MC4zOSAxNTguNDIsLTE4OC4yNCAxNTguNDIsLTE4NS41OSAxNTguNDIsLTE4NS41OSAxNTguNDIsLTE0Mi4zOSAxNTguNDIsLTE0Mi4zOSAxNTguNDIsLTEzOS43NCAxNzYuNjEsLTEzNy41OSAxOTksLTEzNy41OSAyMjEuMzksLTEzNy41OSAyMzkuNTgsLTEzOS43NCAyMzkuNTgsLTE0Mi4zOSAyMzkuNTgsLTE0Mi4zOSAyMzkuNTgsLTE4NS41OSAyMzkuNTgsLTE4NS41OSIvPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0yMzkuNTgsLTE4NS41OUMyMzkuNTgsLTE4Mi45NCAyMjEuMzksLTE4MC43OSAxOTksLTE4MC43OSAxNzYuNjEsLTE4MC43OSAxNTguNDIsLTE4Mi45NCAxNTguNDIsLTE4NS41OSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIxOTkiIHk9Ii0xNjYuOTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+L2FwcC9kYXRhPC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIxOTkiIHk9Ii0xNTQuOTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+U1FMaXRlIFdBTDwvdGV4dD4KPC9nPgo8IS0tIGFwcCYjNDU7Jmd0O3NxbGl0ZSAtLT4KPGcgaWQ9ImVkZ2UzIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5hcHAmIzQ1OyZndDtzcWxpdGU8L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBkPSJNMjQ1Ljg0LC0yNzguNEMyMzYuNTEsLTI1NS44MiAyMjMuMTcsLTIyMy41MSAyMTMuMSwtMTk5LjE0Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iMjQzLjM3LC0yNzkuMzEgMjQ4LjY2LC0yODUuMjQgMjQ4LjIzLC0yNzcuMzEgMjQzLjM3LC0yNzkuMzEiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIyMTUuNjIsLTE5OC4zNSAyMTAuMzMsLTE5Mi40MiAyMTAuNzcsLTIwMC4zNiAyMTUuNjIsLTE5OC4zNSIvPgo8L2c+CjwhLS0gcHJvbXB0cyAtLT4KPGcgaWQ9Im5vZGU2IiBjbGFzcz0ibm9kZSI+Cjx0aXRsZT5wcm9tcHRzPC90aXRsZT4KPHBvbHlnb24gZmlsbD0id2hpdGUiIHN0cm9rZT0iIzMwMzQzYiIgcG9pbnRzPSI0NDQuMywtMTgzLjE5IDQ0MS4zLC0xODcuMTkgNDIwLjMsLTE4Ny4xOSA0MTcuMywtMTgzLjE5IDI3MS43LC0xODMuMTkgMjcxLjcsLTE0NC43OSA0NDQuMywtMTQ0Ljc5IDQ0NC4zLC0xODMuMTkiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzU4IiB5PSItMTY2Ljk5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPmJ1bmRsZWQgcHJvbXB0cyAvIGtub3dsZWRnZTwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzU4IiB5PSItMTU0Ljk5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPnJlYWQmIzQ1O29ubHk8L3RleHQ+CjwvZz4KPCEtLSBhcHAmIzQ1OyZndDtwcm9tcHRzIC0tPgo8ZyBpZD0iZWRnZTQiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPmFwcCYjNDU7Jmd0O3Byb21wdHM8L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBkPSJNMjcwLjQxLC0yODYuNzhDMjg4LjE3LC0yNjIuMDkgMzE5LjU2LC0yMTguNDUgMzM5LjU0LC0xOTAuNjYiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIzNDEuNjMsLTE5Mi4yNCAzNDMuODgsLTE4NC42MiAzMzcuMzcsLTE4OS4xOCAzNDEuNjMsLTE5Mi4yNCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzMjMuNzgiIHk9Ii0yMzcuMTMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI5LjAwIj5yZWFkPC90ZXh0Pgo8L2c+CjwhLS0gb3BlbnJvdXRlciAtLT4KPGcgaWQ9Im5vZGU5IiBjbGFzcz0ibm9kZSI+Cjx0aXRsZT5vcGVucm91dGVyPC90aXRsZT4KPGVsbGlwc2UgZmlsbD0id2hpdGUiIHN0cm9rZT0iIzMwMzQzYiIgY3g9IjU4OSIgY3k9Ii0xNjMuOTkiIHJ4PSIxMTIuMzgiIHJ5PSIzNS42NCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1ODkiIHk9Ii0xNzIuOTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+T3BlblJvdXRlciB2b2ljZSBnYXRld2F5PC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1ODkiIHk9Ii0xNjAuOTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+b25lIGJhY2tlbmQmIzQ1O29ubHkga2V5PC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1ODkiIHk9Ii0xNDguOTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+cGFpZCBIVFRQUyB1c2FnZTwvdGV4dD4KPC9nPgo8IS0tIGFwcCYjNDU7Jmd0O29wZW5yb3V0ZXIgLS0+CjxnIGlkPSJlZGdlOCIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+YXBwJiM0NTsmZ3Q7b3BlbnJvdXRlcjwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0zMDkuMzMsLTI4My4yOUMzNjQuNTMsLTI1OS45NCA0NTEuOTgsLTIyMi45NSA1MTQuMzksLTE5Ni41NSIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjMwOC41MSwtMjgwLjc5IDMwMi42MiwtMjg2LjEzIDMxMC41NSwtMjg1LjYzIDMwOC41MSwtMjgwLjc5Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNTE1LjIyLC0xOTkuMDUgNTIxLjExLC0xOTMuNzEgNTEzLjE3LC0xOTQuMjIgNTE1LjIyLC0xOTkuMDUiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTIzLjI5IiB5PSItMjQ3LjkzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOS4wMCI+U1RUOiBjaGF0L2NvbXBsZXRpb25zPC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1MjMuMjkiIHk9Ii0yMzcuMTMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI5LjAwIj5iYXNlNjQgV0FWIOKGkiBmaW5hbCB0cmFuc2NyaXB0PC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1MjMuMjkiIHk9Ii0yMjYuMzMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI5LjAwIj5UVFM6IGF1ZGlvL3NwZWVjaCDihpIgY29tcGxldGUgTVAzPC90ZXh0Pgo8L2c+CjwhLS0gd2ViaG9vayAtLT4KPGcgaWQ9Im5vZGUxMSIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+d2ViaG9vazwvdGl0bGU+Cjxwb2x5Z29uIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIHBvaW50cz0iODk0LjYxLC0xODEuOTkgODkxLjYxLC0xODUuOTkgODcwLjYxLC0xODUuOTkgODY3LjYxLC0xODEuOTkgNzMzLjM5LC0xODEuOTkgNzMzLjM5LC0xNDUuOTkgODk0LjYxLC0xNDUuOTkgODk0LjYxLC0xODEuOTkiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iODE0IiB5PSItMTYwLjk5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPkNvbnNvbGUgLyBvcHRpb25hbCB3ZWJob29rPC90ZXh0Pgo8L2c+CjwhLS0gYXBwJiM0NTsmZ3Q7d2ViaG9vayAtLT4KPGcgaWQ9ImVkZ2UxMCIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+YXBwJiM0NTsmZ3Q7d2ViaG9vazwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0zMTcuODMsLTI4Ni44MUMzMjcuODQsLTI4NC4yMiAzMzguMTYsLTI4MS44MyAzNDgsLTI4MC4wMyA0NjMuODgsLTI1OC43NyA0OTguMDUsLTI4NS45OCA2MTIsLTI1Ni4wMyA2NzIuMTYsLTI0MC4yMSA3MzYuOTMsLTIwOC4wNSA3NzYuNDcsLTE4Ni41Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNzc3LjI2LC0xODkuMDYgNzgyLjU3LC0xODMuMTUgNzc0LjczLC0xODQuNDYgNzc3LjI2LC0xODkuMDYiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNzMyLjE1IiB5PSItMjM3LjEzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOS4wMCI+Ym9va2luZyBldmVudHM8L3RleHQ+CjwvZz4KPCEtLSBjb2RleGhvbWUgLS0+CjxnIGlkPSJub2RlNyIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+Y29kZXhob21lPC90aXRsZT4KPHBhdGggZmlsbD0id2hpdGUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTE4Mi4yMywtNjRDMTgyLjIzLC02Ni42NSAxNDQuOTMsLTY4LjggOTksLTY4LjggNTMuMDcsLTY4LjggMTUuNzcsLTY2LjY1IDE1Ljc3LC02NCAxNS43NywtNjQgMTUuNzcsLTIwLjggMTUuNzcsLTIwLjggMTUuNzcsLTE4LjE1IDUzLjA3LC0xNiA5OSwtMTYgMTQ0LjkzLC0xNiAxODIuMjMsLTE4LjE1IDE4Mi4yMywtMjAuOCAxODIuMjMsLTIwLjggMTgyLjIzLC02NCAxODIuMjMsLTY0Ii8+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTE4Mi4yMywtNjRDMTgyLjIzLC02MS4zNSAxNDQuOTMsLTU5LjIgOTksLTU5LjIgNTMuMDcsLTU5LjIgMTUuNzcsLTYxLjM1IDE1Ljc3LC02NCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI5OSIgeT0iLTQ1LjQiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+L2NvZGV4JiM0NTtob21lPC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI5OSIgeT0iLTMzLjQiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+YXV0aC5qc29uIMK3IHBlcnNpc3RlbnQgc2VjcmV0PC90ZXh0Pgo8L2c+CjwhLS0gY29kZXgmIzQ1OyZndDtjb2RleGhvbWUgLS0+CjxnIGlkPSJlZGdlNSIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+Y29kZXgmIzQ1OyZndDtjb2RleGhvbWU8L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBkPSJNNzcuNCwtMTM1LjY1QzgxLjQxLC0xMTguNTMgODYuNjEsLTk2LjMxIDkwLjksLTc3Ljk4Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNzQuOTEsLTEzNC43OCA3NS43NSwtMTQyLjY4IDgwLjAyLC0xMzUuOTggNzQuOTEsLTEzNC43OCIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjkzLjQ2LC03OC41OCA5Mi42MSwtNzAuNjggODguMzUsLTc3LjM4IDkzLjQ2LC03OC41OCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIxMTEuNzUiIHk9Ii05Ni4yNSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjkuMDAiPmF1dGgvY2FjaGU8L3RleHQ+CjwvZz4KPCEtLSBvcGVuYWkgLS0+CjxnIGlkPSJub2RlMTAiIGNsYXNzPSJub2RlIj4KPHRpdGxlPm9wZW5haTwvdGl0bGU+CjxlbGxpcHNlIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGN4PSI1NTQiIGN5PSItNDIuNCIgcng9Ijk0LjM1IiByeT0iMjcuMTUiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTU0IiB5PSItNDUuNCIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5PcGVuQUkvQ29kZXggc2VydmljZTwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTU0IiB5PSItMzMuNCIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5MdW5hIHZpYSBzdWJzY3JpcHRpb248L3RleHQ+CjwvZz4KPCEtLSBjb2RleCYjNDU7Jmd0O29wZW5haSAtLT4KPGcgaWQ9ImVkZ2U5IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5jb2RleCYjNDU7Jmd0O29wZW5haTwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0xMTIuNjMsLTE0MC4zOEMxMjIuMDksLTEzNS45IDEzMi4yMywtMTMxLjU4IDE0MiwtMTI4LjM1IDI3Ni44LC04My43NiAzMTcuNTMsLTEwMC45NSA0NTYsLTY5LjU1IDQ2My4yOCwtNjcuOSA0NzAuODQsLTY2LjA4IDQ3OC4zOSwtNjQuMTkiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIxMTEuNjEsLTEzNy45NiAxMDYuMDIsLTE0My42MSAxMTMuOTEsLTE0Mi42OCAxMTEuNjEsLTEzNy45NiIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjQ3OC45OCwtNjYuNzUgNDg1LjYsLTYyLjM1IDQ3Ny42OSwtNjEuNjYgNDc4Ljk4LC02Ni43NSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzNDQuOTkiIHk9Ii05Ni4yNSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjkuMDAiPmF1dGhlbnRpY2F0ZWQgSFRUUFM8L3RleHQ+CjwvZz4KPC9nPgo8L3N2Zz4K" alt="Deployment" />
 <figcaption aria-hidden="true">Deployment</figcaption>
 </figure>
-<p>Release <code>0.5.0-local-rc.2</code> uses this topology on one
-trusted local machine at <code>http://localhost:5173</code>. A target
-VPS, DNS, public TLS/WSS and target-host smokes are later gates and are
-not implied by local readiness.</p>
+<p>Candidate <code>0.5.0-local-rc.3</code> uses this topology on one
+trusted local machine at <code>http://localhost:5173</code>; prior
+<code>0.5.0-local-rc.2</code> remains the rollback image. RC3
+deploy/readiness must be freshly accepted per docs 08/11. A target VPS,
+DNS, public TLS/WSS and target-host smokes are later gates and are not
+implied by local readiness.</p>
 <p>Один <code>docker-compose.yml</code>, ровно два application-path
 сервиса рекомендуются:</p>
 <ol type="1">
@@ -4485,6 +4677,20 @@ materially;</li>
 <p>Каждый provider имеет fake adapter, чтобы основная логика
 тестировалась без денег и сети.</p>
 <h2 id="unit-tests">2. Unit tests</h2>
+<h3 id="proactive-static-greeting">Proactive static greeting</h3>
+<ul>
+<li>committed product-owned asset is one bounded complete MP3 at fixed
+same-origin path;</li>
+<li>controller makes exactly one automatic attempt per mounted page
+lifecycle and exposes no REST/WS/mic/provider/session capabilities;</li>
+<li>autoplay <code>NotAllowedError</code> and media error render
+<code>Включить приветствие</code>; retry occurs only on user
+action;</li>
+<li>real session start and final unmount pause/reset/release audio;
+StrictMode-style resubscribe does not replay;</li>
+<li>fixed copy/generation input contains no visitor data; explicit admin
+script requires opt-in and is not part of visitor runtime.</li>
+</ul>
 <h3 id="state-machine-1">State machine</h3>
 <p>Table-driven cases:</p>
 <ul>
@@ -4523,16 +4729,35 @@ booking, user-facing confirmation и отдельного consent;</li>
 <li>required
 name/company/working-email/phone-or-Telegram/consent/structured slot
 validation;</li>
-<li>exactly two deterministic candidates, Moscow
+<li>exactly two deterministic candidates, all 20 minutes, Moscow
 weekday/non-today/09:00–17:00 20-minute grid;</li>
+<li>no-preference default is one morning plus one evening
+candidate;</li>
+<li>typed/spoken Russian morning/day/second-half/evening variants
+refresh identical scheduling context;</li>
+<li>selected band gives two in-band options roughly one hour apart,
+moves around occupied starts, and rolls to a later weekday when the band
+cannot supply a pair;</li>
+<li>explicit rejection excludes the rejected band; ambiguous phrases do
+not mutate preference;</li>
+<li>context/prompt presents candidates as two current alternatives,
+never exhaustive global availability;</li>
 <li>non-candidate, stale and internally occupied slots rejected;</li>
 <li>migration preserves legacy rows with null meeting fields and does
 not invent slots; modern snapshot use fails closed;</li>
 <li>same idempotency key/same payload → same result;</li>
 <li>same key/different payload → conflict;</li>
-<li>qualification patch merges monthly inbound volume and integer
-<code>salesManagerCount</code>;</li>
-<li>empty patch rejected;</li>
+<li>exact post-confirmation consent question precedes qualification and
+same-turn booking envelope cannot grant consent;</li>
+<li>deterministic question order is monthly inbound leads then integer
+<code>salesManagerCount</code>, one at a time;</li>
+<li>qualification patch merges either field; both-at-once completes, one
+field remains partial, and model completion claims cannot override
+persisted truth;</li>
+<li>zero-answer refusal is skipped; refusal after one answer preserves
+partial; booking remains booked;</li>
+<li>empty patch rejected except server-owned explicit-refusal skip
+operation;</li>
 <li>notifier failure не rolls back booking;</li>
 <li>PII redaction.</li>
 </ul>
@@ -4624,6 +4849,10 @@ status/latency/byte evidence.</p>
 <code>external</code> and excluded from every local unit run.</p>
 <h2 id="integration-tests">4. Integration tests</h2>
 <ul>
+<li>landing entry attempts only the fixed same-origin proactive MP3;
+before both consents there are zero conversation REST requests, sockets,
+capture/mic objects, provider calls, or sessions; session start stops
+greeting;</li>
 <li>bounded PCM16 chunks → <code>audio.commit</code> → gateway-produced
 validated WAV → atomic <code>SttPort</code> request → fake OpenRouter
 already-WAV request/final transcript → fake brain deltas → fake
@@ -4639,12 +4868,19 @@ brain/state/tool/persistence path as speech;</li>
 server-owned <code>COLLECT_BOOKING</code>, never transcript
 wording;</li>
 <li>real SQLite transaction + fake notifier;</li>
-<li>Luna receives server-owned current Moscow date/day and exactly two
-structured candidates with validated labels;</li>
+<li>Luna receives server-owned current Moscow date/day, parsed
+preference/rejection and exactly two structured candidates with
+validated labels;</li>
+<li>typed and spoken preference turns produce matching refreshed
+context; rejected band is absent;</li>
 <li>booking tool call accepts only one active candidate inside brain
 turn;</li>
-<li>booking event and user-facing confirmation appear before
+<li>booking event and user-facing confirmation with exact
+<code>Можно задать два коротких вопроса?</code> appear before
 qualification consent/question/audio;</li>
+<li>explicit consent bypasses a model turn and deterministically asks
+leads first; partial then asks manager count; both-at-once completes;
+zero/one-answer refusal preserves skipped/partial booking truth;</li>
 <li>reconnect with same conversation;</li>
 <li>barge-in while OpenRouter requests/complete segments are in
 flight;</li>
@@ -4655,22 +4891,32 @@ flight;</li>
 <h2 id="browser-e2e">5. Browser E2E</h2>
 <p>Playwright with synthetic audio fixture:</p>
 <ol type="1">
-<li>load landing;</li>
-<li>click CTA;</li>
-<li>mock/allow mic;</li>
+<li>load landing and verify one immediate same-origin proactive MP3
+attempt with no conversation REST/WS/mic/provider/session;</li>
+<li>exercise autoplay success and blocked/error
+<code>Включить приветствие</code>, then verify CTA/session start stops
+greeting;</li>
+<li>click CTA, provide both consents, and mock/allow mic;</li>
 <li>stream fixture PCM;</li>
 <li>observe listening/processing states and then exactly one
 <code>transcript.final</code>;</li>
 <li>receive assistant text and ordered complete MP3 segment events;</li>
 <li>verify the circular countdown is sample-derived and reaches the
 60-second limit without wall-clock drift;</li>
-<li>submit a normal typed final turn and then use the in-chat booking
-form only at <code>COLLECT_BOOKING</code>;</li>
-<li>choose one of exactly two server-labeled Moscow slots and complete
-required name/company/email/phone-or-Telegram/consent data;</li>
-<li>see booked UI and verify no external calendar/invitation claim;</li>
-<li>consent to or skip the two-field qualification;</li>
-<li>verify backend DB/event payload.</li>
+<li>submit typed and spoken time-of-day preferences and verify refreshed
+pairs: default morning+evening, selected in-band roughly hour-apart,
+rejected band absent;</li>
+<li>use the in-chat booking form only at <code>COLLECT_BOOKING</code>,
+choose one of exactly two server-labeled current Moscow alternatives,
+and complete required name/company/email/phone-or-Telegram/consent
+data;</li>
+<li>see booked UI and verify no external calendar/invitation or
+exhaustive availability claim;</li>
+<li>verify exact two-question consent, deterministic leads→manager
+order, both-at-once completion, and zero/one-answer refusal
+outcomes;</li>
+<li>verify backend DB/event payload keeps booking
+<code>booked</code>.</li>
 </ol>
 <p>Browser voice acceptance additionally proves ordered playback of at
 least three complete MP3 phrase segments, immediate stop/queue clear on
@@ -4802,48 +5048,50 @@ directly;</li>
 <li>auth volume not world-readable.</li>
 </ul>
 <h2 id="acceptance-checklist-p0">10. Acceptance checklist P0</h2>
-<h3 id="local-release-candidate-0.5.0-local-rc.2">Local release
-candidate <code>0.5.0-local-rc.2</code></h3>
+<h3 id="local-release-candidate-0.5.0-local-rc.3">Local release
+candidate <code>0.5.0-local-rc.3</code></h3>
+<p>RC3 is a candidate, not an accepted release. RC2 evidence may inform
+rollback but does not close RC3 gates. Record final command counts,
+checksum counts, SHA, browser observations, deployment observations, and
+paid-provider observations only in the parent-owned final evidence after
+those checks actually run.</p>
 <ul class="task-list">
-<li><label><input type="checkbox" checked></input>The candidate extends the
-merged PR #24 baseline with the 60-second capture, typed conversation,
-scheduled booking, qualification, prompt, migration-compatibility, and
-refusal slices.</label></li>
-<li><label><input type="checkbox" checked></input>Fresh deterministic
-release-candidate suite passes 484 tests across 56 files with no
-failures and 4,104 assertions; command evidence is recorded in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>.</label></li>
-<li><label><input type="checkbox" checked></input>Product landing,
-CTA/consent, AI identity, 60-second sample-derived countdown, typed and
-spoken turns, strict supplied-slot booking, explicit refusal behavior,
-booking order/idempotency, safe provider failures, barge-in, prompt
-loading, envelope mode, and sandbox boundaries have deterministic
-coverage.</label></li>
-<li><label><input type="checkbox" checked></input>Chrome local acceptance
-covers the strict-CSP worklet, visible countdown, typed refusal,
-permission-denied recovery, terminal behavior, and no horizontal
-overflow at 780 px and 390 px; Firefox headless rendered the 390 px page
-without CSP/runtime errors.</label></li>
-<li><label><input type="checkbox" checked></input>A fresh bounded real
-local smoke completed one OpenRouter STT → Luna → OpenRouter TTS turn
-with one final transcript, one final answer, two decoder-accepted MP3
-segments, and no booking. Earlier five-turn booking evidence remains in
-<a href="evidence/T30-observed-local-voice-smoke-2026-07-31.md"><code>../evidence/T30-observed-local-voice-smoke-2026-07-31.md</code></a>.</label></li>
-<li><label><input type="checkbox" checked></input><code>scripts/deploy-local.sh</code> completed from the
-candidate tree with read-only file secrets, migration, healthy
-app/Caddy, 60-second/2 MB runtime limits, and all dependency readiness
-checks ready at <code>http://localhost:5173</code>.</label></li>
-<li><label><input type="checkbox" checked></input>Compose contains only app
-and Caddy in the P0 application path; the OpenRouter key stays
-backend-only, and text-only TTS degradation is environment-configurable
-without rebuilding.</label></li>
-<li><label><input type="checkbox" checked></input>Backup/restore/rollback
-scripts, permission/checksum/integrity guards, readiness loops, and
-key-remount ordering pass credential-free deterministic validation and
-are documented for the owner.</label></li>
+<li><label><input type="checkbox"></input>Run the fresh credential-free
+deterministic suite and record its actual result/counts without copying
+RC2 numbers.</label></li>
+<li><label><input type="checkbox"></input>Run typecheck, lint/format checks,
+build, <code>scripts/build-spec.sh</code>,
+<code>scripts/validate-spec.py</code>, required stale searches, and
+<code>git diff --check</code>; record exact
+commands/results.</label></li>
+<li><label><input type="checkbox"></input>Confirm changed docs and generated
+spec describe the committed code/contracts/tests for proactive greeting,
+contextual candidates, and deterministic two-question qualification;
+keep active prompts/code/assets/tests/evals unchanged for this
+documentation candidate.</label></li>
+<li><label><input type="checkbox"></input>Run local Chrome acceptance for
+immediate greeting success plus blocked/error fallback, zero pre-consent
+REST/WS/mic/provider/session, greeting stop on session start,
+typed/spoken scheduling refresh, booking, and skipped/partial/complete
+qualification. Run Firefox/WebKit only when explicitly included and
+report each browser separately.</label></li>
+<li><label><input type="checkbox"></input>Run
+<code>scripts/deploy-local.sh</code> from the final RC3 tree and collect
+app/Caddy migration/readiness evidence; do not infer it from
+RC2.</label></li>
+<li><label><input type="checkbox"></input>With explicit owner approval, run
+bounded OpenRouter STT/TTS/Codex smoke(s) and report safe actual
+evidence. Default tests/spec validation do not spend provider
+usage.</label></li>
+<li><label><input type="checkbox"></input>Verify backup/restore/rollback
+procedure and retain <code>botamin-voice:0.5.0-local-rc.2</code> as the
+prior rollback image before recommending
+<code>v0.5.0-local-rc.3</code>.</label></li>
+<li><label><input type="checkbox"></input>Parent updates
+<code>MANIFEST.txt</code>, <code>CHECKSUMS.sha256</code>, and
+<code>VALIDATION.md</code> with final evidence; this documentation
+change does not modify them.</label></li>
 </ul>
-<p>Checked local gates do not imply target-host or cross-browser
-production acceptance. Local provider observations are not repeated by
-default checks.</p>
 <h3 id="later-target-release-gates-not-closed-by-local-rc">Later target
 release gates — not closed by local RC</h3>
 <ul class="task-list">
@@ -4866,21 +5114,19 @@ commercial operation.</label></li>
 <p>A real calendar event is intentionally out of scope rather than an
 unchecked release gate. The product stores an internal booking and
 notification outbox event only.</p>
-<h2 id="release-evidence-bundle">11. Release evidence bundle</h2>
-<p>The local RC bundle contains:</p>
+<h2 id="candidate-evidence-bundle">11. Candidate evidence bundle</h2>
+<p>The parent acceptance pass should add, after fresh observation:</p>
 <ul>
-<li>final commit SHA and exact uncreated tag recommendation;</li>
-<li>deterministic test/type/lint/build/spec/validator/checksum
-results;</li>
-<li>current MANIFEST/checksum file count;</li>
+<li>final commit SHA and uncreated <code>v0.5.0-local-rc.3</code>
+recommendation;</li>
+<li>actual deterministic test/type/lint/build/spec/validator results and
+separately generated checksum evidence;</li>
 <li>credential-free Compose config, shell/wrapper, and file-secret
-engine checks;</li>
-<li>redacted owner-observed T30 one-turn and five-turn real local path
-evidence;</li>
-<li>local Compose health/readiness and Chrome desktop/mobile acceptance
-observations supplied for T40;</li>
-<li>deployment, backup, restore, key rotation, stop, and rollback
-commands;</li>
+checks;</li>
+<li>browser results labeled by engine/viewport;</li>
+<li>deploy/readiness results and any explicitly approved paid-provider
+results;</li>
+<li>preserved RC2 rollback image and matching DB-backup guidance;</li>
 <li>known limitations and explicit WebKit/VPS/TLS blockers.</li>
 </ul>
 <p>Target-VPS compose/health/preflight/provider evidence and
@@ -5204,17 +5450,19 @@ guards;</li>
 <h3 id="t40-local-release-candidate">T40 — Local release candidate</h3>
 <p><strong>Владелец:</strong> A0 или release integrator<br />
 <strong>Зависимости:</strong> T31, T32.</p>
-<p><strong>Current label:</strong> <code>0.5.0-local-rc.2</code>.</p>
+<p><strong>Current label:</strong> <code>0.5.0-local-rc.3</code>; keep
+<code>0.5.0-local-rc.2</code> as rollback image.</p>
 <ul>
-<li>local P0 gates green on the integrated PR #21 baseline;</li>
-<li><code>scripts/deploy-local.sh</code> observed ready at
-<code>http://localhost:5173</code> with file-backed secrets;</li>
-<li>active docs/tasks/env/agent packets/diagrams/charts/sources contain
-no stale second voice provider, credential/path or provider-streaming
-STT instruction and match code;</li>
-<li>local evidence, known limitations, recovery instructions, and
-explicit later gates attached;</li>
-<li>release commit prepared without creating or pushing a Git tag;</li>
+<li>RC3 local P0 tests, spec validation, browser, deploy/readiness, and
+any approved provider smokes are candidate acceptance steps in docs
+08/11, not inherited claims from RC2;</li>
+<li>active docs describe committed proactive greeting, contextual
+two-candidate scheduling, and deterministic optional two-question
+qualification contracts;</li>
+<li>parent records final counts/checksums/SHA and observations in
+release evidence after fresh execution;</li>
+<li>release commit is prepared without creating or pushing a Git
+tag;</li>
 <li>WebKit and target VPS/DNS/TLS/WSS remain later gates and are not
 claimed by the local RC.</li>
 </ul>
@@ -5687,50 +5935,68 @@ booking/qualification проверяемыми и оставляет путь к
 </div>
 <h1 id="local-release-candidate-and-handoff">11. Local release candidate
 and handoff</h1>
-<p><strong>Release label:</strong> <code>0.5.0-local-rc.2</code></p>
+<p><strong>Release label:</strong> <code>0.5.0-local-rc.3</code></p>
 <p><strong>Recommended Git tag after owner acceptance:</strong>
-<code>v0.5.0-local-rc.2</code></p>
+<code>v0.5.0-local-rc.3</code></p>
 <p><strong>Tag state:</strong> recommendation only until the validated
 candidate is merged.</p>
 <p><strong>Scope:</strong> local hosting on one trusted machine. This is
 not a target-VPS or public TLS release.</p>
-<h2 id="local-p0-checklist">Local P0 checklist</h2>
-<ul class="task-list">
-<li><label><input type="checkbox" checked></input>The candidate extends the
-merged PR #24 baseline with the 60-second capture, typed conversation,
-scheduled booking, qualification, prompt, migration-compatibility, and
-refusal slices.</label></li>
-<li><label><input type="checkbox" checked></input>Fresh deterministic
-release-candidate suite passed 484 tests across 56 files with 0 failures
-and 4,104 assertions.</label></li>
-<li><label><input type="checkbox" checked></input>Typecheck, lint/format,
-build, deterministic spec/eval generation, validator, and the
-regenerated manifest/checksum set passed.</label></li>
-<li><label><input type="checkbox" checked></input>The committed <a href="evidence/T30-observed-local-voice-smoke-2026-07-31.md">T30
-owner-observed artifact</a> retains the earlier five-turn booking
-evidence; a fresh bounded candidate smoke completed one OpenRouter STT →
-Luna → OpenRouter TTS turn with decoder-accepted MP3 and no
-booking.</label></li>
-<li><label><input type="checkbox" checked></input><code>scripts/deploy-local.sh</code> completed from the
-candidate tree with mode-<code>0600</code> materialized files mounted
-read-only; migration, app/Caddy health, 60-second/2 MB runtime limits,
-and all dependency readiness checks passed.</label></li>
-<li><label><input type="checkbox" checked></input>Chrome accepted the
-strict-CSP worklet, countdown, typed refusal and 780/390 px overflow
-checks; Firefox headless rendered the 390 px page without CSP/runtime
-errors.</label></li>
-<li><label><input type="checkbox" checked></input>The local URL,
-file-backed secret workflow, device auth, readiness, metrics, recovery,
-and paid opt-in boundaries are documented below.</label></li>
-<li><label><input type="checkbox"></input>WebKit playback and complete journey
-acceptance — later gate, unobserved.</label></li>
-<li><label><input type="checkbox"></input>Target VPS deploy, DNS, TLS/WSS, and
-target-host paid smokes — later gate, unobserved.</label></li>
+<h2 id="rc3-scope">RC3 scope</h2>
+<ul>
+<li>committed product-owned same-origin proactive MP3 attempts playback
+once immediately on entry, with no conversation
+REST/WS/mic/provider/session before consent; blocked/error fallback is
+<code>Включить приветствие</code>, and real session start stops it;</li>
+<li>explicit admin-only opt-in OpenRouter script generates the fixed
+no-visitor-data asset before commit; visitor runtime never synthesizes
+it;</li>
+<li>server always offers exactly two current internal Moscow candidates:
+default morning+evening, contextual typed/spoken Russian
+preference/rejection refresh, selected in-band roughly hour-apart pair
+with weekday rollover, and no exhaustive global-availability claim;</li>
+<li>after committed booking and confirmation, exact consent question
+<code>Можно задать два коротких вопроса?</code> gates deterministic
+monthly-leads-then-manager-count collection; both-at-once, skipped, and
+partial outcomes preserve booking.</li>
 </ul>
-<p>The checked runtime/browser lines are observed handoff evidence, not
-claims that this T40 documentation pass repeated provider spending or
-cross-browser testing. Fresh credential-free checks for the release
-commit are recorded in <a href="VALIDATION.md"><code>VALIDATION.md</code></a>.</p>
+<h2 id="local-p0-candidate-checklist">Local P0 candidate checklist</h2>
+<p>RC3 acceptance has not been run by this documentation-only change. Do
+not copy RC2 test/assertion/checksum counts or present historical
+browser/deploy/provider evidence as RC3 evidence.</p>
+<ul class="task-list">
+<li><label><input type="checkbox"></input>Run fresh credential-free tests and
+record actual counts/results.</label></li>
+<li><label><input type="checkbox"></input>Run typecheck, lint/format checks,
+build, <code>scripts/build-spec.sh</code>,
+<code>scripts/validate-spec.py</code>, stale searches, and
+<code>git diff --check</code>; record exact results.</label></li>
+<li><label><input type="checkbox"></input>Run local Chrome acceptance for
+greeting autoplay success and blocked/error fallback, zero pre-consent
+REST/WS/mic/provider/session, greeting stop at session start,
+typed/spoken contextual slots, and skipped/partial/complete
+qualification.</label></li>
+<li><label><input type="checkbox"></input>Run
+<code>scripts/deploy-local.sh</code> from the final RC3 tree and record
+migration, app/Caddy health/readiness, limits, and file-secret
+evidence.</label></li>
+<li><label><input type="checkbox"></input>Run any OpenRouter STT/TTS/Codex
+smoke only with explicit paid-use approval; record actual safe evidence
+or leave not run.</label></li>
+<li><label><input type="checkbox"></input>Verify backup/restore/rollback
+readiness and preserve the immutable RC2 image shown below.</label></li>
+<li><label><input type="checkbox"></input>Parent records final SHA, counts,
+browser/deploy/provider observations, and release result in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>, then updates
+<code>MANIFEST.txt</code> and <code>CHECKSUMS.sha256</code>
+separately.</label></li>
+<li><label><input type="checkbox"></input>WebKit playback and complete journey
+acceptance — later gate unless explicitly run and recorded.</label></li>
+<li><label><input type="checkbox"></input>Target VPS deploy, DNS, TLS/WSS, and
+target-host paid smokes — later gate.</label></li>
+</ul>
+<p>The committed <a href="evidence/T30-observed-local-voice-smoke-2026-07-31.md">T30
+owner-observed artifact</a> remains historical evidence only; it does
+not close RC3 acceptance.</p>
 <h2 id="prerequisites-and-secure-bootstrap">Prerequisites and secure
 bootstrap</h2>
 <ul>
@@ -5780,40 +6046,47 @@ checks never spend OpenRouter usage.</p>
 <h2 id="paid-smokes-explicit-opt-in-only">Paid smokes: explicit opt-in
 only</h2>
 <p>Deployment, tests, health checks, and this release procedure do not
-call paid providers. Against an already-ready local server, an owner may
-deliberately run the integrated smoke; it spends OpenRouter STT/TTS and
-Codex subscription usage:</p>
-<div class="sourceCode" id="cb45"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="va">BOTAMIN_EXTERNAL_VOICE_E2E</span><span class="op">=</span>1 <span class="ex">bun</span> run scripts/local-voice-e2e-smoke.ts <span class="dt">\</span></span>
-<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--server-url</span> http://localhost:5173 <span class="dt">\</span></span>
-<span id="cb45-3"><a href="#cb45-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--origin</span> http://localhost:5173 <span class="dt">\</span></span>
-<span id="cb45-4"><a href="#cb45-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--fixture-turns</span> 1</span></code></pre></div>
+call paid providers. The proactive asset is regenerated only by an
+administrator’s explicit paid opt-in; this command overwrites the
+tracked static MP3 from fixed product copy, never visitor data, so
+inspect the result before committing:</p>
+<div class="sourceCode" id="cb45"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="va">BOTAMIN_GENERATE_PROACTIVE_GREETING</span><span class="op">=</span>1 <span class="dt">\</span></span>
+<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>  <span class="ex">bun</span> run scripts/generate-proactive-greeting.ts</span></code></pre></div>
+<p>This is not a deploy/startup/visitor command. Against an
+already-ready local server, an owner may deliberately run the integrated
+smoke; it spends OpenRouter STT/TTS and Codex subscription usage:</p>
+<div class="sourceCode" id="cb46"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="va">BOTAMIN_EXTERNAL_VOICE_E2E</span><span class="op">=</span>1 <span class="ex">bun</span> run scripts/local-voice-e2e-smoke.ts <span class="dt">\</span></span>
+<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--server-url</span> http://localhost:5173 <span class="dt">\</span></span>
+<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--origin</span> http://localhost:5173 <span class="dt">\</span></span>
+<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--fixture-turns</span> 1</span></code></pre></div>
 <p><code>ffmpeg</code> is mandatory for this non-browser decoder check.
 Use real bounded PCM files rather than <code>--fixture-turns</code> when
 synthetic input is not appropriate. Isolated STT/TTS image probes are
 also paid; export the deployed file paths first and run them only with
 explicit approval:</p>
-<div class="sourceCode" id="cb46"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="va">compose_secret_operation</span><span class="op">=</span>paid-smoke</span>
-<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a><span class="bu">.</span> ./scripts/compose-secret-files.sh</span>
-<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh stt</span>
-<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh tts</span></code></pre></div>
+<div class="sourceCode" id="cb47"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="va">compose_secret_operation</span><span class="op">=</span>paid-smoke</span>
+<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a><span class="bu">.</span> ./scripts/compose-secret-files.sh</span>
+<span id="cb47-3"><a href="#cb47-3" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh stt</span>
+<span id="cb47-4"><a href="#cb47-4" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh tts</span></code></pre></div>
 <h2 id="backup-restore-rotation-stop-and-rollback">Backup, restore,
 rotation, stop, and rollback</h2>
-<div class="sourceCode" id="cb47"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Online SQLite VACUUM INTO backup plus protected checksum sidecar</span></span>
-<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span></span>
-<span id="cb47-3"><a href="#cb47-3" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span> /data/backups/before-release.db</span>
-<span id="cb47-4"><a href="#cb47-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb47-5"><a href="#cb47-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Restore verifies permissions, checksum, integrity, migration, and readiness</span></span>
-<span id="cb47-6"><a href="#cb47-6" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/restore.sh</span> /data/backups/before-release.db</span>
-<span id="cb47-7"><a href="#cb47-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb47-8"><a href="#cb47-8" aria-hidden="true" tabindex="-1"></a><span class="co"># Stop while retaining named volumes</span></span>
-<span id="cb47-9"><a href="#cb47-9" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose stop</span>
-<span id="cb47-10"><a href="#cb47-10" aria-hidden="true" tabindex="-1"></a><span class="co"># Remove containers/network while retaining named volumes</span></span>
-<span id="cb47-11"><a href="#cb47-11" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose down</span>
-<span id="cb47-12"><a href="#cb47-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb47-13"><a href="#cb47-13" aria-hidden="true" tabindex="-1"></a><span class="co"># Roll back to an existing/pullable immutable image, optionally with its DB backup</span></span>
-<span id="cb47-14"><a href="#cb47-14" aria-hidden="true" tabindex="-1"></a><span class="va">PREVIOUS_IMAGE</span><span class="op">=</span>botamin-voice:0.5.0-local-rc.1-previoussha</span>
-<span id="cb47-15"><a href="#cb47-15" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/rollback.sh</span> <span class="st">&quot;</span><span class="va">$PREVIOUS_IMAGE</span><span class="st">&quot;</span></span>
-<span id="cb47-16"><a href="#cb47-16" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/rollback.sh</span> <span class="st">&quot;</span><span class="va">$PREVIOUS_IMAGE</span><span class="st">&quot;</span> /data/backups/before-release.db</span></code></pre></div>
+<div class="sourceCode" id="cb48"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Online SQLite VACUUM INTO backup plus protected checksum sidecar</span></span>
+<span id="cb48-2"><a href="#cb48-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span></span>
+<span id="cb48-3"><a href="#cb48-3" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span> /data/backups/before-release.db</span>
+<span id="cb48-4"><a href="#cb48-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb48-5"><a href="#cb48-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Restore verifies permissions, checksum, integrity, migration, and readiness</span></span>
+<span id="cb48-6"><a href="#cb48-6" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/restore.sh</span> /data/backups/before-release.db</span>
+<span id="cb48-7"><a href="#cb48-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb48-8"><a href="#cb48-8" aria-hidden="true" tabindex="-1"></a><span class="co"># Stop while retaining named volumes</span></span>
+<span id="cb48-9"><a href="#cb48-9" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose stop</span>
+<span id="cb48-10"><a href="#cb48-10" aria-hidden="true" tabindex="-1"></a><span class="co"># Remove containers/network while retaining named volumes</span></span>
+<span id="cb48-11"><a href="#cb48-11" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose down</span>
+<span id="cb48-12"><a href="#cb48-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb48-13"><a href="#cb48-13" aria-hidden="true" tabindex="-1"></a><span class="co"># Keep RC2 as the existing/pullable immutable rollback image for RC3.</span></span>
+<span id="cb48-14"><a href="#cb48-14" aria-hidden="true" tabindex="-1"></a><span class="co"># Use the exact immutable registry reference/digest retained by the owner if available.</span></span>
+<span id="cb48-15"><a href="#cb48-15" aria-hidden="true" tabindex="-1"></a><span class="va">PREVIOUS_IMAGE</span><span class="op">=</span>botamin-voice:0.5.0-local-rc.2</span>
+<span id="cb48-16"><a href="#cb48-16" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/rollback.sh</span> <span class="st">&quot;</span><span class="va">$PREVIOUS_IMAGE</span><span class="st">&quot;</span></span>
+<span id="cb48-17"><a href="#cb48-17" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/rollback.sh</span> <span class="st">&quot;</span><span class="va">$PREVIOUS_IMAGE</span><span class="st">&quot;</span> /data/backups/before-release.db</span></code></pre></div>
 <p>Never use <code>docker compose down -v</code>. SQLite migrations are
 forward-only; use the matching pre-release backup if an older image
 cannot read the current schema.</p>
@@ -5836,10 +6109,18 @@ are not a benchmark or target-host SLO.</li>
 unobserved.</li>
 <li>Target VPS resource behavior, DNS, public TLS/WSS, and target-host
 provider smokes remain unobserved.</li>
+<li>The proactive greeting is a committed static product MP3. Browser
+autoplay remains policy-dependent; failure must leave the explicit
+<code>Включить приветствие</code> control. Regeneration is
+paid/admin-only and not a visitor-runtime action.</li>
 <li>The booking is an internal SQLite record plus notifier outbox event.
-The internal scheduler excludes committed starts, but no real calendar
-event, external availability check, CRM record, or meeting invitation is
+The scheduler always returns two current alternatives, not all global
+availability; it excludes committed starts, but no real calendar event,
+external availability check, CRM record, or meeting invitation is
 created.</li>
+<li>Optional qualification is complete only with both monthly inbound
+leads and integer sales-manager count. Skip/partial/failure never
+removes the booking.</li>
 <li>OpenRouter model/voice availability, paid rates, Codex subscription
 limits, and plan suitability are runtime/owner checks, not release
 guarantees.</li>

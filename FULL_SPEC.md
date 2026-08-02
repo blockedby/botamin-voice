@@ -165,16 +165,17 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 | ID | История | Приёмка |
 |---|---|---|
-| US-001 | Как посетитель, я запускаю разговор одной кнопкой | после двух consents запрашивается mic permission, UI показывает состояние |
+| US-000 | Как посетитель, я сразу слышу короткое представление продукта | при entry выполняется одна попытка committed same-origin MP3 без REST/WS/mic/provider/session; blocked/error даёт `Включить приветствие` |
+| US-001 | Как посетитель, я запускаю разговор одной кнопкой | proactive greeting останавливается; только после двух consents запрашивается mic permission и создаётся session, UI показывает состояние |
 | US-002 | Я говорю естественно по-русски | UI показывает sample-derived circular countdown во время capture, listening/processing, затем ровно один `transcript.final` |
 | US-003 | Я печатаю финальную реплику | stage-gated composer отправляет provider-neutral `visitor.text.submit`; server-accepted typed turn проходит тот же semantic pipeline, что и speech |
 | US-004 | Агент отвечает голосом и текстом | первая полная MP3-фраза может проиграться до завершения ответа Luna; ответ не содержит markdown-мусора |
 | US-005 | Агент понимает, зачем я пришёл | задаёт не более одного вопроса за раз и максимум два discovery-вопроса до мягкого предложения следующего шага |
 | US-006 | Агент объясняет Botamin на релевантном примере | использует только утверждённые knowledge claims; 10–15 млн ₽/месяц — только атрибутированное сообщение пользовательского брифа, не гарантия |
 | US-007 | Я могу возразить или перебить | проигрывание останавливается, новый turn обрабатывается |
-| US-008 | Я соглашаюсь на встречу | агент предлагает ровно два server-supplied слота, собирает обязательные данные и вызывает `create_booking` с выбранным кандидатом |
-| US-009 | После брони я могу ответить на два доп. вопроса | после confirmation и consent месячный inbound volume и integer `salesManagerCount` патчат ту же бронь |
-| US-010 | Я могу отказаться от квалификации | бронь остаётся `booked`, диалог корректно завершается |
+| US-008 | Я соглашаюсь на встречу | агент предлагает ровно два текущих server-supplied слота, не выдавая их за всю глобальную доступность; предпочтение части дня обновляет пару, после чего агент собирает обязательные данные и вызывает `create_booking` с выбранным кандидатом |
+| US-009 | После брони я могу ответить на два доп. вопроса | после commit, confirmation и точного вопроса `Можно задать два коротких вопроса?` explicit consent запускает monthly inbound volume, затем integer `salesManagerCount`; оба ответа одной репликой тоже допустимы |
+| US-010 | Я могу отказаться от квалификации | без ответов статус `skipped`, после одного ответа `partial`; бронь в обоих случаях остаётся `booked`, диалог корректно завершается |
 | US-011 | Получатель видит данные | console/webhook получает структурированный payload со слотом |
 | US-012 | Сервис перезапускается | сохранённые booking/event данные остаются в volume |
 | US-013 | Проект сначала разворачивается локально | `scripts/deploy-local.sh` поднимает готовые app + Caddy на `http://localhost:5173`; target VPS/TLS проверяется отдельным later gate |
@@ -210,31 +211,34 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-BRAIN-006:** system/product/conversation prompts загружаются из Markdown.
 - **FR-BRAIN-007:** tool mode имеет feature flag: `dynamic` и стабильный fallback `envelope`.
 - **FR-BRAIN-008:** reasoning effort задаётся конфигурацией; стартовый профиль Luna использует минимальный уровень, который проходит quality evals.
-- **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, а также ровно два structured meeting candidates с server-generated Russian `displayLabel`.
+- **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, parsed time-of-day preference/rejection и ровно два structured meeting candidates с server-generated Russian `displayLabel`.
 - **FR-BRAIN-010:** cadence умеренно проактивен: один вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting offer, без повторного давления после ясного отказа.
 
 ### 4.3 Booking
 
 - **FR-BOOK-001:** обязательны `conversationId`, имя, компания, рабочий email, телефон или Telegram, `consentConfirmed=true` и structured `meetingSlot`.
-- **FR-BOOK-002:** server выдаёт ровно два уникальных внутренних кандидата длительностью 20 минут в `Europe/Moscow`: будни, дата строго позже server-owned московского today, старты по 20-минутной сетке от 09:00 до 17:00 включительно.
-- **FR-BOOK-003:** `create_booking` разрешён только в `COLLECT_BOOKING`; выбранный `meetingSlot` обязан byte-for-field совпасть с одним из двух candidates активного turn. Non-candidate, stale, occupied или уже не bookable slot отклоняется.
-- **FR-BOOK-004:** `create_booking` атомарен и идемпотентен по `conversationId`/`idempotencyKey`; уникальны conversation и non-null internal `meeting_start_at`.
-- **FR-BOOK-005:** успешный tool всегда возвращает стабильный `bookingId`.
-- **FR-BOOK-006:** committed `booking.created` и user-facing confirmation предшествуют consent на qualification и первому qualification question.
-- **FR-BOOK-007:** backend сохраняет внутреннюю бронь и outbox event, но не создаёт внешнее calendar event/invitation, не вызывает external availability API и не создаёт CRM record.
-- **FR-BOOK-008:** in-chat form показывается только по server-owned `COLLECT_BOOKING`, валидирует name/company/working email/phone-or-Telegram и сериализует данные как обычную visitor typed turn; форма не вызывает tool и не подтверждает бронь.
+- **FR-BOOK-002:** server всегда выдаёт ровно два уникальных внутренних кандидата длительностью 20 минут в `Europe/Moscow`: будни, дата строго позже server-owned московского today, старты по 20-минутной сетке от 09:00 до 17:00 включительно. Без preference это одна утренняя и одна вечерняя альтернатива.
+- **FR-BOOK-003:** bounded Russian parser одинаково обрабатывает typed/spoken явные предпочтения `morning`, `daytime`, `second_half`, `evening` и одно явное rejection. Выбранная часть дня даёт два in-band варианта примерно в часе друг от друга; если пара занята, server ищет ближайшую in-band пару и при необходимости переносит предложение на следующий подходящий будний день. Rejection исключает отклонённую часть дня.
+- **FR-BOOK-004:** два candidates — только текущие внутренние альтернативы, не exhaustive/global availability claim. Они исключают committed internal starts без external availability API.
+- **FR-BOOK-005:** `create_booking` разрешён только в `COLLECT_BOOKING`; выбранный `meetingSlot` обязан byte-for-field совпасть с одним из двух candidates активного turn. Non-candidate, stale, occupied или уже не bookable slot отклоняется.
+- **FR-BOOK-006:** `create_booking` атомарен и идемпотентен по `conversationId`/`idempotencyKey`; уникальны conversation и non-null internal `meeting_start_at`.
+- **FR-BOOK-007:** успешный tool всегда возвращает стабильный `bookingId`.
+- **FR-BOOK-008:** committed `booking.created` и user-facing confirmation с точным consent-вопросом `Можно задать два коротких вопроса?` предшествуют consent на qualification и первому qualification question.
+- **FR-BOOK-009:** backend сохраняет внутреннюю бронь и outbox event, но не создаёт внешнее calendar event/invitation, не вызывает external availability API и не создаёт CRM record.
+- **FR-BOOK-010:** in-chat form показывается только по server-owned `COLLECT_BOOKING`, валидирует name/company/working email/phone-or-Telegram и сериализует данные как обычную visitor typed turn; форма не вызывает tool и не подтверждает бронь.
 
 ### 4.4 Post-booking qualification
 
 - **FR-QUAL-001:** запускается только при committed `booking.status=booked` и после user-facing booking confirmation.
 - **FR-QUAL-002:** пользователь отдельно и явно соглашается на дополнительные вопросы; booking action envelope того же turn не может выдать это согласие.
-- **FR-QUAL-003:** conversational collection ограничен двумя полями: `monthlyLeadVolume` только для месячного объёма входящих лидов и `salesManagerCount` как integer `0..10000`.
-- **FR-QUAL-004:** оба поля необязательны и могут сохраняться partial patch-операцией; остальные legacy schema fields не являются вопросами текущего flow.
-- **FR-QUAL-005:** disconnect/decline переводит qualification в `partial` или `skipped`, но booking остаётся `booked`.
+- **FR-QUAL-003:** server детерминированно спрашивает по одному: сначала месячный объём входящих лидов (`monthlyLeadVolume`), затем число менеджеров продаж (`salesManagerCount`) как integer `0..10000`. Модель не может изменить порядок или досрочно объявить completion.
+- **FR-QUAL-004:** оба поля необязательны для booking и могут сохраняться partial patch-операцией; qualification получает `complete` только при наличии обоих. Если пользователь сообщает оба одновременно, оба сохраняются и flow завершается. Остальные legacy schema fields не являются вопросами текущего flow.
+- **FR-QUAL-005:** explicit refusal без ответов даёт `skipped`; refusal после одного ответа сохраняет `partial`; disconnect/failure не отменяет committed booking, которая остаётся `booked`.
 - **FR-QUAL-006:** повторный patch идемпотентен.
 
 ### 4.5 Landing and UX
 
+- **FR-WEB-000:** при entry выполняется ровно одна automatic playback attempt committed product-owned same-origin MP3. До двух consents запрещены conversation REST, WS, mic, provider и session effects; blocked/error показывает native button `Включить приветствие`, а session start немедленно останавливает и освобождает audio.
 - **FR-WEB-001:** above-the-fold объясняет продукт и содержит один primary CTA.
 - **FR-WEB-002:** до запуска голоса показывается понятное объяснение микрофона и обработки данных.
 - **FR-WEB-003:** UI имеет состояния `idle`, `connecting`, `listening`, `thinking`, `speaking`, `booked`, `complete`, `error`.
@@ -242,6 +246,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-WEB-005:** booking details form существует внутри chat и видима только в `COLLECT_BOOKING`, полученном через server `state.changed`/`session.ready`, а не из transcript wording.
 - **FR-WEB-006:** mobile viewport поддерживается.
 - **FR-WEB-007:** при voice failure пользователю не показываются stack traces/provider details.
+- **FR-WEB-008:** proactive MP3 содержит только фиксированный product copy без visitor data. Его замена выполняется отдельным explicit admin opt-in OpenRouter generation script и commit-ится как static asset; runtime visit не генерирует greeting.
 
 ## 5. P1 и P2
 
@@ -319,7 +324,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 ## 9. Release sequencing boundary
 
-`0.5.0-local-rc.2` is accepted only for local hosting on a trusted owner machine. Chrome desktop/mobile and local Compose evidence can close local gates, but cannot close WebKit, target-VPS resource behavior, DNS, public TLS/WSS, or target-host paid-smoke gates. The internal booking remains deliberately different from a real calendar event.
+`0.5.0-local-rc.3` is a local-only candidate for one trusted owner machine. Candidate acceptance still requires the fresh steps in docs 08/11; prior RC2 observations are not evidence that RC3 browser, deploy, or provider gates ran. Local Chrome/Compose evidence, when freshly collected, cannot close WebKit, target-VPS resource behavior, DNS, public TLS/WSS, or target-host paid-smoke gates. The internal booking remains deliberately different from a real calendar event.
 
 
 <div class="page-break"></div>
@@ -420,7 +425,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 ### Блок 5. Voice demo
 
-Sticky/inline widget с transcript, статусом и одной главной кнопкой.
+Sticky/inline widget с transcript, статусом и одной главной кнопкой. При входе он один раз пытается проиграть committed product-owned same-origin MP3-приветствие. Это product preview, а не voice session: до consent нет conversation REST/WS, microphone или provider call. Если autoplay заблокирован или media не загрузилось, показывается `Включить приветствие`; запуск разговора останавливает приветствие.
 
 ### Блок 6. Trust and limits
 
@@ -436,8 +441,8 @@ Sticky/inline widget с transcript, статусом и одной главно�
 
 | Stage | Цель | Главный event | Drop-off reason examples |
 |---|---|---|---|
-| Visit | понять ценность | `landing.viewed` | неясный оффер |
-| Voice start | снять страх mic | `conversation.started` | permission denied |
+| Visit | понять ценность и услышать короткий static product greeting | `landing.viewed` | autoplay blocked → явная `Включить приветствие` |
+| Voice start | получить оба consent до session/mic/provider path | `conversation.started` | permission denied |
 | Discovery | найти задачу максимум за два вопроса до мягкого offer | `discovery.completed` | слишком много вопросов |
 | Value | связать pain и use case | `value.presented` | общая презентация |
 | Intent | получить согласие на следующий шаг | `booking.offered` | нет доверия/времени |
@@ -460,12 +465,14 @@ Sticky/inline widget с transcript, статусом и одной главно�
 
 Текущий funnel умеренно проактивен: агент задаёт по одному вопросу и не более двух discovery-вопросов до краткого мягкого предложения demo/встречи. После ясного отказа предложение не повторяется.
 
-После согласия агент предлагает ровно два labeled candidates из server context. Новая внутренняя бронь требует name, company, working email, phone or Telegram, consent и один выбранный structured 20-minute `Europe/Moscow` slot. Внешний календарь и external availability API отсутствуют.
+После согласия агент предлагает ровно два labeled candidates из server context и не называет их всей доступностью. Без предпочтения server даёт одну утреннюю и одну вечернюю альтернативу. Typed и spoken русские формулировки про утро, день, вторую половину дня или вечер обновляют контекст: выбранная часть дня даёт два in-band варианта примерно в часе друг от друга, occupied band переносится на следующий подходящий будний день, а явный rejection исключает отклонённую часть. Все варианты — 20 минут, будни, не сегодня, старты 09:00–17:00 по Москве. Новая внутренняя бронь требует name, company, working email, phone or Telegram, consent и один текущий candidate. Внешний календарь и external availability API отсутствуют.
 
-Квалификация начинается только после committed booking, user-facing confirmation и отдельного consent. Она ограничена двумя необязательными вопросами:
+Квалификация начинается только после committed booking и user-facing confirmation с точным вопросом `Можно задать два коротких вопроса?`. После отдельного явного consent server задаёт по одному и в фиксированном порядке:
 
-- месячный объём **входящих** лидов (`monthlyLeadVolume`);
-- явное целое число менеджеров продаж (`salesManagerCount`).
+1. месячный объём **входящих** лидов (`monthlyLeadVolume`);
+2. явное целое число менеджеров продаж (`salesManagerCount`).
+
+`complete` возможен только при обоих значениях; ответ на оба сразу допустим. Отказ без ответов даёт `skipped`, после одного — `partial`; внутренняя бронь остаётся `booked`.
 
 ## 9. Контентные риски
 
@@ -492,7 +499,9 @@ Sticky/inline widget с transcript, статусом и одной главно�
 - **Bun gateway/utterance assembler** — единственный владелец utterance buffers, PCM16 bounds и PCM16-to-WAV encoding;
 - **Bun backend** — владелец state, tools, credentials, voice budgets и persistence.
 
-Действующий pipeline: **browser PCM16 chunks → gateway/utterance assembler bounds mono PCM16 and emits one validated WAV → atomic `audio/wav` SttPort request → OpenRouter audio-input chat completion final transcript → Codex/Luna → OpenRouter TTS complete MP3 segment**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint.
+До этого pipeline существует отдельный pre-consent path: page entry делает одну `HTMLAudio` playback attempt committed same-origin `/assets/botamin-proactive-greeting.mp3`. Он не создаёт conversation, REST/WS, microphone, provider call или session; blocked/error переводит UI к `Включить приветствие`, а session start останавливает/release-ит audio.
+
+Действующий post-consent pipeline: **browser PCM16 chunks → gateway/utterance assembler bounds mono PCM16 and emits one validated WAV → atomic `audio/wav` SttPort request → OpenRouter audio-input chat completion final transcript → Codex/Luna → OpenRouter TTS complete MP3 segment**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint. Static proactive MP3 не входит в этот runtime pipeline.
 
 Это отличается от end-to-end speech-to-speech: добавляется один orchestration layer, зато используется уже оплаченная Codex subscription и мозг можно заменить без переделки audio UI.
 
@@ -502,7 +511,9 @@ Sticky/inline widget с transcript, статусом и одной главно�
 
 Ответственность:
 
-- mic permission;
+- ровно одна immediate entry attempt fixed same-origin proactive MP3 без session/network capabilities кроме same-origin asset fetch;
+- truthful `Включить приветствие` fallback после autoplay block/media error и release greeting при session start;
+- mic permission только после обоих consents;
 - AudioWorklet capture;
 - resample browser audio до mono PCM16 16 kHz;
 - отправка бинарных PCM16 чанков около 100 ms;
@@ -516,7 +527,7 @@ Sticky/inline widget с transcript, статусом и одной главно�
 - rendering transcript/state/errors;
 - reconnect с тем же `conversationId`, если сессия ещё жива.
 
-Клиент не знает OpenRouter или Codex credentials и не вызывает providers напрямую.
+Клиент не знает OpenRouter или Codex credentials и не вызывает providers напрямую. До consent он также не вызывает conversation REST/WS и не запрашивает microphone; static asset delivery не является provider/session traffic.
 
 ### Bun API / WebSocket gateway
 
@@ -538,7 +549,8 @@ Sticky/inline widget с transcript, статусом и одной главно�
 Источник истины для:
 
 - текущего stage;
-- server-owned current Moscow date/day и ровно двух structured/labeled internal meeting candidates;
+- server-owned current Moscow date/day, bounded typed/spoken Russian time-of-day preference/rejection и ровно двух structured/labeled internal meeting candidates;
+- refresh candidate context при выборе `morning`/`daytime`/`second_half`/`evening` или explicit rejection;
 - разрешённых actions, включая rejection любого create-booking slot вне active candidate tuple;
 - qualification gating по committed booking, delivered confirmation и отдельному consent;
 - booking lifecycle;
@@ -596,11 +608,15 @@ P0 transport — direct typed JSON-RPC к app-server. Универсальный
 ### BookingService
 
 - генерирует ровно два deterministic internal 20-minute candidates после текущей московской даты, только по будням и по 20-minute grid с 09:00 до 17:00 starts;
-- исключает уже committed internal start times без external calendar/availability API;
+- без preference выбирает одну утреннюю и одну вечернюю альтернативу;
+- для selected `morning`/`daytime`/`second_half`/`evening` выбирает две in-band точки примерно в часе друг от друга; если occupied starts не оставляют такую пару, ищет ближайшую допустимую пару и при необходимости переносит обе на следующий будний день;
+- для одного explicit rejection исключает rejected band и формирует две альтернативы из оставшихся policy bands;
+- исключает уже committed internal start times без external calendar/availability API и никогда не представляет tuple как exhaustive/global availability;
 - валидирует name, company, working email, phone or Telegram, consent и structured `Europe/Moscow` slot;
 - повторно проверяет slot по текущему server clock и отклоняет stale/non-bookable или internally occupied start до side effect; active-candidate membership до вызова сервиса проверяет orchestrator/tool policy;
 - создаёт/находит booking в одной `BEGIN IMMEDIATE` transaction;
 - обновляет qualification patch для существующей committed booking; confirmation/consent gating до вызова сервиса принадлежит orchestrator/tool policy;
+- вычисляет qualification truth из сохранённых полей: zero+refusal=`skipped`, one=`partial`, both=`complete`; booking status остаётся `booked`;
 - пишет event outbox;
 - никогда не удаляет booking из-за incomplete qualification.
 
@@ -620,13 +636,21 @@ P0 adapter — structured console JSON. P1 — signed HTTP webhook с retry/outb
 
 ![Turn sequence](diagrams/02-turn-sequence.svg)
 
-### Порядок
+### Pre-session entry
+
+1. Browser монтирует greeting controller и немедленно ровно один раз вызывает playback фиксированного same-origin MP3.
+2. Autoplay block или media error не запускает alternate network/provider path: UI показывает `Включить приветствие`, и повтор возможен только по user action.
+3. До обоих consents не создаются conversation/WS/microphone/provider/session. При старте настоящей session greeting немедленно pause/reset/release.
+
+Asset создаётся отдельно от visitor runtime: admin явно запускает opt-in `scripts/generate-proactive-greeting.ts`, script синтезирует фиксированный product copy через OpenRouter, валидирует bounded complete MP3 и заменяет committed asset. В asset нет visitor input/data; обычный entry никогда его не генерирует.
+
+### Post-consent turn order
 
 1. Browser отправляет примерно 100 ms PCM16 chunks; gateway/utterance assembler собирает их в bounded utterance.
 2. End-of-turn / `audio.commit` закрывает реплику. Gateway/utterance assembler проверяет duration/bytes, создаёт и валидирует ровно один mono PCM16 WAV.
 3. Gateway передаёт WAV атомарному `SttPort`; OpenRouter STT adapter повторно валидирует/bounds already-WAV request, base64-кодирует его и отправляет один `input_audio` chat completion.
 4. Только валидный неустаревший final transcript становится user turn и публикуется как `transcript.final`. Альтернативно, monotonic `visitor.text.submit` очищает uncommitted microphone bytes и создаёт такой же final turn без STT; до server `transcript.final` typed input не считается принятым.
-5. Orchestrator добавляет stage, known facts, booking status, server-owned current Moscow date/day и ровно два structured candidates с generated `displayLabel`; Codex thread получает `turn/start` ровно один раз независимо от typed/spoken origin.
+5. Orchestrator одинаково парсит typed/spoken final text на bounded Russian time-of-day preference/rejection, refresh-ит candidates, затем добавляет stage, known facts, booking status, server-owned current Moscow date/day, preference state и ровно два structured candidates с generated `displayLabel`; Codex thread получает `turn/start` ровно один раз независимо от input origin.
 6. Text deltas проходят PII-safe sanitizer и bounded phrase chunker.
 7. Законченная короткая фраза отправляется в OpenRouter TTS; один request соответствует одному segment.
 8. После проверки один полный `audio/mpeg` segment идёт в browser ordered playback queue.
@@ -674,6 +698,8 @@ export interface BrainTurnInput {
     currentInstant: string;
     moscowLocalDate: string;
     moscowWeekday: string;
+    timeOfDayPreference: "none" | "morning" | "daytime" | "second_half" | "evening";
+    rejectedTimeOfDayPreferences: Array<"morning" | "daytime" | "second_half" | "evening">; // max 1
     candidateMeetingSlots: [
       { meetingSlot: MeetingSlot; displayLabel: string },
       { meetingSlot: MeetingSlot; displayLabel: string }
@@ -982,6 +1008,9 @@ STORE_RAW_AUDIO=false
 
 ## 2. Поведенческие правила P0
 
+- до consent отдельный static greeting один раз пытается произнести фиксированный product copy; это не conversation turn и не запуск session;
+- при autoplay block/error показывать `Включить приветствие`, не заявляя, что звук прозвучал;
+- session start останавливает static greeting до REST/WS/mic/provider flow;
 - представиться как AI-продавец Botamin;
 - не маскироваться под человека;
 - одна реплика обычно 1–3 коротких предложения;
@@ -996,9 +1025,16 @@ STORE_RAW_AUDIO=false
 - контакт повторять для подтверждения только при низкой уверенности STT;
 - печатный и голосовой final input равнозначны по смыслу и проходят один state/tool flow;
 - booking confirmation произносить только после committed tool success;
-- qualification начинается только после confirmation и отдельного согласия и содержит максимум два целевых вопроса.
+- после confirmation задать точно `Можно задать два коротких вопроса?` и не считать booking action envelope согласием;
+- qualification начинается только после отдельного явного согласия: server спрашивает leads, затем manager count, по одному; completion только при обоих.
 
 ## 3. Conversation policy по stages
+
+### PRE-CONSENT STATIC GREETING
+
+На entry browser немедленно и ровно один раз пытается проиграть committed same-origin `/assets/botamin-proactive-greeting.mp3` с фиксированным product copy. До consent этот controller не имеет conversation REST/WS, microphone, provider или session capabilities. `NotAllowedError`/media error раскрывает только user-action fallback `Включить приветствие`; начало real session останавливает и освобождает MP3.
+
+Asset не содержит visitor data: администратор отдельно и явно запускает opt-in OpenRouter generation script для фиксированного текста, проверяет MP3 и commit-ит результат. Runtime visitor не инициирует генерацию.
 
 ### GREETING
 
@@ -1039,7 +1075,9 @@ STORE_RAW_AUDIO=false
 
 ### COLLECT_BOOKING
 
-После согласия назвать ровно два `schedulingContext.candidateMeetingSlots` по их server-generated `displayLabel`. Не вычислять и не переформатировать дату, день недели, время или доступность.
+После согласия назвать ровно два `schedulingContext.candidateMeetingSlots` по их server-generated `displayLabel`. Это две текущие внутренние альтернативы, а не вся глобальная доступность. Не вычислять и не переформатировать дату, день недели, время или доступность.
+
+Без предпочтения server даёт один morning и один evening candidate. Явная typed/spoken русская формулировка про утро, день, вторую половину дня или вечер обновляет context и даёт два in-band варианта примерно в часе друг от друга; при занятости server переносит пару на следующий подходящий будний день. Явный отказ от части дня исключает эту часть. Все варианты: 20 минут, будни, не сегодня, starts 09:00–17:00 по Москве.
 
 Обязательный набор:
 
@@ -1056,13 +1094,18 @@ STORE_RAW_AUDIO=false
 
 После `create_booking`:
 
-> Внутренняя бронь на выбранное время зафиксирована. Внешнее календарное событие или приглашение не создавалось; коллега сможет связаться по сохранённому контакту. Можно задать ещё два необязательных вопроса?
+> Всё получила и зафиксировала. Календарная встреча пока не создана: коллега свяжется по указанному контакту. Можно задать два коротких вопроса?
 
-Формулировку про отсутствие календаря можно сделать менее технической в production copy, но нельзя утверждать обратное.
+Последнее предложение — точный consent-вопрос current server contract. Формулировку про отсутствие календаря можно сделать менее технической только вместе с изменением server-authored contract/tests; нельзя утверждать, что external event уже создан.
 
 ### POST_BOOKING_QUALIFICATION
 
-Только после committed booking, user-facing confirmation и отдельного явного consent спросить по одному: месячный объём входящих лидов (`monthlyLeadVolume`) и целое число менеджеров продаж (`salesManagerCount`). Оба поля необязательны; после содержательного ответа допустим partial patch. Другие поля расширенной legacy schema не входят в текущий conversational flow.
+Только после committed booking, user-facing confirmation и точного consent-вопроса `Можно задать два коротких вопроса?` отдельное явное согласие открывает qualification. Server, а не модель, детерминированно задаёт по одному:
+
+1. `Сколько входящих лидов приходит за месяц?` → `monthlyLeadVolume`;
+2. `Сколько менеджеров по продажам работает в вашей команде?` → integer `salesManagerCount`.
+
+В обычном ходе второй вопрос появляется только после первого ответа. Если пользователь сразу сообщает оба значения, сохранить оба и завершить. `complete` разрешён только при обоих полях; отказ без ответов даёт `skipped`, после одного — сохраняет `partial`. Оба поля необязательны для уже committed booking, которая всегда остаётся `booked`. Другие поля расширенной legacy schema не входят в текущий conversational flow.
 
 ### COMPLETE
 
@@ -1100,6 +1143,8 @@ STORE_RAW_AUDIO=false
     "currentInstant": "2026-08-02T08:00:00.000Z",
     "moscowLocalDate": "2026-08-02",
     "moscowWeekday": "воскресенье",
+    "timeOfDayPreference": "none",
+    "rejectedTimeOfDayPreferences": [],
     "candidateMeetingSlots": [
       {
         "meetingSlot": {
@@ -1112,12 +1157,12 @@ STORE_RAW_AUDIO=false
       },
       {
         "meetingSlot": {
-          "startAt": "2026-08-03T06:20:00.000Z",
-          "endAt": "2026-08-03T06:40:00.000Z",
+          "startAt": "2026-08-03T13:00:00.000Z",
+          "endAt": "2026-08-03T13:20:00.000Z",
           "timeZone": "Europe/Moscow",
           "durationMinutes": 20
         },
-        "displayLabel": "03 августа 2026 года, понедельник, 09:20–09:40 по Москве"
+        "displayLabel": "03 августа 2026 года, понедельник, 16:00–16:20 по Москве"
       }
     ]
   },
@@ -1157,7 +1202,7 @@ Prompt compiler:
 - собирает `/app/runtime-brain/AGENTS.md` — основной instruction source для Codex thread;
 - при необходимости копирует туда только разрешённые read-only knowledge-файлы; исходный repository туда не монтируется;
 - при `thread/start` проверяет, что `instructionSources` содержит ожидаемый `AGENTS.md`;
-- перед каждым `turn/start` добавляет compact machine-generated context envelope: stage, known facts, booking snapshot, server-owned current Moscow date/day, ровно два structured/labeled candidates, allowed actions и финальный текст пользователя независимо от typed/spoken origin;
+- перед каждым `turn/start` одинаково разбирает typed/spoken preference/rejection и добавляет compact machine-generated context envelope: stage, known facts, booking snapshot, server-owned current Moscow date/day, preference state, ровно два structured/labeled current candidates, allowed actions и финальный текст пользователя;
 - логирует только version/hash, не весь prompt;
 - поддерживает hot reload только в development: новый prompt version применяется к новым conversations, а активные сохраняют исходную версию.
 
@@ -1186,11 +1231,11 @@ LLM вызывает только когда:
 - выбран один из ровно двух candidates активного server context;
 - consent подтверждён server-side.
 
-Backend сверяет выбранный `meetingSlot` с обоими active candidates и отклоняет любой non-candidate/stale/occupied slot. Это внутренняя 20-minute бронь без external calendar event, invitation или availability API.
+Backend сверяет выбранный `meetingSlot` с обоими active candidates и отклоняет любой non-candidate/stale/occupied slot. Tuple не означает exhaustive availability: preference/rejection refresh заменяет обе текущие альтернативы. Это внутренняя 20-minute бронь без external calendar event, invitation или availability API.
 
 ### `append_booking_qualification`
 
-LLM вызывает только после committed `bookingId`, user-facing confirmation и отдельного qualification consent. Текущий flow патчит только `monthlyLeadVolume` и integer `salesManagerCount`; patch может быть частичным.
+LLM вызывает только после committed `bookingId`, user-facing confirmation и отдельного explicit qualification consent. Server задаёт monthly leads первым и manager count вторым, а status выводит из фактически сохранённых полей, не из заявления модели: one=`partial`, both=`complete`; empty refusal=`skipped`. Текущий flow патчит только `monthlyLeadVolume` и integer `salesManagerCount`; оба значения одной репликой разрешены.
 
 Backend возвращает safe result:
 
@@ -1246,8 +1291,8 @@ Backend возвращает safe result:
 6. Агент: называет ровно два server-supplied Moscow candidates.
 7. Пользователь: typed form/репликой даёт имя, компанию, рабочий email, Telegram и выбирает первый slot; consent уже подтверждён server context.
 8. Backend: валидирует candidate и commit-ит `booking.created` без внешнего календарного события.
-9. Агент: подтверждает внутреннюю бронь; просит разрешение максимум на два доп. вопроса.
-10. Пользователь: соглашается и сообщает месячный объём входящих лидов и целое число менеджеров продаж.
+9. Server-authored confirmation: подтверждает внутреннюю бронь и точно спрашивает `Можно задать два коротких вопроса?`.
+10. Пользователь: явно соглашается; server задаёт вопрос про месячный объём входящих лидов. Пользователь может сразу сообщить и целое число менеджеров продаж, тогда оба поля сохраняются за один turn.
 11. Backend: `booking.updated`.
 12. Агент: кратко суммирует и завершает.
 
@@ -1279,12 +1324,14 @@ Backend возвращает safe result:
 - Ошибки providers не пробрасываются клиенту напрямую.
 - Binary WebSocket frames несут client PCM16 input или один полный server MP3 phrase payload; arbitrary provider network chunks никогда не публикуются как playable audio.
 - Tool handlers не доступны как публичные HTTP endpoints.
+- Proactive greeting не является API/session contract: page entry делает один same-origin GET/playback static MP3, без conversation REST/WS/mic/provider/session до обоих consents. Blocked/error fallback — `Включить приветствие`; session start прекращает static playback.
+- Committed proactive MP3 содержит только fixed product copy без visitor data. Его может заменить только explicit admin opt-in OpenRouter generation script; visitor runtime его не синтезирует.
 
 ## 2. REST endpoints
 
 ### `POST /api/v1/conversations`
 
-Создать сессию.
+Создать сессию. Browser не вызывает endpoint, пока `voiceProcessing` и `contactProcessing` не подтверждены; proactive static greeting не создаёт conversation.
 
 Request:
 
@@ -1596,22 +1643,10 @@ type CreateBookingResult = {
 ### `append_booking_qualification`
 
 ```ts
-// Storage contract retains these optional fields for compatibility. Current
-// conversation policy collects only monthlyLeadVolume (monthly inbound leads)
-// and integer salesManagerCount after committed booking, confirmation, and consent.
+// Active write contract is exactly the two optional RC3 fields.
 const QualificationPatchSchema = z.object({
-  role: z.string().max(200).optional(),
-  industry: z.string().max(200).optional(),
-  companySize: z.string().max(100).optional(),
-  monthlyLeadVolume: z.string().max(100).optional(),
+  monthlyLeadVolume: z.string().trim().min(1).max(100).optional(),
   salesManagerCount: z.number().int().min(0).max(10000).optional(),
-  currentChannels: z.array(z.string().max(80)).max(10).optional(),
-  crm: z.string().max(120).optional(),
-  currentProcess: z.string().max(1000).optional(),
-  pains: z.array(z.string().max(300)).max(10).optional(),
-  desiredUseCase: z.string().max(500).optional(),
-  timeline: z.string().max(200).optional(),
-  notes: z.string().max(1500).optional(),
 }).strict();
 
 const AppendQualificationInputSchema = z.object({
@@ -1629,10 +1664,12 @@ type AppendQualificationResult = {
   ok: true;
   bookingId: string;
   qualificationStatus: "partial" | "complete" | "skipped";
-  updatedFields: string[];
+  updatedFields: Array<"monthlyLeadVolume" | "salesManagerCount">;
   updatedAt: string;
 };
 ```
+
+Server выводит status из persisted truth: оба поля → `complete`, одно → `partial`, zero-field explicit refusal → `skipped`. Model-provided `completion` не может объявить complete без обоих полей. Оба ответа могут прийти одним turn/patch. Legacy rows могут физически содержать старые qualification keys; read-normalization отбрасывает их, а active write schema выше их не принимает.
 
 ## 6. Domain policy до tool execution
 
@@ -1654,7 +1691,9 @@ switch (tool.name) {
 }
 ```
 
-LLM-provided `conversationId`, `bookingId`, slot и consent сверяются с server-side session; нельзя доверять им как единственному источнику. Server перед каждым Luna turn строит `schedulingContext` из собственного clock: canonical `currentInstant`, `moscowLocalDate`, `moscowWeekday` и tuple ровно из двух `{ meetingSlot, displayLabel }`. Tool execution повторно отвергает slot вне tuple; BookingService повторно отвергает now-non-bookable или internally occupied start.
+LLM-provided `conversationId`, `bookingId`, slot и consent сверяются с server-side session; нельзя доверять им как единственному источнику. После booking commit и delivered confirmation server задаёт точный consent-вопрос `Можно задать два коротких вопроса?`; grant возможен только из последующей explicit user turn. Затем server задаёт monthly leads первым и manager count вторым, по одному; отказ завершает как `skipped` или сохраняет `partial`, не меняя `booking.status=booked`.
+
+Server перед каждым Luna turn строит `schedulingContext` из собственного clock: canonical `currentInstant`, `moscowLocalDate`, `moscowWeekday`, `timeOfDayPreference`, максимум один `rejectedTimeOfDayPreferences` и tuple ровно из двух `{ meetingSlot, displayLabel }`. Bounded Russian parser одинаково применяет typed/spoken morning/day/second-half/evening wording. Default tuple — morning + evening; selected preference даёт два in-band starts примерно через час и переносит пару на следующий weekday, если текущий band occupied; rejection исключает band. Каждый slot — 20 минут, weekday, не сегодня, start на 20-minute grid 09:00–17:00 MSK. Tuple — текущие internal alternatives, не all/global availability. Tool execution повторно отвергает slot вне tuple; BookingService повторно отвергает now-non-bookable или internally occupied start.
 
 ## 7. SQLite model
 
@@ -1705,8 +1744,8 @@ LLM-provided `conversationId`, `bookingId`, slot и consent сверяются �
 | `meeting_start_at` | nullable для legacy rows; canonical UTC, required для новых bookings, UNIQUE when non-null |
 | `meeting_end_at` | nullable для legacy rows; ровно +20 минут, required для новых bookings |
 | `meeting_timezone` | nullable для legacy rows; `Europe/Moscow`, required для новых bookings |
-| `qualification_json` | default `{}`; active flow writes only monthly inbound `monthlyLeadVolume` and integer `salesManagerCount` |
-| `qualification_status` | none/partial/complete/skipped |
+| `qualification_json` | default `{}`; active flow writes only monthly inbound `monthlyLeadVolume` and integer `salesManagerCount`; legacy keys normalize away on read |
+| `qualification_status` | none/partial/complete/skipped; complete iff both active fields, partial iff one, skipped on zero-answer refusal |
 | `created_at`, `updated_at` | timestamps |
 
 Migration `0003_internal_meeting_slots.sql` добавляет три meeting columns, partial unique index на non-null start и insert/update triggers для company, canonical timestamps, exact 20-minute duration, Moscow weekday и 09:00–17:00/20-minute-grid rules. Existing legacy rows намеренно сохраняются с `NULL` meeting fields и прежним deprecated text column: migration не придумывает им slots и не удаляет их. Domain snapshot/service fail closed при попытке использовать такую legacy row как complete modern booking; все новые inserts и relevant updates обязаны удовлетворять triggers.
@@ -1762,7 +1801,8 @@ COMMIT
 1. отправить WS `booking.created`;
 2. notifier worker публикует payload;
 3. assistant получает safe tool result;
-4. только потом orchestrator разрешает qualification stage.
+4. server-authored confirmation сообщает, что calendar event не создан, и точно спрашивает `Можно задать два коротких вопроса?`;
+5. только subsequent explicit consent открывает qualification и первый deterministic leads question; booking остаётся committed при skip/partial/failure.
 
 ## 9. Notification payloads
 
@@ -1851,7 +1891,7 @@ Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` �
 
 ![Deployment](diagrams/05-deployment.svg)
 
-Release `0.5.0-local-rc.2` uses this topology on one trusted local machine at `http://localhost:5173`. A target VPS, DNS, public TLS/WSS and target-host smokes are later gates and are not implied by local readiness.
+Candidate `0.5.0-local-rc.3` uses this topology on one trusted local machine at `http://localhost:5173`; prior `0.5.0-local-rc.2` remains the rollback image. RC3 deploy/readiness must be freshly accepted per docs 08/11. A target VPS, DNS, public TLS/WSS and target-host smokes are later gates and are not implied by local readiness.
 
 Один `docker-compose.yml`, ровно два application-path сервиса рекомендуются:
 
@@ -2381,6 +2421,14 @@ The chart deliberately contains no numeric currency estimate. Variable usage dep
 
 ## 2. Unit tests
 
+### Proactive static greeting
+
+- committed product-owned asset is one bounded complete MP3 at fixed same-origin path;
+- controller makes exactly one automatic attempt per mounted page lifecycle and exposes no REST/WS/mic/provider/session capabilities;
+- autoplay `NotAllowedError` and media error render `Включить приветствие`; retry occurs only on user action;
+- real session start and final unmount pause/reset/release audio; StrictMode-style resubscribe does not replay;
+- fixed copy/generation input contains no visitor data; explicit admin script requires opt-in and is not part of visitor runtime.
+
 ### State machine
 
 Table-driven cases:
@@ -2414,13 +2462,21 @@ Table-driven cases:
 
 - one booking per conversation и one booking per non-null `meeting_start_at`;
 - required name/company/working-email/phone-or-Telegram/consent/structured slot validation;
-- exactly two deterministic candidates, Moscow weekday/non-today/09:00–17:00 20-minute grid;
+- exactly two deterministic candidates, all 20 minutes, Moscow weekday/non-today/09:00–17:00 20-minute grid;
+- no-preference default is one morning plus one evening candidate;
+- typed/spoken Russian morning/day/second-half/evening variants refresh identical scheduling context;
+- selected band gives two in-band options roughly one hour apart, moves around occupied starts, and rolls to a later weekday when the band cannot supply a pair;
+- explicit rejection excludes the rejected band; ambiguous phrases do not mutate preference;
+- context/prompt presents candidates as two current alternatives, never exhaustive global availability;
 - non-candidate, stale and internally occupied slots rejected;
 - migration preserves legacy rows with null meeting fields and does not invent slots; modern snapshot use fails closed;
 - same idempotency key/same payload → same result;
 - same key/different payload → conflict;
-- qualification patch merges monthly inbound volume and integer `salesManagerCount`;
-- empty patch rejected;
+- exact post-confirmation consent question precedes qualification and same-turn booking envelope cannot grant consent;
+- deterministic question order is monthly inbound leads then integer `salesManagerCount`, one at a time;
+- qualification patch merges either field; both-at-once completes, one field remains partial, and model completion claims cannot override persisted truth;
+- zero-answer refusal is skipped; refusal after one answer preserves partial; booking remains booked;
+- empty patch rejected except server-owned explicit-refusal skip operation;
 - notifier failure не rolls back booking;
 - PII redaction.
 
@@ -2486,14 +2542,17 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 ## 4. Integration tests
 
+- landing entry attempts only the fixed same-origin proactive MP3; before both consents there are zero conversation REST requests, sockets, capture/mic objects, provider calls, or sessions; session start stops greeting;
 - bounded PCM16 chunks → `audio.commit` → gateway-produced validated WAV → atomic `SttPort` request → fake OpenRouter already-WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
 - sample-derived capture progress/countdown uses accepted PCM16 bytes and stricter server duration/byte ceiling, then auto-commits exactly once;
 - bounded monotonic `visitor.text.submit` clears uncommitted audio, suppresses pending duplicates, retains sequence on rejection, emits server final once, and follows the same brain/state/tool/persistence path as speech;
 - typed composer is stage-gated, and booking form renders only from server-owned `COLLECT_BOOKING`, never transcript wording;
 - real SQLite transaction + fake notifier;
-- Luna receives server-owned current Moscow date/day and exactly two structured candidates with validated labels;
+- Luna receives server-owned current Moscow date/day, parsed preference/rejection and exactly two structured candidates with validated labels;
+- typed and spoken preference turns produce matching refreshed context; rejected band is absent;
 - booking tool call accepts only one active candidate inside brain turn;
-- booking event and user-facing confirmation appear before qualification consent/question/audio;
+- booking event and user-facing confirmation with exact `Можно задать два коротких вопроса?` appear before qualification consent/question/audio;
+- explicit consent bypasses a model turn and deterministically asks leads first; partial then asks manager count; both-at-once completes; zero/one-answer refusal preserves skipped/partial booking truth;
 - reconnect with same conversation;
 - barge-in while OpenRouter requests/complete segments are in flight;
 - brain process restart;
@@ -2504,18 +2563,18 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 Playwright with synthetic audio fixture:
 
-1. load landing;
-2. click CTA;
-3. mock/allow mic;
+1. load landing and verify one immediate same-origin proactive MP3 attempt with no conversation REST/WS/mic/provider/session;
+2. exercise autoplay success and blocked/error `Включить приветствие`, then verify CTA/session start stops greeting;
+3. click CTA, provide both consents, and mock/allow mic;
 4. stream fixture PCM;
 5. observe listening/processing states and then exactly one `transcript.final`;
 6. receive assistant text and ordered complete MP3 segment events;
 7. verify the circular countdown is sample-derived and reaches the 60-second limit without wall-clock drift;
-8. submit a normal typed final turn and then use the in-chat booking form only at `COLLECT_BOOKING`;
-9. choose one of exactly two server-labeled Moscow slots and complete required name/company/email/phone-or-Telegram/consent data;
-10. see booked UI and verify no external calendar/invitation claim;
-11. consent to or skip the two-field qualification;
-12. verify backend DB/event payload.
+8. submit typed and spoken time-of-day preferences and verify refreshed pairs: default morning+evening, selected in-band roughly hour-apart, rejected band absent;
+9. use the in-chat booking form only at `COLLECT_BOOKING`, choose one of exactly two server-labeled current Moscow alternatives, and complete required name/company/email/phone-or-Telegram/consent data;
+10. see booked UI and verify no external calendar/invitation or exhaustive availability claim;
+11. verify exact two-question consent, deterministic leads→manager order, both-at-once completion, and zero/one-answer refusal outcomes;
+12. verify backend DB/event payload keeps booking `booked`.
 
 Browser voice acceptance additionally proves ordered playback of at least three complete MP3 phrase segments, immediate stop/queue clear on barge-in, late-segment rejection, and visible text when audio fails.
 
@@ -2645,18 +2704,18 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ## 10. Acceptance checklist P0
 
-### Local release candidate `0.5.0-local-rc.2`
+### Local release candidate `0.5.0-local-rc.3`
 
-- [x] The candidate extends the merged PR #24 baseline with the 60-second capture, typed conversation, scheduled booking, qualification, prompt, migration-compatibility, and refusal slices.
-- [x] Fresh deterministic release-candidate suite passes 484 tests across 56 files with no failures and 4,104 assertions; command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md).
-- [x] Product landing, CTA/consent, AI identity, 60-second sample-derived countdown, typed and spoken turns, strict supplied-slot booking, explicit refusal behavior, booking order/idempotency, safe provider failures, barge-in, prompt loading, envelope mode, and sandbox boundaries have deterministic coverage.
-- [x] Chrome local acceptance covers the strict-CSP worklet, visible countdown, typed refusal, permission-denied recovery, terminal behavior, and no horizontal overflow at 780 px and 390 px; Firefox headless rendered the 390 px page without CSP/runtime errors.
-- [x] A fresh bounded real local smoke completed one OpenRouter STT → Luna → OpenRouter TTS turn with one final transcript, one final answer, two decoder-accepted MP3 segments, and no booking. Earlier five-turn booking evidence remains in [`../evidence/T30-observed-local-voice-smoke-2026-07-31.md`](evidence/T30-observed-local-voice-smoke-2026-07-31.md).
-- [x] `scripts/deploy-local.sh` completed from the candidate tree with read-only file secrets, migration, healthy app/Caddy, 60-second/2 MB runtime limits, and all dependency readiness checks ready at `http://localhost:5173`.
-- [x] Compose contains only app and Caddy in the P0 application path; the OpenRouter key stays backend-only, and text-only TTS degradation is environment-configurable without rebuilding.
-- [x] Backup/restore/rollback scripts, permission/checksum/integrity guards, readiness loops, and key-remount ordering pass credential-free deterministic validation and are documented for the owner.
+RC3 is a candidate, not an accepted release. RC2 evidence may inform rollback but does not close RC3 gates. Record final command counts, checksum counts, SHA, browser observations, deployment observations, and paid-provider observations only in the parent-owned final evidence after those checks actually run.
 
-Checked local gates do not imply target-host or cross-browser production acceptance. Local provider observations are not repeated by default checks.
+- [ ] Run the fresh credential-free deterministic suite and record its actual result/counts without copying RC2 numbers.
+- [ ] Run typecheck, lint/format checks, build, `scripts/build-spec.sh`, `scripts/validate-spec.py`, required stale searches, and `git diff --check`; record exact commands/results.
+- [ ] Confirm changed docs and generated spec describe the committed code/contracts/tests for proactive greeting, contextual candidates, and deterministic two-question qualification; keep active prompts/code/assets/tests/evals unchanged for this documentation candidate.
+- [ ] Run local Chrome acceptance for immediate greeting success plus blocked/error fallback, zero pre-consent REST/WS/mic/provider/session, greeting stop on session start, typed/spoken scheduling refresh, booking, and skipped/partial/complete qualification. Run Firefox/WebKit only when explicitly included and report each browser separately.
+- [ ] Run `scripts/deploy-local.sh` from the final RC3 tree and collect app/Caddy migration/readiness evidence; do not infer it from RC2.
+- [ ] With explicit owner approval, run bounded OpenRouter STT/TTS/Codex smoke(s) and report safe actual evidence. Default tests/spec validation do not spend provider usage.
+- [ ] Verify backup/restore/rollback procedure and retain `botamin-voice:0.5.0-local-rc.2` as the prior rollback image before recommending `v0.5.0-local-rc.3`.
+- [ ] Parent updates `MANIFEST.txt`, `CHECKSUMS.sha256`, and `VALIDATION.md` with final evidence; this documentation change does not modify them.
 
 ### Later target release gates — not closed by local RC
 
@@ -2669,17 +2728,16 @@ Checked local gates do not imply target-host or cross-browser production accepta
 
 A real calendar event is intentionally out of scope rather than an unchecked release gate. The product stores an internal booking and notification outbox event only.
 
-## 11. Release evidence bundle
+## 11. Candidate evidence bundle
 
-The local RC bundle contains:
+The parent acceptance pass should add, after fresh observation:
 
-- final commit SHA and exact uncreated tag recommendation;
-- deterministic test/type/lint/build/spec/validator/checksum results;
-- current MANIFEST/checksum file count;
-- credential-free Compose config, shell/wrapper, and file-secret engine checks;
-- redacted owner-observed T30 one-turn and five-turn real local path evidence;
-- local Compose health/readiness and Chrome desktop/mobile acceptance observations supplied for T40;
-- deployment, backup, restore, key rotation, stop, and rollback commands;
+- final commit SHA and uncreated `v0.5.0-local-rc.3` recommendation;
+- actual deterministic test/type/lint/build/spec/validator results and separately generated checksum evidence;
+- credential-free Compose config, shell/wrapper, and file-secret checks;
+- browser results labeled by engine/viewport;
+- deploy/readiness results and any explicitly approved paid-provider results;
+- preserved RC2 rollback image and matching DB-backup guidance;
 - known limitations and explicit WebKit/VPS/TLS blockers.
 
 Target-VPS compose/health/preflight/provider evidence and benchmark-grade latency remain a later evidence bundle; they must not be inferred from this local release candidate.
@@ -2921,13 +2979,12 @@ DoD:
 **Владелец:** A0 или release integrator  
 **Зависимости:** T31, T32.
 
-**Current label:** `0.5.0-local-rc.2`.
+**Current label:** `0.5.0-local-rc.3`; keep `0.5.0-local-rc.2` as rollback image.
 
-- local P0 gates green on the integrated PR #21 baseline;
-- `scripts/deploy-local.sh` observed ready at `http://localhost:5173` with file-backed secrets;
-- active docs/tasks/env/agent packets/diagrams/charts/sources contain no stale second voice provider, credential/path or provider-streaming STT instruction and match code;
-- local evidence, known limitations, recovery instructions, and explicit later gates attached;
-- release commit prepared without creating or pushing a Git tag;
+- RC3 local P0 tests, spec validation, browser, deploy/readiness, and any approved provider smokes are candidate acceptance steps in docs 08/11, not inherited claims from RC2;
+- active docs describe committed proactive greeting, contextual two-candidate scheduling, and deterministic optional two-question qualification contracts;
+- parent records final counts/checksums/SHA and observations in release evidence after fresh execution;
+- release commit is prepared without creating or pushing a Git tag;
 - WebKit and target VPS/DNS/TLS/WSS remain later gates and are not claimed by the local RC.
 
 ## 8. Merge gates
@@ -3209,27 +3266,36 @@ VoiceOrchestrator
 
 # 11. Local release candidate and handoff
 
-**Release label:** `0.5.0-local-rc.2`
+**Release label:** `0.5.0-local-rc.3`
 
-**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.2`
+**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.3`
 
 **Tag state:** recommendation only until the validated candidate is merged.
 
 **Scope:** local hosting on one trusted machine. This is not a target-VPS or public TLS release.
 
-## Local P0 checklist
+## RC3 scope
 
-- [x] The candidate extends the merged PR #24 baseline with the 60-second capture, typed conversation, scheduled booking, qualification, prompt, migration-compatibility, and refusal slices.
-- [x] Fresh deterministic release-candidate suite passed 484 tests across 56 files with 0 failures and 4,104 assertions.
-- [x] Typecheck, lint/format, build, deterministic spec/eval generation, validator, and the regenerated manifest/checksum set passed.
-- [x] The committed [T30 owner-observed artifact](evidence/T30-observed-local-voice-smoke-2026-07-31.md) retains the earlier five-turn booking evidence; a fresh bounded candidate smoke completed one OpenRouter STT → Luna → OpenRouter TTS turn with decoder-accepted MP3 and no booking.
-- [x] `scripts/deploy-local.sh` completed from the candidate tree with mode-`0600` materialized files mounted read-only; migration, app/Caddy health, 60-second/2 MB runtime limits, and all dependency readiness checks passed.
-- [x] Chrome accepted the strict-CSP worklet, countdown, typed refusal and 780/390 px overflow checks; Firefox headless rendered the 390 px page without CSP/runtime errors.
-- [x] The local URL, file-backed secret workflow, device auth, readiness, metrics, recovery, and paid opt-in boundaries are documented below.
-- [ ] WebKit playback and complete journey acceptance — later gate, unobserved.
-- [ ] Target VPS deploy, DNS, TLS/WSS, and target-host paid smokes — later gate, unobserved.
+- committed product-owned same-origin proactive MP3 attempts playback once immediately on entry, with no conversation REST/WS/mic/provider/session before consent; blocked/error fallback is `Включить приветствие`, and real session start stops it;
+- explicit admin-only opt-in OpenRouter script generates the fixed no-visitor-data asset before commit; visitor runtime never synthesizes it;
+- server always offers exactly two current internal Moscow candidates: default morning+evening, contextual typed/spoken Russian preference/rejection refresh, selected in-band roughly hour-apart pair with weekday rollover, and no exhaustive global-availability claim;
+- after committed booking and confirmation, exact consent question `Можно задать два коротких вопроса?` gates deterministic monthly-leads-then-manager-count collection; both-at-once, skipped, and partial outcomes preserve booking.
 
-The checked runtime/browser lines are observed handoff evidence, not claims that this T40 documentation pass repeated provider spending or cross-browser testing. Fresh credential-free checks for the release commit are recorded in [`VALIDATION.md`](VALIDATION.md).
+## Local P0 candidate checklist
+
+RC3 acceptance has not been run by this documentation-only change. Do not copy RC2 test/assertion/checksum counts or present historical browser/deploy/provider evidence as RC3 evidence.
+
+- [ ] Run fresh credential-free tests and record actual counts/results.
+- [ ] Run typecheck, lint/format checks, build, `scripts/build-spec.sh`, `scripts/validate-spec.py`, stale searches, and `git diff --check`; record exact results.
+- [ ] Run local Chrome acceptance for greeting autoplay success and blocked/error fallback, zero pre-consent REST/WS/mic/provider/session, greeting stop at session start, typed/spoken contextual slots, and skipped/partial/complete qualification.
+- [ ] Run `scripts/deploy-local.sh` from the final RC3 tree and record migration, app/Caddy health/readiness, limits, and file-secret evidence.
+- [ ] Run any OpenRouter STT/TTS/Codex smoke only with explicit paid-use approval; record actual safe evidence or leave not run.
+- [ ] Verify backup/restore/rollback readiness and preserve the immutable RC2 image shown below.
+- [ ] Parent records final SHA, counts, browser/deploy/provider observations, and release result in [`../VALIDATION.md`](VALIDATION.md), then updates `MANIFEST.txt` and `CHECKSUMS.sha256` separately.
+- [ ] WebKit playback and complete journey acceptance — later gate unless explicitly run and recorded.
+- [ ] Target VPS deploy, DNS, TLS/WSS, and target-host paid smokes — later gate.
+
+The committed [T30 owner-observed artifact](evidence/T30-observed-local-voice-smoke-2026-07-31.md) remains historical evidence only; it does not close RC3 acceptance.
 
 ## Prerequisites and secure bootstrap
 
@@ -3268,7 +3334,14 @@ Caddy/public access to `/metrics` is denied. Readiness is dependency-aware and m
 
 ## Paid smokes: explicit opt-in only
 
-Deployment, tests, health checks, and this release procedure do not call paid providers. Against an already-ready local server, an owner may deliberately run the integrated smoke; it spends OpenRouter STT/TTS and Codex subscription usage:
+Deployment, tests, health checks, and this release procedure do not call paid providers. The proactive asset is regenerated only by an administrator's explicit paid opt-in; this command overwrites the tracked static MP3 from fixed product copy, never visitor data, so inspect the result before committing:
+
+```bash
+BOTAMIN_GENERATE_PROACTIVE_GREETING=1 \
+  bun run scripts/generate-proactive-greeting.ts
+```
+
+This is not a deploy/startup/visitor command. Against an already-ready local server, an owner may deliberately run the integrated smoke; it spends OpenRouter STT/TTS and Codex subscription usage:
 
 ```bash
 BOTAMIN_EXTERNAL_VOICE_E2E=1 bun run scripts/local-voice-e2e-smoke.ts \
@@ -3301,8 +3374,9 @@ docker compose stop
 # Remove containers/network while retaining named volumes
 docker compose down
 
-# Roll back to an existing/pullable immutable image, optionally with its DB backup
-PREVIOUS_IMAGE=botamin-voice:0.5.0-local-rc.1-previoussha
+# Keep RC2 as the existing/pullable immutable rollback image for RC3.
+# Use the exact immutable registry reference/digest retained by the owner if available.
+PREVIOUS_IMAGE=botamin-voice:0.5.0-local-rc.2
 ./scripts/rollback.sh "$PREVIOUS_IMAGE"
 ./scripts/rollback.sh "$PREVIOUS_IMAGE" /data/backups/before-release.db
 ```
@@ -3317,7 +3391,9 @@ For OpenRouter/webhook key rotation: revoke or schedule revocation at the provid
 - T30 local synthetic timings prove functional sequencing only; they are not a benchmark or target-host SLO.
 - WebKit complete-MP3 playback and journey acceptance remain unobserved.
 - Target VPS resource behavior, DNS, public TLS/WSS, and target-host provider smokes remain unobserved.
-- The booking is an internal SQLite record plus notifier outbox event. The internal scheduler excludes committed starts, but no real calendar event, external availability check, CRM record, or meeting invitation is created.
+- The proactive greeting is a committed static product MP3. Browser autoplay remains policy-dependent; failure must leave the explicit `Включить приветствие` control. Regeneration is paid/admin-only and not a visitor-runtime action.
+- The booking is an internal SQLite record plus notifier outbox event. The scheduler always returns two current alternatives, not all global availability; it excludes committed starts, but no real calendar event, external availability check, CRM record, or meeting invitation is created.
+- Optional qualification is complete only with both monthly inbound leads and integer sales-manager count. Skip/partial/failure never removes the booking.
 - OpenRouter model/voice availability, paid rates, Codex subscription limits, and plan suitability are runtime/owner checks, not release guarantees.
 
 

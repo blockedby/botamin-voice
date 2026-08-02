@@ -232,13 +232,12 @@ DoD:
 **Владелец:** A0 или release integrator  
 **Зависимости:** T31, T32.
 
-**Current label:** `0.5.0-local-rc.2`.
+**Current label:** `0.5.0-local-rc.3`; keep `0.5.0-local-rc.2` as rollback image.
 
-- local P0 gates green on the integrated PR #21 baseline;
-- `scripts/deploy-local.sh` observed ready at `http://localhost:5173` with file-backed secrets;
-- active docs/tasks/env/agent packets/diagrams/charts/sources contain no stale second voice provider, credential/path or provider-streaming STT instruction and match code;
-- local evidence, known limitations, recovery instructions, and explicit later gates attached;
-- release commit prepared without creating or pushing a Git tag;
+- RC3 local P0 tests, spec validation, browser, deploy/readiness, and any approved provider smokes are candidate acceptance steps in docs 08/11, not inherited claims from RC2;
+- active docs describe committed proactive greeting, contextual two-candidate scheduling, and deterministic optional two-question qualification contracts;
+- parent records final counts/checksums/SHA and observations in release evidence after fresh execution;
+- release commit is prepared without creating or pushing a Git tag;
 - WebKit and target VPS/DNS/TLS/WSS remain later gates and are not claimed by the local RC.
 
 ## 8. Merge gates

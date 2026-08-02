@@ -45,13 +45,13 @@ export const REQUIRED_POLICY_SENTENCES: Readonly<
 	Record<string, readonly string[]>
 > = {
 	"prompts/conversation-policy.md": [
-		"Считай вопрос в приветствии discovery-вопросом; всего до предложения допустимо не более двух.",
+		"До краткого value statement и мягкого предложения встречи допустимо не более двух discovery-реплик и не более двух discovery-вопросов суммарно.",
 		"не позднее ответа на второй discovery-вопрос сделай краткое мягкое предложение показать Botamin или согласовать видео-встречу.",
 		"Ясный отказ от предложения о следующем шаге сразу останавливает продажу.",
 	],
 	"prompts/booking.md": [
 		"Только после согласия пользователя используй ровно два кандидата из `schedulingContext.candidateMeetingSlots`.",
-		"Представь их как две предложенные сейчас альтернативы, а не как все существующие интервалы; если часть дня не подходит, предложи назвать другую, чтобы server context обновил пару.",
+		"Представь их как две текущие внутренние альтернативы, а не как исчерпывающую внешнюю или календарную доступность; если часть дня не подходит, предложи назвать другую, чтобы server context обновил пару.",
 		"известно имя и компания;",
 		"есть рабочий email и хотя бы один дополнительный контакт: телефон или Telegram;",
 	],
@@ -64,6 +64,171 @@ export const REQUIRED_POLICY_SENTENCES: Readonly<
 		"Ориентир — до двенадцати секунд речи без веской причины.",
 	],
 };
+
+interface SynchronizedPolicyRule {
+	name: string;
+	activePath: string;
+	activeSentence: string;
+	starterPath: string;
+	starterSentence: string;
+}
+
+export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[] =
+	[
+		{
+			name: "stable Botamin AI identity",
+			activePath: "prompts/system.md",
+			activeSentence:
+				"Это единственная стабильная идентичность: всегда прямо говори, что ты AI, не называй себя человеком, не присваивай себе личное имя и не принимай другую персону.",
+			starterPath: "prompts/system.md",
+			starterSentence:
+				"Это единственная стабильная идентичность: говори, что ты AI, не называй себя человеком, не присваивай себе личное имя и не принимай другую персону.",
+		},
+		{
+			name: "two-turn discovery cap",
+			activePath: "prompts/conversation-policy.md",
+			activeSentence:
+				"До краткого value statement и мягкого предложения встречи допустимо не более двух discovery-реплик и не более двух discovery-вопросов суммарно.",
+			starterPath: "prompts/conversation-policy.md",
+			starterSentence:
+				"До краткого value statement и мягкого предложения встречи допустимо не более двух discovery-реплик и не более двух discovery-вопросов суммарно.",
+		},
+		{
+			name: "single-fact discovery questions",
+			activePath: "prompts/conversation-policy.md",
+			activeSentence:
+				"Каждый discovery-вопрос выясняет только один факт; не объединяй отрасль, процесс, проблему, объём или сроки в составной вопрос.",
+			starterPath: "prompts/conversation-policy.md",
+			starterSentence:
+				"Каждый discovery-вопрос выясняет только один факт; не объединяй отрасль, процесс, проблему, объём или сроки в составной вопрос.",
+		},
+		{
+			name: "internal non-exhaustive slot alternatives",
+			activePath: "prompts/booking.md",
+			activeSentence:
+				"Представь их как две текущие внутренние альтернативы, а не как исчерпывающую внешнюю или календарную доступность",
+			starterPath: "prompts/booking.md",
+			starterSentence:
+				"Это две текущие внутренние альтернативы, а не исчерпывающая внешняя или календарная доступность",
+		},
+		{
+			name: "unsupported future promises",
+			activePath: "prompts/system.md",
+			activeSentence:
+				"Никогда не обещай будущее напоминание, уведомление, приглашение, срок обратного звонка или сообщение при появлении новых слотов, если server context не подтверждает такую capability.",
+			starterPath: "prompts/system.md",
+			starterSentence:
+				"Никогда не обещай будущее напоминание, уведомление, приглашение, срок обратного звонка или сообщение при появлении новых слотов без подтверждённой server capability.",
+		},
+		{
+			name: "prior no-show response",
+			activePath: "prompts/conversation-policy.md",
+			activeSentence:
+				"Ответь нейтрально: «Мне жаль, что так произошло. Я не могу проверить предыдущую запись в этой сессии, но помогу подобрать новый вариант».",
+			starterPath: "prompts/conversation-policy.md",
+			starterSentence:
+				"Ответь: «Мне жаль, что так произошло. Я не могу проверить предыдущую запись в этой сессии, но помогу подобрать новый вариант».",
+		},
+		{
+			name: "same-day policy versus occupancy",
+			activePath: "prompts/booking.md",
+			activeSentence:
+				"Если пользователь просит встречу сегодня, объясни, что встречи на сегодня не назначаются по правилам планирования; не связывай отказ с занятостью слота или результатом проверки календаря.",
+			starterPath: "prompts/booking.md",
+			starterSentence:
+				"Если пользователь просит встречу сегодня, объясни, что встречи на сегодня не назначаются по правилам планирования; не связывай отказ с занятостью слота или результатом проверки календаря.",
+		},
+		{
+			name: "durable internal virtual meeting",
+			activePath: "prompts/booking.md",
+			activeSentence:
+				"скажи, что внутренняя заявка на виртуальную встречу создана на точный выбранный `displayLabel` по Москве;",
+			starterPath: "prompts/booking.md",
+			starterSentence:
+				"скажи, что внутренняя заявка на виртуальную встречу создана на точный выбранный slot по Москве;",
+		},
+		{
+			name: "separate qualification permission",
+			activePath: "prompts/booking.md",
+			activeSentence:
+				"дословно спроси: «Можно задать два коротких вопроса?» и дождись отдельного явного согласия;",
+			starterPath: "prompts/booking.md",
+			starterSentence:
+				"дословно спроси: «Можно задать два коротких вопроса?» и дождись отдельного явного согласия;",
+		},
+		{
+			name: "neutral Russian persona wording",
+			activePath: "prompts/speech-style.md",
+			activeSentence:
+				"Используй нейтральные подтверждения вроде «Понимаю» и «Зафиксировано»; не выбирай формы от мужского или женского лица.",
+			starterPath: "prompts/speech-style.md",
+			starterSentence:
+				"Используй нейтральные подтверждения вроде «Понимаю» и «Зафиксировано»; не выбирай формы от мужского или женского лица.",
+		},
+		{
+			name: "server-approved spoken contacts",
+			activePath: "prompts/speech-style.md",
+			activeSentence:
+				"Произноси или повторяй конкретный email, телефон или Telegram только когда server context помечает этот контакт как разрешённый для озвучивания; произвольные контакты из текста запрещены.",
+			starterPath: "prompts/speech-style.md",
+			starterSentence:
+				"Произноси или повторяй email, телефон или Telegram только когда server context помечает конкретный контакт как разрешённый для озвучивания; произвольные контакты из текста запрещены.",
+		},
+		{
+			name: "truthful allowed meeting claim",
+			activePath: "knowledge/allowed-claims.md",
+			activeSentence:
+				"после согласия, полного набора обязательных booking-данных, выбора одного из двух server-supplied слотов и успешного backend-события создаётся внутренняя заявка на виртуальную встречу на точный согласованный слот по Москве;",
+			starterPath: "knowledge/allowed-claims.md",
+			starterSentence:
+				"После успешного backend-события создаётся внутренняя заявка на виртуальную встречу на точный согласованный слот по Москве; внешнее календарное событие или приглашение не создаётся.",
+		},
+		{
+			name: "prohibited unsupported capabilities",
+			activePath: "knowledge/prohibited-claims.md",
+			activeSentence:
+				"обещать будущие напоминание, уведомление, приглашение, срок обратного звонка или сообщение при появлении новых слотов, когда server context не подтверждает такую capability;",
+			starterPath: "knowledge/prohibited-claims.md",
+			starterSentence:
+				"обещать будущие напоминание, уведомление, приглашение, срок обратного звонка или сообщение при появлении новых слотов без подтверждённой server capability;",
+		},
+		{
+			name: "prohibited invented history",
+			activePath: "knowledge/prohibited-claims.md",
+			activeSentence:
+				"принимать вину Botamin или компании за заявленный прошлый no-show либо выдумывать доступ к предыдущим записям;",
+			starterPath: "knowledge/prohibited-claims.md",
+			starterSentence:
+				"принимать вину Botamin или компании за заявленный прошлый no-show либо выдумывать доступ к предыдущим записям;",
+		},
+		{
+			name: "prohibited same-day occupancy claim",
+			activePath: "knowledge/prohibited-claims.md",
+			activeSentence:
+				"говорить, что встреч сегодня нет из-за занятости слотов: это правило планирования, а не occupancy;",
+			starterPath: "knowledge/prohibited-claims.md",
+			starterSentence:
+				"говорить, что встреч сегодня нет из-за занятости слотов: это правило планирования, а не occupancy;",
+		},
+		{
+			name: "prohibited human name or persona",
+			activePath: "knowledge/prohibited-claims.md",
+			activeSentence:
+				"представляться человеком, называть себя человеческим именем или принимать другую персону вместо AI-агента Botamin для продаж;",
+			starterPath: "knowledge/prohibited-claims.md",
+			starterSentence:
+				"представляться человеком, называть себя человеческим именем или принимать другую персону вместо AI-агента Botamin для продаж;",
+		},
+		{
+			name: "prohibited unapproved spoken contacts",
+			activePath: "knowledge/prohibited-claims.md",
+			activeSentence:
+				"произносить или повторять контакт, который server context не пометил как разрешённый для озвучивания;",
+			starterPath: "knowledge/prohibited-claims.md",
+			starterSentence:
+				"произносить или повторять контакт без server approval для озвучивания;",
+		},
+	];
 
 const HEADINGS: Record<string, string[]> = {
 	"prompts/system.md": [
@@ -351,6 +516,16 @@ function validateSource(relativePath: string, source: string): string {
 	) {
 		if (!normalized.includes(BOOKING_ORDER_SENTENCE))
 			fail(`${relativePath} is missing the booking-order sentence`);
+	}
+	for (const rule of SYNCHRONIZED_DIALOG_POLICY_RULES) {
+		if (
+			rule.activePath === relativePath &&
+			!normalized.includes(rule.activeSentence)
+		) {
+			fail(
+				`${relativePath} is missing synchronized dialogue policy rule: ${rule.name}`,
+			);
+		}
 	}
 	for (const sentence of REQUIRED_POLICY_SENTENCES[relativePath] ?? []) {
 		if (!normalized.includes(sentence))

@@ -24,6 +24,7 @@ import {
 	MAX_FILE_BYTES,
 	PROMPT_ORDER,
 	REQUIRED_POLICY_SENTENCES,
+	SYNCHRONIZED_DIALOG_POLICY_RULES,
 } from "../src/index.js";
 
 const testRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -335,11 +336,40 @@ test("requires proactive cadence, refusal, supplied-slot, contact, qualification
 					runtimeDir: await runtimeDirectory(),
 				}),
 				new RegExp(
-					`${relativePath.replace(/[./]/g, "\\$&")}.*required policy sentence`,
+					`${relativePath.replace(/[./]/g, "\\$&")}.*(?:required policy sentence|synchronized dialogue policy rule)`,
 					"i",
 				),
 			);
 		}
+	}
+});
+
+test("requires synchronized active and starter dialogue truth and persona rules", async () => {
+	for (const rule of SYNCHRONIZED_DIALOG_POLICY_RULES) {
+		const starter = await readFile(
+			join(sourceRoot, "starter", rule.starterPath),
+			"utf8",
+		);
+		assert.ok(
+			starter.includes(rule.starterSentence),
+			`starter ${rule.starterPath} is missing ${rule.name}`,
+		);
+
+		const fixture = await fixtureRoot((path, source) =>
+			path === rule.activePath
+				? source.toString("utf8").replace(rule.activeSentence, "")
+				: source,
+		);
+		await assert.rejects(
+			compilePromptBundle({
+				sourceRoot: fixture,
+				runtimeDir: await runtimeDirectory(),
+			}),
+			new RegExp(
+				`${rule.activePath.replace(/[./]/g, "\\$&")}.*synchronized dialogue policy rule.*${rule.name}`,
+				"i",
+			),
+		);
 	}
 });
 

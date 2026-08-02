@@ -48,6 +48,15 @@ describe("server-owned contextual Moscow slots", () => {
 		);
 		expect(parseMeetingTimePreference("Можно только вечером")).toBe("evening");
 		expect(parseMeetingTimePreference("вечер")).toBe("evening");
+		expect(
+			parseMeetingTimePreference(
+				"Нет, я бы хотел сегодня в одиннадцать часов вечера",
+			),
+		).toBe("evening");
+		expect(parseMeetingTimePreference("Давайте в десять часов утра")).toBe(
+			"morning",
+		);
+		expect(parseMeetingTimePreference("Подойдёт два часа дня")).toBe("daytime");
 		expect(parseMeetingTimePreference("Добрый вечер")).toBeNull();
 		expect(parseMeetingTimePreference("Добрый день")).toBeNull();
 		expect(parseMeetingTimePreference("Сегодня удобно созвониться")).toBeNull();

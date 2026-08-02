@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	chunkSpeech,
+	prepareSpeech,
 	SpeechBudgetGuard,
 	SpeechPrefetchCoordinator,
 	StreamingSentenceChunker,
@@ -57,6 +58,208 @@ generationId=01J00000000000000000000002
 	test("never returns punctuation-only or empty segments", () => {
 		expect(sanitizeSpeech(" ** --- ... ")).toBe("");
 		expect(sanitizeSpeech("```json\n{}\n```")).toBe("");
+	});
+});
+
+describe("approved contact speech", () => {
+	const gmail = {
+		channel: "email",
+		value: "RosSelGosTorg@gmail.com",
+	} as const;
+	const phone = { channel: "phone", value: "+79555678955" } as const;
+	const telegram = { channel: "telegram", value: "@Sales_Bot" } as const;
+
+	test("speaks an exact approved Gmail address with punctuation words", () => {
+		const prepared = prepareSpeech("Почта: RosSelGosTorg@GMAIL.com.", {
+			contactProcessing: true,
+			approvedContacts: [gmail],
+		});
+		expect(prepared).toEqual({
+			spokenText: "Почта: RosSelGosTorg собака GMAIL точка com.",
+			metadata: { forwardedChannels: ["email"], forwardedCount: 1 },
+		});
+	});
+
+	test("formats every supported email separator naturally", () => {
+		const approved = {
+			channel: "email",
+			value: "name.surname+sales-test_box@example-domain.com",
+		} as const;
+		const prepared = prepareSpeech(`Пишите ${approved.value}`, {
+			contactProcessing: true,
+			approvedContacts: [approved],
+		});
+		expect(prepared.spokenText).toBe(
+			"Пишите name точка surname плюс sales дефис test подчёркивание box собака example дефис domain точка com",
+		);
+	});
+
+	test("canonical-matches +7 and 8 forms and speaks familiar Russian groups", () => {
+		for (const detected of ["+7 (955) 567-89-55", "8 955 567 89 55"]) {
+			const prepared = prepareSpeech(`Телефон ${detected}`, {
+				contactProcessing: true,
+				approvedContacts: [phone],
+			});
+			expect(prepared.spokenText).toBe(
+				"Телефон плюс семь, девятьсот пятьдесят пять, пятьсот шестьдесят семь, восемьдесят девять, пятьдесят пять",
+			);
+			expect(prepared.metadata).toEqual({
+				forwardedChannels: ["phone"],
+				forwardedCount: 1,
+			});
+		}
+	});
+
+	test("normalizes Unicode phone digits and punctuation without fuzzy matching", () => {
+		const prepared = prepareSpeech("Телефон +７（９５５）５６７–８９–５５", {
+			contactProcessing: true,
+			approvedContacts: [phone],
+		});
+		expect(prepared.metadata.forwardedCount).toBe(1);
+		expect(prepared.spokenText).toContain(
+			"плюс семь, девятьсот пятьдесят пять",
+		);
+	});
+
+	test("normalizes strict Telegram mentions and t.me URLs case-insensitively", () => {
+		for (const detected of ["@sales_bot", "https://t.me/SALES_BOT/"]) {
+			const prepared = prepareSpeech(`Телеграм ${detected}.`, {
+				contactProcessing: true,
+				approvedContacts: [telegram],
+			});
+			expect(prepared.spokenText).toMatch(
+				/^Телеграм собака SALES_BOT\.$|^Телеграм собака sales_bot\.$/u,
+			);
+			expect(prepared.metadata).toEqual({
+				forwardedChannels: ["telegram"],
+				forwardedCount: 1,
+			});
+		}
+	});
+
+	test("redacts exact contacts without contact-processing consent", () => {
+		const prepared = prepareSpeech(
+			"Контакты RosSelGosTorg@gmail.com, +79555678955, @Sales_Bot.",
+			{
+				contactProcessing: false,
+				approvedContacts: [gmail, phone, telegram],
+			},
+		);
+		expect(prepared.spokenText).toBe("Контакты контакт скрыт");
+		expect(prepared.metadata).toEqual({
+			forwardedChannels: [],
+			forwardedCount: 0,
+		});
+	});
+
+	test("redacts near, different-local, domain-only, and phone-suffix values", () => {
+		for (const detected of [
+			"RosSelGosTorg+sales@gmail.com",
+			"OtherLocal@gmail.com",
+			"rosselgostorg@gmail.com",
+			"gmail.com",
+			"555678955",
+		]) {
+			const prepared = prepareSpeech(`Контакт ${detected}.`, {
+				contactProcessing: true,
+				approvedContacts: [gmail, phone],
+			});
+			expect(prepared.spokenText).toBe("Контакт контакт скрыт.");
+			expect(prepared.metadata.forwardedCount).toBe(0);
+		}
+	});
+
+	test("forwards only exact approved values among multiple contacts", () => {
+		const prepared = prepareSpeech(
+			"Почты other@example.com и RosSelGosTorg@gmail.com, телефон +7 999 123-45-67.",
+			{ contactProcessing: true, approvedContacts: [gmail] },
+		);
+		expect(prepared.spokenText).toBe(
+			"Почты контакт скрыт и RosSelGosTorg собака gmail точка com, телефон контакт скрыт.",
+		);
+		expect(prepared.metadata).toEqual({
+			forwardedChannels: ["email"],
+			forwardedCount: 1,
+		});
+	});
+
+	test("normalizes Unicode email forms before conservative matching", () => {
+		const prepared = prepareSpeech("Café@EXAMPLE.com", {
+			contactProcessing: true,
+			approvedContacts: [{ channel: "email", value: "Café@example.com" }],
+		});
+		expect(prepared.spokenText).toBe("Café собака EXAMPLE точка com");
+		expect(prepared.metadata.forwardedCount).toBe(1);
+	});
+
+	test("never forwards approved contacts from JSON, tool envelopes, or hidden Markdown URLs", () => {
+		const prepared = prepareSpeech(
+			'До. {"email":"RosSelGosTorg@gmail.com"} <tool_call>https://t.me/Sales_Bot</tool_call> [профиль](https://t.me/Sales_Bot) После.',
+			{ contactProcessing: true, approvedContacts: [gmail, telegram] },
+		);
+		expect(prepared.spokenText).toBe("До. профиль После.");
+		expect(prepared.metadata.forwardedCount).toBe(0);
+	});
+
+	test("redacts unknown or invalid strict Telegram contacts", () => {
+		for (const value of [
+			"https://t.me/Other_Bot",
+			"t.me/Sales_Bot?start=secret",
+		]) {
+			const unknown = prepareSpeech(`Телеграм ${value}`, {
+				contactProcessing: true,
+				approvedContacts: [telegram],
+			});
+			expect(unknown.spokenText).toBe("Телеграм контакт скрыт");
+			expect(unknown.metadata.forwardedCount).toBe(0);
+		}
+
+		const invalid = prepareSpeech("Телеграм @Sales__Bot", {
+			contactProcessing: true,
+			approvedContacts: [{ channel: "telegram", value: "@Sales__Bot" }],
+		});
+		expect(invalid.spokenText).toBe("Телеграм контакт скрыт");
+		expect(invalid.metadata.forwardedCount).toBe(0);
+	});
+
+	test("fails closed when the approved list exceeds its booking bound", () => {
+		const prepared = prepareSpeech("RosSelGosTorg@gmail.com", {
+			contactProcessing: true,
+			approvedContacts: [
+				gmail,
+				phone,
+				telegram,
+				{ channel: "email", value: "fourth@example.com" },
+			],
+		});
+		expect(prepared.spokenText).toBe("контакт скрыт");
+		expect(prepared.metadata.forwardedCount).toBe(0);
+	});
+
+	test("metadata never contains raw or formatted contact values", () => {
+		const prepared = prepareSpeech(
+			"RosSelGosTorg@gmail.com +79555678955 @Sales_Bot",
+			{
+				contactProcessing: true,
+				approvedContacts: [gmail, phone, telegram],
+			},
+		);
+		const metadata = JSON.stringify(prepared.metadata);
+		expect(prepared.metadata.forwardedCount).toBe(3);
+		expect(metadata).not.toMatch(/RosSel|gmail|7955|Sales_Bot|собака/u);
+	});
+
+	test("expanded speech can be re-chunked under the 240-character ceiling", () => {
+		const prepared = prepareSpeech(
+			`Повтор: ${gmail.value}. Ещё раз: ${gmail.value}. И снова: ${gmail.value}.`,
+			{ contactProcessing: true, approvedContacts: [gmail] },
+		);
+		const chunks = chunkSpeech(prepared.spokenText);
+		expect(chunks.length).toBeGreaterThan(0);
+		for (const chunk of chunks) {
+			expect([...chunk].length).toBeLessThanOrEqual(240);
+			expect(chunk).not.toMatch(/^[\p{P}\p{S}\s]*$/u);
+		}
 	});
 });
 

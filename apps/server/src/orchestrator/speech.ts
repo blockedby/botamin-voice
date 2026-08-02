@@ -1,3 +1,15 @@
+import {
+	type ApprovedSpeechContact,
+	MAX_APPROVED_SPEECH_CONTACTS,
+	markApprovedSpeechContacts,
+	type SpeechContactChannel,
+} from "./speech-contacts";
+
+export type {
+	ApprovedSpeechContact,
+	SpeechContactChannel,
+} from "./speech-contacts";
+
 const MARKDOWN_LINK = /\[([^\x5d]+)\]\(\s*(?:https?:\/\/|www\.)[^)]+\)/giu;
 const RAW_URL = /(?:https?:\/\/|www\.)[^\s<>()]*[\p{L}\p{N}/#]/giu;
 const EMAIL =
@@ -29,6 +41,20 @@ export interface SpeechBudgetOptions {
 	maxCharsPerSegment?: number;
 	maxCharsPerTurn?: number;
 	maxCharsPerSession?: number;
+}
+
+export interface PrepareSpeechOptions {
+	contactProcessing: boolean;
+	/** Server-approved contacts from a confirmed draft or committed booking. */
+	approvedContacts: readonly ApprovedSpeechContact[];
+}
+
+export interface PreparedSpeech {
+	spokenText: string;
+	metadata: {
+		forwardedChannels: SpeechContactChannel[];
+		forwardedCount: number;
+	};
 }
 
 export type SpeechBudgetDecision =
@@ -197,6 +223,44 @@ export function sanitizeSpeech(input: string): string {
 	text = text.replace(/\s+([,.!?;:])/gu, "$1");
 	text = text.replace(/\s+/gu, " ").trim();
 	return /^[\p{P}\p{S}\s]*$/u.test(text) ? "" : text;
+}
+
+/**
+ * Produces TTS-only text and forwards exact approved contacts when consented.
+ * Re-chunk `spokenText` before synthesis because spoken contact forms can expand.
+ */
+export function prepareSpeech(
+	input: string,
+	options: PrepareSpeechOptions,
+): PreparedSpeech {
+	const approvedContacts =
+		options.contactProcessing &&
+		options.approvedContacts.length <= MAX_APPROVED_SPEECH_CONTACTS
+			? options.approvedContacts
+			: [];
+	const stripped = stripCodeAndEnvelopes(
+		input.replace(/\r\n?/gu, "\n").normalize("NFKC"),
+	);
+	const marked = markApprovedSpeechContacts(stripped, approvedContacts);
+	let spokenText = sanitizeSpeech(marked.text);
+	const forwardedChannels = new Set<SpeechContactChannel>();
+	let forwardedCount = 0;
+	for (const contact of marked.contacts) {
+		const occurrences = spokenText.split(contact.marker).length - 1;
+		if (occurrences === 0) continue;
+		spokenText = spokenText.replaceAll(contact.marker, contact.spoken);
+		forwardedChannels.add(contact.channel);
+		forwardedCount += occurrences;
+	}
+	spokenText = spokenText.replace(/\s+/gu, " ").trim();
+	if (/^[\p{P}\p{S}\s]*$/u.test(spokenText)) spokenText = "";
+	return {
+		spokenText,
+		metadata: {
+			forwardedChannels: [...forwardedChannels],
+			forwardedCount,
+		},
+	};
 }
 
 function indexInside(pattern: RegExp, text: string, index: number): boolean {

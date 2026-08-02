@@ -113,24 +113,23 @@ export function getVoiceStatePresentation(
 			};
 		case "booked":
 			return {
-				label: "Внутренняя встреча создана",
-				detail: "Детали подтверждены сервером и показаны ниже.",
+				label: "Внутренняя виртуальная встреча создана",
+				detail: "Точный слот по Москве подтверждён сервером.",
 				tone: "success",
 			};
 		case "qualification":
 			return {
-				label: "Уточняем контекст",
+				label: "Уточняем недостающий контекст",
 				detail:
-					state.questionNumber && state.questionCount
-						? `Необязательный вопрос ${state.questionNumber} из ${state.questionCount}. Можно остановиться в любой момент.`
-						: "Два дополнительных вопроса необязательны. Можно остановиться в любой момент.",
+					"Уточнение необязательно: нужен только отсутствующий факт. Можно остановиться в любой момент.",
 				tone: "active",
 			};
 		case "complete":
 			return state.bookingOutcome === "committed"
 				? {
 						label: "Разговор завершён",
-						detail: "Спасибо. Лид и согласованный следующий шаг записаны.",
+						detail:
+							"Внутренняя виртуальная встреча создана на точный согласованный слот по Москве. Внешнее календарное событие и приглашение не создавались.",
 						tone: "success",
 					}
 				: {
@@ -324,7 +323,7 @@ export function getVoiceLiveStatusAnnouncement(
 ): string {
 	const presentation = getVoiceStatePresentation(state, muted);
 	if (state.kind === "booked") {
-		return "Внутренняя встреча создана. Внешнее календарное событие не создавалось.";
+		return "Внутренняя виртуальная встреча создана на точный согласованный слот по Москве. Внешнее календарное событие и приглашение не создавались.";
 	}
 	if (state.kind === "complete" && state.bookingOutcome === "committed") {
 		const qualification =
@@ -473,9 +472,9 @@ function StateActions(props: VoiceDemoProps) {
 		return (
 			<div className="qualification-choice">
 				<p id="qualification-offer">
-					Внутренняя встреча уже создана. Два коротких дополнительных вопроса
-					необязательны: можно отказаться до первого или остановиться после
-					него.
+					Внутренняя виртуальная встреча уже создана на точный согласованный
+					слот по Москве. Botamin уточнит только недостающий контекст; отвечать
+					необязательно, и разговор можно завершить в любой момент.
 				</p>
 				<ControlButton onClick={props.onStop}>Завершить разговор</ControlButton>
 			</div>

@@ -37,7 +37,7 @@ export function formatMoscowMeeting(
 function qualificationLabel(meeting: InternalVirtualMeetingProjection): string {
 	switch (meeting.qualificationStatus) {
 		case "none":
-			return "Дополнительная квалификация ещё не начата";
+			return "Дополнительный контекст отсутствует — он необязателен";
 		case "partial":
 			return "Дополнительная квалификация заполнена частично";
 		case "complete":
@@ -74,7 +74,7 @@ export function FinalMeetingWidget({
 			tabIndex={-1}
 		>
 			<p className="section-index">Внутренняя встреча Botamin</p>
-			<h3 id="final-meeting-title">Встреча создана</h3>
+			<h3 id="final-meeting-title">Внутренняя виртуальная встреча создана</h3>
 			<dl>
 				<div>
 					<dt>Дата по Москве</dt>
@@ -115,20 +115,20 @@ export function FinalMeetingWidget({
 				</div>
 				{meeting.qualificationFields.monthlyLeadVolume !== null ? (
 					<div>
-						<dt>Входящие лиды в месяц</dt>
+						<dt>Лиды или контакты за месяц</dt>
 						<dd>{meeting.qualificationFields.monthlyLeadVolume}</dd>
 					</div>
 				) : null}
 				{meeting.qualificationFields.salesManagerCount !== null ? (
 					<div>
-						<dt>Сотрудники отдела продаж</dt>
+						<dt>Менеджеры по продажам</dt>
 						<dd>{meeting.qualificationFields.salesManagerCount}</dd>
 					</div>
 				) : null}
 			</dl>
 			<p className="final-meeting-truth-note">
-				Внутренняя виртуальная встреча Botamin. Внешнее календарное событие и
-				приглашение не создавались.
+				Внутренняя виртуальная встреча создана на указанный точный слот по
+				Москве. Внешнее календарное событие и приглашение не создавались.
 			</p>
 		</section>
 	);

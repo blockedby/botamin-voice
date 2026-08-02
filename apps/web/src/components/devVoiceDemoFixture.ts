@@ -105,9 +105,9 @@ function transcriptForPreview(
 	}
 
 	const committedBooking: FinalTranscriptEntry = {
-		id: "agent-next-step",
+		id: "agent-meeting-confirmation",
 		speaker: "agent",
-		text: "Спасибо. Ваш контакт и желаемый следующий шаг записаны для команды Botamin. Внешнее календарное событие и приглашение не создавались.",
+		text: "Внутренняя виртуальная встреча создана на точный согласованный слот по Москве. Внешнее календарное событие и приглашение не создавались.",
 	};
 	return [greeting, visitor, answer, committedBooking];
 }

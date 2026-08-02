@@ -21,6 +21,7 @@ import {
 	ATTRIBUTED_REVENUE_CLAIM_LINES,
 	BOOKING_ORDER_SENTENCE,
 	compilePromptBundle,
+	FORBIDDEN_POLICY_PHRASES,
 	MAX_FILE_BYTES,
 	PROMPT_ORDER,
 	REQUIRED_POLICY_SENTENCES,
@@ -320,7 +321,42 @@ test("requires the booking-before-qualification rule in system and booking promp
 	}
 });
 
-test("requires proactive cadence, refusal, supplied-slot, contact, qualification, and concise-speech rules", async () => {
+test("forbids stale qualification-permission wording in active and starter prompts", async () => {
+	const promptPaths = PROMPT_ORDER.filter((path) =>
+		path.startsWith("prompts/"),
+	);
+	for (const relativePath of promptPaths) {
+		for (const prefix of ["", "starter"]) {
+			const source = await readFile(
+				join(sourceRoot, prefix, relativePath),
+				"utf8",
+			);
+			for (const phrase of FORBIDDEN_POLICY_PHRASES) {
+				assert.ok(
+					!source.toLocaleLowerCase("ru-RU").includes(phrase),
+					`${join(prefix, relativePath)} contains forbidden phrase: ${phrase}`,
+				);
+			}
+		}
+	}
+
+	for (const phrase of FORBIDDEN_POLICY_PHRASES) {
+		const fixture = await fixtureRoot((relativePath, source) =>
+			relativePath === "prompts/system.md"
+				? `${source.toString("utf8")}\n${phrase}\n`
+				: source,
+		);
+		await assert.rejects(
+			compilePromptBundle({
+				sourceRoot: fixture,
+				runtimeDir: await runtimeDirectory(),
+			}),
+			/forbidden qualification-permission wording/i,
+		);
+	}
+});
+
+test("requires proactive cadence, direct missing-only qualification, supplied-slot, contact, and concise-speech rules", async () => {
 	for (const [relativePath, sentences] of Object.entries(
 		REQUIRED_POLICY_SENTENCES,
 	)) {

@@ -28,14 +28,22 @@ describe("FinalMeetingWidget", () => {
 
 	test("renders an accessible section, dl, times, full contacts and exact truth note", () => {
 		const html = renderToStaticMarkup(
-			<FinalMeetingWidget meeting={createInternalMeeting()} />,
+			<FinalMeetingWidget
+				meeting={createInternalMeeting({
+					qualificationStatus: "complete",
+					qualificationFields: {
+						monthlyLeadVolume: "120–150",
+						salesManagerCount: 8,
+					},
+				})}
+			/>,
 		);
 		expect(html).toContain('class="final-meeting-widget"');
 		expect(html).toContain('aria-labelledby="final-meeting-title"');
 		expect(html).toContain('tabindex="-1"');
 		expect(html).toContain("<dl>");
 		expect(html.match(/<time/g)?.length).toBe(3);
-		expect(html).toContain("Встреча создана");
+		expect(html).toContain("Внутренняя виртуальная встреча создана");
 		expect(html).toContain("09:00");
 		expect(html).toContain("09:20");
 		expect(html).toContain("20 минут");
@@ -45,11 +53,13 @@ describe("FinalMeetingWidget", () => {
 		expect(html).toContain("+7 999 123-45-67");
 		expect(html).toContain("@anna_botamin");
 		expect(html).toContain("Квалификация");
+		expect(html).toContain("Лиды или контакты за месяц");
+		expect(html).toContain("Менеджеры по продажам");
 		expect(html).toContain(
-			"Внутренняя виртуальная встреча Botamin. Внешнее календарное событие и приглашение не создавались.",
+			"Внутренняя виртуальная встреча создана на указанный точный слот по Москве. Внешнее календарное событие и приглашение не создавались.",
 		);
 		expect(html).not.toContain('aria-live="');
 		expect(html).not.toContain('role="status"');
-		expect(html).not.toMatch(/join|provider|провайдер|менеджер/iu);
+		expect(html).not.toMatch(/join|provider|провайдер/iu);
 	});
 });

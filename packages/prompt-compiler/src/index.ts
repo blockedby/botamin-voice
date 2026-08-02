@@ -48,22 +48,34 @@ export const REQUIRED_POLICY_SENTENCES: Readonly<
 		"До краткого value statement и мягкого предложения встречи допустимо не более двух discovery-реплик и не более двух discovery-вопросов суммарно.",
 		"не позднее ответа на второй discovery-вопрос сделай краткое мягкое предложение показать Botamin или согласовать видео-встречу.",
 		"Ясный отказ от предложения о следующем шаге сразу останавливает продажу.",
+		"Без отдельного запроса разрешения сразу спроси первое отсутствующее qualification-поле; если оба поля уже известны из server facts, ничего не спрашивай и заверши.",
 	],
 	"prompts/booking.md": [
 		"Только после согласия пользователя используй ровно два кандидата из `schedulingContext.candidateMeetingSlots`.",
 		"Представь их как две текущие внутренние альтернативы, а не как исчерпывающую внешнюю или календарную доступность; если часть дня не подходит, предложи назвать другую, чтобы server context обновил пару.",
 		"известно имя и компания;",
 		"есть рабочий email и хотя бы один дополнительный контакт: телефон или Telegram;",
+		"после правдивого подтверждения без отдельного запроса разрешения сразу задай первый вопрос только об отсутствующем qualification-поле; если оба поля уже известны из server facts, не задавай ничего и заверши;",
 	],
 	"prompts/qualification.md": [
-		"месячный объём входящих лидов — сохрани в `monthlyLeadVolume`;",
+		"месячный объём лидов или обрабатываемых контактов — сохрани в `monthlyLeadVolume`;",
 		"явное число менеджеров продаж — сохрани целым числом в `salesManagerCount` без домысливания.",
+		"Если оба поля отсутствуют, сначала спроси месячный объём; если одно уже известно, спроси только другое; если оба известны, не задавай qualification-вопросов и заверши.",
+		"Если пользователь назвал объём просто «в день» без явного основания, сначала уточни: «Это по рабочим или календарным дням?».",
+		"Сам не вычисляй и не утверждай умножение на 22 или 30 дней.",
 	],
 	"prompts/speech-style.md": [
 		"Выражай одну мысль и задавай не больше одного вопроса.",
 		"Ориентир — до двенадцати секунд речи без веской причины.",
 	],
 };
+
+export const FORBIDDEN_POLICY_PHRASES = [
+	"можно задать два коротких вопроса",
+	"отдельного явного согласия",
+	"пользователь согласился ответить на дополнительные вопросы",
+	"только после consent собери",
+] as const;
 
 interface SynchronizedPolicyRule {
 	name: string;
@@ -142,19 +154,55 @@ export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[]
 			name: "durable internal virtual meeting",
 			activePath: "prompts/booking.md",
 			activeSentence:
-				"скажи, что внутренняя заявка на виртуальную встречу создана на точный выбранный `displayLabel` по Москве;",
+				"скажи, что внутренняя виртуальная встреча создана на точный выбранный `displayLabel` по Москве;",
 			starterPath: "prompts/booking.md",
 			starterSentence:
-				"скажи, что внутренняя заявка на виртуальную встречу создана на точный выбранный slot по Москве;",
+				"скажи, что внутренняя виртуальная встреча создана на точный выбранный slot по Москве;",
 		},
 		{
-			name: "separate qualification permission",
+			name: "direct missing-only qualification",
 			activePath: "prompts/booking.md",
 			activeSentence:
-				"дословно спроси: «Можно задать два коротких вопроса?» и дождись отдельного явного согласия;",
+				"после правдивого подтверждения без отдельного запроса разрешения сразу задай первый вопрос только об отсутствующем qualification-поле; если оба поля уже известны из server facts, не задавай ничего и заверши;",
 			starterPath: "prompts/booking.md",
 			starterSentence:
-				"дословно спроси: «Можно задать два коротких вопроса?» и дождись отдельного явного согласия;",
+				"после правдивого подтверждения без отдельного запроса разрешения сразу задай первый вопрос только об отсутствующем qualification-поле; если оба поля уже известны из server facts, не задавай ничего и заверши;",
+		},
+		{
+			name: "known qualification facts are never repeated",
+			activePath: "prompts/qualification.md",
+			activeSentence:
+				"Никогда не повторяй значения `monthlyLeadVolume` или `salesManagerCount`, уже известные из server facts.",
+			starterPath: "prompts/qualification.md",
+			starterSentence:
+				"Никогда не повторяй уже известные `monthlyLeadVolume` или `salesManagerCount`.",
+		},
+		{
+			name: "inbound and outbound lead-volume context",
+			activePath: "prompts/qualification.md",
+			activeSentence:
+				"для входящего процесса спроси о входящих лидах или обращениях, для исходящего — об обрабатываемых исходящих контактах, для смешанного или неизвестного — о лидах или контактах, обрабатываемых за месяц.",
+			starterPath: "prompts/qualification.md",
+			starterSentence:
+				"месячный объём лидов или обрабатываемых контактов (`monthlyLeadVolume`), сформулированный по inbound/outbound контексту;",
+		},
+		{
+			name: "daily lead-volume basis clarification",
+			activePath: "prompts/qualification.md",
+			activeSentence:
+				"Если пользователь назвал объём просто «в день» без явного основания, сначала уточни: «Это по рабочим или календарным дням?».",
+			starterPath: "prompts/qualification.md",
+			starterSentence:
+				"Если объём дан просто за день, до нормализации уточни, рабочие это или календарные дни.",
+		},
+		{
+			name: "optional qualification refusal preserves meeting",
+			activePath: "prompts/qualification.md",
+			activeSentence:
+				"При явном отказе в любой момент прекрати квалификацию: без ответов сохрани skipped, с одним сохранённым фактом оставь partial; больше ничего не спрашивай и не продавай. Существующая встреча остаётся `booked`.",
+			starterPath: "prompts/qualification.md",
+			starterSentence:
+				"Явный отказ в любой момент означает skipped без ответов или сохраняет partial с известным фактом; встреча остаётся созданной, больше не квалифицируй и не продавай.",
 		},
 		{
 			name: "neutral Russian persona wording",
@@ -485,6 +533,14 @@ function validateSource(relativePath: string, source: string): string {
 	}
 	if (SECRET_PATTERNS.some((pattern) => pattern.test(normalized)))
 		fail(`${relativePath} contains a secret-like pattern`);
+	if (
+		relativePath.startsWith("prompts/") &&
+		FORBIDDEN_POLICY_PHRASES.some((phrase) =>
+			normalized.toLocaleLowerCase("ru-RU").includes(phrase),
+		)
+	) {
+		fail(`${relativePath} contains forbidden qualification-permission wording`);
+	}
 	const sourceLines = normalized.split("\n");
 	if (
 		relativePath === "knowledge/cases.md" &&

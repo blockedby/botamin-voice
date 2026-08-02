@@ -36,7 +36,13 @@ describe("development-only voice demo fixtures", () => {
 			qualificationStatus: "partial",
 		});
 		expect(booked.transcript.at(-1)?.text).toContain(
+			"Внутренняя виртуальная встреча создана на точный согласованный слот по Москве",
+		);
+		expect(booked.transcript.at(-1)?.text).toContain(
 			"Внешнее календарное событие и приглашение не создавались",
+		);
+		expect(booked.transcript.at(-1)?.text).not.toContain(
+			"контакт и желаемый следующий шаг записаны",
 		);
 		expect(completed.transcript).toEqual(booked.transcript);
 	});

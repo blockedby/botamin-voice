@@ -181,6 +181,11 @@ export interface BookingDraftStore {
 		conversationId: string,
 		submission: BookingFormDetails,
 	): InternalBookingDraft;
+	setSelectedCandidate(
+		conversationId: string,
+		expectedRevision: number,
+		candidateId: string | null,
+	): InternalBookingDraft;
 	resolveConflict(
 		conversationId: string,
 		resolution: BookingConflictResolution,
@@ -513,6 +518,33 @@ export class SqliteBookingDraftStore implements BookingDraftStore {
 				hash: requestHash(parsed),
 			},
 		);
+	}
+
+	setSelectedCandidate(
+		conversationId: string,
+		expectedRevision: number,
+		candidateId: string | null,
+	): InternalBookingDraft {
+		const parsedCandidateId =
+			candidateId === null
+				? null
+				: this.parseInput(EntityIdSchema, candidateId);
+		return this.mutate(conversationId, expectedRevision, (draft) => {
+			assertMutable(draft);
+			if (parsedCandidateId === null) {
+				const material = draft.selectedCandidate !== null;
+				draft.selectedCandidate = null;
+				return { material };
+			}
+			const selected = draft.candidates.find(
+				(candidate) => candidate.candidateId === parsedCandidateId,
+			);
+			if (!selected) throw new BookingDraftError("CANDIDATE_MISMATCH");
+			const material =
+				draft.selectedCandidate?.candidateId !== selected.candidateId;
+			draft.selectedCandidate = selected;
+			return { material };
+		});
 	}
 
 	resolveConflict(

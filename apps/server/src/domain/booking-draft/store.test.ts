@@ -264,6 +264,42 @@ describe("SqliteBookingDraftStore", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("selects and clears only an exact current candidate at the current revision", () => {
+		const { database, conversationId, store } = setup();
+		const initial = store.initialize(conversationId, slots);
+		const selected = store.setSelectedCandidate(
+			conversationId,
+			initial.revision,
+			initial.candidates[1].candidateId,
+		);
+		expect(selected.selectedCandidate).toEqual(initial.candidates[1]);
+		expectDraftError(
+			() =>
+				store.setSelectedCandidate(
+					conversationId,
+					initial.revision,
+					initial.candidates[0].candidateId,
+				),
+			"INVALID_REVISION",
+		);
+		expectDraftError(
+			() =>
+				store.setSelectedCandidate(
+					conversationId,
+					selected.revision,
+					Bun.randomUUIDv7(),
+				),
+			"CANDIDATE_MISMATCH",
+		);
+		const cleared = store.setSelectedCandidate(
+			conversationId,
+			selected.revision,
+			null,
+		);
+		expect(cleared.selectedCandidate).toBeNull();
+		closeDomainDatabase(database);
+	});
+
 	test("rejects stale revisions without mutating persisted state", () => {
 		const { database, conversationId, store } = setup();
 		const initial = store.initialize(conversationId, slots);

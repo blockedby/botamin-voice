@@ -394,6 +394,130 @@ describe("orchestrator with durable SQLite booking service", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("gateway publishes booking and meeting widgets only after typed voice-parity confirmation", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "botamin-rc4-typed-gateway-"));
+		directories.push(directory);
+		const database = openDomainDatabase({
+			filename: join(directory, "domain.db"),
+		});
+		const conversationId = Bun.randomUUIDv7();
+		new ConversationStore(database).create({
+			id: conversationId,
+			stage: "CONNECTING",
+			promptVersion,
+			source: "landing",
+			locale: "ru-RU",
+			qualificationEnabled: false,
+			consentAt: timestamp,
+			startedAt: timestamp,
+		});
+		const service = new SqliteBookingService(database, {
+			now: () => new Date(timestamp),
+		});
+		const draftStore = new SqliteBookingDraftStore(database, {
+			now: () => new Date(timestamp),
+		});
+		const orchestrator = new ConversationOrchestrator({
+			conversationId,
+			promptVersion,
+			stt: new FakeStt(),
+			brain: new FakeBrain(),
+			bookings: service,
+			draftStore,
+			tts: new FakeTts(),
+			now: () => new Date(timestamp),
+			initialState: {
+				...createInitialConversationState({ qualificationEnabled: false }),
+				contactConsentConfirmed: true,
+			},
+		});
+		const session = new GatewaySession({
+			conversationId,
+			expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+			orchestrator,
+			bookings: service,
+			draftStore,
+			persistence: {
+				appendTurn: () => undefined,
+				setConversationActive: () => undefined,
+				updateConversationStage: () => undefined,
+				failConversation: () => undefined,
+				stopConversation: () => undefined,
+			},
+			brainModel: "fake-luna",
+			maxUtteranceMs: 60_000,
+			maxAudioBytes: 2_000_000,
+			maxFrameBytes: 3_209,
+			maxJsonBytes: 8_192,
+			maxHistoryEvents: 128,
+			maxHistoryBytes: 5_000_000,
+			acquireTurn: async () => ({ ok: true, release: () => undefined }),
+			tokenFactory: () => "initial-typed-client-token-0000000000",
+			now: () => new Date(timestamp),
+		});
+		expect(orchestrator.apply({ type: "connected" }).ok).toBe(true);
+		expect(orchestrator.apply({ type: "booking_offered" }).ok).toBe(true);
+		expect(orchestrator.apply({ type: "booking_accepted" }).ok).toBe(true);
+		const socket = new TestSocket();
+		session.attach(socket);
+		await session.receive(
+			socket,
+			JSON.stringify(
+				ClientWsEventSchema.parse({
+					v: 1,
+					type: "client.hello",
+					conversationId,
+					at: timestamp,
+					payload: {
+						resumeToken: session.takeClientToken(),
+						audio: {
+							encoding: "pcm16le",
+							sampleRate: 16_000,
+							channels: 1,
+							chunkMs: 100,
+						},
+					},
+				}),
+			),
+		);
+		const textEvent = (sequence: number, text: string) =>
+			JSON.stringify(
+				ClientWsEventSchema.parse({
+					v: 1,
+					type: "visitor.text.submit",
+					conversationId,
+					at: timestamp,
+					payload: { sequence, text },
+				}),
+			);
+		await session.receive(
+			socket,
+			textEvent(
+				0,
+				"Меня зовут Алексей Петров, компания Ромашка. Почта alex.petrov@example.com, телефон +7 955 567-89-55. Первый вариант.",
+			),
+		);
+		await session.drain();
+		expect(
+			socket.events().filter((event) => event.type === "booking.created"),
+		).toHaveLength(0);
+		expect(draftStore.load(conversationId)?.readiness).toBe("ready");
+		await session.receive(socket, textEvent(1, "да, подтверждаю"));
+		await session.drain();
+		const events = socket.events();
+		expect(
+			events.filter((event) => event.type === "booking.created"),
+		).toHaveLength(1);
+		expect(
+			events.filter((event) => event.type === "internal.meeting.updated"),
+		).toHaveLength(1);
+		expect(
+			database.select({ value: count() }).from(bookings).get()?.value,
+		).toBe(1);
+		await session.stop();
+		closeDomainDatabase(database);
+	});
+
 	test("gateway correlates strict draft commands and replays one durable meeting", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "botamin-rc4-gateway-"));
 		directories.push(directory);

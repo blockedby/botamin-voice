@@ -551,13 +551,13 @@ function extractIntents(
 	let confirmation: ConversationIntentIndicators["confirmation"] = null;
 	if (context.pendingConfirmation) {
 		if (
-			/^(?:да|да, подтверждаю|подтверждаю|верно|вс[её] верно|согласен|согласна|yes|confirm|correct)[.!]?$/u.test(
+			/^(?:да|да,?\s+подтверждаю|подтверждаю|верно|вс[её] верно|да,?\s+вс[её] верно|вс[её] верно,?\s+(?:записывайте|бронируйте)|согласен|согласна|yes|confirm|correct)[.!]?$/u.test(
 				normalized,
 			)
 		) {
 			confirmation = "confirmed";
 		} else if (
-			/^(?:нет|не подтверждаю|неверно|отклоняю|no|decline|incorrect)[.!]?$/u.test(
+			/^(?:нет|нет,?\s+не подтверждаю|не подтверждаю|неверно|отклоняю|no|decline|incorrect)[.!]?$/u.test(
 				normalized,
 			)
 		) {

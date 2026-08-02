@@ -347,6 +347,10 @@ describe("context-gated intent indicators", () => {
 			extract("Да", { pendingConfirmation: true }).intents.confirmation,
 		).toBe("confirmed");
 		expect(
+			extract("Всё верно, записывайте", { pendingConfirmation: true }).intents
+				.confirmation,
+		).toBe("confirmed");
+		expect(
 			extract("Не подтверждаю", { pendingConfirmation: true }).intents
 				.confirmation,
 		).toBe("declined");

@@ -579,6 +579,7 @@ export class GatewaySession {
 		this.#bookingCommandPending = true;
 		try {
 			this.#draftStore.applyForm(this.conversationId, payload);
+			this.#orchestrator.invalidatePendingDraftConfirmation();
 			this.#publishDraft(payload.requestId);
 		} catch (error) {
 			this.#rejectDraft(payload.requestId, error);
@@ -600,6 +601,7 @@ export class GatewaySession {
 		this.#bookingCommandPending = true;
 		try {
 			this.#draftStore.resolveConflict(this.conversationId, payload);
+			this.#orchestrator.invalidatePendingDraftConfirmation();
 			this.#publishDraft(payload.requestId);
 		} catch (error) {
 			this.#rejectDraft(payload.requestId, error);

@@ -38,6 +38,10 @@ import {
 	type MonthlyLeadVolume,
 } from "../domain/facts";
 import type { ObservabilityMetrics } from "../observability";
+import {
+	type BookingSelectionResolution,
+	resolveCurrentBookingCandidate,
+} from "./booking-selection";
 import { buildBrainContext } from "./context";
 import { GenerationCoordinator } from "./generation";
 import {
@@ -203,6 +207,12 @@ interface DeterministicFactUpdate {
 	pendingDailyBasis: boolean;
 }
 
+interface PendingDraftConfirmation {
+	revision: number;
+	candidateId: string;
+	generationId: string;
+}
+
 const BOOKING_FAILURE =
 	"Не получилось сохранить данные, поэтому я не буду подтверждать бронь. Проверьте контакт и попробуйте ещё раз.";
 const QUALIFICATION_FAILURE =
@@ -214,6 +224,14 @@ const SALES_MANAGER_COUNT_QUESTION =
 const DAILY_LEAD_BASIS_QUESTION = "Это по рабочим или календарным дням?";
 const DRAFT_CONFLICT_RESPONSE =
 	"В данных есть расхождение. Выберите верный вариант в форме, и только после этого я смогу подтвердить встречу.";
+const AMBIGUOUS_SLOT_RESPONSE =
+	"Не удалось однозначно выбрать время. Назовите точное время или скажите: первый вариант либо второй вариант.";
+const STALE_SLOT_RESPONSE =
+	"Такого времени нет среди текущих вариантов. Выберите, пожалуйста, первый или второй вариант.";
+const STALE_DRAFT_CONFIRMATION_RESPONSE =
+	"Данные встречи изменились, поэтому прежнее подтверждение больше не действует. Проверьте актуальные данные и снова выберите время.";
+const DRAFT_CONFIRMATION_DECLINED_RESPONSE =
+	"Хорошо, встречу не сохраняю. Скажите, пожалуйста, что нужно изменить.";
 const QUALIFICATION_COMPLETE_CONFIRMATION =
 	"Дополнительные ответы сохранены. Спасибо, на этом всё.";
 const QUALIFICATION_SKIPPED_CONFIRMATION =
@@ -412,6 +430,7 @@ export class ConversationOrchestrator {
 	#timeOfDayPreference: MeetingTimePreference = "none";
 	#rejectedTimeOfDayPreferences: MeetingTimeBand[] = [];
 	#pendingDailyLeadVolume: CountAmount | null = null;
+	#pendingDraftConfirmation: PendingDraftConfirmation | null = null;
 	#lifecycleInterruption: Promise<void> = Promise.resolve();
 	#closed = false;
 	#closePromise: Promise<void> | null = null;
@@ -460,6 +479,12 @@ export class ConversationOrchestrator {
 		const previousStage = this.#state.stage;
 		this.#state = result.state;
 		if (this.#state.stage === previousStage) return result;
+		if (
+			this.#state.stage === "DISCONNECTED" ||
+			this.#state.stage !== "COLLECT_BOOKING"
+		) {
+			this.#pendingDraftConfirmation = null;
+		}
 		if (this.#state.stage === "DISCONNECTED") {
 			this.#sttTurns.suspend();
 			this.#lifecycleInterruption = this.#invalidateActiveWork("disconnect");
@@ -632,10 +657,16 @@ export class ConversationOrchestrator {
 		);
 	}
 
+	/** Clears a spoken confirmation permit after a successful external mutation. */
+	invalidatePendingDraftConfirmation(): void {
+		this.#pendingDraftConfirmation = null;
+	}
+
 	/** Server-owned commit path for an exact confirmed current draft revision. */
 	async *confirmBookingDraft(
 		input: DraftConfirmationInput,
 	): AsyncGenerator<OrchestratorEvent> {
+		this.#pendingDraftConfirmation = null;
 		const store = this.#draftStore;
 		if (!store) throw new BookingDraftError("INVALID_TRANSITION");
 		const existing = store.load(this.conversationId);
@@ -838,6 +869,9 @@ export class ConversationOrchestrator {
 	}
 
 	async interrupt(generationId: string): Promise<OrchestratorEvent> {
+		if (this.#pendingDraftConfirmation?.generationId === generationId) {
+			this.#pendingDraftConfirmation = null;
+		}
 		const active = this.#generations.current();
 		if (!active || active.generationId !== generationId) {
 			return { type: "ignored", generationId, source: "generation" };
@@ -891,6 +925,61 @@ export class ConversationOrchestrator {
 		knownFacts: KnownFacts;
 		source: "voice_transcript" | "typed_message";
 	}): AsyncGenerator<OrchestratorEvent> {
+		const pendingConfirmation = this.#pendingDraftConfirmation;
+		this.#pendingDraftConfirmation = null;
+		if (pendingConfirmation) {
+			const confirmationIntent = extractConversationFacts({
+				source: "visitor",
+				accepted: true,
+				text: input.userText,
+				context: { pendingConfirmation: true },
+			}).intents.confirmation;
+			if (confirmationIntent === "confirmed") {
+				yield {
+					type: "transcript.final",
+					turnId: input.turnId,
+					text: input.userText,
+				};
+				const draft = this.#draftStore?.load(this.conversationId);
+				if (
+					draft?.revision !== pendingConfirmation.revision ||
+					draft.readiness !== "ready" ||
+					draft.confirmationStatus !== "unconfirmed" ||
+					(draft.commitStatus !== "uncommitted" &&
+						draft.commitStatus !== "failed") ||
+					draft.selectedCandidate?.candidateId !==
+						pendingConfirmation.candidateId
+				) {
+					yield* this.#renderDeterministicFinalResponse(
+						input,
+						STALE_DRAFT_CONFIRMATION_RESPONSE,
+					);
+					return;
+				}
+				yield* this.confirmBookingDraft({
+					turnId: input.turnId,
+					generationId: input.generationId,
+					confirmation: {
+						requestId: this.#createId(),
+						revision: pendingConfirmation.revision,
+					},
+				});
+				return;
+			}
+			if (confirmationIntent === "declined") {
+				yield {
+					type: "transcript.final",
+					turnId: input.turnId,
+					text: input.userText,
+				};
+				yield* this.#renderDeterministicFinalResponse(
+					input,
+					DRAFT_CONFIRMATION_DECLINED_RESPONSE,
+				);
+				return;
+			}
+		}
+
 		const factUpdate = this.#ingestIntoExistingDraft(input);
 		const negativeIntent = classifyConservativeNegativeIntent(
 			input.userText,
@@ -983,6 +1072,29 @@ export class ConversationOrchestrator {
 		yield* this.#runBrainTurn(input, active);
 	}
 
+	async *#renderDeterministicFinalResponse(
+		input: { turnId: string; generationId: string },
+		text: string,
+	): AsyncGenerator<OrchestratorEvent> {
+		try {
+			this.#generations.start(input.generationId, input.turnId);
+		} catch {
+			yield {
+				type: "ignored",
+				generationId: input.generationId,
+				source: "generation",
+			};
+			return;
+		}
+		this.#budgets.startTurn();
+		const rendered = yield* this.#renderPhrase(input, text);
+		yield* this.#finishGeneration(
+			input.generationId,
+			[rendered.visibleText],
+			rendered.audioProduced,
+		);
+	}
+
 	async *#runBrainTurn(
 		input: {
 			turnId: string;
@@ -1045,7 +1157,19 @@ export class ConversationOrchestrator {
 		try {
 			const now = this.#now();
 			const concreteRequest = parseConcreteMeetingRequest(input.userText, now);
-			if (concreteRequest.kind === "none") {
+			const draftBeforeRefresh = this.#draftStore?.load(this.conversationId);
+			const selectionBeforeRefresh =
+				this.#state.stage === "COLLECT_BOOKING" && draftBeforeRefresh
+					? resolveCurrentBookingCandidate(
+							input.userText,
+							draftBeforeRefresh.candidates,
+							now,
+						)
+					: ({ kind: "none" } satisfies BookingSelectionResolution);
+			if (
+				concreteRequest.kind === "none" &&
+				selectionBeforeRefresh.kind === "none"
+			) {
 				const parsedPreference = parseMeetingTimePreference(input.userText);
 				if (parsedPreference.kind === "selected") {
 					this.#timeOfDayPreference = parsedPreference.preference;
@@ -1054,7 +1178,7 @@ export class ConversationOrchestrator {
 					this.#timeOfDayPreference = "none";
 					this.#rejectedTimeOfDayPreferences = [parsedPreference.preference];
 				}
-			} else {
+			} else if (concreteRequest.kind !== "none") {
 				this.#timeOfDayPreference = "none";
 				this.#rejectedTimeOfDayPreferences = [];
 			}
@@ -1082,8 +1206,65 @@ export class ConversationOrchestrator {
 				};
 			}
 			if (!this.#generations.accept(input.generationId, input.turnId)) return;
-			const directDraft = this.#draftStore?.load(this.conversationId);
+			let directDraft = this.#draftStore?.load(this.conversationId);
 			if (this.#state.stage === "COLLECT_BOOKING" && directDraft) {
+				const selection = resolveCurrentBookingCandidate(
+					input.userText,
+					directDraft.candidates,
+					now,
+				);
+				if (selection.kind === "selected") {
+					if (
+						directDraft.selectedCandidate?.candidateId !== selection.candidateId
+					) {
+						directDraft = this.#draftStore?.setSelectedCandidate(
+							this.conversationId,
+							directDraft.revision,
+							selection.candidateId,
+						);
+						if (directDraft) {
+							yield {
+								type: "booking.draft.updated",
+								generationId: input.generationId,
+								requestId: null,
+								bookingDraft: deriveBrowserBookingDraft(directDraft),
+							};
+						}
+					}
+				} else if (
+					selection.kind === "ambiguous" ||
+					selection.kind === "not_current"
+				) {
+					if (directDraft.selectedCandidate) {
+						directDraft = this.#draftStore?.setSelectedCandidate(
+							this.conversationId,
+							directDraft.revision,
+							null,
+						);
+						if (directDraft) {
+							yield {
+								type: "booking.draft.updated",
+								generationId: input.generationId,
+								requestId: null,
+								bookingDraft: deriveBrowserBookingDraft(directDraft),
+							};
+						}
+					}
+					this.#pendingDraftConfirmation = null;
+					const text =
+						selection.kind === "ambiguous"
+							? AMBIGUOUS_SLOT_RESPONSE
+							: STALE_SLOT_RESPONSE;
+					const rendered = yield* this.#renderPhrase(input, text);
+					yield* this.#finishGeneration(
+						input.generationId,
+						[rendered.visibleText],
+						rendered.audioProduced,
+					);
+					return;
+				}
+
+				if (!directDraft) return;
 				const hasConflict = Object.values(directDraft.factRegistry.facts).some(
 					(fact) => fact.status === "conflicted",
 				);
@@ -1092,6 +1273,19 @@ export class ConversationOrchestrator {
 						? DRAFT_CONFLICT_RESPONSE
 						: this.#draftConfirmationQuestion(directDraft);
 					const rendered = yield* this.#renderPhrase(input, text);
+					if (
+						!hasConflict &&
+						directDraft.readiness === "ready" &&
+						directDraft.selectedCandidate &&
+						rendered.visibleText &&
+						this.#generations.accept(input.generationId, input.turnId)
+					) {
+						this.#pendingDraftConfirmation = {
+							revision: directDraft.revision,
+							candidateId: directDraft.selectedCandidate.candidateId,
+							generationId: input.generationId,
+						};
+					}
 					yield* this.#finishGeneration(
 						input.generationId,
 						[rendered.visibleText],
@@ -1522,6 +1716,7 @@ export class ConversationOrchestrator {
 			draft.revision,
 			candidateMeetingSlots,
 		);
+		this.#pendingDraftConfirmation = null;
 		return deriveBrowserBookingDraft(draft);
 	}
 
@@ -1548,7 +1743,11 @@ export class ConversationOrchestrator {
 			return "Проверьте обязательные данные и выберите один из текущих вариантов времени.";
 		}
 		const contactText = contacts
-			.map((contact) => `${contact.channel}: ${contact.value}`)
+			.map((contact) => {
+				if (contact.channel === "email") return `почта ${contact.value}`;
+				if (contact.channel === "phone") return `телефон ${contact.value}`;
+				return `Телеграм ${contact.value}`;
+			})
 			.join(", ");
 		return `Подтвердите, пожалуйста: ${facts.name}, компания ${facts.company}, ${contactText}, встреча ${moscowSlotText(selected.meetingSlot)}. Всё верно?`;
 	}

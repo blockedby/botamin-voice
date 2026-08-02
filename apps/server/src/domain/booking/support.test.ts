@@ -35,34 +35,51 @@ describe("server-owned contextual Moscow slots", () => {
 	});
 
 	test("parses bounded Russian typed and spoken preference variants", () => {
-		expect(parseMeetingTimePreference("Лучше утром")).toBe("morning");
-		expect(parseMeetingTimePreference("утро")).toBe("morning");
-		expect(parseMeetingTimePreference("Давайте с утра")).toBe("morning");
-		expect(parseMeetingTimePreference("Удобно днём")).toBe("daytime");
-		expect(parseMeetingTimePreference("день")).toBe("daytime");
-		expect(parseMeetingTimePreference("Во второй половине дня")).toBe(
-			"second_half",
-		);
-		expect(parseMeetingTimePreference("вторая половина дня")).toBe(
-			"second_half",
-		);
-		expect(parseMeetingTimePreference("Можно только вечером")).toBe("evening");
-		expect(parseMeetingTimePreference("вечер")).toBe("evening");
-		expect(
-			parseMeetingTimePreference(
-				"Нет, я бы хотел сегодня в одиннадцать часов вечера",
-			),
-		).toBe("evening");
-		expect(parseMeetingTimePreference("Давайте в десять часов утра")).toBe(
-			"morning",
-		);
-		expect(parseMeetingTimePreference("Подойдёт два часа дня")).toBe("daytime");
-		expect(parseMeetingTimePreference("Добрый вечер")).toBeNull();
-		expect(parseMeetingTimePreference("Добрый день")).toBeNull();
-		expect(parseMeetingTimePreference("Сегодня удобно созвониться")).toBeNull();
-		expect(parseMeetingTimePreference("Не вечером")).toBeNull();
+		for (const [text, preference] of [
+			["Лучше утром", "morning"],
+			["утро", "morning"],
+			["Давайте с утра", "morning"],
+			["Удобно днём", "daytime"],
+			["день", "daytime"],
+			["Во второй половине дня", "second_half"],
+			["вторая половина дня", "second_half"],
+			["Можно только вечером", "evening"],
+			["вечер", "evening"],
+			["сегодня в одиннадцать часов вечера", "evening"],
+			["Давайте в десять часов утра", "morning"],
+			["Подойдёт два часа дня", "daytime"],
+		] as const) {
+			expect(parseMeetingTimePreference(text)).toEqual({
+				kind: "selected",
+				preference,
+			});
+		}
+		for (const text of [
+			"Мне неудобно вечером",
+			"Вечером не могу",
+			"Не вечером",
+		]) {
+			expect(parseMeetingTimePreference(text)).toEqual({
+				kind: "rejected",
+				preference: "evening",
+			});
+		}
+		for (const text of [
+			"Добрый вечер",
+			"Добрый день",
+			"Сегодня удобно созвониться",
+			"Не только вечером",
+			"Не уверен, что вечером будет удобно?",
+			"Вечером не всегда удобно",
+			"Мне не очень удобно вечером",
+		]) {
+			expect(parseMeetingTimePreference(text)).toEqual({ kind: "no_mention" });
+		}
 		expect(() =>
 			generateCandidateMeetingSlots(thursday, [], "night" as never),
+		).toThrow();
+		expect(() =>
+			generateCandidateMeetingSlots(thursday, [], "evening", ["evening"]),
 		).toThrow();
 	});
 
@@ -92,6 +109,43 @@ describe("server-owned contextual Moscow slots", () => {
 		expect(new Set(moved.map((slot) => slot.startAt)).size).toBe(2);
 	});
 
+	test("keeps one morning and one evening after partial contextual collisions", () => {
+		const anchors = generateCandidateMeetingSlots(thursday);
+		const moved = generateCandidateMeetingSlots(
+			thursday,
+			anchors.map((slot) => slot.startAt),
+		);
+		expect(moved[0].startAt.slice(0, 10)).toBe("2025-01-10");
+		expect(localTimes(moved)).toEqual(["09:20", "16:20"]);
+	});
+
+	test("rolls to a later weekday when all contextual bands are occupied", () => {
+		const occupied = [
+			...Array.from({ length: 9 }, (_, index) => 9 * 60 + index * 20),
+			...Array.from({ length: 4 }, (_, index) => 16 * 60 + index * 20),
+		].map((minute) => {
+			const hour = Math.floor(minute / 60);
+			const minuteOfHour = minute % 60;
+			return new Date(
+				Date.UTC(2025, 0, 10, hour - 3, minuteOfHour),
+			).toISOString();
+		});
+		const rolled = generateCandidateMeetingSlots(thursday, occupied);
+		expect(rolled.map((slot) => slot.startAt)).toEqual([
+			"2025-01-13T06:00:00.000Z",
+			"2025-01-13T13:00:00.000Z",
+		]);
+		expect(localTimes(rolled)).toEqual(["09:00", "16:00"]);
+	});
+
+	test("a bare evening rejection proposes morning and daytime only", () => {
+		const slots = generateCandidateMeetingSlots(thursday, [], "none", [
+			"evening",
+		]);
+		expect(localTimes(slots)).toEqual(["09:00", "14:00"]);
+		expect(localTimes(slots).every((time) => time < "16:00")).toBe(true);
+	});
+
 	test("uses broader policy fallback only after an evening band is occupied", () => {
 		const eveningBand = ["16:00", "16:20", "16:40", "17:00"].map((time) => {
 			const [hour, minute] = time.split(":").map(Number);
@@ -109,7 +163,10 @@ describe("server-owned contextual Moscow slots", () => {
 	});
 
 	test("maps an exact 23:00 request to policy-safe evening alternatives", () => {
-		expect(parseMeetingTimePreference("Подойдёт в 23:00")).toBe("evening");
+		expect(parseMeetingTimePreference("Подойдёт в 23:00")).toEqual({
+			kind: "selected",
+			preference: "evening",
+		});
 		const slots = generateCandidateMeetingSlots(thursday, [], "evening");
 		expect(localTimes(slots)).toEqual(["16:00", "17:00"]);
 		expect(slots.every((slot) => slot.timeZone === "Europe/Moscow")).toBe(true);

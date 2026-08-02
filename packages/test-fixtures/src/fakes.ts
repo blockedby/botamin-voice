@@ -13,6 +13,7 @@ import {
 	type CreateBookingResult,
 	collectedQualificationFields,
 	type MeetingSlot,
+	type MeetingTimeBand,
 	type MeetingTimePreference,
 	MpegAudioBytesSchema,
 	type Notifier,
@@ -230,6 +231,7 @@ export interface FakeBookingOptions {
 	updatedEventId?: () => string;
 	candidateMeetingSlots?: (
 		preference?: MeetingTimePreference,
+		rejectedPreferences?: readonly MeetingTimeBand[],
 	) => [MeetingSlot, MeetingSlot] | Promise<[MeetingSlot, MeetingSlot]>;
 }
 
@@ -266,8 +268,9 @@ export class FakeBookingService implements BookingService {
 
 	async candidateMeetingSlots(
 		preference: MeetingTimePreference = "none",
+		rejectedPreferences: readonly MeetingTimeBand[] = [],
 	): Promise<[MeetingSlot, MeetingSlot]> {
-		return this.#options.candidateMeetingSlots(preference);
+		return this.#options.candidateMeetingSlots(preference, rejectedPreferences);
 	}
 
 	async createBooking(input: unknown): Promise<CreateBookingResult> {

@@ -20,6 +20,7 @@ function contextAt(now: Date) {
 		promptVersion: "a".repeat(64),
 		now,
 		timeOfDayPreference: "none",
+		rejectedTimeOfDayPreferences: [],
 		candidateMeetingSlots: generateCandidateMeetingSlots(now),
 	});
 }
@@ -35,6 +36,7 @@ describe("server-owned Moscow brain context", () => {
 			moscowLocalDate: "2025-01-09",
 			moscowWeekday: "четверг",
 			timeOfDayPreference: "none",
+			rejectedTimeOfDayPreferences: [],
 		});
 		expect(context.schedulingContext.candidateMeetingSlots).toEqual([
 			{
@@ -63,6 +65,7 @@ describe("server-owned Moscow brain context", () => {
 		const scheduling = buildSchedulingContext(
 			now,
 			"none",
+			[],
 			generateCandidateMeetingSlots(now),
 		);
 

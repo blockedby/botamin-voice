@@ -5,6 +5,7 @@ import {
 	BrainTurnInputSchema,
 	type KnownFacts,
 	type MeetingSlot,
+	type MeetingTimeBand,
 	type MeetingTimePreference,
 	SchedulingContextSchema,
 } from "@botamin/contracts";
@@ -42,6 +43,7 @@ export interface BrainContextInput {
 	promptVersion: string;
 	now: Date;
 	timeOfDayPreference: MeetingTimePreference;
+	rejectedTimeOfDayPreferences: readonly MeetingTimeBand[];
 	candidateMeetingSlots: readonly [MeetingSlot, MeetingSlot];
 }
 
@@ -88,6 +90,7 @@ function displayLabel(slot: MeetingSlot): string {
 export function buildSchedulingContext(
 	now: Date,
 	timeOfDayPreference: MeetingTimePreference,
+	rejectedTimeOfDayPreferences: readonly MeetingTimeBand[],
 	candidateMeetingSlots: readonly [MeetingSlot, MeetingSlot],
 ): BrainTurnInput["schedulingContext"] {
 	if (!Number.isFinite(now.getTime()))
@@ -98,6 +101,7 @@ export function buildSchedulingContext(
 		moscowLocalDate: `${String(local.getUTCFullYear()).padStart(4, "0")}-${String(local.getUTCMonth() + 1).padStart(2, "0")}-${String(local.getUTCDate()).padStart(2, "0")}`,
 		moscowWeekday: WEEKDAYS[local.getUTCDay()],
 		timeOfDayPreference,
+		rejectedTimeOfDayPreferences,
 		candidateMeetingSlots: candidateMeetingSlots.map((meetingSlot) => ({
 			meetingSlot,
 			displayLabel: displayLabel(meetingSlot),
@@ -119,6 +123,7 @@ export function buildBrainContext(input: BrainContextInput): BrainTurnInput {
 		schedulingContext: buildSchedulingContext(
 			input.now,
 			input.timeOfDayPreference,
+			input.rejectedTimeOfDayPreferences,
 			input.candidateMeetingSlots,
 		),
 		allowedActions: [...new Set(input.allowedActions)].sort(),

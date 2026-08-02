@@ -184,6 +184,7 @@ describe("shared contracts", () => {
 				moscowLocalDate: "2025-01-09",
 				moscowWeekday: "четверг",
 				timeOfDayPreference: "none",
+				rejectedTimeOfDayPreferences: [],
 				candidateMeetingSlots: candidateMeetingSlots.map((slot) => ({
 					meetingSlot: slot,
 					displayLabel:
@@ -201,6 +202,21 @@ describe("shared contracts", () => {
 				schedulingContext: {
 					...input.schedulingContext,
 					timeOfDayPreference: "late_night",
+				},
+			},
+			{
+				...input,
+				schedulingContext: {
+					...input.schedulingContext,
+					timeOfDayPreference: "evening",
+					rejectedTimeOfDayPreferences: ["evening"],
+				},
+			},
+			{
+				...input,
+				schedulingContext: {
+					...input.schedulingContext,
+					rejectedTimeOfDayPreferences: ["evening"],
 				},
 			},
 			{

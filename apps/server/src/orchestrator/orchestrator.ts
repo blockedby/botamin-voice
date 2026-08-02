@@ -5,6 +5,7 @@ import type {
 	BrainTurnInput,
 	KnownFacts,
 	MeetingSlot,
+	MeetingTimeBand,
 	MeetingTimePreference,
 	QualificationField,
 	SafeErrorCode,
@@ -280,14 +281,14 @@ export function classifyConservativeNegativeIntent(
 			: null;
 	}
 	if (state.stage === "BOOKED" && state.bookingConfirmationDelivered) {
-		return /^(?:нет|нет спасибо|нет не задавайте|не задавайте|не надо|не нужно|не хочу|пропустим|давайте пропустим)(?: дополнительные вопросы)?$/u.test(
+		return /^(?:нет|нет спасибо|нет на этом вс[её]|на этом вс[её]|нет не задавайте|не задавайте|не надо|не нужно|не хочу|пропустим|давайте пропустим)(?: дополнительные вопросы)?$/u.test(
 			normalized,
 		)
 			? "qualification_decline"
 			: null;
 	}
 	if (state.stage === "POST_BOOKING_QUALIFICATION") {
-		return /^(?:нет(?: спасибо)?|(?:(?:не хочу|не буду) (?:отвечать|продолжать)(?: на)?|не задавайте|давайте (?:закончим|завершим|пропустим)|пропустим)(?: дополнительные вопросы| опрос| квалификацию)?(?: пожалуйста)?)$/u.test(
+		return /^(?:нет(?: спасибо)?|нет на этом вс[её]|на этом вс[её]|(?:(?:не хочу|не буду) (?:отвечать|продолжать)(?: на)?|не задавайте|давайте (?:закончим|завершим|пропустим)|пропустим)(?: дополнительные вопросы| опрос| квалификацию)?(?: пожалуйста)?)$/u.test(
 			normalized,
 		)
 			? "qualification_decline"
@@ -338,6 +339,7 @@ export class ConversationOrchestrator {
 	#threadId: string | undefined;
 	#state: ConversationState;
 	#timeOfDayPreference: MeetingTimePreference = "none";
+	#rejectedTimeOfDayPreferences: MeetingTimeBand[] = [];
 	#lifecycleInterruption: Promise<void> = Promise.resolve();
 	#closed = false;
 	#closePromise: Promise<void> | null = null;
@@ -743,11 +745,16 @@ export class ConversationOrchestrator {
 		try {
 			const now = this.#now();
 			const parsedPreference = parseMeetingTimePreference(input.userText);
-			if (parsedPreference !== null) {
-				this.#timeOfDayPreference = parsedPreference;
+			if (parsedPreference.kind === "selected") {
+				this.#timeOfDayPreference = parsedPreference.preference;
+				this.#rejectedTimeOfDayPreferences = [];
+			} else if (parsedPreference.kind === "rejected") {
+				this.#timeOfDayPreference = "none";
+				this.#rejectedTimeOfDayPreferences = [parsedPreference.preference];
 			}
 			const candidateMeetingSlots = await this.#bookings.candidateMeetingSlots(
 				this.#timeOfDayPreference,
+				this.#rejectedTimeOfDayPreferences,
 			);
 			if (!this.#generations.accept(input.generationId, input.turnId)) return;
 			const context = buildBrainContext({
@@ -763,6 +770,7 @@ export class ConversationOrchestrator {
 				promptVersion: this.#promptVersion,
 				now,
 				timeOfDayPreference: this.#timeOfDayPreference,
+				rejectedTimeOfDayPreferences: this.#rejectedTimeOfDayPreferences,
 				candidateMeetingSlots,
 			});
 			schedulingReady = true;

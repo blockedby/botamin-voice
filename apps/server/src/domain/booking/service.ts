@@ -17,6 +17,7 @@ import {
 	collectedQualificationFields,
 	type MeetingSlot,
 	MeetingSlotSchema,
+	type MeetingTimeBand,
 	type MeetingTimePreference,
 	PersistedQualificationPatchSchema,
 	type QualificationPatch,
@@ -149,6 +150,7 @@ export class SqliteBookingService implements BookingService {
 	 */
 	async candidateMeetingSlots(
 		preference: MeetingTimePreference = "none",
+		rejectedPreferences: readonly MeetingTimeBand[] = [],
 	): Promise<[MeetingSlot, MeetingSlot]> {
 		const now = this.now();
 		const unavailable = new Set<string>();
@@ -157,6 +159,7 @@ export class SqliteBookingService implements BookingService {
 				now,
 				unavailable,
 				preference,
+				rejectedPreferences,
 			);
 			const committed = this.database
 				.select({ startAt: bookings.meetingStartAt })

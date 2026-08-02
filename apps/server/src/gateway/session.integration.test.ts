@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+	type AppendQualificationInput,
+	type AppendQualificationResult,
 	BINARY_AUDIO_FRAME_KIND,
 	type BookingService,
 	type BookingSnapshot,
@@ -9,9 +11,11 @@ import {
 	ClientWsEventSchema,
 	type CreateBookingInput,
 	type CreateBookingResult,
+	collectedQualificationFields,
 	decodeBinaryAudioFrame,
 	encodeBinaryAudioFrame,
 	type MeetingSlot,
+	qualificationStatusFor,
 	ServerWsEventSchema,
 	type SttPort,
 	type SttTranscriptionRequest,
@@ -207,6 +211,7 @@ class FirstBlockingTts implements TtsPort {
 
 class Bookings implements BookingService {
 	createCalls = 0;
+	qualificationCalls = 0;
 	snapshot: BookingSnapshot | null = null;
 	async candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]> {
 		return [createTestMeetingSlot(), createTestMeetingSlot(1)];
@@ -236,8 +241,37 @@ class Bookings implements BookingService {
 			createdAt: this.snapshot.createdAt,
 		};
 	}
-	async appendQualification(): Promise<never> {
-		throw new Error("not used");
+	async appendQualification(
+		input: AppendQualificationInput,
+	): Promise<AppendQualificationResult> {
+		this.qualificationCalls += 1;
+		if (!this.snapshot || input.bookingId !== this.snapshot.id) {
+			throw new Error("booking missing");
+		}
+		const qualification = {
+			...(this.snapshot.qualification ?? {}),
+			...input.patch,
+		};
+		const qualificationStatus = qualificationStatusFor(
+			qualification,
+			input.completion === "skipped" ? "skipped" : "none",
+		);
+		if (qualificationStatus === "none") {
+			throw new Error("empty qualification");
+		}
+		this.snapshot = {
+			...this.snapshot,
+			qualification,
+			qualificationStatus,
+			updatedAt: now,
+		};
+		return {
+			ok: true,
+			bookingId: this.snapshot.id,
+			qualificationStatus,
+			updatedFields: collectedQualificationFields(input.patch),
+			updatedAt: now,
+		};
 	}
 	async findByConversationId() {
 		return this.snapshot;
@@ -845,6 +879,103 @@ describe("gateway fake full WebSocket path", () => {
 			harness.bookings.snapshot?.id,
 		);
 		expect(harness.bookings.createCalls).toBe(1);
+	});
+
+	test("exact eval refusal after one qualification answer completes without a brain turn", async () => {
+		const stt = new Stt();
+		const brain = new Brain((input) => {
+			if (input.stage === "COLLECT_BOOKING") {
+				return [
+					{
+						type: "tool.request",
+						turnId: input.turnId,
+						generationId: input.generationId,
+						tool: {
+							name: "create_booking",
+							callId: "booking-partial-refusal-call",
+							args: {
+								conversationId,
+								idempotencyKey: "booking-partial-refusal-key",
+								name: "Александр",
+								contacts: createTestBookingContacts(),
+								company: "Example LLC",
+								meetingSlot: createTestMeetingSlot(),
+								consentConfirmed: true,
+							},
+						},
+					},
+					{
+						type: "turn.completed",
+						turnId: input.turnId,
+						generationId: input.generationId,
+					},
+				];
+			}
+			if (input.stage === "POST_BOOKING_QUALIFICATION") {
+				return [
+					{
+						type: "tool.request",
+						turnId: input.turnId,
+						generationId: input.generationId,
+						tool: {
+							name: "append_booking_qualification",
+							callId: "qualification-partial-refusal-call",
+							args: {
+								bookingId: "01J00000000000000000000010",
+								idempotencyKey: "qualification-partial-refusal-key",
+								patch: { monthlyLeadVolume: "около 240" },
+								completion: "partial",
+							},
+						},
+					},
+					{
+						type: "turn.completed",
+						turnId: input.turnId,
+						generationId: input.generationId,
+					},
+				];
+			}
+			return [];
+		});
+		const harness = createHarness({
+			stt,
+			brain,
+			tts: null,
+			collectBooking: true,
+		});
+		const socket = new Socket();
+		await connect(harness.session, socket);
+
+		stt.text = "Сохраните бронь";
+		await sendUtterance(harness.session, socket, true, 0);
+		stt.text = "Да, можно.";
+		await sendUtterance(harness.session, socket, true, 1);
+		stt.text = "Около 240";
+		await sendUtterance(harness.session, socket, true, 2);
+		expect(harness.orchestrator.state).toMatchObject({
+			stage: "POST_BOOKING_QUALIFICATION",
+			booking: {
+				qualificationStatus: "partial",
+				qualification: { monthlyLeadVolume: "около 240" },
+			},
+		});
+		const brainRunsBeforeRefusal = brain.runs;
+
+		stt.text = "Нет, на этом всё.";
+		await sendUtterance(harness.session, socket, true, 3);
+
+		expect(brain.runs).toBe(brainRunsBeforeRefusal);
+		expect(harness.bookings.createCalls).toBe(1);
+		expect(harness.bookings.qualificationCalls).toBe(1);
+		expect(harness.orchestrator.state).toMatchObject({
+			stage: "COMPLETE",
+			booking: {
+				id: harness.bookings.snapshot?.id,
+				status: "booked",
+				qualificationStatus: "partial",
+				qualification: { monthlyLeadVolume: "около 240" },
+			},
+		});
 	});
 
 	test("barge-in aborts in-flight TTS and suppresses stale binary playback", async () => {

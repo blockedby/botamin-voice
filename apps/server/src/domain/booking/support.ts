@@ -4,6 +4,8 @@ import {
 	MEETING_TIME_ZONE,
 	type MeetingSlot,
 	MeetingSlotSchema,
+	type MeetingTimeBand,
+	MeetingTimeBandSchema,
 	type MeetingTimePreference,
 	MeetingTimePreferenceSchema,
 } from "@botamin/contracts";
@@ -36,10 +38,7 @@ interface PreferencePolicy {
 	band: readonly [number, number];
 }
 
-const PREFERENCE_POLICIES: Record<
-	Exclude<MeetingTimePreference, "none">,
-	PreferencePolicy
-> = {
+const PREFERENCE_POLICIES: Record<MeetingTimeBand, PreferencePolicy> = {
 	morning: { anchors: [9 * 60, 10 * 60], band: [9 * 60, 11 * 60 + 40] },
 	daytime: {
 		anchors: [14 * 60, 15 * 60],
@@ -74,16 +73,64 @@ function hasPositivePhrase(
 	return positive.test(text) && !negated.test(text);
 }
 
+export type MeetingTimePreferenceParseResult =
+	| { kind: "no_mention" }
+	| { kind: "selected"; preference: MeetingTimeBand }
+	| { kind: "rejected"; preference: MeetingTimeBand };
+
+const REJECTED_TIME_BAND_PATTERNS: ReadonlyArray<
+	readonly [MeetingTimeBand, RegExp]
+> = [
+	[
+		"morning",
+		/^(?:нет )?(?:(?:мне )?неудобно утром|утром (?:мне )?(?:неудобно|не могу)|не утром)$/u,
+	],
+	[
+		"daytime",
+		/^(?:нет )?(?:(?:мне )?неудобно дн[её]м|дн[её]м (?:мне )?(?:неудобно|не могу)|не дн[её]м)$/u,
+	],
+	[
+		"second_half",
+		/^(?:нет )?(?:(?:мне )?неудобно во второй половине дня|во второй половине дня (?:мне )?(?:неудобно|не могу)|не во второй половине дня)$/u,
+	],
+	[
+		"evening",
+		/^(?:нет )?(?:(?:мне )?неудобно вечером|вечером (?:мне )?(?:неудобно|не могу)|не вечером)$/u,
+	],
+];
+
+function explicitlyRejectedTimeBand(
+	userText: string,
+	text: string,
+): MeetingTimeBand | null {
+	if (/[?？]/u.test(userText) || /(?:^| )не только(?=$| )/u.test(text)) {
+		return null;
+	}
+	for (const [preference, pattern] of REJECTED_TIME_BAND_PATTERNS) {
+		if (pattern.test(text)) return preference;
+	}
+	return null;
+}
+
 /**
- * Reads only a small, explicit Russian-first vocabulary. Unknown, negated, or
- * conflicting wording is deliberately left to the existing server preference.
+ * Reads only a small, explicit Russian-first vocabulary. Unknown, ambiguous,
+ * and conflicting wording is distinguished from a bounded explicit rejection.
  */
 export function parseMeetingTimePreference(
 	userText: string,
-): MeetingTimePreference | null {
+): MeetingTimePreferenceParseResult {
 	const text = normalizedPreferenceText(userText);
-	if (!text) return null;
-	const keywordPreferences: MeetingTimePreference[] = [];
+	if (!text) return { kind: "no_mention" };
+	const rejected = explicitlyRejectedTimeBand(userText, text);
+	if (rejected) return { kind: "rejected", preference: rejected };
+	if (
+		/(?:^| )(?:не уверен(?:а|ы)?|сомневаюсь|возможно|наверное|не всегда|не очень)(?=$| )/u.test(
+			text,
+		)
+	) {
+		return { kind: "no_mention" };
+	}
+	const keywordPreferences: MeetingTimeBand[] = [];
 	if (
 		hasPositivePhrase(
 			text,
@@ -121,7 +168,7 @@ export function parseMeetingTimePreference(
 		keywordPreferences.push("evening");
 	}
 
-	const exactPreferences = new Set<MeetingTimePreference>();
+	const exactPreferences = new Set<MeetingTimeBand>();
 	for (const match of text.matchAll(
 		/(?:^| )([01]?\d|2[0-3]):([0-5]\d)(?=$| )/gu,
 	)) {
@@ -137,12 +184,15 @@ export function parseMeetingTimePreference(
 		new Set(keywordPreferences).size === 1 ? keywordPreferences[0] : null;
 	const exact = exactPreferences.size === 1 ? [...exactPreferences][0] : null;
 	if (keyword && exact) {
-		if (keyword === exact) return keyword;
-		if (keyword === "second_half" && exact === "daytime") return keyword;
-		return null;
+		if (keyword === exact) return { kind: "selected", preference: keyword };
+		if (keyword === "second_half" && exact === "daytime") {
+			return { kind: "selected", preference: keyword };
+		}
+		return { kind: "no_mention" };
 	}
-	if (keywordPreferences.length > 0 && !keyword) return null;
-	return keyword ?? exact ?? null;
+	if (keywordPreferences.length > 0 && !keyword) return { kind: "no_mention" };
+	const preference = keyword ?? exact;
+	return preference ? { kind: "selected", preference } : { kind: "no_mention" };
 }
 
 function moscowDayNumber(date: Date): number {
@@ -200,25 +250,46 @@ function closestPair(
 	return best?.pair ?? null;
 }
 
+function minuteIsInBand(minute: number, band: MeetingTimeBand): boolean {
+	const [start, end] = PREFERENCE_POLICIES[band].band;
+	return minute >= start && minute <= end;
+}
+
 function selectMinutesForDay(
 	moscowDay: number,
 	preference: MeetingTimePreference,
+	rejectedPreferences: ReadonlySet<MeetingTimeBand>,
 	unavailable: ReadonlySet<string>,
 ): [number, number] | null {
 	const available = ALL_POLICY_MINUTES.filter(
 		(minute) =>
-			!unavailable.has(meetingSlotAtMoscowDay(moscowDay, minute).startAt),
+			!unavailable.has(meetingSlotAtMoscowDay(moscowDay, minute).startAt) &&
+			![...rejectedPreferences].some((band) => minuteIsInBand(minute, band)),
 	);
 	if (available.length < 2) return null;
 	if (preference === "none") {
-		const morning = available.filter((minute) => minute <= 11 * 60 + 40);
-		const evening = available.filter((minute) => minute >= 16 * 60);
+		const [firstBand, secondBand]: [MeetingTimeBand, MeetingTimeBand] =
+			rejectedPreferences.has("evening")
+				? ["morning", "daytime"]
+				: rejectedPreferences.has("morning")
+					? ["daytime", "evening"]
+					: ["morning", "evening"];
+		const firstCandidates = available.filter((minute) =>
+			minuteIsInBand(minute, firstBand),
+		);
+		const secondCandidates = available.filter((minute) =>
+			minuteIsInBand(minute, secondBand),
+		);
+		const anchors: [number, number] = [
+			PREFERENCE_POLICIES[firstBand].anchors[0],
+			PREFERENCE_POLICIES[secondBand].anchors[0],
+		];
 		let best: [number, number] | null = null;
 		let bestScore: number[] | null = null;
-		for (const first of morning) {
-			for (const second of evening) {
+		for (const first of firstCandidates) {
+			for (const second of secondCandidates) {
 				const score = [
-					Math.abs(first - 9 * 60) + Math.abs(second - 16 * 60),
+					Math.abs(first - anchors[0]) + Math.abs(second - anchors[1]),
 					first,
 					second,
 				];
@@ -228,7 +299,7 @@ function selectMinutesForDay(
 				}
 			}
 		}
-		return best ?? closestPair(available, [9 * 60, 16 * 60], false);
+		return best;
 	}
 	const policy = PREFERENCE_POLICIES[preference];
 	const inBand = available.filter(
@@ -249,9 +320,19 @@ export function generateCandidateMeetingSlots(
 	now: Date,
 	unavailableStartAts: Iterable<string> = [],
 	preference: MeetingTimePreference = "none",
+	rejectedPreferences: readonly MeetingTimeBand[] = [],
 ): [MeetingSlot, MeetingSlot] {
 	validDate(now);
 	const parsedPreference = MeetingTimePreferenceSchema.parse(preference);
+	if (rejectedPreferences.length > 1) {
+		throw new RangeError("At most one rejected meeting time band is supported");
+	}
+	const rejected = new Set(
+		rejectedPreferences.map((band) => MeetingTimeBandSchema.parse(band)),
+	);
+	if (parsedPreference !== "none" && rejected.size > 0) {
+		throw new TypeError("A selected preference cannot also reject a time band");
+	}
 	const unavailable = new Set(unavailableStartAts);
 	let moscowDay = moscowDayNumber(now) + 1;
 	while (true) {
@@ -260,6 +341,7 @@ export function generateCandidateMeetingSlots(
 			const minutes = selectMinutesForDay(
 				moscowDay,
 				parsedPreference,
+				rejected,
 				unavailable,
 			);
 			if (minutes) {

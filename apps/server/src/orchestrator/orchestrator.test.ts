@@ -6,6 +6,7 @@ import type {
 	BrainPort,
 	BrainTurnInput,
 	CreateBookingInput,
+	MeetingTimeBand,
 	MeetingTimePreference,
 	ProviderHealth,
 	SttHealth,
@@ -452,46 +453,59 @@ describe("atomic transcript intake", () => {
 		);
 	});
 
-	test("typed and spoken preferences use the same server-owned proposal path", async () => {
+	test("typed and spoken positive preferences use the same server-owned proposal path", async () => {
 		const now = new Date("2025-01-09T09:00:00.000Z");
-		const requested: MeetingTimePreference[] = [];
-		const candidateMeetingSlots = (
-			preference: MeetingTimePreference = "none",
-		) => {
-			requested.push(preference);
-			return generateCandidateMeetingSlots(now, [], preference);
-		};
-		const typedBrain = new FakeBrain([]);
-		const typed = fixture({
-			brain: typedBrain,
-			bookings: new FakeBookingService({ candidateMeetingSlots }),
-			now: () => now,
-		});
-		await collect(
-			typed.orchestrator.acceptTextSubmit({
-				turnId: turn1,
-				generationId: generation1,
-				text: "Мне удобно во второй половине дня",
-				knownFacts: facts,
-			}),
-		);
+		for (const [text, expected] of [
+			["сегодня в одиннадцать часов вечера", "evening"],
+			["во второй половине дня", "second_half"],
+		] as const) {
+			const requested: Array<{
+				preference: MeetingTimePreference;
+				rejected: readonly MeetingTimeBand[];
+			}> = [];
+			const candidateMeetingSlots = (
+				preference: MeetingTimePreference = "none",
+				rejected: readonly MeetingTimeBand[] = [],
+			) => {
+				requested.push({ preference, rejected });
+				return generateCandidateMeetingSlots(now, [], preference, rejected);
+			};
+			const typedBrain = new FakeBrain([]);
+			const typed = fixture({
+				brain: typedBrain,
+				bookings: new FakeBookingService({ candidateMeetingSlots }),
+				now: () => now,
+			});
+			await collect(
+				typed.orchestrator.acceptTextSubmit({
+					turnId: turn1,
+					generationId: generation1,
+					text,
+					knownFacts: facts,
+				}),
+			);
 
-		const spokenBrain = new FakeBrain([]);
-		const spoken = fixture({
-			brain: spokenBrain,
-			stt: new FakeStt({ text: "Мне удобно во второй половине дня" }),
-			bookings: new FakeBookingService({ candidateMeetingSlots }),
-			now: () => now,
-		});
-		await collect(spoken.orchestrator.acceptAudioCommit(commit()));
+			const spokenBrain = new FakeBrain([]);
+			const spoken = fixture({
+				brain: spokenBrain,
+				stt: new FakeStt({ text }),
+				bookings: new FakeBookingService({ candidateMeetingSlots }),
+				now: () => now,
+			});
+			await collect(spoken.orchestrator.acceptAudioCommit(commit()));
 
-		expect(requested).toEqual(["second_half", "second_half"]);
-		expect(typedBrain.turns[0]?.schedulingContext).toEqual(
-			spokenBrain.turns[0]?.schedulingContext,
-		);
-		expect(typedBrain.turns[0]?.schedulingContext.timeOfDayPreference).toBe(
-			"second_half",
-		);
+			expect(requested).toEqual([
+				{ preference: expected, rejected: [] },
+				{ preference: expected, rejected: [] },
+			]);
+			expect(typedBrain.turns[0]?.schedulingContext).toEqual(
+				spokenBrain.turns[0]?.schedulingContext,
+			);
+			expect(typedBrain.turns[0]?.schedulingContext).toMatchObject({
+				timeOfDayPreference: expected,
+				rejectedTimeOfDayPreferences: [],
+			});
+		}
 	});
 
 	test("a later out-of-hours preference refreshes Luna data with evening policy slots", async () => {
@@ -540,6 +554,96 @@ describe("atomic transcript intake", () => {
 			"10 января 2025 года, пятница, 17:00–17:20 по Москве",
 		]);
 		expect(JSON.stringify(brain.turns[1])).not.toContain("23:00–23:20");
+	});
+
+	test("typed and spoken evening rejections produce only non-evening server candidates", async () => {
+		const now = new Date("2025-01-09T09:00:00.000Z");
+		for (const [text, spoken] of [
+			["Мне неудобно вечером", false],
+			["Вечером не могу", true],
+		] as const) {
+			const brain = new FakeBrain([]);
+			const harness = fixture({
+				brain,
+				...(spoken ? { stt: new FakeStt({ text }) } : {}),
+				bookings: new FakeBookingService({
+					candidateMeetingSlots: (preference = "none", rejected = []) =>
+						generateCandidateMeetingSlots(now, [], preference, rejected),
+				}),
+				now: () => now,
+			});
+			if (spoken) {
+				await collect(harness.orchestrator.acceptAudioCommit(commit()));
+			} else {
+				await collect(
+					harness.orchestrator.acceptTextSubmit({
+						turnId: turn1,
+						generationId: generation1,
+						text,
+						knownFacts: facts,
+					}),
+				);
+			}
+			const scheduling = brain.turns[0]?.schedulingContext;
+			expect(scheduling).toMatchObject({
+				timeOfDayPreference: "none",
+				rejectedTimeOfDayPreferences: ["evening"],
+			});
+			expect(
+				scheduling?.candidateMeetingSlots.map(
+					(candidate) => candidate.meetingSlot.startAt,
+				),
+			).toEqual(["2025-01-10T06:00:00.000Z", "2025-01-10T11:00:00.000Z"]);
+		}
+	});
+
+	test("a second-turn bare rejection clears and does not retain evening", async () => {
+		const now = new Date("2025-01-09T09:00:00.000Z");
+		const requested: Array<{
+			preference: MeetingTimePreference;
+			rejected: readonly MeetingTimeBand[];
+		}> = [];
+		const brain = new FakeBrain([], []);
+		const { orchestrator } = fixture({
+			brain,
+			bookings: new FakeBookingService({
+				candidateMeetingSlots: (preference = "none", rejected = []) => {
+					requested.push({ preference, rejected });
+					return generateCandidateMeetingSlots(now, [], preference, rejected);
+				},
+			}),
+			now: () => now,
+		});
+		await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn1,
+				generationId: generation1,
+				text: "Давайте вечером",
+				knownFacts: facts,
+			}),
+		);
+		await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn2,
+				generationId: generation2,
+				text: "Не вечером",
+				knownFacts: facts,
+			}),
+		);
+
+		expect(requested).toEqual([
+			{ preference: "evening", rejected: [] },
+			{ preference: "none", rejected: ["evening"] },
+		]);
+		expect(brain.turns[1]?.schedulingContext).toMatchObject({
+			timeOfDayPreference: "none",
+			rejectedTimeOfDayPreferences: ["evening"],
+		});
+		expect(
+			brain.turns[1]?.schedulingContext.candidateMeetingSlots.map(
+				(candidate) => candidate.meetingSlot.startAt,
+			),
+		).toEqual(["2025-01-10T06:00:00.000Z", "2025-01-10T11:00:00.000Z"]);
 	});
 
 	test("STT failure invokes no brain, tool, notifier, or TTS", async () => {
@@ -1057,7 +1161,7 @@ describe("booking and tool timeline", () => {
 		});
 	}
 
-	test("refusal skips no-answer qualification but preserves one known answer as partial and keeps booking", async () => {
+	test("exact eval refusal after one answer completes without brain and preserves partial booking", async () => {
 		const emptyBookings = new FakeBookingService();
 		await emptyBookings.createBooking(bookingInput);
 		const emptyBooking =
@@ -1124,7 +1228,7 @@ describe("booking and tool timeline", () => {
 			partial.orchestrator.acceptTextSubmit({
 				turnId: turn2,
 				generationId: generation2,
-				text: "Нет.",
+				text: "Нет, на этом всё.",
 				knownFacts: facts,
 			}),
 		);

@@ -8,6 +8,7 @@ import type {
 	BookingDomainEvent,
 	BookingSnapshot,
 	MeetingSlot,
+	MeetingTimeBand,
 	MeetingTimePreference,
 	QualificationPatch,
 } from "./domain";
@@ -16,6 +17,7 @@ import {
 	ConversationStageSchema,
 	KnownFactsSchema,
 	MeetingSlotSchema,
+	MeetingTimeBandSchema,
 	MeetingTimePreferenceSchema,
 } from "./domain";
 import type {
@@ -48,6 +50,17 @@ const MOSCOW_WEEKDAYS = [
 ] as const;
 const MOSCOW_OFFSET_MS = 3 * 60 * 60_000;
 
+function slotFallsInTimeBand(
+	slot: MeetingSlot,
+	band: MeetingTimeBand,
+): boolean {
+	const moscow = new Date(new Date(slot.startAt).getTime() + MOSCOW_OFFSET_MS);
+	const minute = moscow.getUTCHours() * 60 + moscow.getUTCMinutes();
+	if (band === "morning") return minute >= 9 * 60 && minute <= 11 * 60 + 40;
+	if (band === "evening") return minute >= 16 * 60 && minute <= 17 * 60;
+	return minute >= 12 * 60 && minute <= 15 * 60 + 40;
+}
+
 export const SchedulingCandidateSchema = z
 	.object({
 		meetingSlot: MeetingSlotSchema,
@@ -71,6 +84,10 @@ export const SchedulingContextSchema = z
 		moscowLocalDate: z.iso.date(),
 		moscowWeekday: z.enum(MOSCOW_WEEKDAYS),
 		timeOfDayPreference: MeetingTimePreferenceSchema,
+		rejectedTimeOfDayPreferences: z
+			.array(MeetingTimeBandSchema)
+			.max(1)
+			.default([]),
 		candidateMeetingSlots: z.tuple([
 			SchedulingCandidateSchema,
 			SchedulingCandidateSchema,
@@ -95,6 +112,29 @@ export const SchedulingContextSchema = z
 				path: ["moscowWeekday"],
 				message: "Moscow weekday must match the current instant",
 			});
+		}
+		if (
+			context.timeOfDayPreference !== "none" &&
+			context.rejectedTimeOfDayPreferences.length > 0
+		) {
+			refinement.addIssue({
+				code: "custom",
+				path: ["rejectedTimeOfDayPreferences"],
+				message: "A selected preference cannot also reject a time band",
+			});
+		}
+		for (const rejected of context.rejectedTimeOfDayPreferences) {
+			if (
+				context.candidateMeetingSlots.some((candidate) =>
+					slotFallsInTimeBand(candidate.meetingSlot, rejected),
+				)
+			) {
+				refinement.addIssue({
+					code: "custom",
+					path: ["candidateMeetingSlots"],
+					message: "Candidates must exclude explicitly rejected time bands",
+				});
+			}
 		}
 		if (
 			context.candidateMeetingSlots[0].meetingSlot.startAt ===
@@ -297,6 +337,7 @@ export interface BookingService {
 	/** Two current internal candidates; this is not an external availability claim. */
 	candidateMeetingSlots(
 		preference?: MeetingTimePreference,
+		rejectedPreferences?: readonly MeetingTimeBand[],
 	): Promise<[MeetingSlot, MeetingSlot]>;
 	/** Commits booking.created before this promise resolves. */
 	createBooking(input: CreateBookingInput): Promise<CreateBookingResult>;

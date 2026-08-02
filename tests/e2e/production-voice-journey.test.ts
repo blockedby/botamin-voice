@@ -36,18 +36,33 @@ import type {
 	BrainPort,
 	BrainTurnInput,
 	CreateBookingInput,
+	MeetingSlot,
+	TtsPort,
 } from "../../packages/contracts/src";
 import {
 	createDeterministicMp3Fixture,
 	createDeterministicPcm16Fixture,
 	createDeterministicWavFixture,
 	createOpenRouterFixture,
-	createTestBookingContacts,
 } from "../../packages/test-fixtures/src";
 
 const appOrigin = "http://localhost:5173";
 const apiKey = "credential-free-fixture-key";
 const consent = { voiceProcessing: true, contactProcessing: true } as const;
+const syntheticBooking = {
+	name: "Анна-Мария Орлова",
+	company: "ООО «Ромашка 24»",
+	workEmail: "anna.orlova@example.com",
+	telegram: "@fixture",
+} as const;
+const retryTurnSpeech = "Обсудим задачу.";
+const syntheticBookingTurn = [
+	`Имя: ${syntheticBooking.name}`,
+	`Company — ${syntheticBooking.company}`,
+	`Рабочий email: ${syntheticBooking.workEmail}`,
+	`Telegram: ${syntheticBooking.telegram}`,
+	"Первый вариант.",
+].join("\n");
 
 type TimelineLabel =
 	| "audio.commit.client-send"
@@ -57,6 +72,7 @@ type TimelineLabel =
 	| "brain.delta.first"
 	| "tts.provider.request"
 	| "tts.provider.complete"
+	| "tts.retry-turn.complete"
 	| "audio.metadata.client-receipt"
 	| "audio.binary.client-receipt"
 	| "audio.segment.client-paired"
@@ -91,6 +107,30 @@ function countSpeaker(
 	return session
 		.getSnapshot()
 		.transcript.filter((entry) => entry.speaker === speaker).length;
+}
+
+function latestSpeakerText(
+	session: BrowserVoiceSession,
+	speaker: "visitor" | "agent",
+): string | undefined {
+	return session
+		.getSnapshot()
+		.transcript.filter((entry) => entry.speaker === speaker)
+		.at(-1)?.text;
+}
+
+function moscowSlotText(slot: MeetingSlot): string {
+	const local = new Date(new Date(slot.startAt).getTime() + 3 * 60 * 60_000);
+	const date = new Intl.DateTimeFormat("ru-RU", {
+		day: "2-digit",
+		month: "long",
+		year: "numeric",
+		timeZone: "UTC",
+	}).format(local);
+	const time = `${String(local.getUTCHours()).padStart(2, "0")}:${String(
+		local.getUTCMinutes(),
+	).padStart(2, "0")}`;
+	return `${date} в ${time} по Москве`;
 }
 
 async function waitFor(
@@ -198,6 +238,7 @@ class ObservedSocket implements WebSocketLike {
 		url: string,
 		private readonly timeline: TimelineEntry[],
 		private readonly eventCounts: Map<string, number>,
+		private readonly eventSequences: Map<string, Set<number>>,
 		private readonly stages: string[],
 		private readonly errorCodes: string[],
 	) {
@@ -220,6 +261,7 @@ class ObservedSocket implements WebSocketLike {
 				try {
 					const message = JSON.parse(event.data) as {
 						type?: string;
+						seq?: number;
 						payload?: { to?: string; code?: string };
 					};
 					if (message.type) {
@@ -227,6 +269,12 @@ class ObservedSocket implements WebSocketLike {
 							message.type,
 							(this.eventCounts.get(message.type) ?? 0) + 1,
 						);
+						if (message.seq !== undefined) {
+							const sequences =
+								this.eventSequences.get(message.type) ?? new Set<number>();
+							sequences.add(message.seq);
+							this.eventSequences.set(message.type, sequences);
+						}
 						if (message.type === "transcript.final") {
 							this.timeline.push({
 								label: "transcript.final.client-receipt",
@@ -285,8 +333,6 @@ class ObservedSocket implements WebSocketLike {
 
 class ScriptedLuna implements BrainPort {
 	readonly inputs: BrainTurnInput[] = [];
-	readonly qualificationToolStages: string[] = [];
-	bookingInput: CreateBookingInput | null = null;
 	interrupts = 0;
 
 	constructor(private readonly timeline: TimelineEntry[]) {}
@@ -327,72 +373,19 @@ class ScriptedLuna implements BrainPort {
 				yield complete("DISCOVERY");
 				return;
 			case "DISCOVERY":
-				yield observed(speech("Обсудим задачу."));
+				yield observed(speech(retryTurnSpeech));
 				yield complete("BOOKING_OFFER");
 				return;
 			case "BOOKING_OFFER":
 				yield observed(speech("Соберём минимальные данные."));
 				yield complete("COLLECT_BOOKING");
 				return;
-			case "COLLECT_BOOKING": {
-				const args: CreateBookingInput = {
-					conversationId: input.conversationId,
-					idempotencyKey: "t30-booking-idempotency-key",
-					name: "Тестовый лид",
-					contacts: createTestBookingContacts(),
-					company: "Example LLC",
-					meetingSlot:
-						input.schedulingContext.candidateMeetingSlots[0].meetingSlot,
-					consentConfirmed: true,
-				};
-				this.bookingInput = args;
-				const request: BrainDelta = {
-					type: "tool.request",
-					turnId: input.turnId,
-					generationId: input.generationId,
-					tool: {
-						name: "create_booking",
-						callId: "t30-create-booking-call",
-						args,
-					},
-				};
-				yield observed(request);
-				// Same call and payload is a deterministic model/provider replay.
-				yield request;
-				yield complete("BOOKED");
-				return;
-			}
+			case "COLLECT_BOOKING":
 			case "BOOKED":
-				yield observed(
-					speech("Дополнительный вопрос только после сохранения."),
+			case "POST_BOOKING_QUALIFICATION":
+				throw new Error(
+					"RC4 booking confirmation and qualification must remain server-owned",
 				);
-				yield complete("POST_BOOKING_QUALIFICATION");
-				return;
-			case "POST_BOOKING_QUALIFICATION": {
-				this.qualificationToolStages.push(input.stage);
-				if (!input.booking)
-					throw new Error("booking must precede qualification");
-				yield observed({
-					type: "tool.request",
-					turnId: input.turnId,
-					generationId: input.generationId,
-					tool: {
-						name: "append_booking_qualification",
-						callId: "t30-qualification-call",
-						args: {
-							bookingId: input.booking.id,
-							idempotencyKey: "t30-qualification-idempotency-key",
-							patch: {
-								monthlyLeadVolume: "около 240",
-								salesManagerCount: 8,
-							},
-							completion: "complete",
-						},
-					},
-				});
-				yield complete("COMPLETE");
-				return;
-			}
 			default:
 				yield observed(complete());
 		}
@@ -433,6 +426,7 @@ function createBrowserHarness(
 	const sockets: ObservedSocket[] = [];
 	const playbacks: VerifyingPlayback[] = [];
 	const eventCounts = new Map<string, number>();
+	const eventSequences = new Map<string, Set<number>>();
 	const stages: string[] = [];
 	const errorCodes: string[] = [];
 	const runtimeFetch = async (input: string, init?: RequestInit) => {
@@ -460,6 +454,7 @@ function createBrowserHarness(
 				target.toString(),
 				timeline,
 				eventCounts,
+				eventSequences,
 				stages,
 				errorCodes,
 			);
@@ -487,6 +482,7 @@ function createBrowserHarness(
 		sockets,
 		playbacks,
 		eventCounts,
+		eventSequences,
 		stages,
 		errorCodes,
 	};
@@ -537,9 +533,6 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				{ status: 503, retryAfter: "0" },
 				{ jsonBody: chatResult("Нужна автоматизация обращений") },
 				{ jsonBody: chatResult("Да, расскажите о записи") },
-				{ jsonBody: chatResult("Контакт подтверждён") },
-				{ jsonBody: chatResult("Да, можно") },
-				{ jsonBody: chatResult("Дополнительный ответ") },
 				{ status: 400 },
 			],
 			ttsBehaviors: [
@@ -607,18 +600,25 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				}
 			},
 		});
-		const tts = new OpenRouterTtsAdapter({
+		const ttsAdapter = new OpenRouterTtsAdapter({
 			config: voiceConfig,
 			credentialHealth,
-			telemetry: (event) => {
-				if (event.status === 200 && event.outcome === "success") {
-					timeline.push({
-						label: "tts.provider.complete",
-						at: performance.now(),
-					});
-				}
-			},
 		});
+		const tts: TtsPort = {
+			async synthesize(request) {
+				const segment = await ttsAdapter.synthesize(request);
+				timeline.push({
+					label:
+						request.text === retryTurnSpeech
+							? "tts.retry-turn.complete"
+							: "tts.provider.complete",
+					at: performance.now(),
+				});
+				return segment;
+			},
+			resetSession: (conversationId) => ttsAdapter.resetSession(conversationId),
+			health: () => ttsAdapter.health(),
+		};
 		const brain = new ScriptedLuna(timeline);
 		const notifier = new RecordingNotifier();
 		const runtime = await createProductionRuntime(runtimeEnv, {
@@ -691,8 +691,8 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				"booking-offer turn did not finish",
 			);
 
-			// Booking turn: one commit/final/brain, duplicate model call replay,
-			// one durable booking, and unavailable TTS with retained visible text.
+			// RC4 accepts the visitor's exact current draft facts and selection, then
+			// authors the confirmation itself. The retained text survives unavailable TTS.
 			const commitsBeforeBooking = timeline.filter(
 				(entry) => entry.label === "audio.commit.client-send",
 			).length;
@@ -702,24 +702,50 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			const errorsBeforeBooking = happy.eventCounts.get("error") ?? 0;
 			const audioDoneBeforeBooking =
 				happy.eventCounts.get("assistant.audio.done") ?? 0;
-			await commitCurrent(happy.browser, happy.captures);
-			expect(await happy.browser.commit()).toBe(false);
+			const initialDraft = happy.browser.getSnapshot().bookingDraft;
+			if (!initialDraft) throw new Error("RC4 booking draft was not projected");
+			const selectedCandidate = initialDraft.candidates[0];
+			const expectedReadyRevision = initialDraft.revision + 2;
+			expect(happy.browser.submitText(syntheticBookingTurn)).toBe(true);
+			expect(happy.browser.submitText("duplicate typed turn")).toBe(false);
 			await waitFor(
 				() =>
 					countSpeaker(happy.browser, "visitor") === finalsBeforeBooking + 1 &&
 					countSpeaker(happy.browser, "agent") === agentsBeforeBooking + 1 &&
-					brain.bookingInput !== null,
-				"booking turn did not retain text after TTS failure",
+					happy.browser.getSnapshot().bookingDraft?.readiness === "ready" &&
+					happy.browser.getSnapshot().bookingDraft?.revision ===
+						expectedReadyRevision &&
+					happy.captures.at(-1)?.active === true,
+				"server draft confirmation did not retain text after TTS failure",
+			);
+			const readyDraft = happy.browser.getSnapshot().bookingDraft;
+			if (!readyDraft?.selectedCandidate)
+				throw new Error("ready draft did not retain a current candidate");
+			expect(readyDraft).toMatchObject({
+				revision: expectedReadyRevision,
+				readiness: "ready",
+				confirmationStatus: "unconfirmed",
+				commitStatus: "uncommitted",
+				bookingId: null,
+				name: { status: "accepted", value: syntheticBooking.name },
+				company: { status: "accepted", value: syntheticBooking.company },
+				workEmail: { status: "accepted", value: syntheticBooking.workEmail },
+				telegram: { status: "accepted", value: syntheticBooking.telegram },
+				selectedCandidate: {
+					candidateId: selectedCandidate.candidateId,
+					meetingSlot: selectedCandidate.meetingSlot,
+				},
+			});
+			const expectedDraftConfirmation = `Подтвердите, пожалуйста: ${syntheticBooking.name}, компания ${syntheticBooking.company}, почта ${syntheticBooking.workEmail}, Телеграм ${syntheticBooking.telegram}, встреча ${moscowSlotText(selectedCandidate.meetingSlot)}. Всё верно?`;
+			expect(latestSpeakerText(happy.browser, "agent")).toBe(
+				expectedDraftConfirmation,
 			);
 			expect(
 				timeline.filter((entry) => entry.label === "audio.commit.client-send")
-					.length - commitsBeforeBooking,
-			).toBe(1);
-			expect(countSpeaker(happy.browser, "visitor") - finalsBeforeBooking).toBe(
-				1,
-			);
-			expect(brain.inputs.length - brainsBeforeBooking).toBe(1);
-			expect(happy.eventCounts.get("booking.created")).toBe(1);
+					.length,
+			).toBe(commitsBeforeBooking);
+			expect(brain.inputs.length).toBe(brainsBeforeBooking);
+			expect(happy.eventCounts.get("booking.created")).toBeUndefined();
 			expect((happy.eventCounts.get("error") ?? 0) - errorsBeforeBooking).toBe(
 				1,
 			);
@@ -728,48 +754,116 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				(happy.eventCounts.get("assistant.audio.done") ?? 0) -
 					audioDoneBeforeBooking,
 			).toBe(0);
-			expect(happy.browser.getSnapshot().state).toMatchObject({
-				kind: "listening",
-				bookingOutcome: "committed",
+
+			// Only the next-turn affirmative confirms that exact revision. The server
+			// commits once without Luna and immediately asks the first missing fact.
+			const confirmedRevision = readyDraft.revision;
+			expect(happy.browser.submitText("Да, подтверждаю")).toBe(true);
+			await waitFor(
+				() =>
+					happy.eventCounts.get("booking.created") === 1 &&
+					happy.browser.getSnapshot().bookingDraft?.commitStatus ===
+						"committed" &&
+					happy.browser.getSnapshot().internalMeeting !== null &&
+					happy.captures.at(-1)?.active === true,
+				"exact-revision affirmative did not commit the RC4 draft",
+			);
+			const committedSnapshot = happy.browser.getSnapshot();
+			const committedDraft = committedSnapshot.bookingDraft;
+			const internalMeeting = committedSnapshot.internalMeeting;
+			if (!committedDraft || !internalMeeting)
+				throw new Error("committed RC4 projections were missing");
+			expect(committedDraft).toMatchObject({
+				revision: confirmedRevision + 3,
+				confirmationStatus: "confirmed",
+				commitStatus: "committed",
+				bookingId: internalMeeting.bookingId,
 			});
-			expect(happy.captures.at(-1)?.active).toBe(true);
+			expect(internalMeeting).toMatchObject({
+				status: "scheduled",
+				kind: "internal_virtual",
+				name: syntheticBooking.name,
+				company: syntheticBooking.company,
+				contacts: [
+					{ channel: "email", value: syntheticBooking.workEmail },
+					{ channel: "telegram", value: syntheticBooking.telegram },
+				],
+				meetingSlot: selectedCandidate.meetingSlot,
+				qualificationStatus: "none",
+				qualificationFields: {
+					monthlyLeadVolume: null,
+					salesManagerCount: null,
+				},
+				externalCalendarEventCreated: false,
+				externalInviteSent: false,
+			});
+			const expectedBookingConfirmation = `Внутренняя виртуальная встреча создана на ${moscowSlotText(selectedCandidate.meetingSlot)} для ${syntheticBooking.name}, компания ${syntheticBooking.company}. Контакты: почта ${syntheticBooking.workEmail}, Телеграм ${syntheticBooking.telegram}. Внешнее календарное событие и приглашение не создавались. Сколько входящих лидов приходит за месяц?`;
+			expect(latestSpeakerText(happy.browser, "agent")).toBe(
+				expectedBookingConfirmation,
+			);
+			expect(brain.inputs.length).toBe(brainsBeforeBooking);
+			expect(countSpeaker(happy.browser, "visitor")).toBe(5);
+			expect(countSpeaker(happy.browser, "agent")).toBe(4);
 
 			// Force a real WebSocket reconnect after the durable booking.
-			const transcriptsBeforeReconnect =
-				happy.browser.getSnapshot().transcript.length;
+			const transcriptsBeforeReconnect = committedSnapshot.transcript.length;
 			const socketsBeforeReconnect = happy.sockets.length;
 			happy.sockets.at(-1)?.native.close(4000, "t30 reconnect");
 			await waitFor(
 				() =>
 					happy.sockets.length === socketsBeforeReconnect + 1 &&
-					happy.browser.getSnapshot().state.kind === "listening",
+					happy.browser.getSnapshot().conversationStage ===
+						"POST_BOOKING_QUALIFICATION" &&
+					happy.captures.at(-1)?.active === true,
 				"browser did not resume the booked conversation",
 			);
 			expect(happy.browser.getSnapshot().transcript).toHaveLength(
 				transcriptsBeforeReconnect,
 			);
-
-			// Explicit consent enters qualification only after BOOKED.
-			await commitCurrent(happy.browser, happy.captures);
-			await waitFor(
-				() =>
-					countSpeaker(happy.browser, "visitor") === 5 &&
-					happy.captures.at(-1)?.active === true,
-				() =>
-					`post-booking consent turn did not finish (state=${happy.browser.getSnapshot().state.kind}, visitor=${countSpeaker(happy.browser, "visitor")}, agent=${countSpeaker(happy.browser, "agent")}, chat=${provider.counters.chat}, tts=${provider.counters.tts}, brain=${brain.inputs.length}, capture=${happy.captures.at(-1)?.active === true}, events=${JSON.stringify(Object.fromEntries(happy.eventCounts))})`,
+			expect(happy.browser.getSnapshot().internalMeeting?.bookingId).toBe(
+				internalMeeting.bookingId,
 			);
-			await commitCurrent(happy.browser, happy.captures);
+
+			// Qualification starts directly and asks only the missing field each turn.
+			expect(happy.browser.submitText("240 лидов в месяц")).toBe(true);
 			await waitFor(
-				() => happy.browser.getSnapshot().state.kind === "complete",
+				() =>
+					happy.browser.getSnapshot().internalMeeting?.qualificationStatus ===
+						"partial" &&
+					latestSpeakerText(happy.browser, "agent") ===
+						"Сколько менеджеров по продажам работает в вашей команде?" &&
+					happy.captures.at(-1)?.active === true,
+				"monthly lead answer did not advance to the only missing question",
+			);
+			expect(
+				happy.browser.getSnapshot().internalMeeting?.qualificationFields,
+			).toEqual({
+				monthlyLeadVolume: "240 в месяц",
+				salesManagerCount: null,
+			});
+			expect(happy.browser.submitText("8 менеджеров по продажам")).toBe(true);
+			await waitFor(
+				() =>
+					happy.browser.getSnapshot().state.kind === "complete" &&
+					happy.browser.getSnapshot().internalMeeting?.qualificationStatus ===
+						"complete",
 				"qualification did not complete",
 			);
-			expect(brain.qualificationToolStages).toEqual([
-				"POST_BOOKING_QUALIFICATION",
-			]);
-			expect(countSpeaker(happy.browser, "visitor")).toBe(6);
-			// Explicit qualification consent is server-owned and does not invoke Luna.
-			expect(brain.inputs).toHaveLength(5);
-			expect(provider.counters.chat).toBe(7);
+			expect(
+				happy.browser.getSnapshot().internalMeeting?.qualificationFields,
+			).toEqual({
+				monthlyLeadVolume: "240 в месяц",
+				salesManagerCount: 8,
+			});
+			// The reconnect re-delivers the buffered event once, but its server
+			// sequence proves there was exactly one booking.created event.
+			expect(happy.eventCounts.get("booking.created")).toBe(2);
+			expect(happy.eventSequences.get("booking.created")?.size).toBe(1);
+			expect(happy.eventCounts.get("booking.updated")).toBe(2);
+			expect(happy.eventSequences.get("booking.updated")?.size).toBe(2);
+			expect(countSpeaker(happy.browser, "visitor")).toBe(7);
+			expect(brain.inputs).toHaveLength(3);
+			expect(provider.counters.chat).toBe(4);
 			expect(happy.stages).toEqual(
 				expect.arrayContaining([
 					"DISCOVERY",
@@ -782,9 +876,17 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			);
 
 			await waitFor(
-				() => notifier.eventTypes.length === 2,
+				() => notifier.eventTypes.length === 3,
 				"outbox did not deliver booking events",
 			);
+			expect(notifier.eventTypes).toEqual([
+				"booking.created",
+				"booking.updated",
+				"booking.updated",
+			]);
+			const completedDraft = happy.browser.getSnapshot().bookingDraft;
+			if (!completedDraft)
+				throw new Error("completed RC4 draft projection was missing");
 			const database = openDomainDatabase({ filename: databasePath });
 			try {
 				const bookingRows = database.$client
@@ -802,6 +904,30 @@ describe("T30 consolidated credential-free production-component journey", () => 
 					conversation_id: conversationIds[0],
 					qualification_status: "complete",
 				});
+				const persistedDraft = database.$client
+					.query<
+						{
+							revision: number;
+							confirmation_status: string;
+							commit_status: string;
+							booking_id: string;
+						},
+						[string]
+					>(
+						`SELECT revision,
+						        json_extract(draft_json, '$.confirmationStatus') AS confirmation_status,
+						        json_extract(draft_json, '$.commitStatus') AS commit_status,
+						        json_extract(draft_json, '$.bookingId') AS booking_id
+						 FROM conversation_contexts
+						 WHERE conversation_id = ?`,
+					)
+					.get(conversationIds[0] as string);
+				expect(persistedDraft).toEqual({
+					revision: completedDraft.revision,
+					confirmation_status: "confirmed",
+					commit_status: "committed",
+					booking_id: internalMeeting.bookingId,
+				});
 				const outbox = database.$client
 					.query<{ type: string; status: string; attempt_count: number }, []>(
 						`SELECT domain_events.type, notification_outbox.status,
@@ -814,9 +940,22 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				expect(outbox).toEqual([
 					{ type: "booking.created", status: "sent", attempt_count: 1 },
 					{ type: "booking.updated", status: "sent", attempt_count: 1 },
+					{ type: "booking.updated", status: "sent", attempt_count: 1 },
 				]);
+				const replayInput: CreateBookingInput = {
+					conversationId: conversationIds[0] as string,
+					idempotencyKey: `booking-draft-${conversationIds[0]}`,
+					name: syntheticBooking.name,
+					company: syntheticBooking.company,
+					contacts: [
+						{ channel: "email", value: syntheticBooking.workEmail },
+						{ channel: "telegram", value: syntheticBooking.telegram },
+					],
+					meetingSlot: selectedCandidate.meetingSlot,
+					consentConfirmed: true,
+				};
 				const replay = await new SqliteBookingService(database).createBooking(
-					brain.bookingInput as CreateBookingInput,
+					replayInput,
 				);
 				expect(replay).toMatchObject({
 					created: false,
@@ -829,8 +968,8 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				closeDomainDatabase(database);
 			}
 
-			// A fresh production session receives a typed STT failure: no final,
-			// Luna turn, tool, booking, TTS request, or fabricated browser text.
+			// A fresh production session receives a typed STT provider failure: no
+			// final, Luna turn, tool, booking, TTS request, or fabricated browser text.
 			const brainRunsBeforeFailure = brain.inputs.length;
 			const ttsBeforeFailure = provider.counters.tts;
 			failed = createBrowserHarness(runtimeOrigin, timeline, conversationIds);
@@ -865,11 +1004,17 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				closeDomainDatabase(afterFailure);
 			}
 			expect(provider.protocolViolations).toEqual([]);
-			expect(provider.counters.invalid).toBe(0);
+			expect(provider.counters).toEqual({
+				total: 15,
+				chat: 5,
+				tts: 10,
+				invalid: 0,
+				statuses: { "200": 12, "400": 1, "503": 2 },
+			});
 
 			const mp3 = createDeterministicMp3Fixture();
 			const receivedAudio = happy.playbacks.flatMap((item) => item.received);
-			expect(receivedAudio.length).toBeGreaterThanOrEqual(3);
+			expect(receivedAudio).toHaveLength(8);
 			for (const bytes of receivedAudio) expect(bytes).toEqual(mp3);
 
 			// Separate measured boundaries are all observed on the successful
@@ -890,7 +1035,7 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			);
 			const brainDeltaAt = requireTiming("brain.delta.first", 2);
 			const ttsRequestAt = requireTiming("tts.provider.request", 2);
-			const ttsCompleteAt = requireTiming("tts.provider.complete", 1);
+			const ttsCompleteAt = requireTiming("tts.retry-turn.complete", 1);
 			const metadataReceiptAt = requireTiming(
 				"audio.metadata.client-receipt",
 				1,

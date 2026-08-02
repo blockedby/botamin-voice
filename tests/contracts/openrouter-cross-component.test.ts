@@ -155,14 +155,23 @@ describe("cross-component OpenRouter voice contracts", () => {
 		);
 
 		expect(provider.protocolViolations).toEqual([]);
-		expect(provider.counters).toMatchObject({
-			total: 4,
+		expect(provider.counters).toEqual({
+			total: 7,
 			chat: 2,
-			tts: 2,
+			tts: 5,
 			invalid: 0,
-			statuses: { "200": 2, "503": 2 },
+			statuses: { "200": 5, "503": 2 },
 		});
 		expect(brain.turns).toHaveLength(1);
+		expect(
+			events.filter(
+				(event) =>
+					event.type === "tool.result" && event.name === "create_booking",
+			),
+		).toHaveLength(1);
+		expect(
+			events.filter((event) => event.type === "booking.committed"),
+		).toHaveLength(1);
 		expect(bookings.domainEvents.map((event) => event.type)).toEqual([
 			"booking.created",
 		]);
@@ -181,12 +190,15 @@ describe("cross-component OpenRouter voice contracts", () => {
 			}),
 		]);
 		const audio = events.filter((event) => event.type === "audio.segment");
-		expect(audio).toHaveLength(1);
-		expect(audio[0]).toMatchObject({
-			contentType: "audio/mpeg",
-			final: true,
-			bytes: createDeterministicMp3Fixture(),
-		});
+		expect(audio).toHaveLength(4);
+		expect(provider.counters.tts).toBe(audio.length + 1);
+		for (const segment of audio) {
+			expect(segment).toMatchObject({
+				contentType: "audio/mpeg",
+				final: true,
+				bytes: createDeterministicMp3Fixture(),
+			});
+		}
 	});
 
 	test("adapter refuses raw PCM instead of converting it to WAV or issuing fetch", async () => {

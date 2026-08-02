@@ -60,6 +60,110 @@ function integrity(path: string): void {
 	}
 }
 
+function verifyRc4(path: string): void {
+	integrity(path);
+	const client = new Database(path, { readonly: true, strict: true });
+	try {
+		const table = client
+			.query<{ name: string; type: string; notnull: number; pk: number }, []>(
+				"PRAGMA table_info(conversation_contexts)",
+			)
+			.all();
+		const expectedColumns = [
+			["conversation_id", "TEXT", 1, 1],
+			["revision", "INTEGER", 1, 0],
+			["draft_json", "TEXT", 1, 0],
+			["updated_at", "TEXT", 1, 0],
+		] as const;
+		if (
+			table.length !== expectedColumns.length ||
+			table.some(
+				(column, index) =>
+					column.name !== expectedColumns[index]?.[0] ||
+					column.type.toUpperCase() !== expectedColumns[index]?.[1] ||
+					column.notnull !== expectedColumns[index]?.[2] ||
+					column.pk !== expectedColumns[index]?.[3],
+			)
+		) {
+			fail("RC4 conversation context schema is invalid");
+		}
+
+		const foreignKeys = client
+			.query<
+				{ table: string; from: string; to: string; on_delete: string },
+				[]
+			>("PRAGMA foreign_key_list(conversation_contexts)")
+			.all();
+		if (
+			foreignKeys.length !== 1 ||
+			foreignKeys[0]?.table !== "conversations" ||
+			foreignKeys[0]?.from !== "conversation_id" ||
+			foreignKeys[0]?.to !== "id" ||
+			foreignKeys[0]?.on_delete !== "CASCADE"
+		) {
+			fail("RC4 conversation context foreign key is invalid");
+		}
+
+		const createSql = client
+			.query<{ sql: string }, []>(
+				"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_contexts'",
+			)
+			.get()?.sql;
+		const normalizedSql = createSql
+			?.replaceAll(/[`"'[\]\s]/g, "")
+			.toLowerCase();
+		for (const invariant of [
+			"check(revision>=0)",
+			"check(json_valid(draft_json)andjson_type(draft_json)=object)",
+			"check(json_extract(draft_json,$.revision)=revision)",
+			"check(json_extract(draft_json,$.factregistry.revision)=revision)",
+			"check(json_extract(draft_json,$.updatedat)=updated_at)",
+		]) {
+			if (!normalizedSql?.includes(invariant)) {
+				fail("RC4 conversation context JSON invariants are invalid");
+			}
+		}
+
+		const invalidJson = client
+			.query<{ count: number }, []>(
+				"SELECT count(*) AS count FROM conversation_contexts WHERE NOT json_valid(draft_json)",
+			)
+			.get()?.count;
+		if (invalidJson !== 0) {
+			fail("RC4 persisted conversation context JSON is invalid");
+		}
+		const invalidRows = client
+			.query<{ count: number }, []>(
+				`SELECT count(*) AS count
+				 FROM conversation_contexts
+				 WHERE revision < 0
+				    OR json_type(draft_json) <> 'object'
+				    OR json_extract(draft_json, '$.revision') <> revision
+				    OR json_extract(draft_json, '$.factRegistry.revision') <> revision
+				    OR json_extract(draft_json, '$.updatedAt') <> updated_at`,
+			)
+			.get()?.count;
+		if (invalidRows !== 0) {
+			fail("RC4 persisted conversation context invariants are invalid");
+		}
+		if (client.query("PRAGMA foreign_key_check").all().length !== 0) {
+			fail("SQLite foreign key verification failed");
+		}
+
+		const duplicateTables = client
+			.query<{ name: string }, []>(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+			)
+			.all()
+			.some(({ name }) => /fact|evidence|virtual[_ ]?meeting/i.test(name));
+		if (duplicateTables) {
+			fail("RC4 duplicate fact, evidence, or virtual meeting tables detected");
+		}
+	} finally {
+		client.close(false);
+	}
+}
+
 function digest(path: string): string {
 	const hasher = createHash("sha256");
 	hasher.update(readFileSync(path));
@@ -253,7 +357,7 @@ function permissions(): void {
 
 function usage(): never {
 	fail(
-		"usage: db.js migrate | backup [PATH] | verify-backup BACKUP_PATH | restore BACKUP_PATH | integrity [PATH] | permissions",
+		"usage: db.js migrate | backup [PATH] | verify-backup BACKUP_PATH | restore BACKUP_PATH | integrity [PATH] | verify-rc4 [PATH] | permissions",
 	);
 }
 
@@ -286,6 +390,14 @@ try {
 			integrity(path);
 			process.stdout.write(
 				`${JSON.stringify({ operation: "integrity", path, result: "ok" })}\n`,
+			);
+			break;
+		}
+		case "verify-rc4": {
+			const path = argument ? resolve(argument) : databasePath();
+			verifyRc4(path);
+			process.stdout.write(
+				`${JSON.stringify({ operation: "verify-rc4", path, result: "ok" })}\n`,
 			);
 			break;
 		}

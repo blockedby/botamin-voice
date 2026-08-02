@@ -32,7 +32,7 @@
 - отправка бинарных PCM16 чанков около 100 ms;
 - явный end-of-turn `audio.commit`, 60-second ceiling и server-advertised PCM byte cap, производный от 2,000,000-byte WAV cap;
 - circular countdown по принятым samples, а не wall clock, с effective duration по stricter duration/byte ceiling;
-- secure `visitor.text.submit` для bounded final typed turn и in-chat form только в server-owned `COLLECT_BOOKING`;
+- secure `visitor.text.submit` for bounded final typed turns plus structured revisioned booking form commands only in server-owned `COLLECT_BOOKING`;
 - UI states `listening → processing → transcript.final`;
 - ordered playback queue для полных MP3 phrase segments;
 - decode через Web Audio или `HTMLAudio`;
@@ -61,15 +61,13 @@
 
 Источник истины для:
 
-- текущего stage;
-- server-owned current Moscow date/day, bounded typed/spoken Russian time-of-day preference/rejection и ровно двух structured/labeled internal meeting candidates;
-- refresh candidate context при выборе `morning`/`daytime`/`second_half`/`evening` или explicit rejection;
-- разрешённых actions, включая rejection любого create-booking slot вне active candidate tuple;
-- qualification gating по committed booking, delivered confirmation и отдельному consent;
-- booking lifecycle;
-- prompt context;
-- retry/cancellation;
-- post-booking qualification policy.
+- current stage and accepted visitor-turn origin (`voice_transcript` or `typed_message`);
+- durable RC4 draft lifecycle in one `conversation_contexts` JSON row: revision, fact registry/provenance/conflicts, exactly two candidate identities, selection, readiness, confirmation/commit state and booking ID;
+- server-owned Moscow date/day and bounded typed/spoken time-band, rejection, and concrete date/time interpretation;
+- expected-revision CAS, idempotent form/conflict/confirmation commands, explicit conflict resolution, and candidate refresh/reselection;
+- automatic internal booking commit only from a ready, exactly confirmed draft;
+- direct missing-only qualification after durable booking confirmation;
+- prompt context, retry/cancellation, and publication of browser-safe projections.
 
 LLM предлагает действие, но backend валидирует, разрешено ли оно в текущем состоянии.
 
@@ -120,18 +118,23 @@ P0 transport — direct typed JSON-RPC к app-server. Универсальный
 
 ### BookingService
 
-- генерирует ровно два deterministic internal 20-minute candidates после текущей московской даты, только по будням и по 20-minute grid с 09:00 до 17:00 starts;
-- без preference выбирает одну утреннюю и одну вечернюю альтернативу;
-- для selected `morning`/`daytime`/`second_half`/`evening` выбирает две in-band точки примерно в часе друг от друга; если occupied starts не оставляют такую пару, ищет ближайшую допустимую пару и при необходимости переносит обе на следующий будний день;
-- для одного explicit rejection исключает rejected band и формирует две альтернативы из оставшихся policy bands;
+- generates exactly two deterministic internal 20-minute candidates with concrete Moscow dates/times after current Moscow date, weekdays only, on the 09:00–17:00 20-minute grid;
+- without preference chooses one morning and one evening alternative;
+- handles selected time bands/rejection and supported concrete date+time requests; concrete requests return exact permitted + alternative or the nearest two internal starts, while missing/ambiguous/out-of-policy requests fail closed;
 - исключает уже committed internal start times без external calendar/availability API и никогда не представляет tuple как exhaustive/global availability;
 - валидирует name, company, working email, phone or Telegram, consent и structured `Europe/Moscow` slot;
 - повторно проверяет slot по текущему server clock и отклоняет stale/non-bookable или internally occupied start до side effect; active-candidate membership до вызова сервиса проверяет orchestrator/tool policy;
 - создаёт/находит booking в одной `BEGIN IMMEDIATE` transaction;
-- обновляет qualification patch для существующей committed booking; confirmation/consent gating до вызова сервиса принадлежит orchestrator/tool policy;
-- вычисляет qualification truth из сохранённых полей: zero+refusal=`skipped`, one=`partial`, both=`complete`; booking status остаётся `booked`;
+- updates qualification patch only after durable meeting confirmation; missing-field selection and refusal gating belong to orchestrator policy;
+- computes qualification truth from saved fields: zero+refusal=`skipped`, one=`partial`, both=`complete`; only a missing field is asked and booking remains `booked`;
 - пишет event outbox;
 - никогда не удаляет booking из-за incomplete qualification.
+
+### ConversationContext / BookingDraftStore
+
+Migration `0004_conversation_contexts.sql` adds exactly one compact table, not separate fact/evidence/meeting tables. Its PK/FK is `conversation_id` with cascade deletion; SQLite checks require a nonnegative row revision, valid object JSON, and matching draft/fact-registry revisions and `updatedAt`. Store mutations run in `BEGIN IMMEDIATE`, compare the expected revision in the update predicate, and use scoped idempotency keys for form, conflict-resolution, and confirmation commands. Provenance/evidence remains internal; browser events expose only required/status/value/conflict-option projections.
+
+A confirmed current revision is the authorization boundary for automatic internal meeting commit. The durable booking remains the only meeting entity; `InternalVirtualMeetingProjection` is derived from it for `session.ready` / `internal.meeting.updated` and explicitly carries both external flags as false.
 
 ### Notifier
 
@@ -162,13 +165,13 @@ Asset создаётся отдельно от visitor runtime: admin явно �
 1. Browser отправляет примерно 100 ms PCM16 chunks; gateway/utterance assembler собирает их в bounded utterance.
 2. End-of-turn / `audio.commit` закрывает реплику. Gateway/utterance assembler проверяет duration/bytes, создаёт и валидирует ровно один mono PCM16 WAV.
 3. Gateway передаёт WAV атомарному `SttPort`; OpenRouter STT adapter повторно валидирует/bounds already-WAV request, base64-кодирует его и отправляет один `input_audio` chat completion.
-4. Только валидный неустаревший final transcript становится user turn и публикуется как `transcript.final`. Альтернативно, monotonic `visitor.text.submit` очищает uncommitted microphone bytes и создаёт такой же final turn без STT; до server `transcript.final` typed input не считается принятым.
-5. Orchestrator одинаково парсит typed/spoken final text на bounded Russian time-of-day preference/rejection, refresh-ит candidates, затем добавляет stage, known facts, booking status, server-owned current Moscow date/day, preference state и ровно два structured candidates с generated `displayLabel`; Codex thread получает `turn/start` ровно один раз независимо от input origin.
-6. Text deltas проходят PII-safe sanitizer и bounded phrase chunker.
-7. Законченная короткая фраза отправляется в OpenRouter TTS; один request соответствует одному segment.
-8. После проверки один полный `audio/mpeg` segment идёт в browser ordered playback queue.
-9. Tool call исполняется транзакционно и результат возвращается brain независимо от audio path.
-10. Voice retries повторяют только соответствующий pure provider request и никогда не повторяют Luna turn, notifier или business tools.
+4. Only a valid current final transcript becomes a user turn. Monotonic `visitor.text.submit` creates the same accepted final-turn path without STT.
+5. Orchestrator parses typed/spoken input identically, extracts quoted fact proposals, and merges them into the revisioned durable draft; conflicting values become bounded explicit options rather than overwrite.
+6. Structured form commands patch the same draft at `baseRevision`; exact-revision confirmation automatically commits the booking through `uncommitted → committing → committed`.
+7. Text deltas pass the sanitizer. Contacts are redacted unless they exactly match server-approved contacts and contact-processing consent is active.
+8. Complete bounded phrases go to OpenRouter TTS and then the ordered browser queue.
+9. Only a durable booking publishes `internal.meeting.updated`; the final widget cannot be synthesized from transcript/stage alone.
+10. After truthful meeting confirmation, server qualification asks only missing facts. Provider retries never repeat Luna, notifier, draft mutation, or booking effects.
 
 ## 4. Latency design
 
@@ -336,7 +339,7 @@ Backend transition function должна быть чистой и покрыто
 transition(currentState, domainEvent) => nextState | TransitionError
 ```
 
-LLM не может напрямую записать произвольный next state. Он предлагает intent/action, orchestrator применяет допустимый transition. Typed composer/form visibility также проецируется только из server stage; transcript wording не может открыть booking form или разрешить tool.
+LLM cannot directly write state or durable facts. It may propose quoted current-turn facts; the server validates origin, quote, schema, expected revision, conflicts, and transitions. Typed composer/form visibility comes only from server stage. Browser draft projection strips provenance/evidence, and the final meeting widget comes only from a server-derived durable booking projection.
 
 ## 10. Barge-in
 

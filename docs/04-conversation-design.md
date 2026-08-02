@@ -24,11 +24,11 @@
 - не выдумывать цены, интеграции, сроки или кейсы;
 - при неизвестном факте честно предложить передать вопрос коллеге;
 - не читать технические идентификаторы и JSON вслух;
-- контакт повторять для подтверждения только при низкой уверенности STT;
-- печатный и голосовой final input равнозначны по смыслу и проходят один state/tool flow;
-- booking confirmation произносить только после committed tool success;
-- после confirmation задать точно `Можно задать два коротких вопроса?` и не считать booking action envelope согласием;
-- qualification начинается только после отдельного явного согласия: server спрашивает leads, затем manager count, по одному; completion только при обоих.
+- контакты по умолчанию не отправлять в TTS; exact server-approved contact можно озвучить только при contact-processing consent и accepted durable draft fact/booking;
+- печатный и голосовой final input равнозначны и обновляют один durable fact/draft flow; structured form обновляет тот же draft через revisioned commands;
+- conflicting facts требуют explicit resolution, а любое material change сбрасывает exact-revision confirmation;
+- meeting confirmation и final widget допустимы только после durable booking + committed draft;
+- qualification starts directly after truthful confirmation: ask only first missing field, never repeat known fields, and ask nothing when both are known.
 
 ## 3. Conversation policy по stages
 
@@ -77,37 +77,28 @@ Asset не содержит visitor data: администратор отдел�
 
 ### COLLECT_BOOKING
 
-После согласия назвать ровно два `schedulingContext.candidateMeetingSlots` по их server-generated `displayLabel`. Это две текущие внутренние альтернативы, а не вся глобальная доступность. Не вычислять и не переформатировать дату, день недели, время или доступность.
+После согласия использовать ровно два current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Typed/spoken time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
 
-Без предпочтения server даёт один morning и один evening candidate. Явная typed/spoken русская формулировка про утро, день, вторую половину дня или вечер обновляет context и даёт два in-band варианта примерно в часе друг от друга; при занятости server переносит пару на следующий подходящий будний день. Явный отказ от части дня исключает эту часть. Все варианты: 20 минут, будни, не сегодня, starts 09:00–17:00 по Москве.
+Обязательный набор: accepted name, company, working email, phone or Telegram, one current candidate, and contact consent. Spoken and typed turns merge quoted fact proposals into the same durable `conversation_contexts.draft_json`. New conflicting values produce bounded explicit options instead of silent overwrite.
 
-Обязательный набор:
-
-1. имя;
-2. компания;
-3. рабочий email;
-4. телефон или Telegram;
-5. один выбранный structured 20-minute `Europe/Moscow` candidate;
-6. server-confirmed consent.
-
-Если пользователь дал несколько полей одной spoken или typed репликой, не переспрашивать их по одному. In-chat form показывается только по server stage `COLLECT_BOOKING`, валидирует четыре пользовательских поля и передаёт их как обычный typed turn; она не вызывает tool и не подтверждает бронь.
+In-chat form видима только в server stage `COLLECT_BOOKING`. Она auto-fills browser-safe facts, показывает пять полей and exactly two dated candidates, submits a structured patch/current `candidateId` at `baseRevision`, and resolves server conflicts by option identity. It does not serialize as visitor text and does not call `create_booking` directly. After the draft is ready, visitor confirms the exact current revision; stale revisions or candidate refresh require resync/reselection.
 
 ### BOOKED
 
-После `create_booking`:
+После exact-revision confirmation server automatically commits the booking, then confirms truthfully:
 
-> Всё получила и зафиксировала. Календарная встреча пока не создана: коллега свяжется по указанному контакту. Можно задать два коротких вопроса?
+> Внутренняя виртуальная встреча создана на согласованный слот по Москве. Внешнее календарное событие и приглашение не создавались.
 
-Последнее предложение — точный consent-вопрос current server contract. Формулировку про отсутствие календаря можно сделать менее технической только вместе с изменением server-authored contract/tests; нельзя утверждать, что external event уже создан.
+Only then may `internal.meeting.updated` publish the final widget. The projection is derived from the durable booking (`kind=internal_virtual`, `status=scheduled`, external flags false); transcript wording or legacy UI state cannot create it.
 
 ### POST_BOOKING_QUALIFICATION
 
-Только после committed booking, user-facing confirmation и точного consent-вопроса `Можно задать два коротких вопроса?` отдельное явное согласие открывает qualification. Server, а не модель, детерминированно задаёт по одному:
+After durable commit and truthful meeting confirmation, qualification starts directly without a separate permission question. Server asks exactly one missing fact:
 
-1. `Сколько входящих лидов приходит за месяц?` → `monthlyLeadVolume`;
-2. `Сколько менеджеров по продажам работает в вашей команде?` → integer `salesManagerCount`.
+1. monthly lead/contact volume, adapted to known inbound/outbound context, when it is missing;
+2. integer `salesManagerCount` when it is missing.
 
-В обычном ходе второй вопрос появляется только после первого ответа. Если пользователь сразу сообщает оба значения, сохранить оба и завершить. `complete` разрешён только при обоих полях; отказ без ответов даёт `skipped`, после одного — сохраняет `partial`. Оба поля необязательны для уже committed booking, которая всегда остаётся `booked`. Другие поля расширенной legacy schema не входят в текущий conversational flow.
+If both are missing, volume goes first. If one is already accepted in durable facts/booking qualification, ask only the other. If both are known, ask nothing and complete. Generic per-day volume first requires working-vs-calendar-day clarification; the model does not silently multiply. Both missing values in one turn may be stored together. Refusal with zero answers is `skipped`; after one answer it remains `partial`; the internal meeting stays scheduled.
 
 ### COMPLETE
 
@@ -120,9 +111,9 @@ Asset не содержит visitor data: администратор отдел�
 Жёсткое правило prompt + backend policy:
 
 ```text
-Квалификация не является условием брони.
-Никогда не откладывай create_booking ради дополнительных вопросов.
-После tool success сначала подтверди сохранение, затем запроси согласие на qualification.
+Квалификация не является условием встречи.
+Никогда не откладывай exact-revision commit ради дополнительных вопросов.
+После durable commit сначала правдиво подтверди внутреннюю встречу, затем спроси только first missing qualification fact без отдельного permission turn.
 ```
 
 ## 5. Объекты памяти
@@ -173,7 +164,7 @@ Asset не содержит visitor data: администратор отдел�
 }
 ```
 
-Codex thread сохраняет естественную историю; compact state страхует от drift и упрощает resume.
+Codex thread сохраняет естественную историю, but RC4 durable truth lives separately in `conversation_contexts`: `revision`, fact registry with provenance/conflicts, two candidate identities, selection, readiness, confirmation/commit status, timestamps, and optional booking ID. The browser receives only a projection with values/status/options; conversation ownership, evidence text, and provenance are stripped. Compact prompt state is derived from that server truth rather than used as persistence.
 
 ## 6. Prompt files
 
@@ -183,9 +174,9 @@ prompts/
   product.md                # concise Botamin proposition
   conversation-policy.md    # stages, turn length, refusal behavior
   objections.md             # patterns, не жёсткие скрипты
-  booking.md                # tool timing, minimum data, confirmation
-  qualification.md          # optional fields and stopping rules
-  speech-style.md            # spoken Russian, no markdown
+  booking.md                # exact-revision draft confirmation and internal meeting truth
+  qualification.md          # direct missing-only optional facts and stopping rules
+  speech-style.md           # spoken Russian, TTS redaction and approved-contact exception
 knowledge/
   botamin-overview.md
   use-cases.md
@@ -204,7 +195,7 @@ Prompt compiler:
 - собирает `/app/runtime-brain/AGENTS.md` — основной instruction source для Codex thread;
 - при необходимости копирует туда только разрешённые read-only knowledge-файлы; исходный repository туда не монтируется;
 - при `thread/start` проверяет, что `instructionSources` содержит ожидаемый `AGENTS.md`;
-- перед каждым `turn/start` одинаково разбирает typed/spoken preference/rejection и добавляет compact machine-generated context envelope: stage, known facts, booking snapshot, server-owned current Moscow date/day, preference state, ровно два structured/labeled current candidates, allowed actions и финальный текст пользователя;
+- перед каждым `turn/start` одинаково разбирает typed/spoken time-band/concrete requests and adds compact machine-generated context from the durable draft: stage, accepted facts, conflicts, booking snapshot, server-owned Moscow date/day, exactly two concretely dated current candidates, allowed actions, and final user text;
 - логирует только version/hash, не весь prompt;
 - поддерживает hot reload только в development: новый prompt version применяется к новым conversations, а активные сохраняют исходную версию.
 
@@ -214,7 +205,7 @@ Prompt compiler:
 
 - убрать Markdown headings, bullets, code fences, raw URLs и tool envelopes;
 - исключить hidden IDs, system messages и structured payloads;
-- redact phone, email и Telegram handle до отправки provider-у;
+- redact phone, email and Telegram by default; restore only exact server-approved contacts from accepted durable draft facts or a committed booking when contact-processing consent is active;
 - заменить технические аббревиатуры на произносимый вариант при необходимости;
 - не отправлять незакрытые JSON/Markdown fragments или punctuation-only segments;
 - сохранить пунктуацию, важную для интонации.
@@ -225,19 +216,11 @@ Bounded phrase chunker выпускает первую фразу примерн
 
 ### `create_booking`
 
-LLM вызывает только когда:
-
-- stage равен `COLLECT_BOOKING` и пользователь согласился;
-- известны имя и компания;
-- есть валидный рабочий email и телефон или Telegram;
-- выбран один из ровно двух candidates активного server context;
-- consent подтверждён server-side.
-
-Backend сверяет выбранный `meetingSlot` с обоими active candidates и отклоняет любой non-candidate/stale/occupied slot. Tuple не означает exhaustive availability: preference/rejection refresh заменяет обе текущие альтернативы. Это внутренняя 20-minute бронь без external calendar event, invitation или availability API.
+In RC4 the visitor does not invoke this tool directly. When the server-owned draft is ready and the visitor confirms its exact revision, orchestrator marks it `committing`, builds input only from accepted durable facts and the selected current candidate, performs idempotent `create_booking`, verifies the durable booking matches the draft, then marks the draft `committed`. Stale revision, unresolved conflict, changed/non-current candidate, missing field, or booking mismatch fails closed. This creates one internal 20-minute meeting without another meeting table, external calendar event, invite, or availability API.
 
 ### `append_booking_qualification`
 
-LLM вызывает только после committed `bookingId`, user-facing confirmation и отдельного explicit qualification consent. Server задаёт monthly leads первым и manager count вторым, а status выводит из фактически сохранённых полей, не из заявления модели: one=`partial`, both=`complete`; empty refusal=`skipped`. Текущий flow патчит только `monthlyLeadVolume` и integer `salesManagerCount`; оба значения одной репликой разрешены.
+After durable meeting confirmation, accepted missing facts are patched into the same booking. No separate qualification consent is required. Server asks volume first only when both are missing, otherwise only the missing field, and derives status from persisted truth: one=`partial`, both=`complete`; empty refusal=`skipped`. The active fields remain `monthlyLeadVolume` and integer `salesManagerCount`; both may arrive in one turn.
 
 Backend возвращает safe result:
 
@@ -290,13 +273,13 @@ Backend возвращает safe result:
 3. Агент: связывает 24/7 входящую обработку и квалификацию с pain; задаёт вопрос о текущем процессе.
 4. Пользователь: отвечает и спрашивает про CRM.
 5. Агент: описывает integration layer без обещания конкретного срока; предлагает demo.
-6. Агент: называет ровно два server-supplied Moscow candidates.
-7. Пользователь: typed form/репликой даёт имя, компанию, рабочий email, Telegram и выбирает первый slot; consent уже подтверждён server context.
-8. Backend: валидирует candidate и commit-ит `booking.created` без внешнего календарного события.
-9. Server-authored confirmation: подтверждает внутреннюю бронь и точно спрашивает `Можно задать два коротких вопроса?`.
-10. Пользователь: явно соглашается; server задаёт вопрос про месячный объём входящих лидов. Пользователь может сразу сообщить и целое число менеджеров продаж, тогда оба поля сохраняются за один turn.
-11. Backend: `booking.updated`.
-12. Агент: кратко суммирует и завершает.
+6. Server/agent names exactly two concretely dated Moscow candidates.
+7. Spoken/text turns and/or structured form fill one durable revisioned draft; conflicts are resolved and one current candidate is selected.
+8. Visitor confirms the exact ready revision; backend automatically commits `booking.created`, marks the draft committed, and publishes the server-derived internal meeting widget.
+9. Server truthfully confirms the internal virtual meeting and states that no external calendar event/invite was created.
+10. Server immediately asks only the first missing qualification fact. If both facts were already captured, it asks nothing; if the user gives both missing values, both persist in one turn.
+11. Backend publishes `booking.updated` / refreshed `internal.meeting.updated` as applicable.
+12. Agent briefly summarizes and ends.
 
 ## 12. Eval rubric для каждой реплики
 

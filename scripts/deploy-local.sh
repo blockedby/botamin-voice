@@ -36,10 +36,23 @@ fi
 
 docker compose build --pull
 scripts/assert-image-content.sh "${APP_IMAGE:-botamin-voice:local}"
-docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate
+
+# Never race a live SQLite writer with a schema migration. Protect the current
+# database first, then let Compose's 30-second grace period drain/stop the app.
+if docker compose ps --status running --services app | grep -qx app; then
+  docker compose exec -T app bun /app/ops/db.js backup
+  docker compose stop --timeout 30 app
+elif docker compose run --rm --no-deps --entrypoint sh app -c '[ -f /data/app.db ]'; then
+  # Preserve an existing stopped database too; AUTO_MIGRATE=false prevents this
+  # one-off backup container from changing its schema.
+  docker compose run --rm --no-deps --entrypoint bun -e AUTO_MIGRATE=false \
+    app /app/ops/db.js backup
+fi
+
 # Compose does not detect a changed file-secret inode at the same source path.
-# Recreate only app unconditionally, then let Compose start/update Caddy if needed.
-docker compose up -d --no-deps --force-recreate app
+# Recreate only app unconditionally. Its normal entrypoint applies migrations
+# before server startup; readiness proves the migrated application came up.
+AUTO_MIGRATE=true docker compose up -d --no-deps --force-recreate app
 docker compose up -d caddy
 
 if ! READY_MAX_ATTEMPTS="${LOCAL_READY_MAX_ATTEMPTS:-30}" \
@@ -51,6 +64,7 @@ if ! READY_MAX_ATTEMPTS="${LOCAL_READY_MAX_ATTEMPTS:-30}" \
   exit 1
 fi
 
+docker compose exec -T app bun /app/ops/db.js verify-rc4
 docker compose ps
 printf '%s\n' "Local HTTP is ready at http://localhost:${HTTP_PORT:-5173}."
 printf '%s\n' "The paid OpenRouter smoke was not run."

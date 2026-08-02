@@ -34,22 +34,13 @@ chmod 600 .env
 curl -fsS http://localhost:5173/health/ready
 ```
 
-Equivalent explicit commands are:
+Do not replace the wrapper with an ad-hoc one-off migration. For an existing database it first takes a protected backup, gracefully stops the live app, then starts the replacement with `AUTO_MIGRATE=true` so the normal entrypoint applies migrations before the server. After dependency readiness it runs:
 
 ```bash
-bun scripts/materialize-compose-secrets.ts
-secret_dir="$(pwd -P)/.runtime/secrets"
-export OPENROUTER_API_KEY_FILE="$secret_dir/openrouter_api_key"
-export WEBHOOK_URL_FILE="$secret_dir/webhook_url"
-export WEBHOOK_SIGNING_SECRET_FILE="$secret_dir/webhook_signing_secret"
-docker compose config >/tmp/botamin-compose-config.yml
-docker compose build --pull
-docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate
-docker compose up -d --no-deps --force-recreate app
-docker compose up -d caddy
-docker compose ps
-curl -fsS http://localhost:5173/health/ready
+docker compose exec -T app bun /app/ops/db.js verify-rc4
 ```
+
+That check is PII-safe and verifies SQLite integrity, exact RC4 context columns/FK/check constraints, persisted JSON revision/timestamp consistency, foreign keys, and absence of duplicate fact/evidence/virtual-meeting tables.
 
 Caddy proxies WebSocket upgrades automatically. `docker compose down` preserves
 all named volumes; never use `down -v` on a host containing real bookings or
@@ -162,12 +153,9 @@ input substitution after transcription failure.
 
 ## Migration, backup, restore, and rollback
 
-Migrations run idempotently before normal startup when `AUTO_MIGRATE=true` and
-are also available explicitly:
+Migrations run idempotently before normal startup when `AUTO_MIGRATE=true`. The supported local cutover never runs a schema migration while the old app can write: it backs up first, drains/stops the app, and lets normal replacement startup migrate. The explicit `db.js migrate` command is reserved for an already-stopped/offline database and must not be used against a live app.
 
-```bash
-docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate
-```
+RC4 migration `0004` adds only `conversation_contexts`; it does not backfill RC3 conversations, alter existing bookings, or create separate fact/evidence/meeting tables. `verify-rc4` must pass after startup.
 
 Backups use SQLite `VACUUM INTO`, not a raw copy of a live DB/WAL, and write a
 mode-`0600` `<backup>.sha256` sidecar bound to the backup basename. Backup,
@@ -201,9 +189,7 @@ backup:
 
 Restore and rollback reject live-but-unready responses and use bounded request,
 retry, and interval settings. After a successful rollback, keep that `APP_IMAGE`
-exported in the host's deployment wrapper. SQLite migrations are forward-only;
-use the matching pre-release backup when the old image cannot read the new
-schema.
+exported in the host's deployment wrapper. SQLite migrations are forward-only. `0004` is additive, but no general downgrade compatibility is promised. Use the matching pre-cutover backup when an older image cannot read the forward schema; do not reverse the migration in place.
 
 ## Safe diagnostics
 
@@ -212,6 +198,7 @@ docker compose run --rm -e AUTO_MIGRATE=false app codex --version
 docker compose run --rm -e AUTO_MIGRATE=false app id
 docker compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js permissions
 docker compose exec -T app bun /app/ops/db.js integrity
+docker compose exec -T app bun /app/ops/db.js verify-rc4
 # Loopback-only safe aggregate snapshot; public/Caddy requests are denied.
 docker compose exec -T app bun -e \
   "const r=await fetch('http://127.0.0.1:3000/metrics');if(!r.ok)process.exit(1);console.log(await r.text())"

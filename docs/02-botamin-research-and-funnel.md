@@ -100,7 +100,7 @@ Sticky/inline widget с transcript, статусом и одной главно�
 
 - данные не попадают в публичный чат;
 - разговор можно остановить;
-- реальная встреча в этом MVP не создаётся, данные только фиксируются.
+- создаётся только внутренняя виртуальная встреча Botamin на точный московский слот; внешнее calendar event/invite не создаётся.
 
 ## 6. Воронка
 
@@ -115,9 +115,9 @@ Sticky/inline widget с transcript, статусом и одной главно�
 | Discovery | найти задачу максимум за два вопроса до мягкого offer | `discovery.completed` | слишком много вопросов |
 | Value | связать pain и use case | `value.presented` | общая презентация |
 | Intent | получить согласие на следующий шаг | `booking.offered` | нет доверия/времени |
-| Booking | сохранить полный обязательный набор и один из двух внутренних slots | `booking.created` | не собраны name/company/email/phone-or-Telegram/consent/slot |
-| Qualification | после commit, confirmation и consent спросить inbound volume и manager count | `qualification.updated` | пользователь устал |
-| Handoff | вывести структурированный результат | `notification.sent` | provider/output error |
+| Booking | свести spoken/text/form facts в один revisioned draft, разрешить conflicts и подтвердить один из двух concretely dated slots | `booking.created` | missing/conflicted facts, stale revision или нет current selection |
+| Qualification | после durable internal meeting и truthful confirmation спросить только missing volume/manager fact | `qualification.updated` | пользователь отказался; meeting сохраняется |
+| Handoff | показать server-derived internal meeting widget и структурированный notifier result | `internal.meeting.updated` / `notification.sent` | widget запрещён до durable commit |
 
 ## 7. Conversation value map
 
@@ -134,14 +134,11 @@ Sticky/inline widget с transcript, статусом и одной главно�
 
 Текущий funnel умеренно проактивен: агент задаёт по одному вопросу и не более двух discovery-вопросов до краткого мягкого предложения demo/встречи. После ясного отказа предложение не повторяется.
 
-После согласия агент предлагает ровно два labeled candidates из server context и не называет их всей доступностью. Без предпочтения server даёт одну утреннюю и одну вечернюю альтернативу. Typed и spoken русские формулировки про утро, день, вторую половину дня или вечер обновляют контекст: выбранная часть дня даёт два in-band варианта примерно в часе друг от друга, occupied band переносится на следующий подходящий будний день, а явный rejection исключает отклонённую часть. Все варианты — 20 минут, будни, не сегодня, старты 09:00–17:00 по Москве. Новая внутренняя бронь требует name, company, working email, phone or Telegram, consent и один текущий candidate. Внешний календарь и external availability API отсутствуют.
+После согласия agent/server предлагает ровно два labeled candidates с конкретной московской датой и временем и не называет их всей доступностью. Без предпочтения server даёт одну утреннюю и одну вечернюю альтернативу. Typed и spoken русские формулировки про часть дня, rejection и поддерживаемую конкретную дату+время проходят один parser: для concrete request server предлагает exact permitted start и alternative либо два nearest internal starts. Все варианты — 20 минут, будни, не сегодня, старты 09:00–17:00 по Москве.
 
-Квалификация начинается только после committed booking и user-facing confirmation с точным вопросом `Можно задать два коротких вопроса?`. После отдельного явного consent server задаёт по одному и в фиксированном порядке:
+Name, company, working email, phone or Telegram, qualification facts и candidate selection сходятся в одном durable revisioned draft независимо от spoken, typed или structured-form origin. Conflicting values не затираются молча; browser показывает bounded options, а stale revision/replaced candidate требует resync/reselection. Exact-revision confirmation автоматически создаёт одну внутреннюю виртуальную встречу и только после durable commit публикует final widget. Внешний календарь, invite и availability API отсутствуют.
 
-1. месячный объём **входящих** лидов (`monthlyLeadVolume`);
-2. явное целое число менеджеров продаж (`salesManagerCount`).
-
-`complete` возможен только при обоих значениях; ответ на оба сразу допустим. Отказ без ответов даёт `skipped`, после одного — `partial`; внутренняя бронь остаётся `booked`.
+После truthful confirmation qualification не запрашивает отдельного разрешения. Server задаёт только first missing field: monthly lead/contact volume first, если оба отсутствуют; otherwise only missing volume or integer `salesManagerCount`; если оба известны — ничего. `complete` возможен только при обоих значениях; ответ на оба сразу допустим. Отказ без ответов даёт `skipped`, после одного — `partial`; внутренняя встреча остаётся scheduled.
 
 ## 9. Контентные риски
 

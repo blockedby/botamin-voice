@@ -85,7 +85,7 @@ Dynamic tool API Codex app-server экспериментальный. Default м
 
 **Статус:** accepted.
 
-Prompt-only state считается недостаточным. LLM может предложить action, но transition и side effects разрешает deterministic policy. Это особенно важно для порядка booking → qualification.
+Prompt-only state считается недостаточным. RC4 persists a revisioned JSON draft/fact/conflict projection in `conversation_contexts`; LLM may only propose quoted current-turn facts, while deterministic policy owns CAS, conflict resolution, exact confirmation, booking commit, and booking → qualification order.
 
 ## ADR-006. Prompts в Markdown, без онлайн-редактора
 
@@ -109,13 +109,13 @@ Prompt-only state считается недостаточным. LLM может 
 
 **Статус:** accepted.
 
-Это сокращает scope и позволяет проверить conversation/tool design. UI и voice copy обязаны не создавать ложного ожидания calendar event.
+The durable booking is the only meeting entity. UI derives an `internal_virtual`/`scheduled` projection and must state that external calendar event/invite flags are false; no second meeting table is introduced.
 
 ## ADR-010. Qualification только после booking
 
 **Статус:** accepted, non-negotiable.
 
-Плюсы: меньше потерянных лидов и ясная транзакционная граница. Минусы: booking может быть менее подробно квалифицирована. Этот минус ожидаем и допустим.
+After truthful durable meeting confirmation, qualification starts directly and asks only missing volume/manager facts; there is no separate permission bridge. Плюсы: меньше потерянных лидов и ясная транзакционная граница. Минусы: booking может быть менее подробно квалифицирована. Этот минус ожидаем и допустим.
 
 ## ADR-011. PCM speech output path
 

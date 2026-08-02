@@ -1,42 +1,46 @@
-# 11. Local release candidate and handoff
+# 11. RC4 local release handoff
 
-**Release label:** `0.5.0-local-rc.3`
+**Release label:** `0.5.0-local-rc.4`
 
-**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.3`
+**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.4`
 
-**Tag state:** recommendation only until the validated candidate is merged.
+**Tag state:** pending/recommendation only. No tag, PR, registry digest, or predecessor image is asserted by this handoff.
 
-**Scope:** local hosting on one trusted machine. This is not a target-VPS or public TLS release.
+**Implementation baseline:** integrated RC4 code through `58aa9ee`; release documentation/operations are committed separately.
 
-## RC3 scope
+**Scope:** local hosting on one trusted machine. This is not target-VPS or public TLS/WSS acceptance.
 
-- committed product-owned same-origin proactive MP3 attempts playback once immediately on entry, with no conversation REST/WS/mic/provider/session before consent; blocked/error fallback is `Включить приветствие`, and real session start stops it;
-- explicit admin-only opt-in OpenRouter script generates the fixed no-visitor-data asset before commit; visitor runtime never synthesizes it;
-- server always offers exactly two current internal Moscow candidates: default morning+evening, contextual typed/spoken Russian preference/rejection refresh, selected in-band roughly hour-apart pair with weekday rollover, and no exhaustive global-availability claim;
-- after committed booking and confirmation, exact consent question `Можно задать два коротких вопроса?` gates deterministic monthly-leads-then-manager-count collection; both-at-once, skipped, and partial outcomes preserve booking.
+## RC4 behavior being handed off
 
-## Local P0 candidate checklist
+- one durable `conversation_contexts` JSON projection per conversation stores nonnegative revision, fact registry/provenance/bounded conflicts, exactly two current candidate identities, selected candidate, readiness, exact-revision confirmation, commit state, booking ID and matching timestamps;
+- spoken and typed final turns use the same fact/scheduling/draft path; the structured form patches the same authoritative draft with expected revision and idempotent request ID rather than pretending to be visitor text;
+- every scheduling offer contains exactly two 20-minute internal Moscow candidates with concrete dates/times; supported concrete date/time requests return the exact permitted start plus an alternative or the nearest two internal starts;
+- a ready draft must be confirmed at its exact current revision; server orchestration then automatically commits one booking and publishes one server-derived `internal_virtual`/`scheduled` meeting projection;
+- the final widget appears only after durable commit and states that no external calendar event or invitation exists;
+- optional qualification starts directly after truthful meeting confirmation and asks only missing facts: volume first when neither is known, only the other field when one is known, and nothing when both are known;
+- TTS redacts contacts by default. The only exception is an exact server-approved contact from accepted durable draft facts or a committed booking while contact-processing consent is active.
 
-Fresh RC3 local evidence is recorded in [`../VALIDATION.md`](../VALIDATION.md); RC2 observations were not reused as proof.
+No duplicate meeting table, external availability query, calendar event/invite, or CRM record is introduced.
 
-- [x] Credential-free suite passed 510 tests across 58 files with 4,265 assertions and no failures.
-- [x] Typecheck, lint/format, production build, deterministic eval/spec generation, validator, and `git diff --check` passed.
-- [x] Chrome exercised proactive greeting success and fallback, zero pre-consent conversation calls, session-start cleanup, responsive layouts, and a real contextual evening request. Gateway/orchestrator tests cover typed/spoken preferences and qualification skipped/partial/complete. Firefox headless rendered 390×844 without CSP/runtime errors.
-- [x] `scripts/deploy-local.sh` completed from the RC3 tree; migration, app/Caddy health/readiness, 60-second/2 MB limits, and file-secret boundaries passed.
-- [x] Explicit paid checks passed: static OpenRouter TTS greeting generation, one typed Luna/TTS evening-slot turn, and one OpenRouter STT → Luna → OpenRouter TTS smoke with two decoder-accepted MP3 segments.
-- [x] Fresh protected backup and deterministic restore/rollback tests passed; RC2 remains the rollback tag shown below.
-- [x] Final evidence was recorded in `VALIDATION.md`; `MANIFEST.txt` and `CHECKSUMS.sha256` were regenerated separately.
-- [ ] WebKit playback and complete journey acceptance — later gate, unobserved.
-- [ ] Target VPS deploy, DNS, TLS/WSS, and target-host paid smokes — later gate, unobserved.
+## Evidence status
 
-The committed [T30 owner-observed artifact](../evidence/T30-observed-local-voice-smoke-2026-07-31.md) remains historical evidence only; it does not close RC3 acceptance.
+Fresh RC4 results are recorded in [`../VALIDATION.md`](../VALIDATION.md). The RC3 report is preserved separately as historical evidence; it does not close RC4 gates.
+
+- Chromium desktop/mobile Playwright **landing smoke** passed through the shared harness. It covers responsive/pre-consent boundaries, not a full voice booking journey.
+- Fixture-only eval baseline is 44/44 scenarios, 25/25 applicable booking-order checks, and 28/28 negative controls with zero provider calls; real Luna was not run.
+- Migration/cutover wrappers and RC3→RC4 schema compatibility are covered by deterministic tests.
+- Repository-wide tests are not fully green: 640 pass and two unchanged integrated journey tests fail; exact evidence is in `VALIDATION.md`.
+- WebKit full journey is not run. Its browser binary is present, but this host lacks `libicu74`, `libxml2`, and `libflite1`.
+- Full voice booking, owner-configured live Compose cutover, target VPS, public TLS/WSS, and target-host provider live booking remain explicit gates.
+
+The committed [T30 owner-observed artifact](../evidence/T30-observed-local-voice-smoke-2026-07-31.md) and the preserved RC3 report remain historical evidence only.
 
 ## Prerequisites and secure bootstrap
 
 - Bun `1.3.14` for repository checks and host smoke tooling.
 - Docker Engine and Docker Compose v2 for the supported local runtime.
-- `ffmpeg` on `PATH` only for `scripts/local-voice-e2e-smoke.ts`; ordinary deployment does not need host decoding.
-- A paid OpenRouter account/key and an authorized Codex subscription for real voice use.
+- `ffmpeg` only for the explicit integrated voice smoke.
+- Paid OpenRouter access and authorized Codex subscription for real voice use.
 
 ```bash
 cp .env.example .env
@@ -48,34 +52,59 @@ chmod 600 .env
 curl -fsS http://localhost:5173/health/ready
 ```
 
-Open <http://localhost:5173>. Device auth is interactive and persists in the fixed `botamin-codex-home` Docker volume. Protect Docker access and the underlying disk; do not include Codex `auth.json` in ordinary backups. The `CODEX_HOME` value in `.env` is for direct host Bun operation; Compose uses `/codex-home` backed by that named volume.
+Open <http://localhost:5173>. Device auth persists in the fixed `botamin-codex-home` volume. Protect Docker access and disk; ordinary DB backups do not include Codex auth.
 
-`deploy-local.sh` parses `.env` without shell evaluation, atomically materializes `.runtime/secrets` as directory mode `0700` and files mode `0600`, exports only the `*_FILE` paths, builds, migrates, force-recreates the app, starts Caddy, and waits for readiness. The files are mounted under `/run/secrets`; key values are not build args or browser configuration.
+`deploy-local.sh` does not change `.env`. It atomically materializes mode-`0600` file secrets, renders/scans Compose config, and builds the image. For an existing DB it creates a protected backup before schema mutation. A running app is then gracefully stopped with a 30-second timeout; a stopped existing DB is backed up through a no-migration one-off container. The replacement starts with `AUTO_MIGRATE=true`, so migrations run through the normal entrypoint before the server. Success requires bounded readiness followed by the PII-safe RC4 invariant check.
 
-## Health, readiness, and metrics
+## Health and durable invariant checks
 
 ```bash
 docker compose ps
 curl -fsS http://localhost:5173/health/live
 curl -fsS http://localhost:5173/health/ready
+docker compose exec -T app bun /app/ops/db.js verify-rc4
+```
 
-# Safe aggregate metrics are intentionally direct-loopback only.
+`verify-rc4` checks SQLite integrity, exact `conversation_contexts` columns and cascade FK, migration check constraints, persisted JSON/revision/timestamp consistency, foreign keys, and absence of duplicate fact/evidence/virtual-meeting tables. It prints no row values.
+
+Safe aggregate metrics remain loopback-only:
+
+```bash
 docker compose exec -T app bun -e \
   "const r=await fetch('http://127.0.0.1:3000/metrics');if(!r.ok)process.exit(1);console.log(await r.text())"
 ```
 
-Caddy/public access to `/metrics` is denied. Readiness is dependency-aware and may return `503` for Codex auth/model, DB, prompt, voice configuration, capacity, or worker failures; health checks never spend OpenRouter usage.
+## Migration 0004 and rollback boundary
+
+`0004_conversation_contexts.sql` adds one empty context table to an RC3 database. It does not rewrite existing conversations/bookings, invent fact history, or create a separate virtual-meeting table. New/resumed RC4 sessions initialize their own durable draft through normal server behavior.
+
+Migrations are forward-only. Do not reverse `0004` in place. Image-only rollback is acceptable only after the owner proves the older image tolerates the forward schema. Otherwise stop the app and restore the matching protected pre-cutover backup. This handoff does not invent an immutable previous image name; supply an owner-retained image reference explicitly.
+
+```bash
+# Online backup while app is running
+./scripts/backup.sh
+./scripts/backup.sh /data/backups/before-rc4.db
+
+# Verified atomic restore; requires readiness before success
+./scripts/restore.sh /data/backups/before-rc4.db
+
+# Owner supplies a real retained immutable image reference.
+PREVIOUS_IMAGE=registry.example.invalid/botamin@sha256:OWNER_RETAINED_DIGEST
+./scripts/rollback.sh "$PREVIOUS_IMAGE" /data/backups/before-rc4.db
+```
+
+The placeholder above is not a real image. Never use `docker compose down -v`. Keep each `.db` with its mode-`0600` `.sha256` sidecar. Repository wrappers checksum/protect backups but do not encrypt or automatically expire them; encrypted snapshots, retention, RPO/RTO, and restore drills are host-owner duties.
 
 ## Paid smokes: explicit opt-in only
 
-Deployment, tests, health checks, and this release procedure do not call paid providers. The proactive asset is regenerated only by an administrator's explicit paid opt-in; this command overwrites the tracked static MP3 from fixed product copy, never visitor data, so inspect the result before committing:
+Deployment, tests, readiness, and schema verification do not spend provider usage. Static greeting regeneration is administrator-only and overwrites a tracked asset, so inspect it before commit:
 
 ```bash
 BOTAMIN_GENERATE_PROACTIVE_GREETING=1 \
   bun run scripts/generate-proactive-greeting.ts
 ```
 
-This is not a deploy/startup/visitor command. Against an already-ready local server, an owner may deliberately run the integrated smoke; it spends OpenRouter STT/TTS and Codex subscription usage:
+Against an already-ready local server, an owner may deliberately run the integrated voice smoke:
 
 ```bash
 BOTAMIN_EXTERNAL_VOICE_E2E=1 bun run scripts/local-voice-e2e-smoke.ts \
@@ -84,7 +113,7 @@ BOTAMIN_EXTERNAL_VOICE_E2E=1 bun run scripts/local-voice-e2e-smoke.ts \
   --fixture-turns 1
 ```
 
-`ffmpeg` is mandatory for this non-browser decoder check. Use real bounded PCM files rather than `--fixture-turns` when synthetic input is not appropriate. Isolated STT/TTS image probes are also paid; export the deployed file paths first and run them only with explicit approval:
+This is not a browser full journey and does not close WebKit or target-host gates. Isolated paid image probes likewise require explicit approval:
 
 ```bash
 compose_secret_operation=paid-smoke
@@ -93,39 +122,12 @@ docker compose run --rm -e AUTO_MIGRATE=false app /app/scripts/run-openrouter-sm
 docker compose run --rm -e AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh tts
 ```
 
-## Backup, restore, rotation, stop, and rollback
+## Explicit remaining gates
 
-```bash
-# Online SQLite VACUUM INTO backup plus protected checksum sidecar
-./scripts/backup.sh
-./scripts/backup.sh /data/backups/before-release.db
-
-# Restore verifies permissions, checksum, integrity, migration, and readiness
-./scripts/restore.sh /data/backups/before-release.db
-
-# Stop while retaining named volumes
-docker compose stop
-# Remove containers/network while retaining named volumes
-docker compose down
-
-# Keep RC2 as the existing/pullable immutable rollback image for RC3.
-# Use the exact immutable registry reference/digest retained by the owner if available.
-PREVIOUS_IMAGE=botamin-voice:0.5.0-local-rc.2
-./scripts/rollback.sh "$PREVIOUS_IMAGE"
-./scripts/rollback.sh "$PREVIOUS_IMAGE" /data/backups/before-release.db
-```
-
-Never use `docker compose down -v`. SQLite migrations are forward-only; use the matching pre-release backup if an older image cannot read the current schema.
-
-For OpenRouter/webhook key rotation: revoke or schedule revocation at the provider, replace the value in mode-`0600` `.env`, then rerun `./scripts/deploy-local.sh`. Its forced app recreation remounts the new secret inode. For Codex auth refresh, stop the app, rerun `./scripts/device-auth.sh`, then rerun `./scripts/deploy-local.sh`. Never print old/new values or copy auth into the repository.
-
-## Known limitations and next gates
-
-- STT is phrase-level and nonstreaming at the provider boundary: transcription starts after `audio.commit` and one complete bounded WAV.
-- T30 local synthetic timings prove functional sequencing only; they are not a benchmark or target-host SLO.
-- WebKit complete-MP3 playback and journey acceptance remain unobserved.
-- Target VPS resource behavior, DNS, public TLS/WSS, and target-host provider smokes remain unobserved.
-- The proactive greeting is a committed static product MP3. Browser autoplay remains policy-dependent; failure must leave the explicit `Включить приветствие` control. Regeneration is paid/admin-only and not a visitor-runtime action.
-- The booking is an internal SQLite record plus notifier outbox event. The scheduler always returns two current alternatives, not all global availability; it excludes committed starts, but no real calendar event, external availability check, CRM record, or meeting invitation is created.
-- Optional qualification is complete only with both monthly inbound leads and integer sales-manager count. Skip/partial/failure never removes the booking.
-- OpenRouter model/voice availability, paid rates, Codex subscription limits, and plan suitability are runtime/owner checks, not release guarantees.
+- WebKit complete-MP3 and full voice booking journey after installing `libicu74`, `libxml2`, and `libflite1` on a compatible host.
+- Full Chromium voice booking journey; desktop/mobile landing smoke is not sufficient.
+- Owner-configured live local Compose cutover/restore drill with retained backup path.
+- Clean target-VPS deploy and resource behavior.
+- Public DNS, TLS, and WSS.
+- Explicitly approved target-host OpenRouter STT/TTS + Codex Luna live booking through final widget.
+- Target-host latency/load profile and owner review of provider rates, model availability, subscription capacity, privacy copy, backup encryption/retention, and commercial operation.

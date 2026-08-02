@@ -60,9 +60,10 @@ MVP должен выглядеть как небольшой реальный �
 - interruption/barge-in на базовом уровне;
 - управляемая state machine разговора;
 - product knowledge из Botamin-сайта и Telegram-кейсов;
-- создание внутренней брони на одном из двух server-supplied structured 20-minute Moscow slots;
-- необязательная квалификация после брони и отдельного согласия, только по monthly inbound leads и integer sales-manager count;
-- SQLite persistence;
+- durable revisioned conversation draft with facts/provenance/conflicts shared by spoken, typed, and structured-form input;
+- automatic internal virtual meeting commit after exact confirmation of one of two concretely dated server-supplied 20-minute Moscow slots;
+- direct optional missing-only qualification after truthful meeting confirmation, limited to monthly lead/contact volume and integer sales-manager count;
+- SQLite persistence and server-derived final meeting widget;
 - console notifier и интерфейс для webhook/push;
 - transcript/event audit;
 - local-first Docker Compose, health checks and backup; VPS TLS/WSS is a later deployment gate;
@@ -173,9 +174,9 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 | US-005 | Агент понимает, зачем я пришёл | задаёт не более одного вопроса за раз и максимум два discovery-вопроса до мягкого предложения следующего шага |
 | US-006 | Агент объясняет Botamin на релевантном примере | использует только утверждённые knowledge claims; 10–15 млн ₽/месяц — только атрибутированное сообщение пользовательского брифа, не гарантия |
 | US-007 | Я могу возразить или перебить | проигрывание останавливается, новый turn обрабатывается |
-| US-008 | Я соглашаюсь на встречу | агент предлагает ровно два текущих server-supplied слота, не выдавая их за всю глобальную доступность; предпочтение части дня обновляет пару, после чего агент собирает обязательные данные и вызывает `create_booking` с выбранным кандидатом |
-| US-009 | После брони я могу ответить на два доп. вопроса | после commit, confirmation и точного вопроса `Можно задать два коротких вопроса?` explicit consent запускает monthly inbound volume, затем integer `salesManagerCount`; оба ответа одной репликой тоже допустимы |
-| US-010 | Я могу отказаться от квалификации | без ответов статус `skipped`, после одного ответа `partial`; бронь в обоих случаях остаётся `booked`, диалог корректно завершается |
+| US-008 | Я соглашаюсь на встречу | server предлагает ровно два concretely dated current Moscow slots, не выдавая их за глобальную доступность; spoken/text/form заполняют один durable revisioned draft, а exact-revision confirmation автоматически commit-ит выбранный вариант |
+| US-009 | После встречи я могу ответить на два доп. вопроса | после durable commit и truthful confirmation server без отдельного permission turn спрашивает только первый missing fact: monthly lead/contact volume, затем integer `salesManagerCount`; known facts не повторяются, оба ответа одной репликой допустимы |
+| US-010 | Я могу отказаться от квалификации | без ответов статус `skipped`, после одного ответа `partial`; scheduled internal virtual meeting в обоих случаях остаётся `booked`, диалог корректно завершается |
 | US-011 | Получатель видит данные | console/webhook получает структурированный payload со слотом |
 | US-012 | Сервис перезапускается | сохранённые booking/event данные остаются в volume |
 | US-013 | Проект сначала разворачивается локально | `scripts/deploy-local.sh` поднимает готовые app + Caddy на `http://localhost:5173`; target VPS/TLS проверяется отдельным later gate |
@@ -211,29 +212,29 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-BRAIN-006:** system/product/conversation prompts загружаются из Markdown.
 - **FR-BRAIN-007:** tool mode имеет feature flag: `dynamic` и стабильный fallback `envelope`.
 - **FR-BRAIN-008:** reasoning effort задаётся конфигурацией; стартовый профиль Luna использует минимальный уровень, который проходит quality evals.
-- **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, parsed time-of-day preference/rejection и ровно два structured meeting candidates с server-generated Russian `displayLabel`.
+- **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, parsed time-of-day/concrete-date-time request и ровно два structured meeting candidates с concrete Moscow date/time labels.
 - **FR-BRAIN-010:** cadence умеренно проактивен: один вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting offer, без повторного давления после ясного отказа.
 
 ### 4.3 Booking
 
 - **FR-BOOK-001:** обязательны `conversationId`, имя, компания, рабочий email, телефон или Telegram, `consentConfirmed=true` и structured `meetingSlot`.
-- **FR-BOOK-002:** server всегда выдаёт ровно два уникальных внутренних кандидата длительностью 20 минут в `Europe/Moscow`: будни, дата строго позже server-owned московского today, старты по 20-минутной сетке от 09:00 до 17:00 включительно. Без preference это одна утренняя и одна вечерняя альтернатива.
-- **FR-BOOK-003:** bounded Russian parser одинаково обрабатывает typed/spoken явные предпочтения `morning`, `daytime`, `second_half`, `evening` и одно явное rejection. Выбранная часть дня даёт два in-band варианта примерно в часе друг от друга; если пара занята, server ищет ближайшую in-band пару и при необходимости переносит предложение на следующий подходящий будний день. Rejection исключает отклонённую часть дня.
+- **FR-BOOK-002:** server всегда выдаёт ровно два уникальных внутренних кандидата длительностью 20 минут в `Europe/Moscow`, каждый с конкретной датой и временем: будни, дата строго позже server-owned московского today, старты по 20-минутной сетке от 09:00 до 17:00 включительно. Без preference это одна утренняя и одна вечерняя альтернатива.
+- **FR-BOOK-003:** bounded Russian parser одинаково обрабатывает typed/spoken явные предпочтения `morning`, `daytime`, `second_half`, `evening`, одно явное rejection и поддерживаемые конкретные московские дату+время. Time band даёт два in-band варианта; concrete request даёт exact permitted start и одну alternative либо два ближайших internal starts. Missing/ambiguous date or time asks for clarification; same-day/past/out-of-hours requests fail closed.
 - **FR-BOOK-004:** два candidates — только текущие внутренние альтернативы, не exhaustive/global availability claim. Они исключают committed internal starts без external availability API.
 - **FR-BOOK-005:** `create_booking` разрешён только в `COLLECT_BOOKING`; выбранный `meetingSlot` обязан byte-for-field совпасть с одним из двух candidates активного turn. Non-candidate, stale, occupied или уже не bookable slot отклоняется.
-- **FR-BOOK-006:** `create_booking` атомарен и идемпотентен по `conversationId`/`idempotencyKey`; уникальны conversation и non-null internal `meeting_start_at`.
-- **FR-BOOK-007:** успешный tool всегда возвращает стабильный `bookingId`.
-- **FR-BOOK-008:** committed `booking.created` и user-facing confirmation с точным consent-вопросом `Можно задать два коротких вопроса?` предшествуют consent на qualification и первому qualification question.
-- **FR-BOOK-009:** backend сохраняет внутреннюю бронь и outbox event, но не создаёт внешнее calendar event/invitation, не вызывает external availability API и не создаёт CRM record.
-- **FR-BOOK-010:** in-chat form показывается только по server-owned `COLLECT_BOOKING`, валидирует name/company/working email/phone-or-Telegram и сериализует данные как обычную visitor typed turn; форма не вызывает tool и не подтверждает бронь.
+- **FR-BOOK-006:** одна durable draft projection хранится в `conversation_contexts` как revisioned JSON facts/provenance/conflicts/lifecycle. Mutations используют expected revision, compare-and-swap, bounded conflicts и idempotent request IDs; stale revisions fail closed.
+- **FR-BOOK-007:** exact-revision draft confirmation переводит draft через `committing` и автоматически вызывает идемпотентный booking create; стабильный `bookingId` записывается и в durable draft, и в единственный booking.
+- **FR-BOOK-008:** committed `booking.created`, committed draft и server-derived internal meeting projection предшествуют final widget и первому qualification question.
+- **FR-BOOK-009:** backend сохраняет booking/outbox и публикует `kind=internal_virtual`, `status=scheduled`, `externalCalendarEventCreated=false`, `externalInviteSent=false`; отдельной meeting table, external availability API, calendar event/invitation или CRM record нет.
+- **FR-BOOK-010:** in-chat form показывается только по server-owned `COLLECT_BOOKING`, редактирует browser-safe projection без provenance/evidence и отправляет structured field patch/current candidate identity. Spoken, typed, and form inputs merge into one authoritative draft; conflicts require explicit resolution and changed candidates require reselection.
 
 ### 4.4 Post-booking qualification
 
-- **FR-QUAL-001:** запускается только при committed `booking.status=booked` и после user-facing booking confirmation.
-- **FR-QUAL-002:** пользователь отдельно и явно соглашается на дополнительные вопросы; booking action envelope того же turn не может выдать это согласие.
-- **FR-QUAL-003:** server детерминированно спрашивает по одному: сначала месячный объём входящих лидов (`monthlyLeadVolume`), затем число менеджеров продаж (`salesManagerCount`) как integer `0..10000`. Модель не может изменить порядок или досрочно объявить completion.
-- **FR-QUAL-004:** оба поля необязательны для booking и могут сохраняться partial patch-операцией; qualification получает `complete` только при наличии обоих. Если пользователь сообщает оба одновременно, оба сохраняются и flow завершается. Остальные legacy schema fields не являются вопросами текущего flow.
-- **FR-QUAL-005:** explicit refusal без ответов даёт `skipped`; refusal после одного ответа сохраняет `partial`; disconnect/failure не отменяет committed booking, которая остаётся `booked`.
+- **FR-QUAL-001:** запускается только после committed booking, committed draft, durable internal meeting publication и truthful user-facing confirmation; отдельного qualification-permission turn нет.
+- **FR-QUAL-002:** server спрашивает только missing authoritative fact: при двух missing сначала контекстный месячный объём лидов/обрабатываемых контактов (`monthlyLeadVolume`), затем integer `salesManagerCount`; при одном known спрашивается только второе, при обоих known — ничего.
+- **FR-QUAL-003:** server не повторяет known facts. Generic daily volume требует clarification `рабочие или календарные дни`; только затем server может нормализовать. Model не вычисляет 22/30 и не может изменить persisted truth.
+- **FR-QUAL-004:** оба поля необязательны для meeting и могут сохраняться partial patch-операцией; `complete` только при обоих. Если пользователь сообщает оба missing значения одновременно, оба сохраняются и flow завершается.
+- **FR-QUAL-005:** explicit refusal без ответов даёт `skipped`; refusal после одного ответа сохраняет `partial`; disconnect/failure не отменяет scheduled internal meeting.
 - **FR-QUAL-006:** повторный patch идемпотентен.
 
 ### 4.5 Landing and UX
@@ -243,7 +244,8 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-WEB-002:** до запуска голоса показывается понятное объяснение микрофона и обработки данных.
 - **FR-WEB-003:** UI имеет состояния `idle`, `connecting`, `listening`, `thinking`, `speaking`, `booked`, `complete`, `error`.
 - **FR-WEB-004:** текстовая копия реплик и stage-gated multiline composer доступны в активных visitor-turn stages; Enter отправляет, Shift+Enter добавляет строку.
-- **FR-WEB-005:** booking details form существует внутри chat и видима только в `COLLECT_BOOKING`, полученном через server `state.changed`/`session.ready`, а не из transcript wording.
+- **FR-WEB-005:** booking form существует внутри chat и видима только в server-owned `COLLECT_BOOKING`. Она показывает auto-filled durable facts, five contact/identity fields, conflicts, exactly two concretely dated candidates, exact-revision confirmation, and safe rejection/retry state.
+- **FR-WEB-005A:** final meeting widget appears only from `session.ready.internalMeeting` or `internal.meeting.updated` derived from the durable booking; legacy UI state or transcript wording cannot synthesize it.
 - **FR-WEB-006:** mobile viewport поддерживается.
 - **FR-WEB-007:** при voice failure пользователю не показываются stack traces/provider details.
 - **FR-WEB-008:** proactive MP3 содержит только фиксированный product copy без visitor data. Его замена выполняется отдельным explicit admin opt-in OpenRouter generation script и commit-ится как static asset; runtime visit не генерирует greeting.
@@ -324,7 +326,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 ## 9. Release sequencing boundary
 
-`0.5.0-local-rc.3` is a local-only candidate for one trusted owner machine. Candidate acceptance still requires the fresh steps in docs 08/11; prior RC2 observations are not evidence that RC3 browser, deploy, or provider gates ran. Local Chrome/Compose evidence, when freshly collected, cannot close WebKit, target-VPS resource behavior, DNS, public TLS/WSS, or target-host paid-smoke gates. The internal booking remains deliberately different from a real calendar event.
+`0.5.0-local-rc.4` is the recommended, still-untagged local candidate for one trusted owner machine. RC3 evidence is preserved as history, not reused as RC4 proof. Chromium desktop/mobile landing smoke is not a full voice journey. WebKit has a downloaded browser binary but the current host is missing `libicu74`, `libxml2`, and `libflite1`; WebKit full journey therefore remains not run. Target-VPS resources, DNS, public TLS/WSS, and target-host provider live booking are also external gates. The internal virtual meeting remains deliberately different from an external calendar event.
 
 
 <div class="page-break"></div>
@@ -431,7 +433,7 @@ Sticky/inline widget с transcript, статусом и одной главно�
 
 - данные не попадают в публичный чат;
 - разговор можно остановить;
-- реальная встреча в этом MVP не создаётся, данные только фиксируются.
+- создаётся только внутренняя виртуальная встреча Botamin на точный московский слот; внешнее calendar event/invite не создаётся.
 
 ## 6. Воронка
 
@@ -446,9 +448,9 @@ Sticky/inline widget с transcript, статусом и одной главно�
 | Discovery | найти задачу максимум за два вопроса до мягкого offer | `discovery.completed` | слишком много вопросов |
 | Value | связать pain и use case | `value.presented` | общая презентация |
 | Intent | получить согласие на следующий шаг | `booking.offered` | нет доверия/времени |
-| Booking | сохранить полный обязательный набор и один из двух внутренних slots | `booking.created` | не собраны name/company/email/phone-or-Telegram/consent/slot |
-| Qualification | после commit, confirmation и consent спросить inbound volume и manager count | `qualification.updated` | пользователь устал |
-| Handoff | вывести структурированный результат | `notification.sent` | provider/output error |
+| Booking | свести spoken/text/form facts в один revisioned draft, разрешить conflicts и подтвердить один из двух concretely dated slots | `booking.created` | missing/conflicted facts, stale revision или нет current selection |
+| Qualification | после durable internal meeting и truthful confirmation спросить только missing volume/manager fact | `qualification.updated` | пользователь отказался; meeting сохраняется |
+| Handoff | показать server-derived internal meeting widget и структурированный notifier result | `internal.meeting.updated` / `notification.sent` | widget запрещён до durable commit |
 
 ## 7. Conversation value map
 
@@ -465,14 +467,11 @@ Sticky/inline widget с transcript, статусом и одной главно�
 
 Текущий funnel умеренно проактивен: агент задаёт по одному вопросу и не более двух discovery-вопросов до краткого мягкого предложения demo/встречи. После ясного отказа предложение не повторяется.
 
-После согласия агент предлагает ровно два labeled candidates из server context и не называет их всей доступностью. Без предпочтения server даёт одну утреннюю и одну вечернюю альтернативу. Typed и spoken русские формулировки про утро, день, вторую половину дня или вечер обновляют контекст: выбранная часть дня даёт два in-band варианта примерно в часе друг от друга, occupied band переносится на следующий подходящий будний день, а явный rejection исключает отклонённую часть. Все варианты — 20 минут, будни, не сегодня, старты 09:00–17:00 по Москве. Новая внутренняя бронь требует name, company, working email, phone or Telegram, consent и один текущий candidate. Внешний календарь и external availability API отсутствуют.
+После согласия agent/server предлагает ровно два labeled candidates с конкретной московской датой и временем и не называет их всей доступностью. Без предпочтения server даёт одну утреннюю и одну вечернюю альтернативу. Typed и spoken русские формулировки про часть дня, rejection и поддерживаемую конкретную дату+время проходят один parser: для concrete request server предлагает exact permitted start и alternative либо два nearest internal starts. Все варианты — 20 минут, будни, не сегодня, старты 09:00–17:00 по Москве.
 
-Квалификация начинается только после committed booking и user-facing confirmation с точным вопросом `Можно задать два коротких вопроса?`. После отдельного явного consent server задаёт по одному и в фиксированном порядке:
+Name, company, working email, phone or Telegram, qualification facts и candidate selection сходятся в одном durable revisioned draft независимо от spoken, typed или structured-form origin. Conflicting values не затираются молча; browser показывает bounded options, а stale revision/replaced candidate требует resync/reselection. Exact-revision confirmation автоматически создаёт одну внутреннюю виртуальную встречу и только после durable commit публикует final widget. Внешний календарь, invite и availability API отсутствуют.
 
-1. месячный объём **входящих** лидов (`monthlyLeadVolume`);
-2. явное целое число менеджеров продаж (`salesManagerCount`).
-
-`complete` возможен только при обоих значениях; ответ на оба сразу допустим. Отказ без ответов даёт `skipped`, после одного — `partial`; внутренняя бронь остаётся `booked`.
+После truthful confirmation qualification не запрашивает отдельного разрешения. Server задаёт только first missing field: monthly lead/contact volume first, если оба отсутствуют; otherwise only missing volume or integer `salesManagerCount`; если оба известны — ничего. `complete` возможен только при обоих значениях; ответ на оба сразу допустим. Отказ без ответов даёт `skipped`, после одного — `partial`; внутренняя встреча остаётся scheduled.
 
 ## 9. Контентные риски
 
@@ -519,7 +518,7 @@ Sticky/inline widget с transcript, статусом и одной главно�
 - отправка бинарных PCM16 чанков около 100 ms;
 - явный end-of-turn `audio.commit`, 60-second ceiling и server-advertised PCM byte cap, производный от 2,000,000-byte WAV cap;
 - circular countdown по принятым samples, а не wall clock, с effective duration по stricter duration/byte ceiling;
-- secure `visitor.text.submit` для bounded final typed turn и in-chat form только в server-owned `COLLECT_BOOKING`;
+- secure `visitor.text.submit` for bounded final typed turns plus structured revisioned booking form commands only in server-owned `COLLECT_BOOKING`;
 - UI states `listening → processing → transcript.final`;
 - ordered playback queue для полных MP3 phrase segments;
 - decode через Web Audio или `HTMLAudio`;
@@ -548,15 +547,13 @@ Sticky/inline widget с transcript, статусом и одной главно�
 
 Источник истины для:
 
-- текущего stage;
-- server-owned current Moscow date/day, bounded typed/spoken Russian time-of-day preference/rejection и ровно двух structured/labeled internal meeting candidates;
-- refresh candidate context при выборе `morning`/`daytime`/`second_half`/`evening` или explicit rejection;
-- разрешённых actions, включая rejection любого create-booking slot вне active candidate tuple;
-- qualification gating по committed booking, delivered confirmation и отдельному consent;
-- booking lifecycle;
-- prompt context;
-- retry/cancellation;
-- post-booking qualification policy.
+- current stage and accepted visitor-turn origin (`voice_transcript` or `typed_message`);
+- durable RC4 draft lifecycle in one `conversation_contexts` JSON row: revision, fact registry/provenance/conflicts, exactly two candidate identities, selection, readiness, confirmation/commit state and booking ID;
+- server-owned Moscow date/day and bounded typed/spoken time-band, rejection, and concrete date/time interpretation;
+- expected-revision CAS, idempotent form/conflict/confirmation commands, explicit conflict resolution, and candidate refresh/reselection;
+- automatic internal booking commit only from a ready, exactly confirmed draft;
+- direct missing-only qualification after durable booking confirmation;
+- prompt context, retry/cancellation, and publication of browser-safe projections.
 
 LLM предлагает действие, но backend валидирует, разрешено ли оно в текущем состоянии.
 
@@ -607,18 +604,23 @@ P0 transport — direct typed JSON-RPC к app-server. Универсальный
 
 ### BookingService
 
-- генерирует ровно два deterministic internal 20-minute candidates после текущей московской даты, только по будням и по 20-minute grid с 09:00 до 17:00 starts;
-- без preference выбирает одну утреннюю и одну вечернюю альтернативу;
-- для selected `morning`/`daytime`/`second_half`/`evening` выбирает две in-band точки примерно в часе друг от друга; если occupied starts не оставляют такую пару, ищет ближайшую допустимую пару и при необходимости переносит обе на следующий будний день;
-- для одного explicit rejection исключает rejected band и формирует две альтернативы из оставшихся policy bands;
+- generates exactly two deterministic internal 20-minute candidates with concrete Moscow dates/times after current Moscow date, weekdays only, on the 09:00–17:00 20-minute grid;
+- without preference chooses one morning and one evening alternative;
+- handles selected time bands/rejection and supported concrete date+time requests; concrete requests return exact permitted + alternative or the nearest two internal starts, while missing/ambiguous/out-of-policy requests fail closed;
 - исключает уже committed internal start times без external calendar/availability API и никогда не представляет tuple как exhaustive/global availability;
 - валидирует name, company, working email, phone or Telegram, consent и structured `Europe/Moscow` slot;
 - повторно проверяет slot по текущему server clock и отклоняет stale/non-bookable или internally occupied start до side effect; active-candidate membership до вызова сервиса проверяет orchestrator/tool policy;
 - создаёт/находит booking в одной `BEGIN IMMEDIATE` transaction;
-- обновляет qualification patch для существующей committed booking; confirmation/consent gating до вызова сервиса принадлежит orchestrator/tool policy;
-- вычисляет qualification truth из сохранённых полей: zero+refusal=`skipped`, one=`partial`, both=`complete`; booking status остаётся `booked`;
+- updates qualification patch only after durable meeting confirmation; missing-field selection and refusal gating belong to orchestrator policy;
+- computes qualification truth from saved fields: zero+refusal=`skipped`, one=`partial`, both=`complete`; only a missing field is asked and booking remains `booked`;
 - пишет event outbox;
 - никогда не удаляет booking из-за incomplete qualification.
+
+### ConversationContext / BookingDraftStore
+
+Migration `0004_conversation_contexts.sql` adds exactly one compact table, not separate fact/evidence/meeting tables. Its PK/FK is `conversation_id` with cascade deletion; SQLite checks require a nonnegative row revision, valid object JSON, and matching draft/fact-registry revisions and `updatedAt`. Store mutations run in `BEGIN IMMEDIATE`, compare the expected revision in the update predicate, and use scoped idempotency keys for form, conflict-resolution, and confirmation commands. Provenance/evidence remains internal; browser events expose only required/status/value/conflict-option projections.
+
+A confirmed current revision is the authorization boundary for automatic internal meeting commit. The durable booking remains the only meeting entity; `InternalVirtualMeetingProjection` is derived from it for `session.ready` / `internal.meeting.updated` and explicitly carries both external flags as false.
 
 ### Notifier
 
@@ -649,13 +651,13 @@ Asset создаётся отдельно от visitor runtime: admin явно �
 1. Browser отправляет примерно 100 ms PCM16 chunks; gateway/utterance assembler собирает их в bounded utterance.
 2. End-of-turn / `audio.commit` закрывает реплику. Gateway/utterance assembler проверяет duration/bytes, создаёт и валидирует ровно один mono PCM16 WAV.
 3. Gateway передаёт WAV атомарному `SttPort`; OpenRouter STT adapter повторно валидирует/bounds already-WAV request, base64-кодирует его и отправляет один `input_audio` chat completion.
-4. Только валидный неустаревший final transcript становится user turn и публикуется как `transcript.final`. Альтернативно, monotonic `visitor.text.submit` очищает uncommitted microphone bytes и создаёт такой же final turn без STT; до server `transcript.final` typed input не считается принятым.
-5. Orchestrator одинаково парсит typed/spoken final text на bounded Russian time-of-day preference/rejection, refresh-ит candidates, затем добавляет stage, known facts, booking status, server-owned current Moscow date/day, preference state и ровно два structured candidates с generated `displayLabel`; Codex thread получает `turn/start` ровно один раз независимо от input origin.
-6. Text deltas проходят PII-safe sanitizer и bounded phrase chunker.
-7. Законченная короткая фраза отправляется в OpenRouter TTS; один request соответствует одному segment.
-8. После проверки один полный `audio/mpeg` segment идёт в browser ordered playback queue.
-9. Tool call исполняется транзакционно и результат возвращается brain независимо от audio path.
-10. Voice retries повторяют только соответствующий pure provider request и никогда не повторяют Luna turn, notifier или business tools.
+4. Only a valid current final transcript becomes a user turn. Monotonic `visitor.text.submit` creates the same accepted final-turn path without STT.
+5. Orchestrator parses typed/spoken input identically, extracts quoted fact proposals, and merges them into the revisioned durable draft; conflicting values become bounded explicit options rather than overwrite.
+6. Structured form commands patch the same draft at `baseRevision`; exact-revision confirmation automatically commits the booking through `uncommitted → committing → committed`.
+7. Text deltas pass the sanitizer. Contacts are redacted unless they exactly match server-approved contacts and contact-processing consent is active.
+8. Complete bounded phrases go to OpenRouter TTS and then the ordered browser queue.
+9. Only a durable booking publishes `internal.meeting.updated`; the final widget cannot be synthesized from transcript/stage alone.
+10. After truthful meeting confirmation, server qualification asks only missing facts. Provider retries never repeat Luna, notifier, draft mutation, or booking effects.
 
 ## 4. Latency design
 
@@ -823,7 +825,7 @@ Backend transition function должна быть чистой и покрыто
 transition(currentState, domainEvent) => nextState | TransitionError
 ```
 
-LLM не может напрямую записать произвольный next state. Он предлагает intent/action, orchestrator применяет допустимый transition. Typed composer/form visibility также проецируется только из server stage; transcript wording не может открыть booking form или разрешить tool.
+LLM cannot directly write state or durable facts. It may propose quoted current-turn facts; the server validates origin, quote, schema, expected revision, conflicts, and transitions. Typed composer/form visibility comes only from server stage. Browser draft projection strips provenance/evidence, and the final meeting widget comes only from a server-derived durable booking projection.
 
 ## 10. Barge-in
 
@@ -1022,11 +1024,11 @@ STORE_RAW_AUDIO=false
 - не выдумывать цены, интеграции, сроки или кейсы;
 - при неизвестном факте честно предложить передать вопрос коллеге;
 - не читать технические идентификаторы и JSON вслух;
-- контакт повторять для подтверждения только при низкой уверенности STT;
-- печатный и голосовой final input равнозначны по смыслу и проходят один state/tool flow;
-- booking confirmation произносить только после committed tool success;
-- после confirmation задать точно `Можно задать два коротких вопроса?` и не считать booking action envelope согласием;
-- qualification начинается только после отдельного явного согласия: server спрашивает leads, затем manager count, по одному; completion только при обоих.
+- контакты по умолчанию не отправлять в TTS; exact server-approved contact можно озвучить только при contact-processing consent и accepted durable draft fact/booking;
+- печатный и голосовой final input равнозначны и обновляют один durable fact/draft flow; structured form обновляет тот же draft через revisioned commands;
+- conflicting facts требуют explicit resolution, а любое material change сбрасывает exact-revision confirmation;
+- meeting confirmation и final widget допустимы только после durable booking + committed draft;
+- qualification starts directly after truthful confirmation: ask only first missing field, never repeat known fields, and ask nothing when both are known.
 
 ## 3. Conversation policy по stages
 
@@ -1075,37 +1077,28 @@ Asset не содержит visitor data: администратор отдел�
 
 ### COLLECT_BOOKING
 
-После согласия назвать ровно два `schedulingContext.candidateMeetingSlots` по их server-generated `displayLabel`. Это две текущие внутренние альтернативы, а не вся глобальная доступность. Не вычислять и не переформатировать дату, день недели, время или доступность.
+После согласия использовать ровно два current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Typed/spoken time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
 
-Без предпочтения server даёт один morning и один evening candidate. Явная typed/spoken русская формулировка про утро, день, вторую половину дня или вечер обновляет context и даёт два in-band варианта примерно в часе друг от друга; при занятости server переносит пару на следующий подходящий будний день. Явный отказ от части дня исключает эту часть. Все варианты: 20 минут, будни, не сегодня, starts 09:00–17:00 по Москве.
+Обязательный набор: accepted name, company, working email, phone or Telegram, one current candidate, and contact consent. Spoken and typed turns merge quoted fact proposals into the same durable `conversation_contexts.draft_json`. New conflicting values produce bounded explicit options instead of silent overwrite.
 
-Обязательный набор:
-
-1. имя;
-2. компания;
-3. рабочий email;
-4. телефон или Telegram;
-5. один выбранный structured 20-minute `Europe/Moscow` candidate;
-6. server-confirmed consent.
-
-Если пользователь дал несколько полей одной spoken или typed репликой, не переспрашивать их по одному. In-chat form показывается только по server stage `COLLECT_BOOKING`, валидирует четыре пользовательских поля и передаёт их как обычный typed turn; она не вызывает tool и не подтверждает бронь.
+In-chat form видима только в server stage `COLLECT_BOOKING`. Она auto-fills browser-safe facts, показывает пять полей and exactly two dated candidates, submits a structured patch/current `candidateId` at `baseRevision`, and resolves server conflicts by option identity. It does not serialize as visitor text and does not call `create_booking` directly. After the draft is ready, visitor confirms the exact current revision; stale revisions or candidate refresh require resync/reselection.
 
 ### BOOKED
 
-После `create_booking`:
+После exact-revision confirmation server automatically commits the booking, then confirms truthfully:
 
-> Всё получила и зафиксировала. Календарная встреча пока не создана: коллега свяжется по указанному контакту. Можно задать два коротких вопроса?
+> Внутренняя виртуальная встреча создана на согласованный слот по Москве. Внешнее календарное событие и приглашение не создавались.
 
-Последнее предложение — точный consent-вопрос current server contract. Формулировку про отсутствие календаря можно сделать менее технической только вместе с изменением server-authored contract/tests; нельзя утверждать, что external event уже создан.
+Only then may `internal.meeting.updated` publish the final widget. The projection is derived from the durable booking (`kind=internal_virtual`, `status=scheduled`, external flags false); transcript wording or legacy UI state cannot create it.
 
 ### POST_BOOKING_QUALIFICATION
 
-Только после committed booking, user-facing confirmation и точного consent-вопроса `Можно задать два коротких вопроса?` отдельное явное согласие открывает qualification. Server, а не модель, детерминированно задаёт по одному:
+After durable commit and truthful meeting confirmation, qualification starts directly without a separate permission question. Server asks exactly one missing fact:
 
-1. `Сколько входящих лидов приходит за месяц?` → `monthlyLeadVolume`;
-2. `Сколько менеджеров по продажам работает в вашей команде?` → integer `salesManagerCount`.
+1. monthly lead/contact volume, adapted to known inbound/outbound context, when it is missing;
+2. integer `salesManagerCount` when it is missing.
 
-В обычном ходе второй вопрос появляется только после первого ответа. Если пользователь сразу сообщает оба значения, сохранить оба и завершить. `complete` разрешён только при обоих полях; отказ без ответов даёт `skipped`, после одного — сохраняет `partial`. Оба поля необязательны для уже committed booking, которая всегда остаётся `booked`. Другие поля расширенной legacy schema не входят в текущий conversational flow.
+If both are missing, volume goes first. If one is already accepted in durable facts/booking qualification, ask only the other. If both are known, ask nothing and complete. Generic per-day volume first requires working-vs-calendar-day clarification; the model does not silently multiply. Both missing values in one turn may be stored together. Refusal with zero answers is `skipped`; after one answer it remains `partial`; the internal meeting stays scheduled.
 
 ### COMPLETE
 
@@ -1118,9 +1111,9 @@ Asset не содержит visitor data: администратор отдел�
 Жёсткое правило prompt + backend policy:
 
 ```text
-Квалификация не является условием брони.
-Никогда не откладывай create_booking ради дополнительных вопросов.
-После tool success сначала подтверди сохранение, затем запроси согласие на qualification.
+Квалификация не является условием встречи.
+Никогда не откладывай exact-revision commit ради дополнительных вопросов.
+После durable commit сначала правдиво подтверди внутреннюю встречу, затем спроси только first missing qualification fact без отдельного permission turn.
 ```
 
 ## 5. Объекты памяти
@@ -1171,7 +1164,7 @@ Asset не содержит visitor data: администратор отдел�
 }
 ```
 
-Codex thread сохраняет естественную историю; compact state страхует от drift и упрощает resume.
+Codex thread сохраняет естественную историю, but RC4 durable truth lives separately in `conversation_contexts`: `revision`, fact registry with provenance/conflicts, two candidate identities, selection, readiness, confirmation/commit status, timestamps, and optional booking ID. The browser receives only a projection with values/status/options; conversation ownership, evidence text, and provenance are stripped. Compact prompt state is derived from that server truth rather than used as persistence.
 
 ## 6. Prompt files
 
@@ -1181,9 +1174,9 @@ prompts/
   product.md                # concise Botamin proposition
   conversation-policy.md    # stages, turn length, refusal behavior
   objections.md             # patterns, не жёсткие скрипты
-  booking.md                # tool timing, minimum data, confirmation
-  qualification.md          # optional fields and stopping rules
-  speech-style.md            # spoken Russian, no markdown
+  booking.md                # exact-revision draft confirmation and internal meeting truth
+  qualification.md          # direct missing-only optional facts and stopping rules
+  speech-style.md           # spoken Russian, TTS redaction and approved-contact exception
 knowledge/
   botamin-overview.md
   use-cases.md
@@ -1202,7 +1195,7 @@ Prompt compiler:
 - собирает `/app/runtime-brain/AGENTS.md` — основной instruction source для Codex thread;
 - при необходимости копирует туда только разрешённые read-only knowledge-файлы; исходный repository туда не монтируется;
 - при `thread/start` проверяет, что `instructionSources` содержит ожидаемый `AGENTS.md`;
-- перед каждым `turn/start` одинаково разбирает typed/spoken preference/rejection и добавляет compact machine-generated context envelope: stage, known facts, booking snapshot, server-owned current Moscow date/day, preference state, ровно два structured/labeled current candidates, allowed actions и финальный текст пользователя;
+- перед каждым `turn/start` одинаково разбирает typed/spoken time-band/concrete requests and adds compact machine-generated context from the durable draft: stage, accepted facts, conflicts, booking snapshot, server-owned Moscow date/day, exactly two concretely dated current candidates, allowed actions, and final user text;
 - логирует только version/hash, не весь prompt;
 - поддерживает hot reload только в development: новый prompt version применяется к новым conversations, а активные сохраняют исходную версию.
 
@@ -1212,7 +1205,7 @@ Prompt compiler:
 
 - убрать Markdown headings, bullets, code fences, raw URLs и tool envelopes;
 - исключить hidden IDs, system messages и structured payloads;
-- redact phone, email и Telegram handle до отправки provider-у;
+- redact phone, email and Telegram by default; restore only exact server-approved contacts from accepted durable draft facts or a committed booking when contact-processing consent is active;
 - заменить технические аббревиатуры на произносимый вариант при необходимости;
 - не отправлять незакрытые JSON/Markdown fragments или punctuation-only segments;
 - сохранить пунктуацию, важную для интонации.
@@ -1223,19 +1216,11 @@ Bounded phrase chunker выпускает первую фразу примерн
 
 ### `create_booking`
 
-LLM вызывает только когда:
-
-- stage равен `COLLECT_BOOKING` и пользователь согласился;
-- известны имя и компания;
-- есть валидный рабочий email и телефон или Telegram;
-- выбран один из ровно двух candidates активного server context;
-- consent подтверждён server-side.
-
-Backend сверяет выбранный `meetingSlot` с обоими active candidates и отклоняет любой non-candidate/stale/occupied slot. Tuple не означает exhaustive availability: preference/rejection refresh заменяет обе текущие альтернативы. Это внутренняя 20-minute бронь без external calendar event, invitation или availability API.
+In RC4 the visitor does not invoke this tool directly. When the server-owned draft is ready and the visitor confirms its exact revision, orchestrator marks it `committing`, builds input only from accepted durable facts and the selected current candidate, performs idempotent `create_booking`, verifies the durable booking matches the draft, then marks the draft `committed`. Stale revision, unresolved conflict, changed/non-current candidate, missing field, or booking mismatch fails closed. This creates one internal 20-minute meeting without another meeting table, external calendar event, invite, or availability API.
 
 ### `append_booking_qualification`
 
-LLM вызывает только после committed `bookingId`, user-facing confirmation и отдельного explicit qualification consent. Server задаёт monthly leads первым и manager count вторым, а status выводит из фактически сохранённых полей, не из заявления модели: one=`partial`, both=`complete`; empty refusal=`skipped`. Текущий flow патчит только `monthlyLeadVolume` и integer `salesManagerCount`; оба значения одной репликой разрешены.
+After durable meeting confirmation, accepted missing facts are patched into the same booking. No separate qualification consent is required. Server asks volume first only when both are missing, otherwise only the missing field, and derives status from persisted truth: one=`partial`, both=`complete`; empty refusal=`skipped`. The active fields remain `monthlyLeadVolume` and integer `salesManagerCount`; both may arrive in one turn.
 
 Backend возвращает safe result:
 
@@ -1288,13 +1273,13 @@ Backend возвращает safe result:
 3. Агент: связывает 24/7 входящую обработку и квалификацию с pain; задаёт вопрос о текущем процессе.
 4. Пользователь: отвечает и спрашивает про CRM.
 5. Агент: описывает integration layer без обещания конкретного срока; предлагает demo.
-6. Агент: называет ровно два server-supplied Moscow candidates.
-7. Пользователь: typed form/репликой даёт имя, компанию, рабочий email, Telegram и выбирает первый slot; consent уже подтверждён server context.
-8. Backend: валидирует candidate и commit-ит `booking.created` без внешнего календарного события.
-9. Server-authored confirmation: подтверждает внутреннюю бронь и точно спрашивает `Можно задать два коротких вопроса?`.
-10. Пользователь: явно соглашается; server задаёт вопрос про месячный объём входящих лидов. Пользователь может сразу сообщить и целое число менеджеров продаж, тогда оба поля сохраняются за один turn.
-11. Backend: `booking.updated`.
-12. Агент: кратко суммирует и завершает.
+6. Server/agent names exactly two concretely dated Moscow candidates.
+7. Spoken/text turns and/or structured form fill one durable revisioned draft; conflicts are resolved and one current candidate is selected.
+8. Visitor confirms the exact ready revision; backend automatically commits `booking.created`, marks the draft committed, and publishes the server-derived internal meeting widget.
+9. Server truthfully confirms the internal virtual meeting and states that no external calendar event/invite was created.
+10. Server immediately asks only the first missing qualification fact. If both facts were already captured, it asks nothing; if the user gives both missing values, both persist in one turn.
+11. Backend publishes `booking.updated` / refreshed `internal.meeting.updated` as applicable.
+12. Agent briefly summarizes and ends.
 
 ## 12. Eval rubric для каждой реплики
 
@@ -1448,7 +1433,10 @@ Server:
 |---|---|---|
 | `client.hello` | audio config, resume token | handshake |
 | `audio.commit` | `{}` | закрыть bounded utterance и создать ровно один atomic final-transcription request |
-| `visitor.text.submit` | `{ sequence, text }` | отправить одну final typed turn до 2,000 chars без provider/tool fields |
+| `visitor.text.submit` | `{ sequence, text }` | one final typed turn; same durable fact path as spoken transcript |
+| `booking.form.submit` | `{ requestId, baseRevision, details, selectedCandidateId? }` | structured patch/current candidate against exact draft revision |
+| `booking.conflict.resolve` | `{ requestId, baseRevision, field, conflictOptionId }` | explicitly accept one current conflict option |
+| `booking.draft.confirm` | `{ requestId, revision }` | confirm exact ready revision and trigger automatic internal meeting commit |
 | `playback.started` | `generationId` | метрика |
 | `playback.interrupted` | `generationId`, reason | barge-in |
 | `session.stop` | reason | корректное завершение |
@@ -1458,7 +1446,9 @@ Server:
 
 После handshake PCM16 audio идёт binary frames без base64. Gateway/utterance assembler ограничивает accumulated input максимумом 60,000 ms и так, чтобы atomic WAV не превысил 2,000,000 bytes; при 16 kHz mono PCM16 default duration ceiling строже и даёт `maxPcmBytes=1,920,000`. После `audio.commit` gateway кодирует ровно один validated WAV и передаёт его atomic `SttPort`; только OpenRouter adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks не означают streaming transport до provider.
 
-`visitor.text.submit` — secure provider-neutral alternative input, а не tool endpoint. Payload strict: trimmed non-empty `text` до 2,000 символов и monotonic nonnegative `sequence`. Typed submit supersedes/clears uncommitted microphone bytes, запрещён при pending/active turn или terminal stage, и считается принятым только когда server эмитит соответствующий `transcript.final`. Duplicate/stale sequence получает idempotency conflict; gap — invalid event; recoverable rejection позволяет повторить тот же sequence. После acceptance typed и spoken text проходят идентичные Luna context, stage policy, domain tools, persistence, assistant text и optional TTS.
+`visitor.text.submit` is the provider-neutral alternative final input. After acceptance, typed and spoken turns use the same fact extractor, quoted Luna proposal boundary, durable draft merge, scheduling parser, state/persistence, assistant, and optional TTS path.
+
+The booking form is not encoded as visitor text in RC4. It sends strict revisioned commands. `details` may patch accepted/missing values; `selectedCandidateId` must identify one of exactly two current candidates. Stale revision, unresolved conflict, candidate mismatch, not-ready, or already-committed state returns a closed `booking.form.rejected` code without echoing PII. Every material change clears prior confirmation. `booking.draft.confirm` confirms only the exact ready revision and automatically runs the idempotent internal booking commit.
 
 ### Server → client events
 
@@ -1472,8 +1462,11 @@ Server:
 | `audio.segment` | generationId, segmentId, sequence, `contentType=audio/mpeg`, byteLength, `final=true`; immediately followed by one complete binary MP3 payload |
 | `assistant.audio.done` | generationId |
 | `assistant.interrupted` | generationId |
-| `booking.created` | safe booking summary |
-| `booking.updated` | qualification status |
+| `booking.draft.updated` | request correlation + browser-safe revisioned projection without provenance/evidence |
+| `booking.form.rejected` | closed safe error code/current revision; never reflects submitted PII |
+| `booking.created` | safe booking summary after durable commit |
+| `internal.meeting.updated` | server-derived scheduled internal-virtual meeting projection; external flags false |
+| `booking.updated` | qualification status/fields after durable patch |
 | `session.capacity_warning` | optional |
 | `error` | safe error object |
 | `server.pong` | timestamp |
@@ -1643,7 +1636,7 @@ type CreateBookingResult = {
 ### `append_booking_qualification`
 
 ```ts
-// Active write contract is exactly the two optional RC3 fields.
+// Active write contract remains exactly the two optional qualification fields.
 const QualificationPatchSchema = z.object({
   monthlyLeadVolume: z.string().trim().min(1).max(100).optional(),
   salesManagerCount: z.number().int().min(0).max(10000).optional(),
@@ -1671,29 +1664,28 @@ type AppendQualificationResult = {
 
 Server выводит status из persisted truth: оба поля → `complete`, одно → `partial`, zero-field explicit refusal → `skipped`. Model-provided `completion` не может объявить complete без обоих полей. Оба ответа могут прийти одним turn/patch. Legacy rows могут физически содержать старые qualification keys; read-normalization отбрасывает их, а active write schema выше их не принимает.
 
-## 6. Domain policy до tool execution
+## 6. Domain policy before durable commit
 
-```ts
-switch (tool.name) {
-  case "create_booking":
-    assert(state === "COLLECT_BOOKING");
-    assert(serverContactConsentConfirmed === true);
-    assert(currentBooking === null || currentBooking.conversationId === conversationId);
-    assert(candidateMeetingSlots.length === 2);
-    assert(candidateMeetingSlots.some((slot) => deepEqual(slot, args.meetingSlot)));
-    break;
-  case "append_booking_qualification":
-    assert(["BOOKED", "POST_BOOKING_QUALIFICATION"].includes(state));
-    assert(currentBooking?.id === args.bookingId);
-    assert(bookingConfirmationDelivered === true);
-    assert(qualificationConsent === "granted");
-    break;
-}
+`create_booking` is reached only through server-owned exact-revision confirmation, not directly from browser/model payload:
+
+```text
+assert stage == COLLECT_BOOKING and contact consent is confirmed
+load draft at confirmation.revision
+assert draft.readiness == ready and draft.confirmationStatus can be confirmed
+assert all required facts are accepted and conflicts are resolved
+assert selectedCandidate exactly matches one of two current candidates
+mark draft committing
+idempotently create booking from accepted facts + selected slot
+verify persisted booking matches confirmed draft
+mark draft committed with bookingId
+publish booking.created and internal.meeting.updated
 ```
 
-LLM-provided `conversationId`, `bookingId`, slot и consent сверяются с server-side session; нельзя доверять им как единственному источнику. После booking commit и delivered confirmation server задаёт точный consent-вопрос `Можно задать два коротких вопроса?`; grant возможен только из последующей explicit user turn. Затем server задаёт monthly leads первым и manager count вторым, по одному; отказ завершает как `skipped` или сохраняет `partial`, не меняя `booking.status=booked`.
+Any material fact/candidate change clears confirmation; stale revision and non-current candidate fail closed. The durable booking is the only meeting entity. Its browser projection says `kind=internal_virtual`, `status=scheduled`, `externalCalendarEventCreated=false`, and `externalInviteSent=false`.
 
-Server перед каждым Luna turn строит `schedulingContext` из собственного clock: canonical `currentInstant`, `moscowLocalDate`, `moscowWeekday`, `timeOfDayPreference`, максимум один `rejectedTimeOfDayPreferences` и tuple ровно из двух `{ meetingSlot, displayLabel }`. Bounded Russian parser одинаково применяет typed/spoken morning/day/second-half/evening wording. Default tuple — morning + evening; selected preference даёт два in-band starts примерно через час и переносит пару на следующий weekday, если текущий band occupied; rejection исключает band. Каждый slot — 20 минут, weekday, не сегодня, start на 20-minute grid 09:00–17:00 MSK. Tuple — текущие internal alternatives, не all/global availability. Tool execution повторно отвергает slot вне tuple; BookingService повторно отвергает now-non-bookable или internally occupied start.
+After truthful meeting confirmation, optional qualification begins directly. There is no separate consent phrase/turn. Server asks only a missing authoritative field: volume first when both are missing, otherwise only the missing field, and none when both are known. Generic daily volume requires basis clarification before server normalization. Refusal yields skipped/partial without changing `booking.status=booked`.
+
+Before each Luna turn the server builds scheduling context from its own clock and exactly two concrete Moscow candidates. Typed/spoken time-band, rejection, and supported concrete date/time expressions use the same parser. Exact permitted requests return exact+alternative; otherwise nearest internal candidates or clarification/unavailable status. Every proposed slot is a non-today weekday 20-minute start on the 09:00–17:00 Moscow grid and is only a current internal alternative.
 
 ## 7. SQLite model
 
@@ -1713,6 +1705,17 @@ Server перед каждым Luna turn строит `schedulingContext` из �
 | `started_at` | text | timestamp |
 | `ended_at` | text nullable | timestamp |
 | `last_error_code` | text nullable | safe code |
+
+### `conversation_contexts` (migration 0004)
+
+| Column | Contract |
+|---|---|
+| `conversation_id` | PK/FK → `conversations.id`, `ON DELETE CASCADE` |
+| `revision` | nonnegative integer used for expected-revision CAS |
+| `draft_json` | valid JSON object; contains internal fact registry/provenance/conflicts, exactly two candidate IDs/slots, selected candidate, readiness, confirmation/commit status, booking ID and timestamps |
+| `updated_at` | must equal `draft_json.updatedAt` |
+
+SQLite checks require `draft_json.revision == revision`, `draft_json.factRegistry.revision == revision`, and matching timestamps. Store writes use `BEGIN IMMEDIATE`; form/conflict/confirm commands also use scoped idempotency keys. Browser projections strip `conversationId`, provenance, and evidence text. No separate facts, evidence, or virtual-meeting table is created.
 
 ### `turns`
 
@@ -1796,13 +1799,13 @@ BEGIN IMMEDIATE
 COMMIT
 ```
 
-После commit:
+After exact-revision commit:
 
-1. отправить WS `booking.created`;
-2. notifier worker публикует payload;
-3. assistant получает safe tool result;
-4. server-authored confirmation сообщает, что calendar event не создан, и точно спрашивает `Можно задать два коротких вопроса?`;
-5. только subsequent explicit consent открывает qualification и первый deterministic leads question; booking остаётся committed при skip/partial/failure.
+1. mark draft `committed` with the same durable `bookingId`;
+2. send `booking.created` and server-derived `internal.meeting.updated`;
+3. notifier worker publishes the booking payload;
+4. truthfully confirm the internal virtual meeting and that no external event/invite exists;
+5. ask only the first missing qualification field, or nothing if both are known; booking remains committed under skip/partial/failure.
 
 ## 9. Notification payloads
 
@@ -1876,11 +1879,12 @@ Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` �
 ## 11. Retention
 
 - raw audio: не хранить;
-- transcript: `TRANSCRIPT_RETENTION_DAYS`, default 30 дней; startup и hourly runner удаляют bounded batches из `turns` по durable timestamp, не удаляя conversation/booking;
-- bookings: до ручного удаления/экспорта и никогда не каскадно из transcript purge;
-- events: минимум срок отладки и аудита, configurable;
+- transcript and active-draft PII: `TRANSCRIPT_RETENTION_DAYS`, default 30 days; startup/hourly bounded purge deletes expired `turns` and `conversation_contexts` but preserves conversations/bookings;
+- bookings: retained until explicit deletion/export and never cascaded by transcript/context retention;
+- explicit privacy deletion by conversation transactionally removes booking, draft context, turns, idempotency rows, related outbox entries, and the conversation; existing append-only domain events are already redacted and remain, and one additional count-only `privacy.deleted` audit event is appended;
+- append-only redacted events remain for audit; their configurable expiry is not implemented by the transcript-retention worker;
 - Codex thread state: stop/expiry прерывает turn, вызывает `thread/delete`, очищает process-local maps; TTS session budgets также reset;
-- backups наследуют срок хранения и шифруются.
+- local protected backups are mode-0600 SQLite files with SHA-256 sidecars; encryption/retention is a host-owner requirement, not implemented by the repository wrapper.
 
 
 <div class="page-break"></div>
@@ -1891,7 +1895,7 @@ Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` �
 
 ![Deployment](diagrams/05-deployment.svg)
 
-Candidate `0.5.0-local-rc.3` uses this topology on one trusted local machine at `http://localhost:5173`; prior `0.5.0-local-rc.2` remains the rollback image. RC3 deploy/readiness must be freshly accepted per docs 08/11. A target VPS, DNS, public TLS/WSS and target-host smokes are later gates and are not implied by local readiness.
+Candidate `0.5.0-local-rc.4` is recommended but untagged for one trusted local machine at `http://localhost:5173`. RC3 evidence is preserved separately and is not RC4 proof. A target VPS, DNS, public TLS/WSS, target-host provider live booking, and WebKit full journey are external gates and are not implied by local readiness.
 
 Один `docker-compose.yml`, ровно два application-path сервиса рекомендуются:
 
@@ -1909,7 +1913,7 @@ Persistent volumes:
 
 The tracked [`../docker-compose.yml`](docker-compose.yml) is the exact runtime contract. It pins app/Caddy inputs, runs the app as non-root with a read-only filesystem, persists SQLite and Codex auth in named volumes, and receives OpenRouter/webhook values only through read-only files under `/run/secrets`.
 
-Do not use `env_file: .env`, source `.env`, or invoke raw `docker compose up` as the documented bootstrap. `scripts/deploy-local.sh` parses dotenv data, materializes mode-`0600` sources below `.runtime/secrets`, exports the three `*_FILE` paths, builds, migrates, force-recreates app, starts Caddy, and requires readiness. Raw `docker compose config` remains safe with `/dev/null` defaults but does not constitute a configured deploy.
+Do not use `env_file: .env`, source `.env`, or invoke raw `docker compose up` as the documented bootstrap. `scripts/deploy-local.sh` parses dotenv data, materializes mode-`0600` secret files, renders/scans Compose config, and builds first. If the app is live it takes a protected online backup and then uses Compose's 30-second graceful stop before any schema mutation; if the app is stopped but `/data/app.db` exists it takes a protected no-migration backup. A fresh volume needs no backup. The replacement app is started with `AUTO_MIGRATE=true`, so migration runs through the normal entrypoint before the server; bounded `/health/ready` and then `db.js verify-rc4` must pass. The script never runs a one-off migration against a live app.
 
 ## 3. Docker image
 
@@ -2002,12 +2006,13 @@ That optional command performs `thread/start`, verifies `instructionSources`, ru
 
 - raw audio не сохраняется;
 - PII redaction в общих логах;
-- contact values доступны только booking payload и защищённому storage;
+- contact values are stored in the durable draft/booking and exposed to the browser only in stage-gated projections; TTS receives only an exact server-approved contact when contact-processing consent is active, otherwise it is redacted;
 - `.env`, единственный OpenRouter key, webhook secret, Codex auth, WAV/base64 audio и transcript PII не попадают в logs;
 - browser bundle и events не содержат OpenRouter key или direct provider URL;
 - DB volume и backup с ограниченными permissions;
 - privacy/consent copy перед микрофоном;
-- deletion runbook по `conversationId`/`bookingId`;
+- implemented conversation deletion transaction removes booking, context, turns, idempotency, related outbox entries, and conversation; existing redacted append-only domain events remain and a count-only `privacy.deleted` event is appended;
+- transcript retention also purges expired `conversation_contexts` in bounded batches while preserving conversations and bookings;
 - финальная юридическая формулировка требует отдельной проверки владельцем продукта.
 
 ## 7. Observability
@@ -2063,15 +2068,14 @@ P0 держит bounded process-local aggregates и отдаёт safe JSON че�
 
 Notifier failure не должен делать app unready, если outbox сохраняет событие. TTS config failure may allow startup only when `TTS_TEXT_ONLY_FALLBACK=true`; readiness must expose degraded state rather than pretending OpenRouter is ready. Healthchecks never spend OpenRouter usage.
 
-## 9. Backup and restore
+## 9. Migration, backup, restore, and rollback boundaries
 
-- SQLite online backup или `VACUUM INTO`, не простой copy активного WAL-файла;
-- ежедневный encrypted snapshot;
-- retention configurable;
-- регулярный restore test в временный файл;
-- `codex-home` backup отдельно и только если необходим; auth backup шифруется;
-- prompts восстанавливаются из Git/image;
-- runbook фиксирует RPO/RTO после выбора хостинга.
+- RC4 migration `0004` only adds `conversation_contexts`; it does not backfill existing RC3 conversations and creates no duplicate fact/evidence/meeting table. Existing RC3 bookings remain unchanged.
+- Local cutover takes `VACUUM INTO` backup plus mode-`0600` SHA-256 sidecar before stopping/migrating an existing DB. The server is gracefully stopped before normal startup applies schema changes.
+- Post-start acceptance requires `/health/ready`, `PRAGMA integrity_check`, exact context columns/FK/check constraints, persisted JSON revision/timestamp consistency, `foreign_key_check`, and absence of duplicate RC4 tables.
+- Migrations are forward-only. Code/image rollback without a DB restore is allowed only if the older image is proven compatible with the forward schema. Otherwise stop the app and use the matching pre-cutover backup; never try to reverse `0004` in place.
+- Restore verifies sidecar permissions/digest/integrity before stop, verifies again, migrates a temporary copy, atomically swaps it, retains a protected pre-restore backup, and requires readiness.
+- Repository backups are protected/checksummed but not encrypted and have no automatic retention policy. Host-owner encrypted snapshots, retention, RPO/RTO and restore drills remain operations responsibilities. `codex-home` auth is separate and excluded from ordinary DB backups.
 
 ## 10. Capacity guard
 
@@ -2138,6 +2142,8 @@ chmod 600 .env
 ./scripts/device-auth.sh
 ./scripts/deploy-local.sh
 curl -fsS http://localhost:5173/health/ready
+# deploy-local already runs this after readiness; manual recheck:
+docker compose exec -T app bun /app/ops/db.js verify-rc4
 ```
 
 The wrapper does not run paid provider smokes. Recovery and observability commands are maintained in [`../infra/README.md`](infra/README.md) and the release checklist in [`11-local-release-handoff.md`](docs/11-local-release-handoff.md).
@@ -2162,13 +2168,7 @@ docker compose logs app --since 30m | grep 'booking\.'
 
 ### Restore
 
-1. stop app;
-2. verify backup checksum;
-3. restore into a new DB path;
-4. run integrity check and migrations;
-5. point `DATABASE_URL` to restored file;
-6. start and validate `/health/ready`;
-7. retain old file until manual confirmation.
+Use `./scripts/restore.sh /data/backups/NAME.db`. The wrapper verifies the protected backup before stopping, verifies again after stop, migrates a temporary copy, atomically swaps it, restarts the app, requires `/health/ready`, and retains a protected pre-restore backup. For image rollback, use `scripts/rollback.sh` with an owner-retained immutable image reference; no RC4 predecessor image/tag is invented by this handoff.
 
 
 <div class="page-break"></div>
@@ -2260,7 +2260,7 @@ Dynamic tool API Codex app-server экспериментальный. Default м
 
 **Статус:** accepted.
 
-Prompt-only state считается недостаточным. LLM может предложить action, но transition и side effects разрешает deterministic policy. Это особенно важно для порядка booking → qualification.
+Prompt-only state считается недостаточным. RC4 persists a revisioned JSON draft/fact/conflict projection in `conversation_contexts`; LLM may only propose quoted current-turn facts, while deterministic policy owns CAS, conflict resolution, exact confirmation, booking commit, and booking → qualification order.
 
 ## ADR-006. Prompts в Markdown, без онлайн-редактора
 
@@ -2284,13 +2284,13 @@ Prompt-only state считается недостаточным. LLM может 
 
 **Статус:** accepted.
 
-Это сокращает scope и позволяет проверить conversation/tool design. UI и voice copy обязаны не создавать ложного ожидания calendar event.
+The durable booking is the only meeting entity. UI derives an `internal_virtual`/`scheduled` projection and must state that external calendar event/invite flags are false; no second meeting table is introduced.
 
 ## ADR-010. Qualification только после booking
 
 **Статус:** accepted, non-negotiable.
 
-Плюсы: меньше потерянных лидов и ясная транзакционная граница. Минусы: booking может быть менее подробно квалифицирована. Этот минус ожидаем и допустим.
+After truthful durable meeting confirmation, qualification starts directly and asks only missing volume/manager facts; there is no separate permission bridge. Плюсы: меньше потерянных лидов и ясная транзакционная граница. Минусы: booking может быть менее подробно квалифицирована. Этот минус ожидаем и допустим.
 
 ## ADR-011. PCM speech output path
 
@@ -2434,8 +2434,8 @@ The chart deliberately contains no numeric currency estimate. Variable usage dep
 Table-driven cases:
 
 - все допустимые transitions;
-- запрещён `append_booking_qualification` до committed booking, user-facing confirmation и отдельного consent;
-- `create_booking` разрешён только из `COLLECT_BOOKING`, при server contact consent и с одним из двух candidates активного turn;
+- qualification forbidden before committed booking/draft, internal meeting publication, and truthful confirmation; no separate permission bridge exists;
+- automatic booking commit allowed only from a ready exact-confirmed revision, with contact consent and one of two current candidates;
 - disconnect после booking → booking stays;
 - clear refusal → declined;
 - retry не меняет domain effect;
@@ -2472,13 +2472,15 @@ Table-driven cases:
 - migration preserves legacy rows with null meeting fields and does not invent slots; modern snapshot use fails closed;
 - same idempotency key/same payload → same result;
 - same key/different payload → conflict;
-- exact post-confirmation consent question precedes qualification and same-turn booking envelope cannot grant consent;
-- deterministic question order is monthly inbound leads then integer `salesManagerCount`, one at a time;
+- one `conversation_contexts` JSON row preserves fact provenance/conflicts, lifecycle and revisions; malformed JSON/revision/timestamp mismatch fails closed;
+- form, typed, and spoken facts converge on the same draft; stale revision, bounded conflict resolution, candidate reselection, idempotent confirmation, and reconnect/resume are covered;
+- exact-revision confirmation automatically commits once and the widget cannot publish before durable booking/draft commit;
+- direct qualification asks only missing facts: volume before managers only when both are absent, one known asks the other, both known asks nothing; generic daily volume requires basis clarification;
 - qualification patch merges either field; both-at-once completes, one field remains partial, and model completion claims cannot override persisted truth;
 - zero-answer refusal is skipped; refusal after one answer preserves partial; booking remains booked;
 - empty patch rejected except server-owned explicit-refusal skip operation;
 - notifier failure не rolls back booking;
-- PII redaction.
+- PII redaction plus the sole exact-server-approved-contact TTS exception under contact-processing consent.
 
 ## 3. Provider contract tests
 
@@ -2546,13 +2548,13 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 - bounded PCM16 chunks → `audio.commit` → gateway-produced validated WAV → atomic `SttPort` request → fake OpenRouter already-WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
 - sample-derived capture progress/countdown uses accepted PCM16 bytes and stricter server duration/byte ceiling, then auto-commits exactly once;
 - bounded monotonic `visitor.text.submit` clears uncommitted audio, suppresses pending duplicates, retains sequence on rejection, emits server final once, and follows the same brain/state/tool/persistence path as speech;
-- typed composer is stage-gated, and booking form renders only from server-owned `COLLECT_BOOKING`, never transcript wording;
-- real SQLite transaction + fake notifier;
-- Luna receives server-owned current Moscow date/day, parsed preference/rejection and exactly two structured candidates with validated labels;
-- typed and spoken preference turns produce matching refreshed context; rejected band is absent;
-- booking tool call accepts only one active candidate inside brain turn;
-- booking event and user-facing confirmation with exact `Можно задать два коротких вопроса?` appear before qualification consent/question/audio;
-- explicit consent bypasses a model turn and deterministically asks leads first; partial then asks manager count; both-at-once completes; zero/one-answer refusal preserves skipped/partial booking truth;
+- typed composer is stage-gated; structured booking form renders only from server-owned `COLLECT_BOOKING` and submits revisioned patches, never transcript-triggered tools;
+- real SQLite RC3→RC4 migration, durable context CAS/conflicts, booking transaction, and fake notifier;
+- Luna receives server-owned current Moscow date/day and exactly two structured candidates with concrete dates; typed/spoken time-band and concrete date/time requests have parity;
+- spoken/text/form facts complete the same draft; first/second spoken selection and spoken confirmation use the same exact-revision commit path;
+- booking event, committed draft, and `internal.meeting.updated` precede final widget and qualification;
+- server asks only missing qualification facts; both-at-once, both-known, daily-basis clarification, and zero/one-answer refusal preserve booking truth;
+- reconnect restores durable draft/meeting; stale projections cannot replace a newer revision;
 - reconnect with same conversation;
 - barge-in while OpenRouter requests/complete segments are in flight;
 - brain process restart;
@@ -2570,11 +2572,11 @@ Playwright with synthetic audio fixture:
 5. observe listening/processing states and then exactly one `transcript.final`;
 6. receive assistant text and ordered complete MP3 segment events;
 7. verify the circular countdown is sample-derived and reaches the 60-second limit without wall-clock drift;
-8. submit typed and spoken time-of-day preferences and verify refreshed pairs: default morning+evening, selected in-band roughly hour-apart, rejected band absent;
-9. use the in-chat booking form only at `COLLECT_BOOKING`, choose one of exactly two server-labeled current Moscow alternatives, and complete required name/company/email/phone-or-Telegram/consent data;
-10. see booked UI and verify no external calendar/invitation or exhaustive availability claim;
-11. verify exact two-question consent, deterministic leads→manager order, both-at-once completion, and zero/one-answer refusal outcomes;
-12. verify backend DB/event payload keeps booking `booked`.
+8. submit typed and spoken time-band plus supported concrete date/time requests and verify exactly two concretely dated current Moscow candidates;
+9. use the structured form only at `COLLECT_BOOKING`; verify auto-filled facts, explicit conflicts, stale revision/reselection, and exact-revision confirmation;
+10. verify automatic durable booking commit precedes the server-derived final widget, whose external calendar/invite flags remain false;
+11. verify missing-only qualification matrix: neither known → volume first; one known → only other; both known → no question; daily count → basis clarification; refusal preserves scheduled meeting;
+12. verify DB/event payload keeps booking `booked`, draft `committed`, and widget projection tied to the same booking ID.
 
 Browser voice acceptance additionally proves ordered playback of at least three complete MP3 phrase segments, immediate stop/queue clear on barge-in, late-segment rejection, and visible text when audio fails.
 
@@ -2588,7 +2590,7 @@ Mobile viewport and slow network profiles included.
 
 ## 6. Conversation eval suite
 
-Минимум 24 сценария:
+The committed RC4 fixture catalog has **44 scenarios**. It is deterministic and credential-free; it does not run Luna/providers and therefore is not model-quality evidence. The scenario groups below describe its minimum behavioral surface:
 
 ### Happy paths
 
@@ -2655,14 +2657,13 @@ Mobile viewport and slow network profiles included.
 - spoken-language quality;
 - final structured handoff.
 
-Release thresholds:
+Release thresholds and current fixture baseline:
 
-- 100% invariant tests;
-- ≥ 90% scripted scenarios без critical failure;
-- 0 fabricated price/guarantee in eval suite;
-- 0 duplicate bookings;
-- 0 pre-booking qualification tool calls;
-- 0 exposed secrets/stack traces.
+- at least 24 scenarios and ≥90% without critical failure;
+- 100% booking-order/scheduled-payload checks among booking-required scenarios;
+- zero fabricated prices, guarantees, secrets, duplicate bookings, pre-booking qualification, widget-before-commit, external invite claims, repeated-known qualification, silent daily normalization, or unauthorized contact TTS;
+- committed artifact: **44/44 scenarios**, **25/25 applicable booking-order checks**, **28/28 negative controls**, zero critical failures;
+- evidence mode is `fixture-only`, provider calls are `0`, and real Luna is explicitly `not-run`.
 
 ## 8. Latency/load test
 
@@ -2704,43 +2705,40 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ## 10. Acceptance checklist P0
 
-### Local release candidate `0.5.0-local-rc.3`
+### Local release candidate `0.5.0-local-rc.4` (recommended; tag pending)
 
-RC3 local acceptance is recorded in [`../VALIDATION.md`](VALIDATION.md). RC2 remains the prior rollback candidate; local evidence does not close WebKit or target-host gates.
+Fresh RC4 command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md). The prior RC3 report is preserved separately under `evidence/`; it is historical and not reused as proof.
 
-- [x] Fresh credential-free deterministic suite: 510 tests passed across 58 files with 4,265 assertions and no failures.
-- [x] Typecheck, lint/format, production build, deterministic eval baseline, `scripts/build-spec.sh`, `scripts/validate-spec.py`, and `git diff --check` passed.
-- [x] Docs and generated specification match proactive greeting, contextual candidates, and deterministic two-question qualification contracts.
-- [x] Disposable Chrome exercised automatic static greeting success, blocked/unavailable fallback, zero pre-consent conversation REST/WS/mic/provider calls, session-start cleanup, 780/390 px layouts, and a real typed evening request that received two server-supplied evening candidates. Deterministic gateway/orchestrator coverage proves typed/spoken equivalence plus skipped/partial/complete qualification. Firefox headless rendered 390×844 without CSP/runtime errors; WebKit was not run.
-- [x] `scripts/deploy-local.sh` completed from the RC3 tree; migration, app/Caddy health, dependency readiness, file-secret boundaries, and 60-second/2 MB limits passed.
-- [x] Explicit bounded paid checks passed: static greeting generation through OpenRouter TTS, one real typed Luna/TTS evening-slot turn, and one OpenRouter STT → Luna → OpenRouter TTS voice smoke with two decoder-accepted MP3 segments.
-- [x] Fresh protected backup succeeded; deterministic restore/rollback tests passed. `botamin-voice:0.5.0-local-rc.2` remains the prior rollback tag.
-- [x] Parent regenerated `MANIFEST.txt` and `CHECKSUMS.sha256` and recorded final evidence in `VALIDATION.md`.
+- [x] Credential-free fixture baseline is current: 44/44 scenarios, 25/25 applicable booking-order checks, 28/28 negative controls, zero provider calls; real Luna not run.
+- [x] Chromium desktop/mobile Playwright landing smoke passed through the shared Chromium harness. This proves responsive/pre-consent transport boundaries only, not a full voice booking journey.
+- [x] Focused cutover tests prove protected backup precedes graceful stop, existing stopped DB is protected, migration is delegated to normal startup, readiness precedes `verify-rc4`, and RC3 schema upgrades to migration 0004 without a duplicate meeting table.
+- [x] RC4-focused tests, typecheck, build, Biome, generated spec validation, release artifact regeneration, and `git diff --check` are reported with actual fresh outputs in `VALIDATION.md`.
+- [ ] Repository-wide tests are not fully green: 640 passed and two unchanged integrated journey tests failed; see `VALIDATION.md`.
+- [ ] Docker Compose cutover against an owner-configured live local volume and credentials was not run by the documentation handoff; the wrapper is covered statically/fake-Docker and DB tests.
+- [ ] Full local voice booking journey was not run; do not infer it from Chromium landing smoke or fixture evals.
 
-### Later target release gates — not closed by local RC
+### External/not-run gates — not closed by RC4 handoff
 
-- [ ] Complete MP3 playback and voice journey accepted in WebKit.
-- [ ] Clean target-VPS deploy accepted under target CPU/RAM/storage/network conditions.
-- [ ] Public DNS and TLS/WSS accepted on the target host.
-- [ ] Explicitly approved target-host Russian STT/TTS smokes accepted with current model/voice/account configuration.
-- [ ] Target-host latency/load evidence establishes a release profile; local synthetic timings are not reused as a benchmark.
-- [ ] Owner reviews Codex/OpenRouter plan suitability, current rates, capacity, privacy copy, and public commercial operation.
+- [ ] WebKit complete-MP3/full voice journey. The browser binary is downloaded locally, but host libraries `libicu74`, `libxml2`, and `libflite1` are missing.
+- [ ] Clean target-VPS deploy under target CPU/RAM/storage/network conditions.
+- [ ] Public DNS and TLS/WSS on the target host.
+- [ ] Explicitly approved target-host live provider booking through OpenRouter STT/TTS + Codex Luna, including the final internal-meeting widget.
+- [ ] Target-host latency/load release profile and owner review of provider plan/rates/capacity/privacy copy.
 
-A real calendar event is intentionally out of scope rather than an unchecked release gate. The product stores an internal booking and notification outbox event only.
+External calendar creation is intentionally absent, not a release gate. The product creates one durable internal booking and derives an internal virtual meeting projection; it never creates a second meeting table or claims an external event/invite.
 
 ## 11. Candidate evidence bundle
 
-The RC3 evidence bundle contains:
+The RC4 handoff bundle contains:
 
-- final candidate SHA and `v0.5.0-local-rc.3` recommendation;
-- deterministic test/type/lint/build/spec/validator and regenerated checksum evidence;
-- Compose migration, file-secret, health, readiness, and backup observations;
-- Chrome and Firefox results labeled by engine and viewport;
-- safe aggregate results from explicitly approved bounded provider checks;
-- preserved RC2 rollback tag and matching DB-backup guidance;
-- known limitations and explicit WebKit/VPS/TLS blockers.
+- implementation baseline through `58aa9ee` and a separate handoff commit; no PR/tag is invented;
+- recommended/pending `v0.5.0-local-rc.4` label;
+- source docs plus regenerated `FULL_SPEC.md`, `technical-spec.html`, `MANIFEST.txt`, and `CHECKSUMS.sha256`;
+- deterministic migration/cutover, contracts, app, web, privacy, eval, type, and Biome evidence as actually run;
+- Chromium desktop/mobile smoke clearly labeled as a landing smoke;
+- preserved RC3 historical report and explicit WebKit/VPS/TLS/WSS/provider-live-booking gates.
 
-Target-VPS compose/health/preflight/provider evidence and benchmark-grade latency remain a later evidence bundle; they must not be inferred from this local release candidate.
+Target-host and full-journey evidence must not be inferred from this local handoff.
 
 
 <div class="page-break"></div>
@@ -2979,13 +2977,13 @@ DoD:
 **Владелец:** A0 или release integrator  
 **Зависимости:** T31, T32.
 
-**Current label:** `0.5.0-local-rc.3`; keep `0.5.0-local-rc.2` as rollback image.
+**Current label:** `0.5.0-local-rc.4` recommended/pending; no previous immutable image name is assumed.
 
-- RC3 local P0 tests, spec validation, browser, deploy/readiness, and any approved provider smokes are candidate acceptance steps in docs 08/11, not inherited claims from RC2;
-- active docs describe committed proactive greeting, contextual two-candidate scheduling, and deterministic optional two-question qualification contracts;
-- parent records final counts/checksums/SHA and observations in release evidence after fresh execution;
-- release commit is prepared without creating or pushing a Git tag;
-- WebKit and target VPS/DNS/TLS/WSS remain later gates and are not claimed by the local RC.
+- RC4 local checks are fresh steps in docs 08/11; RC3 evidence is preserved separately and not inherited;
+- active docs describe the durable revisioned draft/fact/conflict model, structured form plus spoken/text parity, two concretely dated Moscow candidates, automatic internal meeting commit/widget, approved-contact TTS exception, and direct missing-only qualification;
+- release integrator records actual counts, commands, generated artifacts, and limitations after fresh execution;
+- release commit is prepared without inventing or creating a tag/PR/hash;
+- WebKit full journey, target VPS/DNS/TLS/WSS, and provider live booking remain external gates.
 
 ## 8. Merge gates
 
@@ -3264,45 +3262,49 @@ VoiceOrchestrator
 
 <div class="page-break"></div>
 
-# 11. Local release candidate and handoff
+# 11. RC4 local release handoff
 
-**Release label:** `0.5.0-local-rc.3`
+**Release label:** `0.5.0-local-rc.4`
 
-**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.3`
+**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.4`
 
-**Tag state:** recommendation only until the validated candidate is merged.
+**Tag state:** pending/recommendation only. No tag, PR, registry digest, or predecessor image is asserted by this handoff.
 
-**Scope:** local hosting on one trusted machine. This is not a target-VPS or public TLS release.
+**Implementation baseline:** integrated RC4 code through `58aa9ee`; release documentation/operations are committed separately.
 
-## RC3 scope
+**Scope:** local hosting on one trusted machine. This is not target-VPS or public TLS/WSS acceptance.
 
-- committed product-owned same-origin proactive MP3 attempts playback once immediately on entry, with no conversation REST/WS/mic/provider/session before consent; blocked/error fallback is `Включить приветствие`, and real session start stops it;
-- explicit admin-only opt-in OpenRouter script generates the fixed no-visitor-data asset before commit; visitor runtime never synthesizes it;
-- server always offers exactly two current internal Moscow candidates: default morning+evening, contextual typed/spoken Russian preference/rejection refresh, selected in-band roughly hour-apart pair with weekday rollover, and no exhaustive global-availability claim;
-- after committed booking and confirmation, exact consent question `Можно задать два коротких вопроса?` gates deterministic monthly-leads-then-manager-count collection; both-at-once, skipped, and partial outcomes preserve booking.
+## RC4 behavior being handed off
 
-## Local P0 candidate checklist
+- one durable `conversation_contexts` JSON projection per conversation stores nonnegative revision, fact registry/provenance/bounded conflicts, exactly two current candidate identities, selected candidate, readiness, exact-revision confirmation, commit state, booking ID and matching timestamps;
+- spoken and typed final turns use the same fact/scheduling/draft path; the structured form patches the same authoritative draft with expected revision and idempotent request ID rather than pretending to be visitor text;
+- every scheduling offer contains exactly two 20-minute internal Moscow candidates with concrete dates/times; supported concrete date/time requests return the exact permitted start plus an alternative or the nearest two internal starts;
+- a ready draft must be confirmed at its exact current revision; server orchestration then automatically commits one booking and publishes one server-derived `internal_virtual`/`scheduled` meeting projection;
+- the final widget appears only after durable commit and states that no external calendar event or invitation exists;
+- optional qualification starts directly after truthful meeting confirmation and asks only missing facts: volume first when neither is known, only the other field when one is known, and nothing when both are known;
+- TTS redacts contacts by default. The only exception is an exact server-approved contact from accepted durable draft facts or a committed booking while contact-processing consent is active.
 
-Fresh RC3 local evidence is recorded in [`../VALIDATION.md`](VALIDATION.md); RC2 observations were not reused as proof.
+No duplicate meeting table, external availability query, calendar event/invite, or CRM record is introduced.
 
-- [x] Credential-free suite passed 510 tests across 58 files with 4,265 assertions and no failures.
-- [x] Typecheck, lint/format, production build, deterministic eval/spec generation, validator, and `git diff --check` passed.
-- [x] Chrome exercised proactive greeting success and fallback, zero pre-consent conversation calls, session-start cleanup, responsive layouts, and a real contextual evening request. Gateway/orchestrator tests cover typed/spoken preferences and qualification skipped/partial/complete. Firefox headless rendered 390×844 without CSP/runtime errors.
-- [x] `scripts/deploy-local.sh` completed from the RC3 tree; migration, app/Caddy health/readiness, 60-second/2 MB limits, and file-secret boundaries passed.
-- [x] Explicit paid checks passed: static OpenRouter TTS greeting generation, one typed Luna/TTS evening-slot turn, and one OpenRouter STT → Luna → OpenRouter TTS smoke with two decoder-accepted MP3 segments.
-- [x] Fresh protected backup and deterministic restore/rollback tests passed; RC2 remains the rollback tag shown below.
-- [x] Final evidence was recorded in `VALIDATION.md`; `MANIFEST.txt` and `CHECKSUMS.sha256` were regenerated separately.
-- [ ] WebKit playback and complete journey acceptance — later gate, unobserved.
-- [ ] Target VPS deploy, DNS, TLS/WSS, and target-host paid smokes — later gate, unobserved.
+## Evidence status
 
-The committed [T30 owner-observed artifact](evidence/T30-observed-local-voice-smoke-2026-07-31.md) remains historical evidence only; it does not close RC3 acceptance.
+Fresh RC4 results are recorded in [`../VALIDATION.md`](VALIDATION.md). The RC3 report is preserved separately as historical evidence; it does not close RC4 gates.
+
+- Chromium desktop/mobile Playwright **landing smoke** passed through the shared harness. It covers responsive/pre-consent boundaries, not a full voice booking journey.
+- Fixture-only eval baseline is 44/44 scenarios, 25/25 applicable booking-order checks, and 28/28 negative controls with zero provider calls; real Luna was not run.
+- Migration/cutover wrappers and RC3→RC4 schema compatibility are covered by deterministic tests.
+- Repository-wide tests are not fully green: 640 pass and two unchanged integrated journey tests fail; exact evidence is in `VALIDATION.md`.
+- WebKit full journey is not run. Its browser binary is present, but this host lacks `libicu74`, `libxml2`, and `libflite1`.
+- Full voice booking, owner-configured live Compose cutover, target VPS, public TLS/WSS, and target-host provider live booking remain explicit gates.
+
+The committed [T30 owner-observed artifact](evidence/T30-observed-local-voice-smoke-2026-07-31.md) and the preserved RC3 report remain historical evidence only.
 
 ## Prerequisites and secure bootstrap
 
 - Bun `1.3.14` for repository checks and host smoke tooling.
 - Docker Engine and Docker Compose v2 for the supported local runtime.
-- `ffmpeg` on `PATH` only for `scripts/local-voice-e2e-smoke.ts`; ordinary deployment does not need host decoding.
-- A paid OpenRouter account/key and an authorized Codex subscription for real voice use.
+- `ffmpeg` only for the explicit integrated voice smoke.
+- Paid OpenRouter access and authorized Codex subscription for real voice use.
 
 ```bash
 cp .env.example .env
@@ -3314,34 +3316,59 @@ chmod 600 .env
 curl -fsS http://localhost:5173/health/ready
 ```
 
-Open <http://localhost:5173>. Device auth is interactive and persists in the fixed `botamin-codex-home` Docker volume. Protect Docker access and the underlying disk; do not include Codex `auth.json` in ordinary backups. The `CODEX_HOME` value in `.env` is for direct host Bun operation; Compose uses `/codex-home` backed by that named volume.
+Open <http://localhost:5173>. Device auth persists in the fixed `botamin-codex-home` volume. Protect Docker access and disk; ordinary DB backups do not include Codex auth.
 
-`deploy-local.sh` parses `.env` without shell evaluation, atomically materializes `.runtime/secrets` as directory mode `0700` and files mode `0600`, exports only the `*_FILE` paths, builds, migrates, force-recreates the app, starts Caddy, and waits for readiness. The files are mounted under `/run/secrets`; key values are not build args or browser configuration.
+`deploy-local.sh` does not change `.env`. It atomically materializes mode-`0600` file secrets, renders/scans Compose config, and builds the image. For an existing DB it creates a protected backup before schema mutation. A running app is then gracefully stopped with a 30-second timeout; a stopped existing DB is backed up through a no-migration one-off container. The replacement starts with `AUTO_MIGRATE=true`, so migrations run through the normal entrypoint before the server. Success requires bounded readiness followed by the PII-safe RC4 invariant check.
 
-## Health, readiness, and metrics
+## Health and durable invariant checks
 
 ```bash
 docker compose ps
 curl -fsS http://localhost:5173/health/live
 curl -fsS http://localhost:5173/health/ready
+docker compose exec -T app bun /app/ops/db.js verify-rc4
+```
 
-# Safe aggregate metrics are intentionally direct-loopback only.
+`verify-rc4` checks SQLite integrity, exact `conversation_contexts` columns and cascade FK, migration check constraints, persisted JSON/revision/timestamp consistency, foreign keys, and absence of duplicate fact/evidence/virtual-meeting tables. It prints no row values.
+
+Safe aggregate metrics remain loopback-only:
+
+```bash
 docker compose exec -T app bun -e \
   "const r=await fetch('http://127.0.0.1:3000/metrics');if(!r.ok)process.exit(1);console.log(await r.text())"
 ```
 
-Caddy/public access to `/metrics` is denied. Readiness is dependency-aware and may return `503` for Codex auth/model, DB, prompt, voice configuration, capacity, or worker failures; health checks never spend OpenRouter usage.
+## Migration 0004 and rollback boundary
+
+`0004_conversation_contexts.sql` adds one empty context table to an RC3 database. It does not rewrite existing conversations/bookings, invent fact history, or create a separate virtual-meeting table. New/resumed RC4 sessions initialize their own durable draft through normal server behavior.
+
+Migrations are forward-only. Do not reverse `0004` in place. Image-only rollback is acceptable only after the owner proves the older image tolerates the forward schema. Otherwise stop the app and restore the matching protected pre-cutover backup. This handoff does not invent an immutable previous image name; supply an owner-retained image reference explicitly.
+
+```bash
+# Online backup while app is running
+./scripts/backup.sh
+./scripts/backup.sh /data/backups/before-rc4.db
+
+# Verified atomic restore; requires readiness before success
+./scripts/restore.sh /data/backups/before-rc4.db
+
+# Owner supplies a real retained immutable image reference.
+PREVIOUS_IMAGE=registry.example.invalid/botamin@sha256:OWNER_RETAINED_DIGEST
+./scripts/rollback.sh "$PREVIOUS_IMAGE" /data/backups/before-rc4.db
+```
+
+The placeholder above is not a real image. Never use `docker compose down -v`. Keep each `.db` with its mode-`0600` `.sha256` sidecar. Repository wrappers checksum/protect backups but do not encrypt or automatically expire them; encrypted snapshots, retention, RPO/RTO, and restore drills are host-owner duties.
 
 ## Paid smokes: explicit opt-in only
 
-Deployment, tests, health checks, and this release procedure do not call paid providers. The proactive asset is regenerated only by an administrator's explicit paid opt-in; this command overwrites the tracked static MP3 from fixed product copy, never visitor data, so inspect the result before committing:
+Deployment, tests, readiness, and schema verification do not spend provider usage. Static greeting regeneration is administrator-only and overwrites a tracked asset, so inspect it before commit:
 
 ```bash
 BOTAMIN_GENERATE_PROACTIVE_GREETING=1 \
   bun run scripts/generate-proactive-greeting.ts
 ```
 
-This is not a deploy/startup/visitor command. Against an already-ready local server, an owner may deliberately run the integrated smoke; it spends OpenRouter STT/TTS and Codex subscription usage:
+Against an already-ready local server, an owner may deliberately run the integrated voice smoke:
 
 ```bash
 BOTAMIN_EXTERNAL_VOICE_E2E=1 bun run scripts/local-voice-e2e-smoke.ts \
@@ -3350,7 +3377,7 @@ BOTAMIN_EXTERNAL_VOICE_E2E=1 bun run scripts/local-voice-e2e-smoke.ts \
   --fixture-turns 1
 ```
 
-`ffmpeg` is mandatory for this non-browser decoder check. Use real bounded PCM files rather than `--fixture-turns` when synthetic input is not appropriate. Isolated STT/TTS image probes are also paid; export the deployed file paths first and run them only with explicit approval:
+This is not a browser full journey and does not close WebKit or target-host gates. Isolated paid image probes likewise require explicit approval:
 
 ```bash
 compose_secret_operation=paid-smoke
@@ -3359,42 +3386,15 @@ docker compose run --rm -e AUTO_MIGRATE=false app /app/scripts/run-openrouter-sm
 docker compose run --rm -e AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh tts
 ```
 
-## Backup, restore, rotation, stop, and rollback
+## Explicit remaining gates
 
-```bash
-# Online SQLite VACUUM INTO backup plus protected checksum sidecar
-./scripts/backup.sh
-./scripts/backup.sh /data/backups/before-release.db
-
-# Restore verifies permissions, checksum, integrity, migration, and readiness
-./scripts/restore.sh /data/backups/before-release.db
-
-# Stop while retaining named volumes
-docker compose stop
-# Remove containers/network while retaining named volumes
-docker compose down
-
-# Keep RC2 as the existing/pullable immutable rollback image for RC3.
-# Use the exact immutable registry reference/digest retained by the owner if available.
-PREVIOUS_IMAGE=botamin-voice:0.5.0-local-rc.2
-./scripts/rollback.sh "$PREVIOUS_IMAGE"
-./scripts/rollback.sh "$PREVIOUS_IMAGE" /data/backups/before-release.db
-```
-
-Never use `docker compose down -v`. SQLite migrations are forward-only; use the matching pre-release backup if an older image cannot read the current schema.
-
-For OpenRouter/webhook key rotation: revoke or schedule revocation at the provider, replace the value in mode-`0600` `.env`, then rerun `./scripts/deploy-local.sh`. Its forced app recreation remounts the new secret inode. For Codex auth refresh, stop the app, rerun `./scripts/device-auth.sh`, then rerun `./scripts/deploy-local.sh`. Never print old/new values or copy auth into the repository.
-
-## Known limitations and next gates
-
-- STT is phrase-level and nonstreaming at the provider boundary: transcription starts after `audio.commit` and one complete bounded WAV.
-- T30 local synthetic timings prove functional sequencing only; they are not a benchmark or target-host SLO.
-- WebKit complete-MP3 playback and journey acceptance remain unobserved.
-- Target VPS resource behavior, DNS, public TLS/WSS, and target-host provider smokes remain unobserved.
-- The proactive greeting is a committed static product MP3. Browser autoplay remains policy-dependent; failure must leave the explicit `Включить приветствие` control. Regeneration is paid/admin-only and not a visitor-runtime action.
-- The booking is an internal SQLite record plus notifier outbox event. The scheduler always returns two current alternatives, not all global availability; it excludes committed starts, but no real calendar event, external availability check, CRM record, or meeting invitation is created.
-- Optional qualification is complete only with both monthly inbound leads and integer sales-manager count. Skip/partial/failure never removes the booking.
-- OpenRouter model/voice availability, paid rates, Codex subscription limits, and plan suitability are runtime/owner checks, not release guarantees.
+- WebKit complete-MP3 and full voice booking journey after installing `libicu74`, `libxml2`, and `libflite1` on a compatible host.
+- Full Chromium voice booking journey; desktop/mobile landing smoke is not sufficient.
+- Owner-configured live local Compose cutover/restore drill with retained backup path.
+- Clean target-VPS deploy and resource behavior.
+- Public DNS, TLS, and WSS.
+- Explicitly approved target-host OpenRouter STT/TTS + Codex Luna live booking through final widget.
+- Target-host latency/load profile and owner review of provider rates, model availability, subscription capacity, privacy copy, backup encryption/retention, and commercial operation.
 
 
 <div class="page-break"></div>

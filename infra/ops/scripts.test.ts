@@ -103,6 +103,17 @@ describe("file-backed Compose secret wiring", () => {
 			expect(deployment).toContain(
 				"docker compose up -d --no-deps --force-recreate app",
 			);
+			if (path === "scripts/deploy-local.sh") {
+				expect(deployment).toContain(
+					"docker compose ps --status running --services app",
+				);
+				expect(deployment).toContain("docker compose stop --timeout 30 app");
+				expect(deployment).toContain("bun /app/ops/db.js verify-rc4");
+				expect(deployment).toContain("AUTO_MIGRATE=true docker compose up");
+				expect(deployment).not.toContain(
+					"AUTO_MIGRATE=false app bun /app/ops/db.js migrate",
+				);
+			}
 			expect(deployment).toContain("docker compose up -d caddy");
 			expect(deployment.indexOf("--force-recreate app")).toBeLessThan(
 				deployment.indexOf("docker compose up -d caddy"),
@@ -128,9 +139,22 @@ describe("file-backed Compose secret wiring", () => {
 			).ino;
 			expect(newInode).not.toBe(oldInode);
 			const commands = await readFile(fixture.commandLog, "utf8");
-			expect(commands).toContain(
-				"compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate",
-			);
+			if (script === "deploy-local.sh") {
+				expect(commands).not.toContain("db.js migrate");
+				expect(commands).toContain(
+					"compose ps --status running --services app",
+				);
+				expect(commands).toContain(
+					"compose run --rm --no-deps --entrypoint sh app -c [ -f /data/app.db ]",
+				);
+				expect(commands).toContain(
+					"compose exec -T app bun /app/ops/db.js verify-rc4",
+				);
+			} else {
+				expect(commands).toContain(
+					"compose run --rm -e AUTO_MIGRATE=false app bun /app/ops/db.js migrate",
+				);
+			}
 			if (script === "deploy-production.sh") {
 				expect(commands).toContain(
 					"compose run --rm -e AUTO_MIGRATE=false app codex login status",
@@ -144,7 +168,9 @@ describe("file-backed Compose secret wiring", () => {
 			);
 			const caddyIndex = commands.indexOf("compose up -d caddy");
 			const readinessIndex = commands.indexOf("wait-ready ");
-			expect(migrationIndex).toBeGreaterThanOrEqual(0);
+			if (script === "deploy-production.sh") {
+				expect(migrationIndex).toBeGreaterThanOrEqual(0);
+			}
 			expect(recreateIndex).toBeGreaterThan(migrationIndex);
 			expect(caddyIndex).toBeGreaterThan(recreateIndex);
 			expect(readinessIndex).toBeGreaterThan(caddyIndex);
@@ -152,6 +178,52 @@ describe("file-backed Compose secret wiring", () => {
 			expect(allOutput).not.toContain(fixture.env.EXPECTED_OPENROUTER);
 			expect(allOutput).not.toContain("old-openrouter-value");
 		}
+	});
+
+	test("local cutover backs up and stops a running app before startup migration", async () => {
+		const fixture = await createDeploymentRoot("deploy-local.sh");
+		fixture.env.FAKE_APP_RUNNING = "true";
+		const result = await runWrapper(fixture, "deploy-local.sh");
+		expect(result.exitCode).toBe(0);
+		const commands = await readFile(fixture.commandLog, "utf8");
+		const backupIndex = commands.indexOf(
+			"compose exec -T app bun /app/ops/db.js backup",
+		);
+		const stopIndex = commands.indexOf("compose stop --timeout 30 app");
+		const startIndex = commands.indexOf(
+			"compose up -d --no-deps --force-recreate app",
+		);
+		const readinessIndex = commands.indexOf("wait-ready ");
+		const verificationIndex = commands.indexOf(
+			"compose exec -T app bun /app/ops/db.js verify-rc4",
+		);
+		expect(backupIndex).toBeGreaterThanOrEqual(0);
+		expect(stopIndex).toBeGreaterThan(backupIndex);
+		expect(startIndex).toBeGreaterThan(stopIndex);
+		expect(readinessIndex).toBeGreaterThan(startIndex);
+		expect(verificationIndex).toBeGreaterThan(readinessIndex);
+		expect(commands).not.toContain("db.js migrate");
+	});
+
+	test("local cutover protects an existing stopped database before startup", async () => {
+		const fixture = await createDeploymentRoot("deploy-local.sh");
+		fixture.env.FAKE_DB_EXISTS = "true";
+		const result = await runWrapper(fixture, "deploy-local.sh");
+		expect(result.exitCode).toBe(0);
+		const commands = await readFile(fixture.commandLog, "utf8");
+		const probeIndex = commands.indexOf(
+			"compose run --rm --no-deps --entrypoint sh app -c [ -f /data/app.db ]",
+		);
+		const backupIndex = commands.indexOf(
+			"compose run --rm --no-deps --entrypoint bun -e AUTO_MIGRATE=false app /app/ops/db.js backup",
+		);
+		const startIndex = commands.indexOf(
+			"compose up -d --no-deps --force-recreate app",
+		);
+		expect(probeIndex).toBeGreaterThanOrEqual(0);
+		expect(backupIndex).toBeGreaterThan(probeIndex);
+		expect(startIndex).toBeGreaterThan(backupIndex);
+		expect(commands).not.toContain("compose stop --timeout 30 app");
 	});
 
 	test("device auth uses explicit blank files", async () => {
@@ -290,6 +362,7 @@ async function createDeploymentRoot(script: string): Promise<WrapperRoot> {
 	fixture.env.SITE_ADDRESS = "voice.example.test";
 	fixture.env.LOCAL_READY_MAX_ATTEMPTS = "1";
 	fixture.env.PRODUCTION_READY_MAX_ATTEMPTS = "1";
+	if (script === "deploy-local.sh") fixture.env.EXPECT_AUTO_MIGRATE = "true";
 	return fixture;
 }
 
@@ -332,6 +405,19 @@ case "$*" in
     ;;
 esac
 case "$*" in
+  "compose ps --status running --services app")
+    if [ "\${FAKE_APP_RUNNING:-false}" = "true" ]; then printf '%s\\n' app; fi
+    exit 0
+    ;;
+  "compose run --rm --no-deps --entrypoint sh app -c [ -f /data/app.db ]")
+    if [ "\${FAKE_DB_EXISTS:-false}" = "true" ]; then exit 0; fi
+    exit 1
+    ;;
+  "compose up -d --no-deps --force-recreate app")
+    if [ "\${EXPECT_AUTO_MIGRATE:-false}" = "true" ]; then
+      test "\${AUTO_MIGRATE:-}" = "true"
+    fi
+    ;;
   "compose config") printf '%s\\n' 'services: {}' ;;
 esac
 `,

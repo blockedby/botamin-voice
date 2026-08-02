@@ -30,9 +30,10 @@ MVP должен выглядеть как небольшой реальный �
 - interruption/barge-in на базовом уровне;
 - управляемая state machine разговора;
 - product knowledge из Botamin-сайта и Telegram-кейсов;
-- создание внутренней брони на одном из двух server-supplied structured 20-minute Moscow slots;
-- необязательная квалификация после брони и отдельного согласия, только по monthly inbound leads и integer sales-manager count;
-- SQLite persistence;
+- durable revisioned conversation draft with facts/provenance/conflicts shared by spoken, typed, and structured-form input;
+- automatic internal virtual meeting commit after exact confirmation of one of two concretely dated server-supplied 20-minute Moscow slots;
+- direct optional missing-only qualification after truthful meeting confirmation, limited to monthly lead/contact volume and integer sales-manager count;
+- SQLite persistence and server-derived final meeting widget;
 - console notifier и интерфейс для webhook/push;
 - transcript/event audit;
 - local-first Docker Compose, health checks and backup; VPS TLS/WSS is a later deployment gate;

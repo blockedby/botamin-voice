@@ -6,6 +6,10 @@ import {
 	encodeBinaryAudioFrame,
 } from "@botamin/contracts";
 import { createDeterministicMp3Fixture } from "../../../../packages/test-fixtures/src";
+import {
+	createBrowserBookingDraft,
+	createInternalMeeting,
+} from "../testFixtures/rc4";
 import type { ReconnectScheduler, WebSocketLike } from "../transport/ws";
 import type {
 	CaptureAdapter,
@@ -228,6 +232,7 @@ function harness(
 		firstCaptureStopGate?: Promise<void>;
 		firstCaptureFinishGate?: Promise<void>;
 		createSocketError?: Error;
+		requestIds?: string[];
 	} = {},
 ) {
 	const sockets: FakeSocket[] = [];
@@ -269,6 +274,15 @@ function harness(
 		},
 		reconnectScheduler: scheduler,
 		now: () => new Date(at),
+		...(options.requestIds
+			? {
+					createRequestId: () => {
+						const requestId = options.requestIds?.shift();
+						if (!requestId) throw new Error("Missing deterministic request ID");
+						return requestId;
+					},
+				}
+			: {}),
 	});
 	return { session, sockets, captures, playbacks, requests, scheduler };
 }
@@ -584,6 +598,234 @@ describe("production browser voice integration", () => {
 		);
 	});
 
+	test("chains one form action through a correlated ready draft to exact-revision confirmation", async () => {
+		const requestIds = [
+			"01J00000000000000000000020",
+			"01J00000000000000000000021",
+		];
+		const value = await readySession(harness({ requestIds }));
+		value.socket.server(
+			event("state.changed", 2, {
+				from: "BOOKING_OFFER",
+				to: "COLLECT_BOOKING",
+				reason: "server collection",
+			}),
+		);
+		value.socket.server(
+			event("booking.draft.updated", 3, {
+				requestId: null,
+				bookingDraft: createBrowserBookingDraft(1),
+			}),
+		);
+		expect(value.session.getSnapshot().bookingInputAvailable).toBe(true);
+		expect(
+			value.session.submitBookingForm({
+				baseRevision: 1,
+				details: { name: "Анна Новая" },
+			}),
+		).toBe(true);
+		expect(
+			value.session.submitBookingForm({
+				baseRevision: 1,
+				details: { name: "Дубликат" },
+			}),
+		).toBe(false);
+		expect(value.session.submitText("Гонка")).toBe(false);
+		expect(await value.session.commit()).toBe(false);
+		expect(value.session.getSnapshot().bookingSubmission).toMatchObject({
+			status: "details-pending",
+			requestId: "01J00000000000000000000020",
+		});
+
+		// A newer speech-origin draft is authoritative data, but cannot confirm
+		// the form request because its requestId is not correlated.
+		value.socket.server(
+			event("booking.draft.updated", 4, {
+				requestId: null,
+				bookingDraft: createBrowserBookingDraft(2),
+			}),
+		);
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "booking.draft.confirm",
+			),
+		).toHaveLength(0);
+		value.socket.server(
+			event("booking.draft.updated", 5, {
+				requestId: "01J00000000000000000000020",
+				bookingDraft: createBrowserBookingDraft(3),
+			}),
+		);
+		const bookingEvents = sentJson(value.socket).filter((item) =>
+			String(item.type).startsWith("booking."),
+		);
+		expect(bookingEvents).toEqual([
+			{
+				v: 1,
+				at,
+				type: "booking.form.submit",
+				payload: {
+					requestId: "01J00000000000000000000020",
+					baseRevision: 1,
+					details: { name: "Анна Новая" },
+				},
+			},
+			{
+				v: 1,
+				at,
+				type: "booking.draft.confirm",
+				payload: {
+					requestId: "01J00000000000000000000021",
+					revision: 3,
+				},
+			},
+		]);
+		expect(value.session.getSnapshot().bookingSubmission).toEqual({
+			status: "confirmation-pending",
+			requestId: "01J00000000000000000000021",
+			revision: 3,
+		});
+		value.socket.server(
+			event("internal.meeting.updated", 6, {
+				meeting: createInternalMeeting(),
+			}),
+		);
+		expect(value.session.getSnapshot().bookingSubmission).toEqual({
+			status: "committed",
+			requestId: "01J00000000000000000000021",
+			bookingId,
+		});
+	});
+
+	test("keeps an in-flight form request fenced across authoritative reconnect resync", async () => {
+		const value = await readySession(
+			harness({
+				requestIds: [
+					"01J00000000000000000000024",
+					"01J00000000000000000000025",
+				],
+			}),
+		);
+		value.socket.server(
+			event("state.changed", 2, {
+				from: "BOOKING_OFFER",
+				to: "COLLECT_BOOKING",
+				reason: "server collection",
+			}),
+		);
+		value.socket.server(
+			event("booking.draft.updated", 3, {
+				requestId: null,
+				bookingDraft: createBrowserBookingDraft(1),
+			}),
+		);
+		expect(
+			value.session.submitBookingForm({
+				baseRevision: 1,
+				details: { name: "После reconnect" },
+			}),
+		).toBe(true);
+		value.socket.disconnect();
+		value.session.reconnect();
+		const resumed = value.sockets[1] as FakeSocket;
+		resumed.open();
+		const ready = sessionReady(4, "resume-token-booking-pending");
+		resumed.server({
+			...ready,
+			payload: {
+				...ready.payload,
+				state: "COLLECT_BOOKING",
+				bookingDraft: createBrowserBookingDraft(1),
+				internalMeeting: null,
+			},
+		});
+		expect(value.session.getSnapshot().bookingSubmission).toMatchObject({
+			status: "details-pending",
+			requestId: "01J00000000000000000000024",
+		});
+		expect(
+			value.session.submitBookingForm({
+				baseRevision: 1,
+				details: { name: "Дубликат" },
+			}),
+		).toBe(false);
+		resumed.server(
+			event("booking.draft.updated", 5, {
+				requestId: "01J00000000000000000000024",
+				bookingDraft: createBrowserBookingDraft(2),
+			}),
+		);
+		expect(sentJson(resumed).at(-1)).toMatchObject({
+			type: "booking.draft.confirm",
+			payload: {
+				requestId: "01J00000000000000000000025",
+				revision: 2,
+			},
+		});
+	});
+
+	test("correlates bounded form rejection and gives an edited retry a fresh request ID", async () => {
+		const value = await readySession(
+			harness({
+				requestIds: [
+					"01J00000000000000000000022",
+					"01J00000000000000000000023",
+				],
+			}),
+		);
+		value.socket.server(
+			event("state.changed", 2, {
+				from: "BOOKING_OFFER",
+				to: "COLLECT_BOOKING",
+				reason: "server collection",
+			}),
+		);
+		value.socket.server(
+			event("booking.draft.updated", 3, {
+				requestId: null,
+				bookingDraft: createBrowserBookingDraft(1),
+			}),
+		);
+		expect(
+			value.session.submitBookingForm({
+				baseRevision: 1,
+				details: { company: "Первая версия" },
+			}),
+		).toBe(true);
+		value.socket.server(
+			event("booking.form.rejected", 4, {
+				requestId: "01J00000000000000000000099",
+				currentRevision: 1,
+				error: { code: "INVALID_REVISION", retryable: true },
+			}),
+		);
+		expect(value.session.getSnapshot().bookingSubmission.status).toBe(
+			"details-pending",
+		);
+		value.socket.server(
+			event("booking.form.rejected", 5, {
+				requestId: "01J00000000000000000000022",
+				currentRevision: 1,
+				error: { code: "INVALID_REVISION", retryable: true },
+			}),
+		);
+		expect(value.session.getSnapshot().bookingSubmission).toMatchObject({
+			status: "rejected",
+			retryable: true,
+			message: expect.stringContaining("обновились"),
+		});
+		expect(
+			value.session.submitBookingForm({
+				baseRevision: 1,
+				details: { company: "Исправленная версия" },
+			}),
+		).toBe(true);
+		expect(sentJson(value.socket).at(-1)).toMatchObject({
+			type: "booking.form.submit",
+			payload: { requestId: "01J00000000000000000000023" },
+		});
+	});
+
 	test("keeps only final visitor and completed assistant text", async () => {
 		const value = await readySession();
 		value.capture.emit();
@@ -695,6 +937,112 @@ describe("production browser voice integration", () => {
 		expect(value.session.getSnapshot().state.kind).toBe("listening");
 	});
 
+	test("resyncs projections authoritatively on reconnect and clears only for a new conversation", async () => {
+		const value = await readySession();
+		value.socket.server(
+			event("booking.draft.updated", 2, {
+				requestId: null,
+				bookingDraft: createBrowserBookingDraft(2),
+			}),
+		);
+		value.socket.server(
+			event("booking.draft.updated", 3, {
+				requestId: null,
+				bookingDraft: createBrowserBookingDraft(1),
+			}),
+		);
+		expect(value.session.getSnapshot().bookingDraft?.revision).toBe(2);
+		const meeting = createInternalMeeting();
+		value.socket.server(event("internal.meeting.updated", 4, { meeting }));
+		expect(value.session.getSnapshot().internalMeeting).toEqual(meeting);
+
+		value.socket.disconnect();
+		value.session.reconnect();
+		const resumed = value.sockets[1] as FakeSocket;
+		resumed.open();
+		const ready = sessionReady(5, "resume-token-authoritative");
+		resumed.server({
+			...ready,
+			payload: {
+				...ready.payload,
+				bookingDraft: createBrowserBookingDraft(1),
+				internalMeeting: createInternalMeeting({
+					updatedAt: "2026-07-30T20:24:00.000Z",
+				}),
+			},
+		});
+		await flush();
+		expect(value.session.getSnapshot().bookingDraft?.revision).toBe(1);
+		expect(value.session.getSnapshot().internalMeeting?.updatedAt).toBe(
+			"2026-07-30T20:24:00.000Z",
+		);
+		await value.session.stop();
+		expect(value.session.getSnapshot().internalMeeting).not.toBeNull();
+		await value.session.reset();
+		expect(value.session.getSnapshot()).toMatchObject({
+			bookingDraft: null,
+			internalMeeting: null,
+			bookingSubmission: { status: "idle" },
+		});
+	});
+
+	test("meeting projection alone drives persistence and rejects stale or mismatched updates", async () => {
+		const value = await readySession();
+		value.socket.server(
+			event("assistant.text.done", 2, {
+				generationId,
+				fullText: "Встреча создана, всё готово.",
+			}),
+		);
+		expect(value.session.getSnapshot().internalMeeting).toBeNull();
+		const meeting = createInternalMeeting();
+		value.socket.server(event("internal.meeting.updated", 3, { meeting }));
+		expect(value.session.getSnapshot().internalMeeting).toEqual(meeting);
+		expect(value.session.getSnapshot().bookingSubmission).toEqual({
+			status: "idle",
+		});
+		value.socket.server(
+			event("internal.meeting.updated", 4, {
+				meeting: createInternalMeeting({
+					updatedAt: "2026-07-30T20:21:00.000Z",
+				}),
+			}),
+		);
+		value.socket.server(
+			event("internal.meeting.updated", 5, {
+				meeting: createInternalMeeting({
+					bookingId: "01J00000000000000000000040",
+					updatedAt: "2026-07-30T20:25:00.000Z",
+				}),
+			}),
+		);
+		expect(value.session.getSnapshot().internalMeeting).toEqual(meeting);
+		value.socket.server(
+			event("state.changed", 6, {
+				from: "BOOKED",
+				to: "POST_BOOKING_QUALIFICATION",
+				reason: "qualification",
+			}),
+		);
+		value.socket.server(
+			event("error", 7, {
+				code: "TTS_UNAVAILABLE",
+				message: "Звук недоступен.",
+				retryable: true,
+			}),
+		);
+		expect(value.session.getSnapshot().internalMeeting).toEqual(meeting);
+		value.socket.server(
+			event("state.changed", 8, {
+				from: "POST_BOOKING_QUALIFICATION",
+				to: "COMPLETE",
+				reason: "completed",
+			}),
+		);
+		await flush();
+		expect(value.session.getSnapshot().internalMeeting).toEqual(meeting);
+	});
+
 	test("serializes capture startup across reconnect cleanup", async () => {
 		let releaseFirstStop: () => void = () => undefined;
 		const firstStopGate = new Promise<void>((resolve) => {
@@ -756,7 +1104,7 @@ describe("production browser voice integration", () => {
 		);
 	});
 
-	test("booking and qualification UI require committed matching booking events", async () => {
+	test("only the durable meeting projection unlocks booking and qualification UI", async () => {
 		const value = await readySession();
 		value.socket.server(
 			event("state.changed", 2, {
@@ -765,7 +1113,6 @@ describe("production browser voice integration", () => {
 				reason: "model stage only",
 			}),
 		);
-		expect(value.session.getSnapshot().state.kind).not.toBe("booked");
 		value.socket.server(
 			event("booking.created", 3, {
 				bookingId,
@@ -774,9 +1121,22 @@ describe("production browser voice integration", () => {
 				createdAt: at,
 			}),
 		);
+		expect(value.session.getSnapshot().state.kind).not.toBe("booked");
+		expect(value.session.getSnapshot().internalMeeting).toBeNull();
+
+		const meeting = createInternalMeeting({
+			qualificationStatus: "none",
+			qualificationFields: {
+				monthlyLeadVolume: null,
+				salesManagerCount: null,
+			},
+		});
+		value.socket.server(event("internal.meeting.updated", 4, { meeting }));
 		expect(value.session.getSnapshot().state).toEqual({ kind: "booked" });
+		expect(value.session.getSnapshot().internalMeeting).toEqual(meeting);
+
 		value.socket.server(
-			event("state.changed", 4, {
+			event("state.changed", 5, {
 				from: "BOOKED",
 				to: "POST_BOOKING_QUALIFICATION",
 				reason: "explicit consent",
@@ -789,7 +1149,7 @@ describe("production browser voice integration", () => {
 			questionCount: 2,
 		});
 		value.socket.server(
-			event("booking.updated", 5, {
+			event("booking.updated", 6, {
 				bookingId,
 				qualificationStatus: "partial",
 				updatedFields: ["salesManagerCount"],
@@ -797,28 +1157,27 @@ describe("production browser voice integration", () => {
 				updatedAt: at,
 			}),
 		);
-		expect(value.session.getSnapshot().state).toEqual({
+		expect(value.session.getSnapshot().state).toMatchObject({
 			kind: "qualification",
-			bookingOutcome: "committed",
 			questionNumber: 2,
-			questionCount: 2,
 		});
 		value.socket.server(
-			event("booking.updated", 6, {
-				bookingId,
-				qualificationStatus: "complete",
-				updatedFields: ["monthlyLeadVolume"],
-				qualificationFields: ["monthlyLeadVolume", "salesManagerCount"],
-				updatedAt: at,
+			event("internal.meeting.updated", 7, {
+				meeting: createInternalMeeting({
+					qualificationStatus: "complete",
+					qualificationFields: {
+						monthlyLeadVolume: "120",
+						salesManagerCount: 4,
+					},
+					updatedAt: "2026-07-30T20:23:00.000Z",
+				}),
 			}),
 		);
-		expect(value.session.getSnapshot().state).toEqual({
-			kind: "complete",
-			bookingOutcome: "committed",
-			qualificationStatus: "complete",
-		});
+		expect(
+			value.session.getSnapshot().internalMeeting?.qualificationStatus,
+		).toBe("complete");
 		value.socket.server(
-			event("state.changed", 7, {
+			event("state.changed", 8, {
 				from: "POST_BOOKING_QUALIFICATION",
 				to: "COMPLETE",
 				reason: "server completed",
@@ -826,6 +1185,9 @@ describe("production browser voice integration", () => {
 		);
 		await flush();
 		expect(value.socket.closed).toBe(true);
+		expect(value.session.getSnapshot().internalMeeting?.bookingId).toBe(
+			bookingId,
+		);
 	});
 
 	test("terminal provider ERROR stops capture/reconnect but retains safe fallback text", async () => {

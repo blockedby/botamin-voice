@@ -16,6 +16,10 @@ const idleVoice: VoiceDemoProps = {
 	conversationStage: null,
 	textInputAvailable: false,
 	textSubmission: { status: "idle" },
+	bookingDraft: null,
+	internalMeeting: null,
+	bookingSubmission: { status: "idle" },
+	bookingInputAvailable: false,
 	onConsentChange: noop,
 	onStart: noop,
 	onCommit: noop,
@@ -26,6 +30,8 @@ const idleVoice: VoiceDemoProps = {
 	onReconnect: noop,
 	onRestart: noop,
 	onTextSubmit: () => false,
+	onBookingSubmit: () => false,
+	onBookingConflictResolve: () => false,
 };
 
 describe("Botamin landing narrative", () => {
@@ -71,9 +77,9 @@ describe("Botamin landing narrative", () => {
 	test("states privacy, stop and no-calendar limits", () => {
 		expect(html).toContain("Ваши данные не публикуются в открытом разговоре");
 		expect(html).toContain("Микрофон и разговор выключаются в любой момент");
-		expect(html).toContain("Реальная встреча в этом демо не создаётся");
+		expect(html).toContain("внутренняя виртуальная встреча");
 		expect(html).toContain(
-			"Лид и следующий шаг считаются записанными только после явного подтверждения",
+			"внешнее календарное событие и приглашение не создаются",
 		);
 	});
 });

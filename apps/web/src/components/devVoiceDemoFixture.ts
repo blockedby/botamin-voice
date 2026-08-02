@@ -107,7 +107,7 @@ function transcriptForPreview(
 	const committedBooking: FinalTranscriptEntry = {
 		id: "agent-next-step",
 		speaker: "agent",
-		text: "Спасибо. Ваш контакт и желаемый следующий шаг записаны для команды Botamin. Реальная календарная встреча сейчас не создавалась.",
+		text: "Спасибо. Ваш контакт и желаемый следующий шаг записаны для команды Botamin. Внешнее календарное событие и приглашение не создавались.",
 	};
 	return [greeting, visitor, answer, committedBooking];
 }

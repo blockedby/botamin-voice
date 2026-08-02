@@ -1,8 +1,13 @@
 import {
 	type AudioClientConfig,
+	type BookingConflictResolution,
+	type BookingFormDetails,
+	type BrowserBookingDraft,
 	type ConversationStage,
 	CreateConversationRequestSchema,
 	CreateConversationResponseSchema,
+	type InternalVirtualMeetingProjection,
+	InternalVirtualMeetingProjectionSchema,
 	type QualificationField,
 	type ServerWsEvent,
 } from "@botamin/contracts";
@@ -17,6 +22,9 @@ import {
 	PhrasePlaybackQueue,
 } from "../audio/playback";
 import type {
+	BookingConflictSelection,
+	BookingFormSubmission,
+	BookingSubmissionState,
 	FinalTranscriptEntry,
 	TextSubmissionState,
 	VoiceCaptureProgress,
@@ -46,6 +54,10 @@ export interface BrowserVoiceSnapshot {
 	conversationStage: ConversationStage | null;
 	textInputAvailable: boolean;
 	textSubmission: TextSubmissionState;
+	bookingDraft: BrowserBookingDraft | null;
+	internalMeeting: InternalVirtualMeetingProjection | null;
+	bookingSubmission: BookingSubmissionState;
+	bookingInputAvailable: boolean;
 }
 
 export interface CaptureAdapter {
@@ -100,6 +112,7 @@ export interface BrowserVoiceFactories {
 	now?: () => Date;
 	reconnectScheduler?: ReconnectScheduler;
 	createAbortController?: () => AbortController;
+	createRequestId?: () => string;
 }
 
 const INITIAL_SNAPSHOT: BrowserVoiceSnapshot = {
@@ -110,6 +123,10 @@ const INITIAL_SNAPSHOT: BrowserVoiceSnapshot = {
 	conversationStage: null,
 	textInputAvailable: false,
 	textSubmission: { status: "idle" },
+	bookingDraft: null,
+	internalMeeting: null,
+	bookingSubmission: { status: "idle" },
+	bookingInputAvailable: false,
 };
 
 /** Resolve a contract WS path without allowing the REST response to leave this origin. */
@@ -151,7 +168,11 @@ export class BrowserVoiceSession {
 	private conversationId: string | null = null;
 	private clientConfig: AudioClientConfig | null = null;
 	private conversationStage: ConversationStage | null = null;
-	private bookingId: string | null = null;
+	private bookingDraft: BrowserBookingDraft | null = null;
+	private internalMeeting: InternalVirtualMeetingProjection | null = null;
+	/** Legacy lifecycle marker is presentation-only and never renders the widget. */
+	private legacyBookingPresentation = false;
+	private bookingSubmission: BookingSubmissionState = { status: "idle" };
 	private pendingTypedText: string | null = null;
 	private qualificationStatus: "none" | "partial" | "complete" | "skipped" =
 		"none";
@@ -193,7 +214,10 @@ export class BrowserVoiceSession {
 		this.starting = true;
 		this.consent = { ...consent };
 		const epoch = ++this.epoch;
-		this.bookingId = null;
+		this.bookingDraft = null;
+		this.internalMeeting = null;
+		this.legacyBookingPresentation = false;
+		this.bookingSubmission = { status: "idle" };
 		this.conversationStage = null;
 		this.pendingTypedText = null;
 		this.qualificationStatus = "none";
@@ -212,6 +236,10 @@ export class BrowserVoiceSession {
 			conversationStage: null,
 			textInputAvailable: false,
 			textSubmission: { status: "idle" },
+			bookingDraft: null,
+			internalMeeting: null,
+			bookingSubmission: { status: "idle" },
+			bookingInputAvailable: false,
 		});
 		this.controller = new VoiceSessionController(initialVoiceState, (state) =>
 			this.projectControllerState(state),
@@ -338,6 +366,7 @@ export class BrowserVoiceSession {
 		if (
 			this.disposed ||
 			this.terminalFailurePending ||
+			this.isBookingRequestPending() ||
 			this.committing ||
 			this.captureStarting ||
 			!this.capture?.isActive ||
@@ -381,6 +410,7 @@ export class BrowserVoiceSession {
 			this.disposed ||
 			this.terminalFailurePending ||
 			!this.snapshot.textInputAvailable ||
+			this.isBookingRequestPending() ||
 			!this.controller ||
 			!this.transport ||
 			this.pendingTypedText !== null
@@ -409,6 +439,81 @@ export class BrowserVoiceSession {
 			...this.snapshot,
 			textSubmission: { status: "pending" },
 		});
+		return true;
+	}
+
+	/** Submit only visitor fields and a current candidate identity. */
+	submitBookingForm(submission: BookingFormSubmission): boolean {
+		const draft = this.bookingDraft;
+		const transport = this.transport;
+		if (
+			!draft ||
+			!transport ||
+			!this.canSubmitBooking() ||
+			submission.baseRevision !== draft.revision
+		) {
+			return false;
+		}
+		const hasDetails = Object.keys(submission.details).length > 0;
+		const hasCandidateSelection = submission.selectedCandidateId !== undefined;
+		if (!hasDetails && !hasCandidateSelection) {
+			if (!isDraftConfirmable(draft)) return false;
+			return this.sendBookingConfirmation(draft.revision);
+		}
+
+		const requestId = this.createRequestId();
+		const payload: BookingFormDetails = {
+			requestId,
+			baseRevision: draft.revision,
+			details: submission.details,
+			...(hasCandidateSelection
+				? { selectedCandidateId: submission.selectedCandidateId }
+				: {}),
+		};
+		this.suspendCaptureForBooking();
+		if (!transport.submitBookingForm(payload)) {
+			void this.beginCapture(this.epoch);
+			return false;
+		}
+		this.bookingSubmission = {
+			status: "details-pending",
+			requestId,
+			baseRevision: draft.revision,
+		};
+		this.syncBookingSnapshot();
+		return true;
+	}
+
+	resolveBookingConflict(selection: BookingConflictSelection): boolean {
+		const draft = this.bookingDraft;
+		const transport = this.transport;
+		if (
+			!draft ||
+			!transport ||
+			!this.canSubmitBooking() ||
+			selection.baseRevision !== draft.revision
+		) {
+			return false;
+		}
+		const requestId = this.createRequestId();
+		const payload: BookingConflictResolution = {
+			requestId,
+			baseRevision: draft.revision,
+			field: selection.field,
+			conflictOptionId: selection.conflictOptionId,
+		};
+		this.suspendCaptureForBooking();
+		if (!transport.resolveBookingConflict(payload)) {
+			void this.beginCapture(this.epoch);
+			return false;
+		}
+		this.bookingSubmission = {
+			status: "conflict-resolution-pending",
+			requestId,
+			baseRevision: draft.revision,
+			field: selection.field,
+		};
+		this.syncBookingSnapshot();
 		return true;
 	}
 
@@ -459,7 +564,7 @@ export class BrowserVoiceSession {
 	}
 
 	async stop(): Promise<void> {
-		const state = this.bookingId
+		const state = this.internalMeeting
 			? ({
 					kind: "complete",
 					bookingOutcome: "committed",
@@ -477,6 +582,10 @@ export class BrowserVoiceSession {
 		await this.releaseResources("user_requested", true);
 		this.consent = null;
 		this.conversationStage = null;
+		this.bookingDraft = null;
+		this.internalMeeting = null;
+		this.legacyBookingPresentation = false;
+		this.bookingSubmission = { status: "idle" };
 		this.pendingTypedText = null;
 		this.setSnapshot({ ...INITIAL_SNAPSHOT });
 	}
@@ -559,6 +668,7 @@ export class BrowserVoiceSession {
 			this.capture !== null ||
 			this.captureStarting ||
 			this.committing ||
+			this.isBookingRequestPending() ||
 			this.controller?.hasPendingCommit
 		) {
 			return;
@@ -572,6 +682,7 @@ export class BrowserVoiceSession {
 				!this.isCurrent(epoch) ||
 				attempt !== this.captureAttempt ||
 				!this.transport?.isReady ||
+				this.isBookingRequestPending() ||
 				this.controller?.hasPendingCommit ||
 				!this.transport.beginUtterance()
 			) {
@@ -699,7 +810,29 @@ export class BrowserVoiceSession {
 					break;
 				}
 				this.sessionEstablished = true;
+				const previousBookingSubmission = this.bookingSubmission;
 				this.conversationStage = event.payload.state;
+				this.bookingDraft = event.payload.bookingDraft;
+				this.internalMeeting = meetingMatchesDraft(
+					event.payload.internalMeeting,
+					event.payload.bookingDraft,
+				)
+					? event.payload.internalMeeting
+					: null;
+				this.legacyBookingPresentation =
+					this.internalMeeting === null &&
+					event.payload.bookingDraft?.commitStatus === "committed";
+				this.bookingSubmission = bookingSubmissionAfterResync(
+					previousBookingSubmission,
+					this.internalMeeting,
+				);
+				if (this.internalMeeting) this.transport?.settleBookingRequest();
+				this.qualificationStatus =
+					this.internalMeeting?.qualificationStatus ?? "none";
+				this.qualificationFields = qualificationFieldNames(
+					this.internalMeeting,
+				);
+				this.syncBookingSnapshot();
 				const capture = this.capture;
 				if (capture?.isActive && this.transport?.beginUtterance()) {
 					this.captureArmed = true;
@@ -802,14 +935,31 @@ export class BrowserVoiceSession {
 				this.conversationStage = event.payload.to;
 				this.applyServerStage(event.payload.to);
 				break;
-			case "booking.created":
-				this.bookingId = event.payload.bookingId;
-				this.qualificationStatus = event.payload.qualificationStatus;
-				this.qualificationFields = [];
-				this.setState({ kind: "booked" });
+			case "booking.draft.updated":
+				this.acceptBookingDraft(
+					event.payload.bookingDraft,
+					event.payload.requestId,
+					epoch,
+				);
 				break;
-			case "booking.updated":
-				if (event.payload.bookingId !== this.bookingId) break;
+			case "booking.form.rejected":
+				this.acceptBookingRejection(event, epoch);
+				break;
+			case "internal.meeting.updated":
+				this.acceptInternalMeeting(event.payload.meeting, false);
+				break;
+			case "booking.created": {
+				// Keep legacy active-state presentation compatible while refusing to
+				// synthesize a meeting widget or final success from this thin event.
+				this.legacyBookingPresentation = true;
+				const enriched = projectionFromEventPayload(event.payload);
+				if (enriched) this.acceptInternalMeeting(enriched, false);
+				break;
+			}
+			case "booking.updated": {
+				const enriched = projectionFromEventPayload(event.payload);
+				if (enriched) this.acceptInternalMeeting(enriched, false);
+				if (event.payload.bookingId !== this.internalMeeting?.bookingId) break;
 				this.qualificationStatus = event.payload.qualificationStatus;
 				this.qualificationFields = [...event.payload.qualificationFields];
 				if (event.payload.qualificationStatus === "partial") {
@@ -827,6 +977,7 @@ export class BrowserVoiceSession {
 					});
 				}
 				break;
+			}
 			case "error":
 				if (this.pendingTypedText !== null) {
 					this.pendingTypedText = null;
@@ -858,6 +1009,158 @@ export class BrowserVoiceSession {
 		}
 	}
 
+	private acceptBookingDraft(
+		draft: BrowserBookingDraft,
+		requestId: string | null,
+		epoch: number,
+	): void {
+		if (this.bookingDraft && draft.revision <= this.bookingDraft.revision)
+			return;
+		this.bookingDraft = draft;
+		const pending = this.bookingSubmission;
+		if (
+			pending.status === "details-pending" &&
+			requestId === pending.requestId
+		) {
+			if (isDraftConfirmable(draft)) {
+				this.syncBookingSnapshot();
+				if (!this.sendBookingConfirmation(draft.revision)) {
+					this.bookingSubmission = {
+						status: "rejected",
+						requestId: pending.requestId,
+						message: "Подтверждение пока не отправлено. Повторите попытку.",
+						retryable: true,
+					};
+					this.syncBookingSnapshot();
+					void this.beginCapture(epoch);
+				}
+				return;
+			}
+			this.bookingSubmission = { status: "idle" };
+			this.syncBookingSnapshot();
+			void this.beginCapture(epoch);
+			return;
+		}
+		if (
+			pending.status === "conflict-resolution-pending" &&
+			requestId === pending.requestId
+		) {
+			this.bookingSubmission = { status: "idle" };
+			void this.beginCapture(epoch);
+		}
+		this.syncBookingSnapshot();
+	}
+
+	private acceptBookingRejection(
+		event: Extract<ServerWsEvent, { type: "booking.form.rejected" }>,
+		epoch: number,
+	): void {
+		const pending = this.bookingSubmission;
+		if (
+			pending.status !== "details-pending" &&
+			pending.status !== "confirmation-pending" &&
+			pending.status !== "conflict-resolution-pending"
+		) {
+			return;
+		}
+		if (event.payload.requestId !== pending.requestId) return;
+		this.bookingSubmission = {
+			status: "rejected",
+			requestId: event.payload.requestId,
+			message: bookingRejectionMessage(
+				event.payload.error.code,
+				event.payload.error.retryable,
+			),
+			retryable: event.payload.error.retryable,
+		};
+		this.syncBookingSnapshot();
+		void this.beginCapture(epoch);
+	}
+
+	private acceptInternalMeeting(
+		meeting: InternalVirtualMeetingProjection,
+		authoritative: boolean,
+	): boolean {
+		if (
+			!authoritative &&
+			this.bookingDraft?.bookingId !== null &&
+			this.bookingDraft?.bookingId !== undefined &&
+			this.bookingDraft.bookingId !== meeting.bookingId
+		) {
+			return false;
+		}
+		const current = this.internalMeeting;
+		if (!authoritative && current) {
+			if (current.bookingId !== meeting.bookingId) return false;
+			if (
+				new Date(meeting.updatedAt).getTime() <=
+				new Date(current.updatedAt).getTime()
+			) {
+				return false;
+			}
+		}
+		const pending = this.bookingSubmission;
+		const formInitiated =
+			pending.status === "details-pending" ||
+			pending.status === "confirmation-pending" ||
+			pending.status === "conflict-resolution-pending";
+		const requestId = formInitiated ? pending.requestId : null;
+		this.internalMeeting = meeting;
+		this.legacyBookingPresentation = false;
+		this.qualificationStatus = meeting.qualificationStatus;
+		this.qualificationFields = qualificationFieldNames(meeting);
+		this.transport?.settleBookingRequest();
+		this.bookingSubmission = formInitiated
+			? {
+					status: "committed",
+					requestId,
+					bookingId: meeting.bookingId,
+				}
+			: pending.status === "committed"
+				? pending
+				: { status: "idle" };
+		this.syncBookingSnapshot();
+		if (
+			this.conversationStage === "BOOKED" ||
+			this.conversationStage === "COLLECT_BOOKING"
+		) {
+			this.setState({ kind: "booked" });
+		}
+		return true;
+	}
+
+	private sendBookingConfirmation(revision: number): boolean {
+		const transport = this.transport;
+		if (!transport) return false;
+		const requestId = this.createRequestId();
+		this.suspendCaptureForBooking();
+		if (!transport.confirmBookingRevision({ requestId, revision })) {
+			void this.beginCapture(this.epoch);
+			return false;
+		}
+		this.bookingSubmission = {
+			status: "confirmation-pending",
+			requestId,
+			revision,
+		};
+		this.syncBookingSnapshot();
+		return true;
+	}
+
+	private suspendCaptureForBooking(): void {
+		const capture = this.capture;
+		this.capture = null;
+		this.captureArmed = false;
+		this.setCaptureProgress(null);
+		if (!capture) return;
+		capture.setAccepting(false);
+		const previousCleanup = this.captureCleanup;
+		this.captureCleanup = Promise.allSettled([
+			previousCleanup,
+			capture.stop(),
+		]).then(() => undefined);
+	}
+
 	private async receiveAudio(segment: CompletePlaybackSegment): Promise<void> {
 		if (
 			!this.playback ||
@@ -879,7 +1182,7 @@ export class BrowserVoiceSession {
 			case "COMPLETE":
 			case "DECLINED":
 				this.setState(
-					this.bookingId
+					this.internalMeeting
 						? {
 								kind: "complete",
 								bookingOutcome: "committed",
@@ -893,10 +1196,10 @@ export class BrowserVoiceSession {
 				void this.releaseResources("user_requested", false);
 				break;
 			case "BOOKED":
-				if (this.bookingId) this.setState({ kind: "booked" });
+				if (this.internalMeeting) this.setState({ kind: "booked" });
 				break;
 			case "POST_BOOKING_QUALIFICATION":
-				if (this.bookingId) {
+				if (this.internalMeeting) {
 					const answered = this.qualificationFields.length;
 					this.setState({
 						kind: "qualification",
@@ -1062,7 +1365,9 @@ export class BrowserVoiceSession {
 			| "reconnecting"
 			| "error",
 	): VoiceUiState {
-		return this.bookingId ? { kind, bookingOutcome: "committed" } : { kind };
+		return this.internalMeeting || this.legacyBookingPresentation
+			? { kind, bookingOutcome: "committed" }
+			: { kind };
 	}
 
 	private setState(state: VoiceUiState): void {
@@ -1097,6 +1402,10 @@ export class BrowserVoiceSession {
 			...snapshot,
 			conversationStage: this.conversationStage,
 			textInputAvailable: this.canSubmitTextIn(snapshot.state),
+			bookingDraft: this.bookingDraft,
+			internalMeeting: this.internalMeeting,
+			bookingSubmission: this.bookingSubmission,
+			bookingInputAvailable: this.canSubmitBooking(),
 		};
 		for (const listener of this.listeners) listener();
 	}
@@ -1105,6 +1414,7 @@ export class BrowserVoiceSession {
 		if (
 			!this.transport?.isReady ||
 			this.controller?.hasPendingCommit ||
+			this.isBookingRequestPending() ||
 			this.pendingTypedText !== null ||
 			this.conversationStage === null ||
 			this.conversationStage === "IDLE" ||
@@ -1126,6 +1436,35 @@ export class BrowserVoiceSession {
 		);
 	}
 
+	private canSubmitBooking(): boolean {
+		return (
+			this.transport?.isReady === true &&
+			this.conversationStage === "COLLECT_BOOKING" &&
+			this.internalMeeting === null &&
+			this.controller?.state.status === "listening" &&
+			!this.controller.hasPendingCommit &&
+			this.pendingTypedText === null &&
+			!this.isBookingRequestPending() &&
+			!this.terminalFailurePending
+		);
+	}
+
+	private isBookingRequestPending(): boolean {
+		return (
+			this.bookingSubmission.status === "details-pending" ||
+			this.bookingSubmission.status === "confirmation-pending" ||
+			this.bookingSubmission.status === "conflict-resolution-pending"
+		);
+	}
+
+	private syncBookingSnapshot(): void {
+		this.setSnapshot({ ...this.snapshot });
+	}
+
+	private createRequestId(): string {
+		return this.factories.createRequestId?.() ?? createUuidV7(this.now());
+	}
+
 	private isCurrent(epoch: number): boolean {
 		return !this.disposed && this.epoch === epoch;
 	}
@@ -1133,6 +1472,144 @@ export class BrowserVoiceSession {
 	private now(): Date {
 		return this.factories.now?.() ?? new Date();
 	}
+}
+
+const DRAFT_FACT_FIELDS = [
+	"name",
+	"company",
+	"workEmail",
+	"phone",
+	"telegram",
+	"monthlyLeadVolume",
+	"salesManagerCount",
+] as const;
+
+function isDraftConfirmable(draft: BrowserBookingDraft): boolean {
+	return (
+		draft.readiness === "ready" &&
+		draft.commitStatus !== "committed" &&
+		DRAFT_FACT_FIELDS.every((field) => draft[field].status !== "conflicted")
+	);
+}
+
+function bookingSubmissionAfterResync(
+	previous: BookingSubmissionState,
+	meeting: InternalVirtualMeetingProjection | null,
+): BookingSubmissionState {
+	if (
+		meeting &&
+		(previous.status === "details-pending" ||
+			previous.status === "confirmation-pending" ||
+			previous.status === "conflict-resolution-pending")
+	) {
+		return {
+			status: "committed",
+			requestId: previous.requestId,
+			bookingId: meeting.bookingId,
+		};
+	}
+	if (
+		previous.status === "details-pending" ||
+		previous.status === "confirmation-pending" ||
+		previous.status === "conflict-resolution-pending"
+	) {
+		return previous;
+	}
+	if (
+		meeting &&
+		previous.status === "committed" &&
+		previous.bookingId === meeting.bookingId
+	) {
+		return previous;
+	}
+	return { status: "idle" };
+}
+
+function meetingMatchesDraft(
+	meeting: InternalVirtualMeetingProjection | null,
+	draft: BrowserBookingDraft | null,
+): boolean {
+	return (
+		meeting === null ||
+		draft?.bookingId === null ||
+		draft?.bookingId === undefined ||
+		draft.bookingId === meeting.bookingId
+	);
+}
+
+function bookingRejectionMessage(code: string, retryable: boolean): string {
+	const messages: Record<string, string> = {
+		INVALID_REVISION:
+			"Данные на сервере обновились. Проверьте форму и повторите.",
+		INVALID_DETAILS: "Проверьте заполненные данные и повторите.",
+		MISSING_REQUIRED_FIELD:
+			"Заполните имя, компанию, рабочий email и телефон или Telegram.",
+		CONFLICT_REQUIRES_RESOLUTION:
+			"Сначала выберите верное значение в отмеченном поле.",
+		CANDIDATE_MISMATCH: "Варианты времени изменились. Выберите время заново.",
+		NOT_READY: "Проверьте обязательные поля и выбранное время.",
+		ALREADY_COMMITTED: "Запрос уже обработан. Дождитесь обновления разговора.",
+	};
+	return (
+		messages[code] ??
+		(retryable
+			? "Запрос временно не принят. Проверьте данные и повторите."
+			: "Запрос не принят в текущем состоянии разговора.")
+	);
+}
+
+function qualificationFieldNames(
+	meeting: InternalVirtualMeetingProjection | null,
+): QualificationField[] {
+	if (!meeting) return [];
+	const fields: QualificationField[] = [];
+	if (meeting.qualificationFields.monthlyLeadVolume !== null) {
+		fields.push("monthlyLeadVolume");
+	}
+	if (meeting.qualificationFields.salesManagerCount !== null) {
+		fields.push("salesManagerCount");
+	}
+	return fields;
+}
+
+function projectionFromEventPayload(
+	payload: unknown,
+): InternalVirtualMeetingProjection | null {
+	if (!payload || typeof payload !== "object") return null;
+	const enriched = payload as {
+		internalMeeting?: unknown;
+		meeting?: unknown;
+	};
+	const result = InternalVirtualMeetingProjectionSchema.safeParse(
+		enriched.internalMeeting ?? enriched.meeting,
+	);
+	return result.success ? result.data : null;
+}
+
+let fallbackRequestCounter = 0;
+
+function createUuidV7(now: Date): string {
+	const bytes = new Uint8Array(16);
+	const cryptoApi = globalThis.crypto;
+	if (cryptoApi?.getRandomValues) {
+		cryptoApi.getRandomValues(bytes);
+	} else {
+		fallbackRequestCounter = (fallbackRequestCounter + 1) >>> 0;
+		let seed = now.getTime() ^ fallbackRequestCounter ^ 0x9e3779b9;
+		for (let index = 0; index < bytes.length; index += 1) {
+			seed = Math.imul(seed ^ (seed >>> 16), 0x45d9f3b);
+			bytes[index] = seed & 0xff;
+		}
+	}
+	let timestamp = now.getTime();
+	for (let index = 5; index >= 0; index -= 1) {
+		bytes[index] = timestamp & 0xff;
+		timestamp = Math.floor(timestamp / 256);
+	}
+	bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x70;
+	bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+	const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+	return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
 }
 
 function sameAudioClientConfig(

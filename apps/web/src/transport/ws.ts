@@ -1,5 +1,8 @@
 import {
 	type AudioSegmentMetadata,
+	type BookingConflictResolution,
+	type BookingFormDetails,
+	type BookingRevisionConfirmation,
 	type ClientWsEvent,
 	ClientWsEventSchema,
 	CONTRACT_VERSION,
@@ -73,6 +76,7 @@ export class VoiceTransport {
 	private clientSequence = 0;
 	private textSequence = 0;
 	private textSubmissionPending = false;
+	private bookingRequestId: string | null = null;
 	private lastServerSequence = 0;
 	private pendingSegment: PendingServerSegment | null = null;
 	private readonly incompleteAudioSequences = new Set<number>();
@@ -146,7 +150,7 @@ export class VoiceTransport {
 
 	/** Begin a fresh local utterance after the prior final transcript. */
 	beginUtterance(): boolean {
-		if (this.utteranceCommitted) return false;
+		if (this.utteranceCommitted || this.bookingRequestId !== null) return false;
 		this.utteranceHasAudio = false;
 		this.utteranceNeedsRestart = false;
 		return true;
@@ -157,6 +161,7 @@ export class VoiceTransport {
 			!this.canSend() ||
 			this.muted ||
 			this.utteranceCommitted ||
+			this.bookingRequestId !== null ||
 			this.utteranceNeedsRestart ||
 			!(pcm16 instanceof Uint8Array) ||
 			pcm16.byteLength === 0 ||
@@ -182,7 +187,8 @@ export class VoiceTransport {
 			!this.canSend() ||
 			!this.utteranceHasAudio ||
 			this.utteranceCommitted ||
-			this.textSubmissionPending
+			this.textSubmissionPending ||
+			this.bookingRequestId !== null
 		) {
 			return false;
 		}
@@ -196,7 +202,8 @@ export class VoiceTransport {
 		if (
 			!this.canSend() ||
 			this.utteranceCommitted ||
-			this.textSubmissionPending
+			this.textSubmissionPending ||
+			this.bookingRequestId !== null
 		) {
 			return false;
 		}
@@ -212,6 +219,18 @@ export class VoiceTransport {
 		this.utteranceHasAudio = false;
 		this.utteranceNeedsRestart = false;
 		return true;
+	}
+
+	submitBookingForm(payload: BookingFormDetails): boolean {
+		return this.sendBookingCommand("booking.form.submit", payload);
+	}
+
+	confirmBookingRevision(payload: BookingRevisionConfirmation): boolean {
+		return this.sendBookingCommand("booking.draft.confirm", payload);
+	}
+
+	resolveBookingConflict(payload: BookingConflictResolution): boolean {
+		return this.sendBookingCommand("booking.conflict.resolve", payload);
 	}
 
 	playbackStarted(generationId: string): boolean {
@@ -238,6 +257,11 @@ export class VoiceTransport {
 		this.muted = muted;
 	}
 
+	/** Called only after the session accepts a matching durable meeting projection. */
+	settleBookingRequest(): void {
+		this.bookingRequestId = null;
+	}
+
 	/** Keep the socket readable for terminal fallback text; only session.stop may send. */
 	disableReconnect(): void {
 		if (this.stopped) return;
@@ -262,6 +286,7 @@ export class VoiceTransport {
 		this.outboundDisabled = true;
 		this.terminalFallbackOnly = false;
 		this.sessionReady = false;
+		this.bookingRequestId = null;
 		this.pendingSegment = null;
 		this.incompleteAudioSequences.clear();
 		this.cancelReconnect();
@@ -342,6 +367,8 @@ export class VoiceTransport {
 		if (event.type === "session.ready") {
 			this.resumeToken = event.payload.resumeToken;
 			this.sessionReady = true;
+			// Keep an in-flight request fenced across reconnect. The session settles
+			// it only after accepting a matching durable meeting projection.
 			this.reconnectAttempt = 0;
 			this.options.onStatus?.("ready");
 		}
@@ -357,6 +384,18 @@ export class VoiceTransport {
 		if (event.type === "error" && this.textSubmissionPending) {
 			// A rejected sequence is retried with the same number.
 			this.textSubmissionPending = false;
+		}
+		if (
+			event.type === "booking.draft.updated" &&
+			event.payload.requestId === this.bookingRequestId
+		) {
+			this.bookingRequestId = null;
+		}
+		if (
+			event.type === "booking.form.rejected" &&
+			event.payload.requestId === this.bookingRequestId
+		) {
+			this.bookingRequestId = null;
 		}
 		this.options.onEvent?.(event);
 	}
@@ -414,9 +453,15 @@ export class VoiceTransport {
 		) {
 			return false;
 		}
+		const bookingCommand =
+			type === "booking.form.submit" ||
+			type === "booking.draft.confirm" ||
+			type === "booking.conflict.resolve";
 		const candidate = {
 			v: CONTRACT_VERSION,
-			conversationId: this.options.conversationId,
+			...(bookingCommand
+				? {}
+				: { conversationId: this.options.conversationId }),
 			at: this.nowIso(),
 			type,
 			payload,
@@ -433,6 +478,33 @@ export class VoiceTransport {
 			this.reportProtocolError(toError(error, `Failed to send ${type}`));
 			return false;
 		}
+	}
+
+	private sendBookingCommand(
+		type:
+			| "booking.form.submit"
+			| "booking.draft.confirm"
+			| "booking.conflict.resolve",
+		payload:
+			| BookingFormDetails
+			| BookingRevisionConfirmation
+			| BookingConflictResolution,
+	): boolean {
+		if (
+			!this.canSend() ||
+			this.bookingRequestId !== null ||
+			this.textSubmissionPending ||
+			this.utteranceCommitted
+		) {
+			return false;
+		}
+		if (!this.sendClientEvent(type, payload as Record<string, unknown>)) {
+			return false;
+		}
+		this.bookingRequestId = payload.requestId;
+		this.utteranceHasAudio = false;
+		this.utteranceNeedsRestart = false;
+		return true;
 	}
 
 	private canSend(): boolean {

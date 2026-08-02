@@ -16,6 +16,11 @@ import {
 	PhrasePlaybackQueue,
 	type PlaybackSourceLike,
 } from "../audio/playback";
+import {
+	createBrowserBookingDraft,
+	createInternalMeeting,
+	RC4_IDS,
+} from "../testFixtures/rc4";
 import type { ReconnectScheduler, WebSocketLike } from "./ws";
 import { VoiceTransport } from "./ws";
 
@@ -265,6 +270,143 @@ describe("voice WebSocket transport", () => {
 			payload: { sequence: 1, text: "Следующая" },
 		});
 		expect(transport.submitText(" ")).toBe(false);
+	});
+
+	test("sends strict booking commands without client authority and fences duplicate/audio/text commits", () => {
+		const socket = new FakeSocket();
+		const transport = new VoiceTransport({
+			conversationId,
+			url: "ws://local",
+			createWebSocket: () => socket,
+			now: () => new Date(at),
+		});
+		transport.connect();
+		socket.open();
+		socket.serverJson(sessionReady());
+		transport.beginUtterance();
+		expect(transport.sendPcmFrame(new Uint8Array([0, 0]))).toBe(true);
+		const detailsRequest = "01J00000000000000000000020";
+		expect(
+			transport.submitBookingForm({
+				requestId: detailsRequest,
+				baseRevision: 1,
+				details: { name: "Анна", phone: null },
+				selectedCandidateId: RC4_IDS.candidateOne,
+			}),
+		).toBe(true);
+		expect(
+			transport.submitBookingForm({
+				requestId: "01J00000000000000000000021",
+				baseRevision: 1,
+				details: { company: "Дубликат" },
+			}),
+		).toBe(false);
+		expect(transport.commit()).toBe(false);
+		expect(transport.submitText("Не должно уйти")).toBe(false);
+		const submit = sentJson(socket).at(-1);
+		expect(submit).toEqual({
+			v: 1,
+			at,
+			type: "booking.form.submit",
+			payload: {
+				requestId: detailsRequest,
+				baseRevision: 1,
+				details: { name: "Анна", phone: null },
+				selectedCandidateId: RC4_IDS.candidateOne,
+			},
+		});
+		expect(submit).not.toHaveProperty("conversationId");
+		expect(JSON.stringify(submit)).not.toMatch(
+			/consent|status|bookingId|meetingSlot/u,
+		);
+
+		socket.serverJson({
+			v: 1,
+			conversationId,
+			seq: 2,
+			at,
+			type: "booking.draft.updated",
+			payload: {
+				requestId: detailsRequest,
+				bookingDraft: createBrowserBookingDraft(2),
+			},
+		});
+		const confirmRequest = "01J00000000000000000000022";
+		expect(
+			transport.confirmBookingRevision({
+				requestId: confirmRequest,
+				revision: 2,
+			}),
+		).toBe(true);
+		expect(
+			transport.confirmBookingRevision({
+				requestId: "01J00000000000000000000023",
+				revision: 2,
+			}),
+		).toBe(false);
+		expect(sentJson(socket).at(-1)).toEqual({
+			v: 1,
+			at,
+			type: "booking.draft.confirm",
+			payload: { requestId: confirmRequest, revision: 2 },
+		});
+		socket.serverJson({
+			v: 1,
+			conversationId,
+			seq: 3,
+			at,
+			type: "booking.form.rejected",
+			payload: {
+				requestId: confirmRequest,
+				currentRevision: 2,
+				error: { code: "CONFLICT_REQUIRES_RESOLUTION", retryable: true },
+			},
+		});
+		const conflictRequest = "01J00000000000000000000024";
+		expect(
+			transport.resolveBookingConflict({
+				requestId: conflictRequest,
+				baseRevision: 2,
+				field: "name",
+				conflictOptionId: RC4_IDS.optionOne,
+			}),
+		).toBe(true);
+		expect(sentJson(socket).at(-1)).toEqual({
+			v: 1,
+			at,
+			type: "booking.conflict.resolve",
+			payload: {
+				requestId: conflictRequest,
+				baseRevision: 2,
+				field: "name",
+				conflictOptionId: RC4_IDS.optionOne,
+			},
+		});
+		socket.serverJson({
+			v: 1,
+			conversationId,
+			seq: 4,
+			at,
+			type: "internal.meeting.updated",
+			payload: { meeting: createInternalMeeting() },
+		});
+		expect(
+			transport.resolveBookingConflict({
+				requestId: "01J00000000000000000000025",
+				baseRevision: 2,
+				field: "name",
+				conflictOptionId: RC4_IDS.optionTwo,
+			}),
+		).toBe(false);
+		transport.settleBookingRequest();
+		expect(
+			transport.resolveBookingConflict({
+				requestId: "01J00000000000000000000026",
+				baseRevision: 2,
+				field: "name",
+				conflictOptionId: RC4_IDS.optionTwo,
+			}),
+		).toBe(true);
 	});
 
 	test("pairs complete MP3 metadata with exactly the next shared binary frame", () => {

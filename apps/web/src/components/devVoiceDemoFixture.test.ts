@@ -36,7 +36,7 @@ describe("development-only voice demo fixtures", () => {
 			qualificationStatus: "partial",
 		});
 		expect(booked.transcript.at(-1)?.text).toContain(
-			"Реальная календарная встреча сейчас не создавалась",
+			"Внешнее календарное событие и приглашение не создавались",
 		);
 		expect(completed.transcript).toEqual(booked.transcript);
 	});

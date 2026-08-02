@@ -10,6 +10,9 @@
 
 ## 2. Поведенческие правила P0
 
+- до consent отдельный static greeting один раз пытается произнести фиксированный product copy; это не conversation turn и не запуск session;
+- при autoplay block/error показывать `Включить приветствие`, не заявляя, что звук прозвучал;
+- session start останавливает static greeting до REST/WS/mic/provider flow;
 - представиться как AI-продавец Botamin;
 - не маскироваться под человека;
 - одна реплика обычно 1–3 коротких предложения;
@@ -24,9 +27,16 @@
 - контакт повторять для подтверждения только при низкой уверенности STT;
 - печатный и голосовой final input равнозначны по смыслу и проходят один state/tool flow;
 - booking confirmation произносить только после committed tool success;
-- qualification начинается только после confirmation и отдельного согласия и содержит максимум два целевых вопроса.
+- после confirmation задать точно `Можно задать два коротких вопроса?` и не считать booking action envelope согласием;
+- qualification начинается только после отдельного явного согласия: server спрашивает leads, затем manager count, по одному; completion только при обоих.
 
 ## 3. Conversation policy по stages
+
+### PRE-CONSENT STATIC GREETING
+
+На entry browser немедленно и ровно один раз пытается проиграть committed same-origin `/assets/botamin-proactive-greeting.mp3` с фиксированным product copy. До consent этот controller не имеет conversation REST/WS, microphone, provider или session capabilities. `NotAllowedError`/media error раскрывает только user-action fallback `Включить приветствие`; начало real session останавливает и освобождает MP3.
+
+Asset не содержит visitor data: администратор отдельно и явно запускает opt-in OpenRouter generation script для фиксированного текста, проверяет MP3 и commit-ит результат. Runtime visitor не инициирует генерацию.
 
 ### GREETING
 
@@ -67,7 +77,9 @@
 
 ### COLLECT_BOOKING
 
-После согласия назвать ровно два `schedulingContext.candidateMeetingSlots` по их server-generated `displayLabel`. Не вычислять и не переформатировать дату, день недели, время или доступность.
+После согласия назвать ровно два `schedulingContext.candidateMeetingSlots` по их server-generated `displayLabel`. Это две текущие внутренние альтернативы, а не вся глобальная доступность. Не вычислять и не переформатировать дату, день недели, время или доступность.
+
+Без предпочтения server даёт один morning и один evening candidate. Явная typed/spoken русская формулировка про утро, день, вторую половину дня или вечер обновляет context и даёт два in-band варианта примерно в часе друг от друга; при занятости server переносит пару на следующий подходящий будний день. Явный отказ от части дня исключает эту часть. Все варианты: 20 минут, будни, не сегодня, starts 09:00–17:00 по Москве.
 
 Обязательный набор:
 
@@ -84,13 +96,18 @@
 
 После `create_booking`:
 
-> Внутренняя бронь на выбранное время зафиксирована. Внешнее календарное событие или приглашение не создавалось; коллега сможет связаться по сохранённому контакту. Можно задать ещё два необязательных вопроса?
+> Всё получила и зафиксировала. Календарная встреча пока не создана: коллега свяжется по указанному контакту. Можно задать два коротких вопроса?
 
-Формулировку про отсутствие календаря можно сделать менее технической в production copy, но нельзя утверждать обратное.
+Последнее предложение — точный consent-вопрос current server contract. Формулировку про отсутствие календаря можно сделать менее технической только вместе с изменением server-authored contract/tests; нельзя утверждать, что external event уже создан.
 
 ### POST_BOOKING_QUALIFICATION
 
-Только после committed booking, user-facing confirmation и отдельного явного consent спросить по одному: месячный объём входящих лидов (`monthlyLeadVolume`) и целое число менеджеров продаж (`salesManagerCount`). Оба поля необязательны; после содержательного ответа допустим partial patch. Другие поля расширенной legacy schema не входят в текущий conversational flow.
+Только после committed booking, user-facing confirmation и точного consent-вопроса `Можно задать два коротких вопроса?` отдельное явное согласие открывает qualification. Server, а не модель, детерминированно задаёт по одному:
+
+1. `Сколько входящих лидов приходит за месяц?` → `monthlyLeadVolume`;
+2. `Сколько менеджеров по продажам работает в вашей команде?` → integer `salesManagerCount`.
+
+В обычном ходе второй вопрос появляется только после первого ответа. Если пользователь сразу сообщает оба значения, сохранить оба и завершить. `complete` разрешён только при обоих полях; отказ без ответов даёт `skipped`, после одного — сохраняет `partial`. Оба поля необязательны для уже committed booking, которая всегда остаётся `booked`. Другие поля расширенной legacy schema не входят в текущий conversational flow.
 
 ### COMPLETE
 
@@ -128,6 +145,8 @@
     "currentInstant": "2026-08-02T08:00:00.000Z",
     "moscowLocalDate": "2026-08-02",
     "moscowWeekday": "воскресенье",
+    "timeOfDayPreference": "none",
+    "rejectedTimeOfDayPreferences": [],
     "candidateMeetingSlots": [
       {
         "meetingSlot": {
@@ -140,12 +159,12 @@
       },
       {
         "meetingSlot": {
-          "startAt": "2026-08-03T06:20:00.000Z",
-          "endAt": "2026-08-03T06:40:00.000Z",
+          "startAt": "2026-08-03T13:00:00.000Z",
+          "endAt": "2026-08-03T13:20:00.000Z",
           "timeZone": "Europe/Moscow",
           "durationMinutes": 20
         },
-        "displayLabel": "03 августа 2026 года, понедельник, 09:20–09:40 по Москве"
+        "displayLabel": "03 августа 2026 года, понедельник, 16:00–16:20 по Москве"
       }
     ]
   },
@@ -185,7 +204,7 @@ Prompt compiler:
 - собирает `/app/runtime-brain/AGENTS.md` — основной instruction source для Codex thread;
 - при необходимости копирует туда только разрешённые read-only knowledge-файлы; исходный repository туда не монтируется;
 - при `thread/start` проверяет, что `instructionSources` содержит ожидаемый `AGENTS.md`;
-- перед каждым `turn/start` добавляет compact machine-generated context envelope: stage, known facts, booking snapshot, server-owned current Moscow date/day, ровно два structured/labeled candidates, allowed actions и финальный текст пользователя независимо от typed/spoken origin;
+- перед каждым `turn/start` одинаково разбирает typed/spoken preference/rejection и добавляет compact machine-generated context envelope: stage, known facts, booking snapshot, server-owned current Moscow date/day, preference state, ровно два structured/labeled current candidates, allowed actions и финальный текст пользователя;
 - логирует только version/hash, не весь prompt;
 - поддерживает hot reload только в development: новый prompt version применяется к новым conversations, а активные сохраняют исходную версию.
 
@@ -214,11 +233,11 @@ LLM вызывает только когда:
 - выбран один из ровно двух candidates активного server context;
 - consent подтверждён server-side.
 
-Backend сверяет выбранный `meetingSlot` с обоими active candidates и отклоняет любой non-candidate/stale/occupied slot. Это внутренняя 20-minute бронь без external calendar event, invitation или availability API.
+Backend сверяет выбранный `meetingSlot` с обоими active candidates и отклоняет любой non-candidate/stale/occupied slot. Tuple не означает exhaustive availability: preference/rejection refresh заменяет обе текущие альтернативы. Это внутренняя 20-minute бронь без external calendar event, invitation или availability API.
 
 ### `append_booking_qualification`
 
-LLM вызывает только после committed `bookingId`, user-facing confirmation и отдельного qualification consent. Текущий flow патчит только `monthlyLeadVolume` и integer `salesManagerCount`; patch может быть частичным.
+LLM вызывает только после committed `bookingId`, user-facing confirmation и отдельного explicit qualification consent. Server задаёт monthly leads первым и manager count вторым, а status выводит из фактически сохранённых полей, не из заявления модели: one=`partial`, both=`complete`; empty refusal=`skipped`. Текущий flow патчит только `monthlyLeadVolume` и integer `salesManagerCount`; оба значения одной репликой разрешены.
 
 Backend возвращает safe result:
 
@@ -274,8 +293,8 @@ Backend возвращает safe result:
 6. Агент: называет ровно два server-supplied Moscow candidates.
 7. Пользователь: typed form/репликой даёт имя, компанию, рабочий email, Telegram и выбирает первый slot; consent уже подтверждён server context.
 8. Backend: валидирует candidate и commit-ит `booking.created` без внешнего календарного события.
-9. Агент: подтверждает внутреннюю бронь; просит разрешение максимум на два доп. вопроса.
-10. Пользователь: соглашается и сообщает месячный объём входящих лидов и целое число менеджеров продаж.
+9. Server-authored confirmation: подтверждает внутреннюю бронь и точно спрашивает `Можно задать два коротких вопроса?`.
+10. Пользователь: явно соглашается; server задаёт вопрос про месячный объём входящих лидов. Пользователь может сразу сообщить и целое число менеджеров продаж, тогда оба поля сохраняются за один turn.
 11. Backend: `booking.updated`.
 12. Агент: кратко суммирует и завершает.
 

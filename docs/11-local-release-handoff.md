@@ -1,26 +1,35 @@
 # 11. Local release candidate and handoff
 
-**Release label:** `0.5.0-local-rc.2`
+**Release label:** `0.5.0-local-rc.3`
 
-**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.2`
+**Recommended Git tag after owner acceptance:** `v0.5.0-local-rc.3`
 
 **Tag state:** recommendation only until the validated candidate is merged.
 
 **Scope:** local hosting on one trusted machine. This is not a target-VPS or public TLS release.
 
-## Local P0 checklist
+## RC3 scope
 
-- [x] The candidate extends the merged PR #24 baseline with the 60-second capture, typed conversation, scheduled booking, qualification, prompt, migration-compatibility, and refusal slices.
-- [x] Fresh deterministic release-candidate suite passed 484 tests across 56 files with 0 failures and 4,104 assertions.
-- [x] Typecheck, lint/format, build, deterministic spec/eval generation, validator, and the regenerated manifest/checksum set passed.
-- [x] The committed [T30 owner-observed artifact](../evidence/T30-observed-local-voice-smoke-2026-07-31.md) retains the earlier five-turn booking evidence; a fresh bounded candidate smoke completed one OpenRouter STT → Luna → OpenRouter TTS turn with decoder-accepted MP3 and no booking.
-- [x] `scripts/deploy-local.sh` completed from the candidate tree with mode-`0600` materialized files mounted read-only; migration, app/Caddy health, 60-second/2 MB runtime limits, and all dependency readiness checks passed.
-- [x] Chrome accepted the strict-CSP worklet, countdown, typed refusal and 780/390 px overflow checks; Firefox headless rendered the 390 px page without CSP/runtime errors.
-- [x] The local URL, file-backed secret workflow, device auth, readiness, metrics, recovery, and paid opt-in boundaries are documented below.
+- committed product-owned same-origin proactive MP3 attempts playback once immediately on entry, with no conversation REST/WS/mic/provider/session before consent; blocked/error fallback is `Включить приветствие`, and real session start stops it;
+- explicit admin-only opt-in OpenRouter script generates the fixed no-visitor-data asset before commit; visitor runtime never synthesizes it;
+- server always offers exactly two current internal Moscow candidates: default morning+evening, contextual typed/spoken Russian preference/rejection refresh, selected in-band roughly hour-apart pair with weekday rollover, and no exhaustive global-availability claim;
+- after committed booking and confirmation, exact consent question `Можно задать два коротких вопроса?` gates deterministic monthly-leads-then-manager-count collection; both-at-once, skipped, and partial outcomes preserve booking.
+
+## Local P0 candidate checklist
+
+Fresh RC3 local evidence is recorded in [`../VALIDATION.md`](../VALIDATION.md); RC2 observations were not reused as proof.
+
+- [x] Credential-free suite passed 510 tests across 58 files with 4,265 assertions and no failures.
+- [x] Typecheck, lint/format, production build, deterministic eval/spec generation, validator, and `git diff --check` passed.
+- [x] Chrome exercised proactive greeting success and fallback, zero pre-consent conversation calls, session-start cleanup, responsive layouts, and a real contextual evening request. Gateway/orchestrator tests cover typed/spoken preferences and qualification skipped/partial/complete. Firefox headless rendered 390×844 without CSP/runtime errors.
+- [x] `scripts/deploy-local.sh` completed from the RC3 tree; migration, app/Caddy health/readiness, 60-second/2 MB limits, and file-secret boundaries passed.
+- [x] Explicit paid checks passed: static OpenRouter TTS greeting generation, one typed Luna/TTS evening-slot turn, and one OpenRouter STT → Luna → OpenRouter TTS smoke with two decoder-accepted MP3 segments.
+- [x] Fresh protected backup and deterministic restore/rollback tests passed; RC2 remains the rollback tag shown below.
+- [x] Final evidence was recorded in `VALIDATION.md`; `MANIFEST.txt` and `CHECKSUMS.sha256` were regenerated separately.
 - [ ] WebKit playback and complete journey acceptance — later gate, unobserved.
 - [ ] Target VPS deploy, DNS, TLS/WSS, and target-host paid smokes — later gate, unobserved.
 
-The checked runtime/browser lines are observed handoff evidence, not claims that this T40 documentation pass repeated provider spending or cross-browser testing. Fresh credential-free checks for the release commit are recorded in [`VALIDATION.md`](../VALIDATION.md).
+The committed [T30 owner-observed artifact](../evidence/T30-observed-local-voice-smoke-2026-07-31.md) remains historical evidence only; it does not close RC3 acceptance.
 
 ## Prerequisites and secure bootstrap
 
@@ -59,7 +68,14 @@ Caddy/public access to `/metrics` is denied. Readiness is dependency-aware and m
 
 ## Paid smokes: explicit opt-in only
 
-Deployment, tests, health checks, and this release procedure do not call paid providers. Against an already-ready local server, an owner may deliberately run the integrated smoke; it spends OpenRouter STT/TTS and Codex subscription usage:
+Deployment, tests, health checks, and this release procedure do not call paid providers. The proactive asset is regenerated only by an administrator's explicit paid opt-in; this command overwrites the tracked static MP3 from fixed product copy, never visitor data, so inspect the result before committing:
+
+```bash
+BOTAMIN_GENERATE_PROACTIVE_GREETING=1 \
+  bun run scripts/generate-proactive-greeting.ts
+```
+
+This is not a deploy/startup/visitor command. Against an already-ready local server, an owner may deliberately run the integrated smoke; it spends OpenRouter STT/TTS and Codex subscription usage:
 
 ```bash
 BOTAMIN_EXTERNAL_VOICE_E2E=1 bun run scripts/local-voice-e2e-smoke.ts \
@@ -92,8 +108,9 @@ docker compose stop
 # Remove containers/network while retaining named volumes
 docker compose down
 
-# Roll back to an existing/pullable immutable image, optionally with its DB backup
-PREVIOUS_IMAGE=botamin-voice:0.5.0-local-rc.1-previoussha
+# Keep RC2 as the existing/pullable immutable rollback image for RC3.
+# Use the exact immutable registry reference/digest retained by the owner if available.
+PREVIOUS_IMAGE=botamin-voice:0.5.0-local-rc.2
 ./scripts/rollback.sh "$PREVIOUS_IMAGE"
 ./scripts/rollback.sh "$PREVIOUS_IMAGE" /data/backups/before-release.db
 ```
@@ -108,5 +125,7 @@ For OpenRouter/webhook key rotation: revoke or schedule revocation at the provid
 - T30 local synthetic timings prove functional sequencing only; they are not a benchmark or target-host SLO.
 - WebKit complete-MP3 playback and journey acceptance remain unobserved.
 - Target VPS resource behavior, DNS, public TLS/WSS, and target-host provider smokes remain unobserved.
-- The booking is an internal SQLite record plus notifier outbox event. The internal scheduler excludes committed starts, but no real calendar event, external availability check, CRM record, or meeting invitation is created.
+- The proactive greeting is a committed static product MP3. Browser autoplay remains policy-dependent; failure must leave the explicit `Включить приветствие` control. Regeneration is paid/admin-only and not a visitor-runtime action.
+- The booking is an internal SQLite record plus notifier outbox event. The scheduler always returns two current alternatives, not all global availability; it excludes committed starts, but no real calendar event, external availability check, CRM record, or meeting invitation is created.
+- Optional qualification is complete only with both monthly inbound leads and integer sales-manager count. Skip/partial/failure never removes the booking.
 - OpenRouter model/voice availability, paid rates, Codex subscription limits, and plan suitability are runtime/owner checks, not release guarantees.

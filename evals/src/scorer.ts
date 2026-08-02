@@ -637,8 +637,7 @@ function allOutputEvents(events: EvalEvent[]): EvalEvent[] {
 const SEMANTIC_TEXT: Partial<Record<string, RegExp>> = {
 	booking_confirmation:
 		/(?:данн|контакт|брон|запрос)[^.!?]{0,80}(?:сохран|зафиксир)|(?:сохран|зафиксир)[^.!?]{0,80}(?:данн|контакт|брон|запрос)/iu,
-	qualification_consent_request:
-		/(?:можно|разрешите|согласны)[^.!?]{0,60}(?:необязательн[^.!?]{0,20})?(?:вопрос|уточн)/iu,
+	qualification_consent_request: /можно\s+задать\s+два\s+коротких\s+вопроса/iu,
 	qualification_consent_granted:
 		/^\s*(?:да|можно|конечно|согласен|согласна|хорошо)(?=\s|[,.!?]|$)[^.!?]{0,60}(?:вопрос|можно|зада)/iu,
 	qualification_consent_declined:

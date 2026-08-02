@@ -12,7 +12,9 @@
 - **Bun gateway/utterance assembler** — единственный владелец utterance buffers, PCM16 bounds и PCM16-to-WAV encoding;
 - **Bun backend** — владелец state, tools, credentials, voice budgets и persistence.
 
-Действующий pipeline: **browser PCM16 chunks → gateway/utterance assembler bounds mono PCM16 and emits one validated WAV → atomic `audio/wav` SttPort request → OpenRouter audio-input chat completion final transcript → Codex/Luna → OpenRouter TTS complete MP3 segment**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint.
+До этого pipeline существует отдельный pre-consent path: page entry делает одну `HTMLAudio` playback attempt committed same-origin `/assets/botamin-proactive-greeting.mp3`. Он не создаёт conversation, REST/WS, microphone, provider call или session; blocked/error переводит UI к `Включить приветствие`, а session start останавливает/release-ит audio.
+
+Действующий post-consent pipeline: **browser PCM16 chunks → gateway/utterance assembler bounds mono PCM16 and emits one validated WAV → atomic `audio/wav` SttPort request → OpenRouter audio-input chat completion final transcript → Codex/Luna → OpenRouter TTS complete MP3 segment**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint. Static proactive MP3 не входит в этот runtime pipeline.
 
 Это отличается от end-to-end speech-to-speech: добавляется один orchestration layer, зато используется уже оплаченная Codex subscription и мозг можно заменить без переделки audio UI.
 
@@ -22,7 +24,9 @@
 
 Ответственность:
 
-- mic permission;
+- ровно одна immediate entry attempt fixed same-origin proactive MP3 без session/network capabilities кроме same-origin asset fetch;
+- truthful `Включить приветствие` fallback после autoplay block/media error и release greeting при session start;
+- mic permission только после обоих consents;
 - AudioWorklet capture;
 - resample browser audio до mono PCM16 16 kHz;
 - отправка бинарных PCM16 чанков около 100 ms;
@@ -36,7 +40,7 @@
 - rendering transcript/state/errors;
 - reconnect с тем же `conversationId`, если сессия ещё жива.
 
-Клиент не знает OpenRouter или Codex credentials и не вызывает providers напрямую.
+Клиент не знает OpenRouter или Codex credentials и не вызывает providers напрямую. До consent он также не вызывает conversation REST/WS и не запрашивает microphone; static asset delivery не является provider/session traffic.
 
 ### Bun API / WebSocket gateway
 
@@ -58,7 +62,8 @@
 Источник истины для:
 
 - текущего stage;
-- server-owned current Moscow date/day и ровно двух structured/labeled internal meeting candidates;
+- server-owned current Moscow date/day, bounded typed/spoken Russian time-of-day preference/rejection и ровно двух structured/labeled internal meeting candidates;
+- refresh candidate context при выборе `morning`/`daytime`/`second_half`/`evening` или explicit rejection;
 - разрешённых actions, включая rejection любого create-booking slot вне active candidate tuple;
 - qualification gating по committed booking, delivered confirmation и отдельному consent;
 - booking lifecycle;
@@ -116,11 +121,15 @@ P0 transport — direct typed JSON-RPC к app-server. Универсальный
 ### BookingService
 
 - генерирует ровно два deterministic internal 20-minute candidates после текущей московской даты, только по будням и по 20-minute grid с 09:00 до 17:00 starts;
-- исключает уже committed internal start times без external calendar/availability API;
+- без preference выбирает одну утреннюю и одну вечернюю альтернативу;
+- для selected `morning`/`daytime`/`second_half`/`evening` выбирает две in-band точки примерно в часе друг от друга; если occupied starts не оставляют такую пару, ищет ближайшую допустимую пару и при необходимости переносит обе на следующий будний день;
+- для одного explicit rejection исключает rejected band и формирует две альтернативы из оставшихся policy bands;
+- исключает уже committed internal start times без external calendar/availability API и никогда не представляет tuple как exhaustive/global availability;
 - валидирует name, company, working email, phone or Telegram, consent и structured `Europe/Moscow` slot;
 - повторно проверяет slot по текущему server clock и отклоняет stale/non-bookable или internally occupied start до side effect; active-candidate membership до вызова сервиса проверяет orchestrator/tool policy;
 - создаёт/находит booking в одной `BEGIN IMMEDIATE` transaction;
 - обновляет qualification patch для существующей committed booking; confirmation/consent gating до вызова сервиса принадлежит orchestrator/tool policy;
+- вычисляет qualification truth из сохранённых полей: zero+refusal=`skipped`, one=`partial`, both=`complete`; booking status остаётся `booked`;
 - пишет event outbox;
 - никогда не удаляет booking из-за incomplete qualification.
 
@@ -140,13 +149,21 @@ P0 adapter — structured console JSON. P1 — signed HTTP webhook с retry/outb
 
 ![Turn sequence](../diagrams/02-turn-sequence.svg)
 
-### Порядок
+### Pre-session entry
+
+1. Browser монтирует greeting controller и немедленно ровно один раз вызывает playback фиксированного same-origin MP3.
+2. Autoplay block или media error не запускает alternate network/provider path: UI показывает `Включить приветствие`, и повтор возможен только по user action.
+3. До обоих consents не создаются conversation/WS/microphone/provider/session. При старте настоящей session greeting немедленно pause/reset/release.
+
+Asset создаётся отдельно от visitor runtime: admin явно запускает opt-in `scripts/generate-proactive-greeting.ts`, script синтезирует фиксированный product copy через OpenRouter, валидирует bounded complete MP3 и заменяет committed asset. В asset нет visitor input/data; обычный entry никогда его не генерирует.
+
+### Post-consent turn order
 
 1. Browser отправляет примерно 100 ms PCM16 chunks; gateway/utterance assembler собирает их в bounded utterance.
 2. End-of-turn / `audio.commit` закрывает реплику. Gateway/utterance assembler проверяет duration/bytes, создаёт и валидирует ровно один mono PCM16 WAV.
 3. Gateway передаёт WAV атомарному `SttPort`; OpenRouter STT adapter повторно валидирует/bounds already-WAV request, base64-кодирует его и отправляет один `input_audio` chat completion.
 4. Только валидный неустаревший final transcript становится user turn и публикуется как `transcript.final`. Альтернативно, monotonic `visitor.text.submit` очищает uncommitted microphone bytes и создаёт такой же final turn без STT; до server `transcript.final` typed input не считается принятым.
-5. Orchestrator добавляет stage, known facts, booking status, server-owned current Moscow date/day и ровно два structured candidates с generated `displayLabel`; Codex thread получает `turn/start` ровно один раз независимо от typed/spoken origin.
+5. Orchestrator одинаково парсит typed/spoken final text на bounded Russian time-of-day preference/rejection, refresh-ит candidates, затем добавляет stage, known facts, booking status, server-owned current Moscow date/day, preference state и ровно два structured candidates с generated `displayLabel`; Codex thread получает `turn/start` ровно один раз независимо от input origin.
 6. Text deltas проходят PII-safe sanitizer и bounded phrase chunker.
 7. Законченная короткая фраза отправляется в OpenRouter TTS; один request соответствует одному segment.
 8. После проверки один полный `audio/mpeg` segment идёт в browser ordered playback queue.
@@ -194,6 +211,8 @@ export interface BrainTurnInput {
     currentInstant: string;
     moscowLocalDate: string;
     moscowWeekday: string;
+    timeOfDayPreference: "none" | "morning" | "daytime" | "second_half" | "evening";
+    rejectedTimeOfDayPreferences: Array<"morning" | "daytime" | "second_half" | "evening">; // max 1
     candidateMeetingSlots: [
       { meetingSlot: MeetingSlot; displayLabel: string },
       { meetingSlot: MeetingSlot; displayLabel: string }

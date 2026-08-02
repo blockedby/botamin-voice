@@ -272,13 +272,14 @@ describe("browser-to-production-runtime terminal ERROR cleanup", () => {
 					currentInstant: "2099-01-08T09:00:00.000Z",
 					moscowLocalDate: "2099-01-08",
 					moscowWeekday: "четверг",
+					timeOfDayPreference: "none",
 				},
 			});
 			expect(
 				brainInputs[0]?.schedulingContext.candidateMeetingSlots.map(
 					(candidate) => candidate.meetingSlot.startAt,
 				),
-			).toEqual(["2099-01-09T06:00:00.000Z", "2099-01-09T06:20:00.000Z"]);
+			).toEqual(["2099-01-09T06:00:00.000Z", "2099-01-09T13:00:00.000Z"]);
 
 			const replacement = await runtimeFetch("/api/v1/conversations", {
 				method: "POST",

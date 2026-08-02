@@ -33,16 +33,17 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 | ID | История | Приёмка |
 |---|---|---|
-| US-001 | Как посетитель, я запускаю разговор одной кнопкой | после двух consents запрашивается mic permission, UI показывает состояние |
+| US-000 | Как посетитель, я сразу слышу короткое представление продукта | при entry выполняется одна попытка committed same-origin MP3 без REST/WS/mic/provider/session; blocked/error даёт `Включить приветствие` |
+| US-001 | Как посетитель, я запускаю разговор одной кнопкой | proactive greeting останавливается; только после двух consents запрашивается mic permission и создаётся session, UI показывает состояние |
 | US-002 | Я говорю естественно по-русски | UI показывает sample-derived circular countdown во время capture, listening/processing, затем ровно один `transcript.final` |
 | US-003 | Я печатаю финальную реплику | stage-gated composer отправляет provider-neutral `visitor.text.submit`; server-accepted typed turn проходит тот же semantic pipeline, что и speech |
 | US-004 | Агент отвечает голосом и текстом | первая полная MP3-фраза может проиграться до завершения ответа Luna; ответ не содержит markdown-мусора |
 | US-005 | Агент понимает, зачем я пришёл | задаёт не более одного вопроса за раз и максимум два discovery-вопроса до мягкого предложения следующего шага |
 | US-006 | Агент объясняет Botamin на релевантном примере | использует только утверждённые knowledge claims; 10–15 млн ₽/месяц — только атрибутированное сообщение пользовательского брифа, не гарантия |
 | US-007 | Я могу возразить или перебить | проигрывание останавливается, новый turn обрабатывается |
-| US-008 | Я соглашаюсь на встречу | агент предлагает ровно два server-supplied слота, собирает обязательные данные и вызывает `create_booking` с выбранным кандидатом |
-| US-009 | После брони я могу ответить на два доп. вопроса | после confirmation и consent месячный inbound volume и integer `salesManagerCount` патчат ту же бронь |
-| US-010 | Я могу отказаться от квалификации | бронь остаётся `booked`, диалог корректно завершается |
+| US-008 | Я соглашаюсь на встречу | агент предлагает ровно два текущих server-supplied слота, не выдавая их за всю глобальную доступность; предпочтение части дня обновляет пару, после чего агент собирает обязательные данные и вызывает `create_booking` с выбранным кандидатом |
+| US-009 | После брони я могу ответить на два доп. вопроса | после commit, confirmation и точного вопроса `Можно задать два коротких вопроса?` explicit consent запускает monthly inbound volume, затем integer `salesManagerCount`; оба ответа одной репликой тоже допустимы |
+| US-010 | Я могу отказаться от квалификации | без ответов статус `skipped`, после одного ответа `partial`; бронь в обоих случаях остаётся `booked`, диалог корректно завершается |
 | US-011 | Получатель видит данные | console/webhook получает структурированный payload со слотом |
 | US-012 | Сервис перезапускается | сохранённые booking/event данные остаются в volume |
 | US-013 | Проект сначала разворачивается локально | `scripts/deploy-local.sh` поднимает готовые app + Caddy на `http://localhost:5173`; target VPS/TLS проверяется отдельным later gate |
@@ -78,31 +79,34 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-BRAIN-006:** system/product/conversation prompts загружаются из Markdown.
 - **FR-BRAIN-007:** tool mode имеет feature flag: `dynamic` и стабильный fallback `envelope`.
 - **FR-BRAIN-008:** reasoning effort задаётся конфигурацией; стартовый профиль Luna использует минимальный уровень, который проходит quality evals.
-- **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, а также ровно два structured meeting candidates с server-generated Russian `displayLabel`.
+- **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, parsed time-of-day preference/rejection и ровно два structured meeting candidates с server-generated Russian `displayLabel`.
 - **FR-BRAIN-010:** cadence умеренно проактивен: один вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting offer, без повторного давления после ясного отказа.
 
 ### 4.3 Booking
 
 - **FR-BOOK-001:** обязательны `conversationId`, имя, компания, рабочий email, телефон или Telegram, `consentConfirmed=true` и structured `meetingSlot`.
-- **FR-BOOK-002:** server выдаёт ровно два уникальных внутренних кандидата длительностью 20 минут в `Europe/Moscow`: будни, дата строго позже server-owned московского today, старты по 20-минутной сетке от 09:00 до 17:00 включительно.
-- **FR-BOOK-003:** `create_booking` разрешён только в `COLLECT_BOOKING`; выбранный `meetingSlot` обязан byte-for-field совпасть с одним из двух candidates активного turn. Non-candidate, stale, occupied или уже не bookable slot отклоняется.
-- **FR-BOOK-004:** `create_booking` атомарен и идемпотентен по `conversationId`/`idempotencyKey`; уникальны conversation и non-null internal `meeting_start_at`.
-- **FR-BOOK-005:** успешный tool всегда возвращает стабильный `bookingId`.
-- **FR-BOOK-006:** committed `booking.created` и user-facing confirmation предшествуют consent на qualification и первому qualification question.
-- **FR-BOOK-007:** backend сохраняет внутреннюю бронь и outbox event, но не создаёт внешнее calendar event/invitation, не вызывает external availability API и не создаёт CRM record.
-- **FR-BOOK-008:** in-chat form показывается только по server-owned `COLLECT_BOOKING`, валидирует name/company/working email/phone-or-Telegram и сериализует данные как обычную visitor typed turn; форма не вызывает tool и не подтверждает бронь.
+- **FR-BOOK-002:** server всегда выдаёт ровно два уникальных внутренних кандидата длительностью 20 минут в `Europe/Moscow`: будни, дата строго позже server-owned московского today, старты по 20-минутной сетке от 09:00 до 17:00 включительно. Без preference это одна утренняя и одна вечерняя альтернатива.
+- **FR-BOOK-003:** bounded Russian parser одинаково обрабатывает typed/spoken явные предпочтения `morning`, `daytime`, `second_half`, `evening` и одно явное rejection. Выбранная часть дня даёт два in-band варианта примерно в часе друг от друга; если пара занята, server ищет ближайшую in-band пару и при необходимости переносит предложение на следующий подходящий будний день. Rejection исключает отклонённую часть дня.
+- **FR-BOOK-004:** два candidates — только текущие внутренние альтернативы, не exhaustive/global availability claim. Они исключают committed internal starts без external availability API.
+- **FR-BOOK-005:** `create_booking` разрешён только в `COLLECT_BOOKING`; выбранный `meetingSlot` обязан byte-for-field совпасть с одним из двух candidates активного turn. Non-candidate, stale, occupied или уже не bookable slot отклоняется.
+- **FR-BOOK-006:** `create_booking` атомарен и идемпотентен по `conversationId`/`idempotencyKey`; уникальны conversation и non-null internal `meeting_start_at`.
+- **FR-BOOK-007:** успешный tool всегда возвращает стабильный `bookingId`.
+- **FR-BOOK-008:** committed `booking.created` и user-facing confirmation с точным consent-вопросом `Можно задать два коротких вопроса?` предшествуют consent на qualification и первому qualification question.
+- **FR-BOOK-009:** backend сохраняет внутреннюю бронь и outbox event, но не создаёт внешнее calendar event/invitation, не вызывает external availability API и не создаёт CRM record.
+- **FR-BOOK-010:** in-chat form показывается только по server-owned `COLLECT_BOOKING`, валидирует name/company/working email/phone-or-Telegram и сериализует данные как обычную visitor typed turn; форма не вызывает tool и не подтверждает бронь.
 
 ### 4.4 Post-booking qualification
 
 - **FR-QUAL-001:** запускается только при committed `booking.status=booked` и после user-facing booking confirmation.
 - **FR-QUAL-002:** пользователь отдельно и явно соглашается на дополнительные вопросы; booking action envelope того же turn не может выдать это согласие.
-- **FR-QUAL-003:** conversational collection ограничен двумя полями: `monthlyLeadVolume` только для месячного объёма входящих лидов и `salesManagerCount` как integer `0..10000`.
-- **FR-QUAL-004:** оба поля необязательны и могут сохраняться partial patch-операцией; остальные legacy schema fields не являются вопросами текущего flow.
-- **FR-QUAL-005:** disconnect/decline переводит qualification в `partial` или `skipped`, но booking остаётся `booked`.
+- **FR-QUAL-003:** server детерминированно спрашивает по одному: сначала месячный объём входящих лидов (`monthlyLeadVolume`), затем число менеджеров продаж (`salesManagerCount`) как integer `0..10000`. Модель не может изменить порядок или досрочно объявить completion.
+- **FR-QUAL-004:** оба поля необязательны для booking и могут сохраняться partial patch-операцией; qualification получает `complete` только при наличии обоих. Если пользователь сообщает оба одновременно, оба сохраняются и flow завершается. Остальные legacy schema fields не являются вопросами текущего flow.
+- **FR-QUAL-005:** explicit refusal без ответов даёт `skipped`; refusal после одного ответа сохраняет `partial`; disconnect/failure не отменяет committed booking, которая остаётся `booked`.
 - **FR-QUAL-006:** повторный patch идемпотентен.
 
 ### 4.5 Landing and UX
 
+- **FR-WEB-000:** при entry выполняется ровно одна automatic playback attempt committed product-owned same-origin MP3. До двух consents запрещены conversation REST, WS, mic, provider и session effects; blocked/error показывает native button `Включить приветствие`, а session start немедленно останавливает и освобождает audio.
 - **FR-WEB-001:** above-the-fold объясняет продукт и содержит один primary CTA.
 - **FR-WEB-002:** до запуска голоса показывается понятное объяснение микрофона и обработки данных.
 - **FR-WEB-003:** UI имеет состояния `idle`, `connecting`, `listening`, `thinking`, `speaking`, `booked`, `complete`, `error`.
@@ -110,6 +114,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-WEB-005:** booking details form существует внутри chat и видима только в `COLLECT_BOOKING`, полученном через server `state.changed`/`session.ready`, а не из transcript wording.
 - **FR-WEB-006:** mobile viewport поддерживается.
 - **FR-WEB-007:** при voice failure пользователю не показываются stack traces/provider details.
+- **FR-WEB-008:** proactive MP3 содержит только фиксированный product copy без visitor data. Его замена выполняется отдельным explicit admin opt-in OpenRouter generation script и commit-ится как static asset; runtime visit не генерирует greeting.
 
 ## 5. P1 и P2
 
@@ -187,4 +192,4 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 ## 9. Release sequencing boundary
 
-`0.5.0-local-rc.2` is accepted only for local hosting on a trusted owner machine. Chrome desktop/mobile and local Compose evidence can close local gates, but cannot close WebKit, target-VPS resource behavior, DNS, public TLS/WSS, or target-host paid-smoke gates. The internal booking remains deliberately different from a real calendar event.
+`0.5.0-local-rc.3` is a local-only candidate for one trusted owner machine. Candidate acceptance still requires the fresh steps in docs 08/11; prior RC2 observations are not evidence that RC3 browser, deploy, or provider gates ran. Local Chrome/Compose evidence, when freshly collected, cannot close WebKit, target-VPS resource behavior, DNS, public TLS/WSS, or target-host paid-smoke gates. The internal booking remains deliberately different from a real calendar event.

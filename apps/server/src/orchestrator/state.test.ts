@@ -224,9 +224,11 @@ describe("conversation transition policy", () => {
 			qualification: { salesManagerCount: 8 },
 			qualificationStatus: "partial" as const,
 		};
-		expect(
-			transition(state, { type: "qualification_updated", booking: updated }),
-		).toMatchObject({
+		const updatedResult = transition(state, {
+			type: "qualification_updated",
+			booking: updated,
+		});
+		expect(updatedResult).toMatchObject({
 			ok: true,
 			state: { booking: { qualificationStatus: "partial" } },
 		});
@@ -236,6 +238,25 @@ describe("conversation transition policy", () => {
 				booking: { ...updated, id: "01J00000000000000000000099" },
 			}),
 		).toMatchObject({ ok: false, code: "BOOKING_MISMATCH" });
+		expect(
+			transition(updatedResult.ok ? updatedResult.state : state, {
+				type: "qualification_completed",
+			}),
+		).toMatchObject({ ok: false, code: "INVALID_TRANSITION" });
+		const completeBooking = {
+			...booking,
+			qualification: {
+				monthlyLeadVolume: "около 240",
+				salesManagerCount: 8,
+			},
+			qualificationStatus: "complete" as const,
+		};
+		expect(
+			transition(
+				{ ...state, booking: completeBooking },
+				{ type: "qualification_completed" },
+			),
+		).toMatchObject({ ok: true, state: { stage: "COMPLETE" } });
 	});
 
 	test("provider failure changes status but never compensates a booking", () => {

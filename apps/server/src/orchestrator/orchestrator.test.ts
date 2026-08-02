@@ -6,6 +6,8 @@ import type {
 	BrainPort,
 	BrainTurnInput,
 	CreateBookingInput,
+	MeetingTimeBand,
+	MeetingTimePreference,
 	ProviderHealth,
 	SttHealth,
 	SttPort,
@@ -26,6 +28,7 @@ import {
 	FakeStt,
 	FakeTts,
 } from "../../../../packages/test-fixtures/src";
+import { generateCandidateMeetingSlots } from "../domain/booking";
 import {
 	ConversationOrchestrator,
 	type OrchestratorEvent,
@@ -151,6 +154,7 @@ function fixture(
 		bookings?: FakeBookingService;
 		tts?: TtsPort | null;
 		initialState?: ConversationState;
+		now?: () => Date;
 	} = {},
 ) {
 	const stt = options.stt ?? new FakeStt({ text: "Да, сохраните данные" });
@@ -165,6 +169,7 @@ function fixture(
 		bookings,
 		tts,
 		initialState: options.initialState ?? collectionState(),
+		...(options.now ? { now: options.now } : {}),
 	});
 	return { orchestrator, stt, brain, bookings, tts };
 }
@@ -446,6 +451,199 @@ describe("atomic transcript intake", () => {
 				code: "DB_UNAVAILABLE",
 			}),
 		);
+	});
+
+	test("typed and spoken positive preferences use the same server-owned proposal path", async () => {
+		const now = new Date("2025-01-09T09:00:00.000Z");
+		for (const [text, expected] of [
+			["сегодня в одиннадцать часов вечера", "evening"],
+			["во второй половине дня", "second_half"],
+		] as const) {
+			const requested: Array<{
+				preference: MeetingTimePreference;
+				rejected: readonly MeetingTimeBand[];
+			}> = [];
+			const candidateMeetingSlots = (
+				preference: MeetingTimePreference = "none",
+				rejected: readonly MeetingTimeBand[] = [],
+			) => {
+				requested.push({ preference, rejected });
+				return generateCandidateMeetingSlots(now, [], preference, rejected);
+			};
+			const typedBrain = new FakeBrain([]);
+			const typed = fixture({
+				brain: typedBrain,
+				bookings: new FakeBookingService({ candidateMeetingSlots }),
+				now: () => now,
+			});
+			await collect(
+				typed.orchestrator.acceptTextSubmit({
+					turnId: turn1,
+					generationId: generation1,
+					text,
+					knownFacts: facts,
+				}),
+			);
+
+			const spokenBrain = new FakeBrain([]);
+			const spoken = fixture({
+				brain: spokenBrain,
+				stt: new FakeStt({ text }),
+				bookings: new FakeBookingService({ candidateMeetingSlots }),
+				now: () => now,
+			});
+			await collect(spoken.orchestrator.acceptAudioCommit(commit()));
+
+			expect(requested).toEqual([
+				{ preference: expected, rejected: [] },
+				{ preference: expected, rejected: [] },
+			]);
+			expect(typedBrain.turns[0]?.schedulingContext).toEqual(
+				spokenBrain.turns[0]?.schedulingContext,
+			);
+			expect(typedBrain.turns[0]?.schedulingContext).toMatchObject({
+				timeOfDayPreference: expected,
+				rejectedTimeOfDayPreferences: [],
+			});
+		}
+	});
+
+	test("a later out-of-hours preference refreshes Luna data with evening policy slots", async () => {
+		const now = new Date("2025-01-09T09:00:00.000Z");
+		const requested: MeetingTimePreference[] = [];
+		const brain = new FakeBrain([], []);
+		const { orchestrator } = fixture({
+			brain,
+			bookings: new FakeBookingService({
+				candidateMeetingSlots: (preference = "none") => {
+					requested.push(preference);
+					return generateCandidateMeetingSlots(now, [], preference);
+				},
+			}),
+			now: () => now,
+		});
+
+		await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn1,
+				generationId: generation1,
+				text: "Давайте утром",
+				knownFacts: facts,
+			}),
+		);
+		await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn2,
+				generationId: generation2,
+				text: "Нет, лучше в 23:00",
+				knownFacts: facts,
+			}),
+		);
+
+		expect(requested).toEqual(["morning", "evening"]);
+		expect(brain.turns).toHaveLength(2);
+		expect(brain.turns[1]?.schedulingContext.timeOfDayPreference).toBe(
+			"evening",
+		);
+		expect(
+			brain.turns[1]?.schedulingContext.candidateMeetingSlots.map(
+				(candidate) => candidate.displayLabel,
+			),
+		).toEqual([
+			"10 января 2025 года, пятница, 16:00–16:20 по Москве",
+			"10 января 2025 года, пятница, 17:00–17:20 по Москве",
+		]);
+		expect(JSON.stringify(brain.turns[1])).not.toContain("23:00–23:20");
+	});
+
+	test("typed and spoken evening rejections produce only non-evening server candidates", async () => {
+		const now = new Date("2025-01-09T09:00:00.000Z");
+		for (const [text, spoken] of [
+			["Мне неудобно вечером", false],
+			["Вечером не могу", true],
+		] as const) {
+			const brain = new FakeBrain([]);
+			const harness = fixture({
+				brain,
+				...(spoken ? { stt: new FakeStt({ text }) } : {}),
+				bookings: new FakeBookingService({
+					candidateMeetingSlots: (preference = "none", rejected = []) =>
+						generateCandidateMeetingSlots(now, [], preference, rejected),
+				}),
+				now: () => now,
+			});
+			if (spoken) {
+				await collect(harness.orchestrator.acceptAudioCommit(commit()));
+			} else {
+				await collect(
+					harness.orchestrator.acceptTextSubmit({
+						turnId: turn1,
+						generationId: generation1,
+						text,
+						knownFacts: facts,
+					}),
+				);
+			}
+			const scheduling = brain.turns[0]?.schedulingContext;
+			expect(scheduling).toMatchObject({
+				timeOfDayPreference: "none",
+				rejectedTimeOfDayPreferences: ["evening"],
+			});
+			expect(
+				scheduling?.candidateMeetingSlots.map(
+					(candidate) => candidate.meetingSlot.startAt,
+				),
+			).toEqual(["2025-01-10T06:00:00.000Z", "2025-01-10T11:00:00.000Z"]);
+		}
+	});
+
+	test("a second-turn bare rejection clears and does not retain evening", async () => {
+		const now = new Date("2025-01-09T09:00:00.000Z");
+		const requested: Array<{
+			preference: MeetingTimePreference;
+			rejected: readonly MeetingTimeBand[];
+		}> = [];
+		const brain = new FakeBrain([], []);
+		const { orchestrator } = fixture({
+			brain,
+			bookings: new FakeBookingService({
+				candidateMeetingSlots: (preference = "none", rejected = []) => {
+					requested.push({ preference, rejected });
+					return generateCandidateMeetingSlots(now, [], preference, rejected);
+				},
+			}),
+			now: () => now,
+		});
+		await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn1,
+				generationId: generation1,
+				text: "Давайте вечером",
+				knownFacts: facts,
+			}),
+		);
+		await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn2,
+				generationId: generation2,
+				text: "Не вечером",
+				knownFacts: facts,
+			}),
+		);
+
+		expect(requested).toEqual([
+			{ preference: "evening", rejected: [] },
+			{ preference: "none", rejected: ["evening"] },
+		]);
+		expect(brain.turns[1]?.schedulingContext).toMatchObject({
+			timeOfDayPreference: "none",
+			rejectedTimeOfDayPreferences: ["evening"],
+		});
+		expect(
+			brain.turns[1]?.schedulingContext.candidateMeetingSlots.map(
+				(candidate) => candidate.meetingSlot.startAt,
+			),
+		).toEqual(["2025-01-10T06:00:00.000Z", "2025-01-10T11:00:00.000Z"]);
 	});
 
 	test("STT failure invokes no brain, tool, notifier, or TTS", async () => {
@@ -831,73 +1029,71 @@ describe("booking and tool timeline", () => {
 		});
 	});
 
-	test("explicit post-booking consent enables qualification on the next transcript", async () => {
-		const qualification: BrainDelta[] = [
-			{
-				type: "tool.request",
+	test("booking confirmation asks exact consent and explicit consent deterministically asks leads first", async () => {
+		const brain = new FakeBrain(bookingScript());
+		const { orchestrator } = fixture({ brain });
+		const bookingEvents = await collect(
+			orchestrator.acceptAudioCommit(commit()),
+		);
+		expect(
+			bookingEvents
+				.filter((event) => event.type === "text.delta")
+				.map((event) => event.text)
+				.join(" "),
+		).toContain("Можно задать два коротких вопроса?");
+
+		const consentEvents = await collect(
+			orchestrator.acceptTextSubmit({
 				turnId: turn2,
 				generationId: generation2,
-				tool: {
-					name: "append_booking_qualification",
-					callId: "qualification-after-consent",
-					args: {
-						bookingId: "01J00000000000000000000001",
-						idempotencyKey: "qualification-consent-01",
-						patch: { monthlyLeadVolume: "около 240" },
-						completion: "complete",
-					},
-				},
-			},
-			{ type: "turn.completed", turnId: turn2, generationId: generation2 },
-		];
-		const brain = new FakeBrain(bookingScript(), qualification);
-		const { orchestrator, bookings } = fixture({ brain });
-		await collect(orchestrator.acceptAudioCommit(commit()));
-		expect(
-			orchestrator.apply({ type: "qualification_consent_granted" }).ok,
-		).toBe(true);
-		const events = await collect(
-			orchestrator.acceptAudioCommit(commit(turn2, generation2)),
+				text: "Да, можно.",
+				knownFacts: facts,
+			}),
 		);
-		expect(brain.turns).toHaveLength(2);
-		expect(brain.turns[1]).toMatchObject({
-			stage: "POST_BOOKING_QUALIFICATION",
-			allowedActions: ["append_booking_qualification"],
-		});
-		expect(events.some((event) => event.type === "booking.updated")).toBe(true);
-		expect(bookings.domainEvents.map((event) => event.type)).toEqual([
-			"booking.created",
-			"booking.updated",
-		]);
-		expect(orchestrator.state).toMatchObject({
-			stage: "COMPLETE",
-			booking: { qualification: { monthlyLeadVolume: "около 240" } },
-		});
+		expect(brain.turns).toHaveLength(1);
+		expect(orchestrator.state.stage).toBe("POST_BOOKING_QUALIFICATION");
+		expect(consentEvents).toContainEqual(
+			expect.objectContaining({
+				type: "state.changed",
+				reason: "explicit_qualification_consent",
+			}),
+		);
+		expect(
+			consentEvents
+				.filter((event) => event.type === "text.delta")
+				.map((event) => event.text),
+		).toEqual(["Сколько входящих лидов приходит за месяц?"]);
 	});
 
 	for (const scenario of [
 		{
-			status: "partial" as const,
+			name: "first partial asks the missing manager-count question",
 			patch: { monthlyLeadVolume: "около 240" },
+			completion: "complete" as const,
+			expectedStatus: "partial" as const,
 			expected:
-				"Дополнительные ответы сохранены. Можно продолжить или закончить на этом.",
+				"Дополнительный ответ сохранён. Сколько менеджеров по продажам работает в вашей команде?",
 			terminal: false,
 		},
 		{
-			status: "complete" as const,
+			name: "reverse field order asks only for missing monthly leads",
 			patch: { salesManagerCount: 8 },
+			completion: "complete" as const,
+			expectedStatus: "partial" as const,
+			expected:
+				"Дополнительный ответ сохранён. Сколько входящих лидов приходит за месяц?",
+			terminal: false,
+		},
+		{
+			name: "both fields at once complete despite a partial model claim",
+			patch: { monthlyLeadVolume: "около 240", salesManagerCount: 8 },
+			completion: "partial" as const,
+			expectedStatus: "complete" as const,
 			expected: "Дополнительные ответы сохранены. Спасибо, на этом всё.",
 			terminal: true,
 		},
-		{
-			status: "skipped" as const,
-			patch: {},
-			expected:
-				"Основные данные сохранены. Дополнительные вопросы пропущены, на этом всё.",
-			terminal: true,
-		},
 	] as const) {
-		test(`qualification ${scenario.status} emits only truthful server-authored visible text`, async () => {
+		test(scenario.name, async () => {
 			const bookings = new FakeBookingService();
 			await bookings.createBooking(bookingInput);
 			const booking = await bookings.findByConversationId(conversationId);
@@ -910,14 +1106,12 @@ describe("booking and tool timeline", () => {
 				bookingConfirmationDelivered: true,
 				qualificationConsent: "granted",
 			};
-			const falseModelConfirmation =
-				"Модель ложно подтверждает обновление до серверного результата и называет клиента Анна.";
 			const brain = new FakeBrain([
 				{
 					type: "speech.delta",
 					turnId: turn1,
 					generationId: generation1,
-					text: falseModelConfirmation,
+					text: "Модель ложно подтверждает завершение.",
 				},
 				{
 					type: "tool.request",
@@ -925,20 +1119,14 @@ describe("booking and tool timeline", () => {
 					generationId: generation1,
 					tool: {
 						name: "append_booking_qualification",
-						callId: `qualification-${scenario.status}`,
+						callId: `qualification-${scenario.expectedStatus}-${scenario.patch.salesManagerCount ?? "leads"}`,
 						args: {
 							bookingId: booking.id,
-							idempotencyKey: `qualification-${scenario.status}-truthful`,
+							idempotencyKey: `qualification-${scenario.expectedStatus}-${scenario.patch.salesManagerCount ?? "leads"}-truthful`,
 							patch: scenario.patch,
-							completion: scenario.status,
+							completion: scenario.completion,
 						},
 					},
-				},
-				{
-					type: "speech.delta",
-					turnId: turn1,
-					generationId: generation1,
-					text: "Модель ещё раз ложно подтверждает результат.",
 				},
 				{ type: "turn.completed", turnId: turn1, generationId: generation1 },
 			]);
@@ -951,41 +1139,116 @@ describe("booking and tool timeline", () => {
 			});
 			const events = await collect(orchestrator.acceptAudioCommit(commit()));
 			const visible = events
-				.filter(
-					(
-						event,
-					): event is Extract<OrchestratorEvent, { type: "text.delta" }> =>
-						event.type === "text.delta",
-				)
+				.filter((event) => event.type === "text.delta")
 				.map((event) => event.text)
 				.join(" ");
-			const done = events.find((event) => event.type === "text.done");
 			expect(visible).toBe(scenario.expected);
 			expect(visible).not.toContain("Модель");
-			expect(done).toMatchObject({ text: scenario.expected });
 			expect(events).toContainEqual(
 				expect.objectContaining({
 					type: "booking.updated",
-					qualificationStatus: scenario.status,
+					qualificationStatus: scenario.expectedStatus,
 				}),
 			);
-			expect(orchestrator.state.booking?.qualificationStatus).toBe(
-				scenario.status,
-			);
-			expect(orchestrator.state.stage === "COMPLETE").toBe(scenario.terminal);
-			if (scenario.terminal) {
-				expect(tts.inputs).toHaveLength(0);
-				expect(
-					events.filter((event) => event.type === "text.done"),
-				).toHaveLength(1);
-				expect(events.some((event) => event.type === "audio.done")).toBe(false);
-			} else {
-				expect(tts.inputs.map((input) => input.text)).toEqual([
-					scenario.expected,
-				]);
-			}
+			expect(orchestrator.state).toMatchObject({
+				stage: scenario.terminal ? "COMPLETE" : "POST_BOOKING_QUALIFICATION",
+				booking: {
+					status: "booked",
+					qualificationStatus: scenario.expectedStatus,
+					qualification: scenario.patch,
+				},
+			});
 		});
 	}
+
+	test("exact eval refusal after one answer completes without brain and preserves partial booking", async () => {
+		const emptyBookings = new FakeBookingService();
+		await emptyBookings.createBooking(bookingInput);
+		const emptyBooking =
+			await emptyBookings.findByConversationId(conversationId);
+		if (!emptyBooking) throw new Error("booking missing");
+		const emptyBrain = new FakeBrain([]);
+		const empty = fixture({
+			brain: emptyBrain,
+			bookings: emptyBookings,
+			initialState: {
+				...createInitialConversationState(),
+				stage: "BOOKED",
+				booking: emptyBooking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered: true,
+			},
+		});
+		const skippedEvents = await collect(
+			empty.orchestrator.acceptTextSubmit({
+				turnId: turn1,
+				generationId: generation1,
+				text: "Нет, не задавайте.",
+				knownFacts: facts,
+			}),
+		);
+		expect(emptyBrain.turns).toHaveLength(0);
+		expect(empty.orchestrator.state).toMatchObject({
+			stage: "COMPLETE",
+			booking: { status: "booked", qualificationStatus: "skipped" },
+		});
+		expect(skippedEvents).toContainEqual(
+			expect.objectContaining({
+				type: "booking.updated",
+				qualificationStatus: "skipped",
+			}),
+		);
+
+		const partialBookings = new FakeBookingService();
+		const created = await partialBookings.createBooking(bookingInput);
+		await partialBookings.appendQualification({
+			bookingId: created.bookingId,
+			idempotencyKey: "qualification-before-refusal",
+			patch: { monthlyLeadVolume: "около 240" },
+			completion: "complete",
+		});
+		const partialBooking =
+			await partialBookings.findByConversationId(conversationId);
+		if (!partialBooking) throw new Error("booking missing");
+		const partialBrain = new FakeBrain([]);
+		const partial = fixture({
+			brain: partialBrain,
+			bookings: partialBookings,
+			initialState: {
+				...createInitialConversationState(),
+				stage: "POST_BOOKING_QUALIFICATION",
+				booking: partialBooking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered: true,
+				qualificationConsent: "granted",
+			},
+		});
+		const updatesBeforeRefusal = partialBookings.domainEvents.length;
+		const refusedEvents = await collect(
+			partial.orchestrator.acceptTextSubmit({
+				turnId: turn2,
+				generationId: generation2,
+				text: "Нет, на этом всё.",
+				knownFacts: facts,
+			}),
+		);
+		expect(partialBrain.turns).toHaveLength(0);
+		expect(partialBookings.domainEvents).toHaveLength(updatesBeforeRefusal);
+		expect(partial.orchestrator.state).toMatchObject({
+			stage: "COMPLETE",
+			booking: {
+				status: "booked",
+				qualificationStatus: "partial",
+				qualification: { monthlyLeadVolume: "около 240" },
+			},
+		});
+		expect(
+			refusedEvents
+				.filter((event) => event.type === "text.delta")
+				.map((event) => event.text)
+				.join(" "),
+		).not.toMatch(/сколько|продолж/u);
+	});
 
 	test("current brain failure retains its truthful server-authored terminal response", async () => {
 		const brain = new FakeBrain([

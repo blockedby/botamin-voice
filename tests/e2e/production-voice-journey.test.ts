@@ -382,7 +382,10 @@ class ScriptedLuna implements BrainPort {
 						args: {
 							bookingId: input.booking.id,
 							idempotencyKey: "t30-qualification-idempotency-key",
-							patch: { monthlyLeadVolume: "около 240" },
+							patch: {
+								monthlyLeadVolume: "около 240",
+								salesManagerCount: 8,
+							},
 							completion: "complete",
 						},
 					},
@@ -764,7 +767,8 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				"POST_BOOKING_QUALIFICATION",
 			]);
 			expect(countSpeaker(happy.browser, "visitor")).toBe(6);
-			expect(brain.inputs).toHaveLength(6);
+			// Explicit qualification consent is server-owned and does not invoke Luna.
+			expect(brain.inputs).toHaveLength(5);
 			expect(provider.counters.chat).toBe(7);
 			expect(happy.stages).toEqual(
 				expect.arrayContaining([

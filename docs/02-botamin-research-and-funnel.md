@@ -94,7 +94,7 @@
 
 ### Блок 5. Voice demo
 
-Sticky/inline widget с transcript, статусом и одной главной кнопкой.
+Sticky/inline widget с transcript, статусом и одной главной кнопкой. При входе он один раз пытается проиграть committed product-owned same-origin MP3-приветствие. Это product preview, а не voice session: до consent нет conversation REST/WS, microphone или provider call. Если autoplay заблокирован или media не загрузилось, показывается `Включить приветствие`; запуск разговора останавливает приветствие.
 
 ### Блок 6. Trust and limits
 
@@ -110,8 +110,8 @@ Sticky/inline widget с transcript, статусом и одной главно�
 
 | Stage | Цель | Главный event | Drop-off reason examples |
 |---|---|---|---|
-| Visit | понять ценность | `landing.viewed` | неясный оффер |
-| Voice start | снять страх mic | `conversation.started` | permission denied |
+| Visit | понять ценность и услышать короткий static product greeting | `landing.viewed` | autoplay blocked → явная `Включить приветствие` |
+| Voice start | получить оба consent до session/mic/provider path | `conversation.started` | permission denied |
 | Discovery | найти задачу максимум за два вопроса до мягкого offer | `discovery.completed` | слишком много вопросов |
 | Value | связать pain и use case | `value.presented` | общая презентация |
 | Intent | получить согласие на следующий шаг | `booking.offered` | нет доверия/времени |
@@ -134,12 +134,14 @@ Sticky/inline widget с transcript, статусом и одной главно�
 
 Текущий funnel умеренно проактивен: агент задаёт по одному вопросу и не более двух discovery-вопросов до краткого мягкого предложения demo/встречи. После ясного отказа предложение не повторяется.
 
-После согласия агент предлагает ровно два labeled candidates из server context. Новая внутренняя бронь требует name, company, working email, phone or Telegram, consent и один выбранный structured 20-minute `Europe/Moscow` slot. Внешний календарь и external availability API отсутствуют.
+После согласия агент предлагает ровно два labeled candidates из server context и не называет их всей доступностью. Без предпочтения server даёт одну утреннюю и одну вечернюю альтернативу. Typed и spoken русские формулировки про утро, день, вторую половину дня или вечер обновляют контекст: выбранная часть дня даёт два in-band варианта примерно в часе друг от друга, occupied band переносится на следующий подходящий будний день, а явный rejection исключает отклонённую часть. Все варианты — 20 минут, будни, не сегодня, старты 09:00–17:00 по Москве. Новая внутренняя бронь требует name, company, working email, phone or Telegram, consent и один текущий candidate. Внешний календарь и external availability API отсутствуют.
 
-Квалификация начинается только после committed booking, user-facing confirmation и отдельного consent. Она ограничена двумя необязательными вопросами:
+Квалификация начинается только после committed booking и user-facing confirmation с точным вопросом `Можно задать два коротких вопроса?`. После отдельного явного consent server задаёт по одному и в фиксированном порядке:
 
-- месячный объём **входящих** лидов (`monthlyLeadVolume`);
-- явное целое число менеджеров продаж (`salesManagerCount`).
+1. месячный объём **входящих** лидов (`monthlyLeadVolume`);
+2. явное целое число менеджеров продаж (`salesManagerCount`).
+
+`complete` возможен только при обоих значениях; ответ на оба сразу допустим. Отказ без ответов даёт `skipped`, после одного — `partial`; внутренняя бронь остаётся `booked`.
 
 ## 9. Контентные риски
 

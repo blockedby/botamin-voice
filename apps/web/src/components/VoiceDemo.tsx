@@ -1,5 +1,6 @@
 import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 import { useRef } from "react";
+import { ProactiveGreeting, useProactiveGreeting } from "./ProactiveGreeting";
 import { TextChat } from "./TextChat";
 import type {
 	FinalTranscriptEntry,
@@ -113,8 +114,8 @@ export function getVoiceStatePresentation(
 				label: "Уточняем контекст",
 				detail:
 					state.questionNumber && state.questionCount
-						? `Дополнительный вопрос ${state.questionNumber} из ${state.questionCount}. Можно остановиться в любой момент.`
-						: "Дополнительные вопросы необязательны. Можно остановиться в любой момент.",
+						? `Необязательный вопрос ${state.questionNumber} из ${state.questionCount}. Можно остановиться в любой момент.`
+						: "Два дополнительных вопроса необязательны. Можно остановиться в любой момент.",
 				tone: "active",
 			};
 		case "complete":
@@ -462,8 +463,8 @@ function StateActions(props: VoiceDemoProps) {
 		return (
 			<div className="qualification-choice">
 				<p id="qualification-offer">
-					Лид уже записан. Если агент предложит дополнительные вопросы, они
-					останутся необязательными.
+					Лид уже записан. Два коротких дополнительных вопроса необязательны:
+					можно отказаться до первого или остановиться после него.
 				</p>
 				<ControlButton onClick={props.onStop}>Завершить разговор</ControlButton>
 			</div>
@@ -493,6 +494,7 @@ function StateActions(props: VoiceDemoProps) {
 
 export function VoiceDemo(props: VoiceDemoProps) {
 	const presentation = getVoiceStatePresentation(props.state, props.muted);
+	const proactiveGreeting = useProactiveGreeting(props.state.kind !== "idle");
 	const isActive = ACTIVE_STATES.has(props.state.kind);
 	const bookingCommitted = hasCommittedBooking(props.state);
 	const showCountdown =
@@ -514,7 +516,10 @@ export function VoiceDemo(props: VoiceDemoProps) {
 		handOffVoiceControlFocus("session", focusTargets());
 	const stateActions: VoiceDemoProps = {
 		...props,
-		onStart: () => activateVoiceStart(props.onStart, statusRef.current),
+		onStart: () => {
+			proactiveGreeting.stop();
+			activateVoiceStart(props.onStart, statusRef.current);
+		},
 		onRetryPermission: () => {
 			handOffSessionFocus();
 			props.onRetryPermission();
@@ -589,10 +594,16 @@ export function VoiceDemo(props: VoiceDemoProps) {
 			</div>
 
 			{props.state.kind === "idle" ? (
-				<ConsentPanel
-					consent={props.consent}
-					onConsentChange={props.onConsentChange}
-				/>
+				<>
+					<ProactiveGreeting
+						status={proactiveGreeting.status}
+						onRetry={proactiveGreeting.retry}
+					/>
+					<ConsentPanel
+						consent={props.consent}
+						onConsentChange={props.onConsentChange}
+					/>
+				</>
 			) : null}
 
 			{bookingCommitted ? (

@@ -14,10 +14,14 @@ import {
 	CreateBookingInputSchema,
 	type CreateBookingResult,
 	CreateBookingResultSchema,
+	collectedQualificationFields,
 	type MeetingSlot,
 	MeetingSlotSchema,
+	type MeetingTimeBand,
+	type MeetingTimePreference,
 	PersistedQualificationPatchSchema,
 	type QualificationPatch,
+	qualificationStatusFor,
 } from "@botamin/contracts";
 import { and, eq, inArray } from "drizzle-orm";
 import type { DomainDatabase } from "../../db/database";
@@ -94,6 +98,11 @@ function bookingSnapshot(row: BookingRow): BookingSnapshot {
 			"Stored booking does not contain a complete internal meeting slot",
 		);
 	}
+	const qualification = persistedQualification(row.qualificationJson);
+	const qualificationStatus = qualificationStatusFor(
+		qualification,
+		row.qualificationStatus === "skipped" ? "skipped" : "none",
+	);
 	return BookingSnapshotSchema.parse({
 		id: row.id,
 		conversationId: row.conversationId,
@@ -107,8 +116,8 @@ function bookingSnapshot(row: BookingRow): BookingSnapshot {
 			timeZone: row.meetingTimeZone,
 			durationMinutes: 20,
 		}),
-		qualification: persistedQualification(row.qualificationJson),
-		qualificationStatus: row.qualificationStatus,
+		qualification,
+		qualificationStatus,
 		createdAt: row.createdAt,
 		updatedAt: row.updatedAt,
 	});
@@ -139,11 +148,19 @@ export class SqliteBookingService implements BookingService {
 	 * Returns two deterministic internal candidates, excluding slots committed
 	 * at query time. This does not reserve a slot or assert external availability.
 	 */
-	async candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]> {
+	async candidateMeetingSlots(
+		preference: MeetingTimePreference = "none",
+		rejectedPreferences: readonly MeetingTimeBand[] = [],
+	): Promise<[MeetingSlot, MeetingSlot]> {
 		const now = this.now();
 		const unavailable = new Set<string>();
 		while (true) {
-			const candidates = generateCandidateMeetingSlots(now, unavailable);
+			const candidates = generateCandidateMeetingSlots(
+				now,
+				unavailable,
+				preference,
+				rejectedPreferences,
+			);
 			const committed = this.database
 				.select({ startAt: bookings.meetingStartAt })
 				.from(bookings)
@@ -339,13 +356,23 @@ export class SqliteBookingService implements BookingService {
 				}
 				const current = bookingSnapshot(existing).qualification ?? {};
 				const merged: QualificationPatch = { ...current, ...parsed.patch };
-				const updatedFields = Object.keys(parsed.patch).sort();
+				const qualificationStatus = qualificationStatusFor(
+					merged,
+					parsed.completion === "skipped" ? "skipped" : "none",
+				);
+				if (qualificationStatus === "none") {
+					throw new BookingDomainError(
+						"BOOKING_VALIDATION_FAILED",
+						"Qualification update did not contain a field",
+					);
+				}
+				const updatedFields = collectedQualificationFields(parsed.patch);
 				const timestamp = this.now().toISOString();
 				transaction
 					.update(bookings)
 					.set({
 						qualificationJson: canonicalJson(merged),
-						qualificationStatus: parsed.completion,
+						qualificationStatus,
 						updatedAt: timestamp,
 					})
 					.where(eq(bookings.id, existing.id))
@@ -360,7 +387,7 @@ export class SqliteBookingService implements BookingService {
 					data: {
 						bookingId: existing.id,
 						conversationId: existing.conversationId,
-						qualificationStatus: parsed.completion,
+						qualificationStatus,
 						qualification: merged,
 					},
 				});
@@ -369,7 +396,7 @@ export class SqliteBookingService implements BookingService {
 				const result = AppendQualificationResultSchema.parse({
 					ok: true,
 					bookingId: existing.id,
-					qualificationStatus: parsed.completion,
+					qualificationStatus,
 					updatedFields,
 					updatedAt: timestamp,
 				});

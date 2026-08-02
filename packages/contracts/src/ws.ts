@@ -7,7 +7,7 @@ import {
 	Rfc3339UtcSchema,
 	SafeErrorSchema,
 } from "./common";
-import { ConversationStageSchema } from "./domain";
+import { ConversationStageSchema, QualificationFieldSchema } from "./domain";
 import { AudioClientConfigSchema } from "./rest";
 
 /** Binary-frame sequences are unsigned integers exactly representable by JS. */
@@ -281,7 +281,8 @@ export const BookingUpdatedWsEventSchema = z
 			.object({
 				bookingId: EntityIdSchema,
 				qualificationStatus: z.enum(["partial", "complete", "skipped"]),
-				updatedFields: z.array(z.string().min(1)).max(12),
+				updatedFields: z.array(QualificationFieldSchema).max(2),
+				qualificationFields: z.array(QualificationFieldSchema).max(2),
 				updatedAt: Rfc3339UtcSchema,
 			})
 			.strict(),

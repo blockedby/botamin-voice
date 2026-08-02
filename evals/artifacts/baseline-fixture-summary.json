@@ -12,9 +12,9 @@
 	"promptTuningClaimed": true,
 	"prompt": {
 		"sourceChangedByProactivePromptTask": true,
-		"sourceSha256": "4293e4db0c3a333e5563079056f48d604cd4887080d6b4f2f6984008ee745fc7"
+		"sourceSha256": "44ac2b91f013cbcf6c1917af5c08356ad801631c44c8206d5537856e3d3d53fc"
 	},
-	"inputsSha256": "228ea6ec7fc4524c2124cd14d70d0ea6bf257c17dad68fcb91cb914e2d1b4811",
+	"inputsSha256": "cc30c1b6dc03abcaa6d18880fd13b740ef48d721a70307c05512b4dd92b86678",
 	"fixture": {
 		"scenarioCount": 35,
 		"passedScenarios": 35,

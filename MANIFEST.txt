@@ -24,6 +24,7 @@ apps/server/src/domain/booking/concurrency-worker.ts
 apps/server/src/domain/booking/index.ts
 apps/server/src/domain/booking/service.test.ts
 apps/server/src/domain/booking/service.ts
+apps/server/src/domain/booking/support.test.ts
 apps/server/src/domain/booking/support.ts
 apps/server/src/domain/index.ts
 apps/server/src/domain/privacy/deletion.ts
@@ -101,6 +102,7 @@ apps/server/tsconfig.json
 apps/web/index.html
 apps/web/package.json
 apps/web/public/assets/botamin-pcm-capture-worklet.js
+apps/web/public/assets/botamin-proactive-greeting.mp3
 apps/web/src/App.tsx
 apps/web/src/audio/capture.test.ts
 apps/web/src/audio/capture.ts
@@ -108,12 +110,15 @@ apps/web/src/audio/pcm.ts
 apps/web/src/audio/playback.test.ts
 apps/web/src/audio/playback.ts
 apps/web/src/audio/resampler.ts
+apps/web/src/components/ProactiveGreeting.test.tsx
+apps/web/src/components/ProactiveGreeting.tsx
 apps/web/src/components/TextChat.test.tsx
 apps/web/src/components/TextChat.tsx
 apps/web/src/components/VoiceDemo.test.tsx
 apps/web/src/components/VoiceDemo.tsx
 apps/web/src/components/devVoiceDemoFixture.test.ts
 apps/web/src/components/devVoiceDemoFixture.ts
+apps/web/src/components/proactiveGreetingContent.ts
 apps/web/src/components/voiceTypes.ts
 apps/web/src/integration/browserVoiceSession.test.ts
 apps/web/src/integration/browserVoiceSession.ts
@@ -264,6 +269,7 @@ scripts/compose-secret-files.sh
 scripts/deploy-local.sh
 scripts/deploy-production.sh
 scripts/device-auth.sh
+scripts/generate-proactive-greeting.ts
 scripts/local-voice-e2e-smoke.ts
 scripts/materialize-compose-secrets.ts
 scripts/observability-report.ts

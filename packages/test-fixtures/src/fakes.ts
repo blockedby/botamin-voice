@@ -11,10 +11,14 @@ import {
 	type BrainTurnInput,
 	CreateBookingInputSchema,
 	type CreateBookingResult,
+	collectedQualificationFields,
 	type MeetingSlot,
+	type MeetingTimeBand,
+	type MeetingTimePreference,
 	MpegAudioBytesSchema,
 	type Notifier,
 	type ProviderHealth,
+	qualificationStatusFor,
 	type SttHealth,
 	type SttPort,
 	type SttTranscriptionRequest,
@@ -225,9 +229,10 @@ export interface FakeBookingOptions {
 	bookingId?: () => string;
 	createdEventId?: () => string;
 	updatedEventId?: () => string;
-	candidateMeetingSlots?: () =>
-		| [MeetingSlot, MeetingSlot]
-		| Promise<[MeetingSlot, MeetingSlot]>;
+	candidateMeetingSlots?: (
+		preference?: MeetingTimePreference,
+		rejectedPreferences?: readonly MeetingTimeBand[],
+	) => [MeetingSlot, MeetingSlot] | Promise<[MeetingSlot, MeetingSlot]>;
 }
 
 export class FakeBookingService implements BookingService {
@@ -261,8 +266,11 @@ export class FakeBookingService implements BookingService {
 		};
 	}
 
-	async candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]> {
-		return this.#options.candidateMeetingSlots();
+	async candidateMeetingSlots(
+		preference: MeetingTimePreference = "none",
+		rejectedPreferences: readonly MeetingTimeBand[] = [],
+	): Promise<[MeetingSlot, MeetingSlot]> {
+		return this.#options.candidateMeetingSlots(preference, rejectedPreferences);
 	}
 
 	async createBooking(input: unknown): Promise<CreateBookingResult> {
@@ -354,18 +362,26 @@ export class FakeBookingService implements BookingService {
 		const current = this.#bookingsById.get(parsed.bookingId);
 		if (!current) throw new FakeBookingError("BOOKING_NOT_FOUND");
 		const at = this.#options.now();
-		const updatedFields = Object.keys(parsed.patch);
+		const updatedFields = collectedQualificationFields(parsed.patch);
+		const qualification = { ...current.qualification, ...parsed.patch };
+		const qualificationStatus = qualificationStatusFor(
+			qualification,
+			parsed.completion === "skipped" ? "skipped" : "none",
+		);
+		if (qualificationStatus === "none") {
+			throw new Error("Qualification update did not contain a field");
+		}
 		const updated: BookingSnapshot = {
 			...current,
 			status: "booked",
-			qualification: { ...current.qualification, ...parsed.patch },
-			qualificationStatus: parsed.completion,
+			qualification,
+			qualificationStatus,
 			updatedAt: at,
 		};
 		const result: AppendQualificationResult = {
 			ok: true,
 			bookingId: current.id,
-			qualificationStatus: parsed.completion,
+			qualificationStatus,
 			updatedFields,
 			updatedAt: at,
 		};
@@ -377,7 +393,7 @@ export class FakeBookingService implements BookingService {
 			data: {
 				bookingId: current.id,
 				conversationId: current.conversationId,
-				qualificationStatus: parsed.completion,
+				qualificationStatus,
 				qualification: updated.qualification,
 			},
 		};

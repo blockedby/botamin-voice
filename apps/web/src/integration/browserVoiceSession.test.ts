@@ -776,10 +776,39 @@ describe("production browser voice integration", () => {
 		);
 		expect(value.session.getSnapshot().state).toEqual({ kind: "booked" });
 		value.socket.server(
-			event("booking.updated", 4, {
+			event("state.changed", 4, {
+				from: "BOOKED",
+				to: "POST_BOOKING_QUALIFICATION",
+				reason: "explicit consent",
+			}),
+		);
+		expect(value.session.getSnapshot().state).toEqual({
+			kind: "qualification",
+			bookingOutcome: "committed",
+			questionNumber: 1,
+			questionCount: 2,
+		});
+		value.socket.server(
+			event("booking.updated", 5, {
+				bookingId,
+				qualificationStatus: "partial",
+				updatedFields: ["salesManagerCount"],
+				qualificationFields: ["salesManagerCount"],
+				updatedAt: at,
+			}),
+		);
+		expect(value.session.getSnapshot().state).toEqual({
+			kind: "qualification",
+			bookingOutcome: "committed",
+			questionNumber: 2,
+			questionCount: 2,
+		});
+		value.socket.server(
+			event("booking.updated", 6, {
 				bookingId,
 				qualificationStatus: "complete",
-				updatedFields: ["role"],
+				updatedFields: ["monthlyLeadVolume"],
+				qualificationFields: ["monthlyLeadVolume", "salesManagerCount"],
 				updatedAt: at,
 			}),
 		);
@@ -789,7 +818,7 @@ describe("production browser voice integration", () => {
 			qualificationStatus: "complete",
 		});
 		value.socket.server(
-			event("state.changed", 5, {
+			event("state.changed", 7, {
 				from: "POST_BOOKING_QUALIFICATION",
 				to: "COMPLETE",
 				reason: "server completed",

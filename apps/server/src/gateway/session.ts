@@ -740,7 +740,8 @@ export class GatewaySession {
 						bookingId: booking.id,
 						qualificationStatus: event.qualificationStatus,
 						updatedFields: event.updatedFields,
-						updatedAt: booking.updatedAt,
+						qualificationFields: event.qualificationFields,
+						updatedAt: event.updatedAt,
 					});
 				}
 				break;

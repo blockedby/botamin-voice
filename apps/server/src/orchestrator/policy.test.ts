@@ -123,6 +123,45 @@ describe("allowed action and tool authorization policy", () => {
 		).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
 	});
 
+	test("rejects stale and out-of-policy slots after contextual candidates change", () => {
+		const eveningCandidates = [
+			{
+				startAt: "2099-01-05T13:00:00.000Z",
+				endAt: "2099-01-05T13:20:00.000Z",
+				timeZone: "Europe/Moscow" as const,
+				durationMinutes: 20 as const,
+			},
+			{
+				startAt: "2099-01-05T14:00:00.000Z",
+				endAt: "2099-01-05T14:20:00.000Z",
+				timeZone: "Europe/Moscow" as const,
+				durationMinutes: 20 as const,
+			},
+		] as const;
+		expect(
+			authorizeTool(
+				collectionState(),
+				conversationId,
+				eveningCandidates,
+				request,
+			),
+		).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
+		expect(
+			authorizeTool(collectionState(), conversationId, eveningCandidates, {
+				...request,
+				args: {
+					...request.args,
+					meetingSlot: {
+						startAt: "2099-01-05T20:00:00.000Z",
+						endAt: "2099-01-05T20:20:00.000Z",
+						timeZone: "Europe/Moscow",
+						durationMinutes: 20,
+					},
+				},
+			}),
+		).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
+	});
+
 	test("qualification is allowed only after confirmation and explicit consent", async () => {
 		const service = new FakeBookingService();
 		const created = await service.createBooking(input);
@@ -193,6 +232,63 @@ describe("allowed action and tool authorization policy", () => {
 		expect(await service.findByConversationId(conversationId)).toMatchObject({
 			qualificationStatus: "none",
 		});
+	});
+
+	test("executor replays a qualification call without a duplicate durable update", async () => {
+		const service = new FakeBookingService();
+		await service.createBooking(input);
+		const booking = await service.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const state: ConversationState = {
+			...createInitialConversationState(),
+			stage: "POST_BOOKING_QUALIFICATION",
+			booking,
+			contactConsentConfirmed: true,
+			bookingConfirmationDelivered: true,
+			qualificationConsent: "granted",
+		};
+		const executor = new BookingToolExecutor(service);
+		const qualificationRequest = {
+			name: "append_booking_qualification" as const,
+			callId: "qualification-replay-call",
+			args: {
+				bookingId: booking.id,
+				idempotencyKey: "qualification-replay-key",
+				patch: { monthlyLeadVolume: "около 240" },
+				completion: "complete" as const,
+			},
+		};
+
+		const first = await executor.execute(
+			state,
+			conversationId,
+			candidateMeetingSlots,
+			qualificationRequest,
+		);
+		const replay = await executor.execute(
+			state,
+			conversationId,
+			candidateMeetingSlots,
+			qualificationRequest,
+		);
+		expect(first).toMatchObject({
+			ok: true,
+			value: {
+				replayedCall: false,
+				result: { qualificationStatus: "partial" },
+			},
+		});
+		expect(replay).toMatchObject({
+			ok: true,
+			value: {
+				replayedCall: true,
+				result: { qualificationStatus: "partial" },
+			},
+		});
+		expect(service.domainEvents.map((event) => event.type)).toEqual([
+			"booking.created",
+			"booking.updated",
+		]);
 	});
 
 	test("executor deduplicates identical callId and rejects changed replay", async () => {

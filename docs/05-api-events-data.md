@@ -10,12 +10,14 @@
 - Ошибки providers не пробрасываются клиенту напрямую.
 - Binary WebSocket frames несут client PCM16 input или один полный server MP3 phrase payload; arbitrary provider network chunks никогда не публикуются как playable audio.
 - Tool handlers не доступны как публичные HTTP endpoints.
+- Proactive greeting не является API/session contract: page entry делает один same-origin GET/playback static MP3, без conversation REST/WS/mic/provider/session до обоих consents. Blocked/error fallback — `Включить приветствие`; session start прекращает static playback.
+- Committed proactive MP3 содержит только fixed product copy без visitor data. Его может заменить только explicit admin opt-in OpenRouter generation script; visitor runtime его не синтезирует.
 
 ## 2. REST endpoints
 
 ### `POST /api/v1/conversations`
 
-Создать сессию.
+Создать сессию. Browser не вызывает endpoint, пока `voiceProcessing` и `contactProcessing` не подтверждены; proactive static greeting не создаёт conversation.
 
 Request:
 
@@ -327,22 +329,10 @@ type CreateBookingResult = {
 ### `append_booking_qualification`
 
 ```ts
-// Storage contract retains these optional fields for compatibility. Current
-// conversation policy collects only monthlyLeadVolume (monthly inbound leads)
-// and integer salesManagerCount after committed booking, confirmation, and consent.
+// Active write contract is exactly the two optional RC3 fields.
 const QualificationPatchSchema = z.object({
-  role: z.string().max(200).optional(),
-  industry: z.string().max(200).optional(),
-  companySize: z.string().max(100).optional(),
-  monthlyLeadVolume: z.string().max(100).optional(),
+  monthlyLeadVolume: z.string().trim().min(1).max(100).optional(),
   salesManagerCount: z.number().int().min(0).max(10000).optional(),
-  currentChannels: z.array(z.string().max(80)).max(10).optional(),
-  crm: z.string().max(120).optional(),
-  currentProcess: z.string().max(1000).optional(),
-  pains: z.array(z.string().max(300)).max(10).optional(),
-  desiredUseCase: z.string().max(500).optional(),
-  timeline: z.string().max(200).optional(),
-  notes: z.string().max(1500).optional(),
 }).strict();
 
 const AppendQualificationInputSchema = z.object({
@@ -360,10 +350,12 @@ type AppendQualificationResult = {
   ok: true;
   bookingId: string;
   qualificationStatus: "partial" | "complete" | "skipped";
-  updatedFields: string[];
+  updatedFields: Array<"monthlyLeadVolume" | "salesManagerCount">;
   updatedAt: string;
 };
 ```
+
+Server выводит status из persisted truth: оба поля → `complete`, одно → `partial`, zero-field explicit refusal → `skipped`. Model-provided `completion` не может объявить complete без обоих полей. Оба ответа могут прийти одним turn/patch. Legacy rows могут физически содержать старые qualification keys; read-normalization отбрасывает их, а active write schema выше их не принимает.
 
 ## 6. Domain policy до tool execution
 
@@ -385,7 +377,9 @@ switch (tool.name) {
 }
 ```
 
-LLM-provided `conversationId`, `bookingId`, slot и consent сверяются с server-side session; нельзя доверять им как единственному источнику. Server перед каждым Luna turn строит `schedulingContext` из собственного clock: canonical `currentInstant`, `moscowLocalDate`, `moscowWeekday` и tuple ровно из двух `{ meetingSlot, displayLabel }`. Tool execution повторно отвергает slot вне tuple; BookingService повторно отвергает now-non-bookable или internally occupied start.
+LLM-provided `conversationId`, `bookingId`, slot и consent сверяются с server-side session; нельзя доверять им как единственному источнику. После booking commit и delivered confirmation server задаёт точный consent-вопрос `Можно задать два коротких вопроса?`; grant возможен только из последующей explicit user turn. Затем server задаёт monthly leads первым и manager count вторым, по одному; отказ завершает как `skipped` или сохраняет `partial`, не меняя `booking.status=booked`.
+
+Server перед каждым Luna turn строит `schedulingContext` из собственного clock: canonical `currentInstant`, `moscowLocalDate`, `moscowWeekday`, `timeOfDayPreference`, максимум один `rejectedTimeOfDayPreferences` и tuple ровно из двух `{ meetingSlot, displayLabel }`. Bounded Russian parser одинаково применяет typed/spoken morning/day/second-half/evening wording. Default tuple — morning + evening; selected preference даёт два in-band starts примерно через час и переносит пару на следующий weekday, если текущий band occupied; rejection исключает band. Каждый slot — 20 минут, weekday, не сегодня, start на 20-minute grid 09:00–17:00 MSK. Tuple — текущие internal alternatives, не all/global availability. Tool execution повторно отвергает slot вне tuple; BookingService повторно отвергает now-non-bookable или internally occupied start.
 
 ## 7. SQLite model
 
@@ -436,8 +430,8 @@ LLM-provided `conversationId`, `bookingId`, slot и consent сверяются �
 | `meeting_start_at` | nullable для legacy rows; canonical UTC, required для новых bookings, UNIQUE when non-null |
 | `meeting_end_at` | nullable для legacy rows; ровно +20 минут, required для новых bookings |
 | `meeting_timezone` | nullable для legacy rows; `Europe/Moscow`, required для новых bookings |
-| `qualification_json` | default `{}`; active flow writes only monthly inbound `monthlyLeadVolume` and integer `salesManagerCount` |
-| `qualification_status` | none/partial/complete/skipped |
+| `qualification_json` | default `{}`; active flow writes only monthly inbound `monthlyLeadVolume` and integer `salesManagerCount`; legacy keys normalize away on read |
+| `qualification_status` | none/partial/complete/skipped; complete iff both active fields, partial iff one, skipped on zero-answer refusal |
 | `created_at`, `updated_at` | timestamps |
 
 Migration `0003_internal_meeting_slots.sql` добавляет три meeting columns, partial unique index на non-null start и insert/update triggers для company, canonical timestamps, exact 20-minute duration, Moscow weekday и 09:00–17:00/20-minute-grid rules. Existing legacy rows намеренно сохраняются с `NULL` meeting fields и прежним deprecated text column: migration не придумывает им slots и не удаляет их. Domain snapshot/service fail closed при попытке использовать такую legacy row как complete modern booking; все новые inserts и relevant updates обязаны удовлетворять triggers.
@@ -493,7 +487,8 @@ COMMIT
 1. отправить WS `booking.created`;
 2. notifier worker публикует payload;
 3. assistant получает safe tool result;
-4. только потом orchestrator разрешает qualification stage.
+4. server-authored confirmation сообщает, что calendar event не создан, и точно спрашивает `Можно задать два коротких вопроса?`;
+5. только subsequent explicit consent открывает qualification и первый deterministic leads question; booking остаётся committed при skip/partial/failure.
 
 ## 9. Notification payloads
 

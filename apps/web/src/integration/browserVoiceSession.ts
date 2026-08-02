@@ -713,7 +713,6 @@ export class BrowserVoiceSession {
 				this.captureArmed = true;
 				this.resetCaptureProgress();
 				this.controller?.beginListening();
-				this.setState(this.activeState("listening"));
 			} catch (error) {
 				if (
 					this.isCurrent(epoch) &&
@@ -844,6 +843,7 @@ export class BrowserVoiceSession {
 					void capture.stop();
 				}
 				this.controller.acceptEvent(event);
+				this.applyServerStage(event.payload.state, false);
 				if (!this.captureArmed) void this.beginCapture(epoch);
 				break;
 			}
@@ -1120,11 +1120,9 @@ export class BrowserVoiceSession {
 				? pending
 				: { status: "idle" };
 		this.syncBookingSnapshot();
-		if (
-			this.conversationStage === "BOOKED" ||
-			this.conversationStage === "COLLECT_BOOKING"
-		) {
-			this.setState({ kind: "booked" });
+		if (this.conversationStage) {
+			const state = this.authoritativeStageState(this.conversationStage);
+			if (state) this.setState(state);
 		}
 		return true;
 	}
@@ -1171,59 +1169,71 @@ export class BrowserVoiceSession {
 		await this.playback.enqueue(segment);
 	}
 
-	private applyServerStage(stage: ConversationStage): void {
+	private authoritativeStageState(
+		stage: ConversationStage,
+	): VoiceUiState | null {
 		switch (stage) {
 			case "DISCONNECTED":
-				this.setState(this.activeState("disconnected"));
-				break;
-			case "ERROR":
-				this.beginTerminalFailure();
-				break;
+				return this.activeState("disconnected");
 			case "COMPLETE":
 			case "DECLINED":
-				this.setState(
-					this.internalMeeting
-						? {
-								kind: "complete",
-								bookingOutcome: "committed",
-								qualificationStatus:
-									this.qualificationStatus === "none"
-										? "skipped"
-										: this.qualificationStatus,
-							}
-						: { kind: "complete", bookingOutcome: "none" },
-				);
-				void this.releaseResources("user_requested", false);
-				break;
+				return this.internalMeeting
+					? {
+							kind: "complete",
+							bookingOutcome: "committed",
+							qualificationStatus:
+								this.qualificationStatus === "none"
+									? "skipped"
+									: this.qualificationStatus,
+						}
+					: { kind: "complete", bookingOutcome: "none" };
+			case "COLLECT_BOOKING":
 			case "BOOKED":
-				if (this.internalMeeting) this.setState({ kind: "booked" });
-				break;
-			case "POST_BOOKING_QUALIFICATION":
-				if (this.internalMeeting) {
-					const answered = this.qualificationFields.length;
-					this.setState({
-						kind: "qualification",
-						bookingOutcome: "committed",
-						...(answered < 2
-							? {
-									questionNumber: answered === 0 ? 1 : 2,
-									questionCount: 2 as const,
-								}
-							: {}),
-					});
-				}
-				break;
+				return this.internalMeeting ? { kind: "booked" } : null;
+			case "POST_BOOKING_QUALIFICATION": {
+				if (!this.internalMeeting) return null;
+				const answered = this.qualificationFields.length;
+				return {
+					kind: "qualification",
+					bookingOutcome: "committed",
+					...(answered < 2
+						? {
+								questionNumber: answered === 0 ? 1 : 2,
+								questionCount: 2 as const,
+							}
+						: {}),
+				};
+			}
 			case "CONNECTING":
-				this.setState(this.activeState("connecting"));
-				break;
+				return this.activeState("connecting");
 			default:
-				if (
-					this.snapshot.state.kind !== "speaking" &&
-					this.snapshot.state.kind !== "booked" &&
-					this.snapshot.state.kind !== "qualification"
-				) {
-					this.setState(this.activeState("thinking"));
-				}
+				return null;
+		}
+	}
+
+	private applyServerStage(
+		stage: ConversationStage,
+		projectActiveStage = true,
+	): void {
+		if (stage === "ERROR") {
+			this.beginTerminalFailure();
+			return;
+		}
+		const authoritativeState = this.authoritativeStageState(stage);
+		if (authoritativeState) {
+			this.setState(authoritativeState);
+			if (stage === "COMPLETE" || stage === "DECLINED") {
+				void this.releaseResources("user_requested", false);
+			}
+			return;
+		}
+		if (
+			projectActiveStage &&
+			this.snapshot.state.kind !== "speaking" &&
+			this.snapshot.state.kind !== "booked" &&
+			this.snapshot.state.kind !== "qualification"
+		) {
+			this.setState(this.activeState("thinking"));
 		}
 	}
 
@@ -1240,7 +1250,10 @@ export class BrowserVoiceSession {
 				break;
 			case "listening":
 				if (this.capture?.isActive) {
-					this.setState(this.activeState("listening"));
+					const authoritativeState = this.conversationStage
+						? this.authoritativeStageState(this.conversationStage)
+						: null;
+					this.setState(authoritativeState ?? this.activeState("listening"));
 				}
 				break;
 			case "processing":

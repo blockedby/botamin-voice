@@ -3,9 +3,12 @@
 import { describe, expect, test } from "bun:test";
 import {
 	BINARY_AUDIO_FRAME_KIND,
+	type ConversationStage,
 	encodeBinaryAudioFrame,
+	type InternalVirtualMeetingProjection,
 } from "@botamin/contracts";
 import { createDeterministicMp3Fixture } from "../../../../packages/test-fixtures/src";
+import type { VoiceUiState } from "../components/voiceTypes";
 import {
 	createBrowserBookingDraft,
 	createInternalMeeting,
@@ -202,11 +205,17 @@ function response() {
 	};
 }
 
-function sessionReady(seq = 1, token = "resume-token-0001") {
+function sessionReady(
+	seq = 1,
+	token = "resume-token-0001",
+	state: ConversationStage = "GREETING",
+	internalMeeting: InternalVirtualMeetingProjection | null = null,
+) {
 	return event("session.ready", seq, {
-		state: "GREETING",
+		state,
 		resumeToken: token,
 		clientConfig: response().clientConfig,
+		internalMeeting,
 	});
 }
 
@@ -935,6 +944,215 @@ describe("production browser voice integration", () => {
 		await flush();
 		expect(value.captures).toHaveLength(2);
 		expect(value.session.getSnapshot().state.kind).toBe("listening");
+	});
+
+	const authoritativeReadyScenarios = [
+		{
+			name: "BOOKED",
+			stage: "BOOKED" as const,
+			meeting: createInternalMeeting(),
+			expectedState: { kind: "booked" },
+		},
+		{
+			name: "qualification with no answers",
+			stage: "POST_BOOKING_QUALIFICATION" as const,
+			meeting: createInternalMeeting({
+				qualificationStatus: "none",
+				qualificationFields: {
+					monthlyLeadVolume: null,
+					salesManagerCount: null,
+				},
+			}),
+			expectedState: {
+				kind: "qualification",
+				bookingOutcome: "committed",
+				questionNumber: 1,
+				questionCount: 2,
+			},
+		},
+		{
+			name: "qualification with one answer",
+			stage: "POST_BOOKING_QUALIFICATION" as const,
+			meeting: createInternalMeeting(),
+			expectedState: {
+				kind: "qualification",
+				bookingOutcome: "committed",
+				questionNumber: 2,
+				questionCount: 2,
+			},
+		},
+		{
+			name: "qualification with all answers",
+			stage: "POST_BOOKING_QUALIFICATION" as const,
+			meeting: createInternalMeeting({
+				qualificationStatus: "complete",
+				qualificationFields: {
+					monthlyLeadVolume: "120–150",
+					salesManagerCount: 4,
+				},
+			}),
+			expectedState: {
+				kind: "qualification",
+				bookingOutcome: "committed",
+			},
+		},
+		{
+			name: "COMPLETE with a committed meeting",
+			stage: "COMPLETE" as const,
+			meeting: createInternalMeeting({
+				qualificationStatus: "complete",
+				qualificationFields: {
+					monthlyLeadVolume: "120–150",
+					salesManagerCount: 4,
+				},
+			}),
+			expectedState: {
+				kind: "complete",
+				bookingOutcome: "committed",
+				qualificationStatus: "complete",
+			},
+		},
+		{
+			name: "pre-booking listening control",
+			stage: "DISCOVERY" as const,
+			meeting: null,
+			expectedState: { kind: "listening" },
+		},
+	] satisfies ReadonlyArray<{
+		name: string;
+		stage: ConversationStage;
+		meeting: InternalVirtualMeetingProjection | null;
+		expectedState: VoiceUiState;
+	}>;
+
+	for (const readyMode of ["initial", "reconnect"] as const) {
+		for (const scenario of authoritativeReadyScenarios) {
+			test(`${readyMode} session.ready restores ${scenario.name}`, async () => {
+				const value = harness();
+				expect(await value.session.start(consent)).toBe(true);
+				let socket = value.sockets[0] as FakeSocket;
+				socket.open();
+				let sequence = 1;
+				if (readyMode === "reconnect") {
+					socket.server(sessionReady());
+					await flush();
+					socket.disconnect();
+					expect(value.session.getSnapshot().state).toEqual({
+						kind: "reconnecting",
+					});
+					value.session.reconnect();
+					socket = value.sockets[1] as FakeSocket;
+					socket.open();
+					sequence = 2;
+				}
+
+				socket.server(
+					sessionReady(
+						sequence,
+						`resume-token-${readyMode}-authoritative`,
+						scenario.stage,
+						scenario.meeting,
+					),
+				);
+				await flush();
+
+				expect(value.session.getSnapshot().state).toEqual(
+					scenario.expectedState,
+				);
+				expect(value.session.getSnapshot().internalMeeting).toEqual(
+					scenario.meeting,
+				);
+				if (scenario.stage === "COMPLETE") {
+					expect(socket.closed).toBe(true);
+					expect(value.captures.at(-1)?.active).toBe(false);
+				} else {
+					expect(value.captures.at(-1)?.active).toBe(true);
+					expect(value.captures.at(-1)?.accepting).toBe(true);
+				}
+			});
+		}
+	}
+
+	test("keeps committed disconnect states before restoring BOOKED", async () => {
+		const value = harness();
+		expect(await value.session.start(consent)).toBe(true);
+		const meeting = createInternalMeeting();
+		const socket = value.sockets[0] as FakeSocket;
+		socket.open();
+		socket.server(
+			sessionReady(1, "resume-token-booked-initial", "BOOKED", meeting),
+		);
+		await flush();
+		expect(value.session.getSnapshot().state).toEqual({ kind: "booked" });
+
+		socket.fail();
+		expect(value.session.getSnapshot().state).toEqual({
+			kind: "disconnected",
+			bookingOutcome: "committed",
+		});
+		socket.disconnect();
+		expect(value.session.getSnapshot().state).toEqual({
+			kind: "reconnecting",
+			bookingOutcome: "committed",
+		});
+		expect(value.session.getSnapshot().internalMeeting).toEqual(meeting);
+
+		value.session.reconnect();
+		const resumed = value.sockets[1] as FakeSocket;
+		resumed.open();
+		resumed.server(
+			sessionReady(2, "resume-token-booked-resumed", "BOOKED", meeting),
+		);
+		await flush();
+		expect(value.session.getSnapshot().state).toEqual({ kind: "booked" });
+		expect(value.session.getSnapshot().internalMeeting).toEqual(meeting);
+	});
+
+	test("qualification projection converges for meeting and stage event ordering", async () => {
+		for (const meetingFirst of [false, true]) {
+			const value = await readySession();
+			const partialMeeting = createInternalMeeting();
+			const stageChange = event("state.changed", meetingFirst ? 3 : 2, {
+				from: "BOOKED",
+				to: "POST_BOOKING_QUALIFICATION",
+				reason: "qualification",
+			});
+			const meetingUpdate = event(
+				"internal.meeting.updated",
+				meetingFirst ? 2 : 3,
+				{ meeting: partialMeeting },
+			);
+			if (meetingFirst) {
+				value.socket.server(meetingUpdate);
+				value.socket.server(stageChange);
+			} else {
+				value.socket.server(stageChange);
+				value.socket.server(meetingUpdate);
+			}
+			expect(value.session.getSnapshot().state).toEqual({
+				kind: "qualification",
+				bookingOutcome: "committed",
+				questionNumber: 2,
+				questionCount: 2,
+			});
+
+			value.socket.server(
+				event("internal.meeting.updated", 4, {
+					meeting: createInternalMeeting({
+						qualificationStatus: "complete",
+						qualificationFields: {
+							monthlyLeadVolume: "120–150",
+							salesManagerCount: 4,
+						},
+						updatedAt: "2026-07-30T20:23:00.000Z",
+					}),
+				}),
+			);
+			expect(value.session.getSnapshot().state).toEqual({
+				kind: "qualification",
+				bookingOutcome: "committed",
+			});
+		}
 	});
 
 	test("resyncs projections authoritatively on reconnect and clears only for a new conversation", async () => {

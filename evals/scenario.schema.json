@@ -6,11 +6,15 @@
 	"additionalProperties": false,
 	"required": ["schemaVersion", "scenarios"],
 	"properties": {
-		"schemaVersion": { "const": 1 },
+		"schemaVersion": {
+			"const": 1
+		},
 		"scenarios": {
 			"type": "array",
 			"minItems": 24,
-			"items": { "$ref": "#/$defs/scenario" }
+			"items": {
+				"$ref": "#/$defs/scenario"
+			}
 		}
 	},
 	"$defs": {
@@ -29,8 +33,12 @@
 					"format": "date-time",
 					"pattern": "Z$"
 				},
-				"timeZone": { "const": "Europe/Moscow" },
-				"durationMinutes": { "const": 20 }
+				"timeZone": {
+					"const": "Europe/Moscow"
+				},
+				"durationMinutes": {
+					"const": 20
+				}
 			}
 		},
 		"slotCandidate": {
@@ -38,8 +46,13 @@
 			"additionalProperties": false,
 			"required": ["label", "meetingSlot"],
 			"properties": {
-				"label": { "type": "string", "minLength": 1 },
-				"meetingSlot": { "$ref": "#/$defs/meetingSlot" }
+				"label": {
+					"type": "string",
+					"minLength": 1
+				},
+				"meetingSlot": {
+					"$ref": "#/$defs/meetingSlot"
+				}
 			}
 		},
 		"scenario": {
@@ -55,19 +68,32 @@
 				"expected"
 			],
 			"properties": {
-				"id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]+$" },
-				"title": { "type": "string", "minLength": 1 },
+				"id": {
+					"type": "string",
+					"pattern": "^[a-z0-9][a-z0-9-]+$"
+				},
+				"title": {
+					"type": "string",
+					"minLength": 1
+				},
 				"tags": {
 					"type": "array",
 					"minItems": 1,
 					"uniqueItems": true,
-					"items": { "type": "string" }
+					"items": {
+						"type": "string"
+					}
 				},
-				"language": { "const": "ru" },
+				"language": {
+					"const": "ru"
+				},
 				"direction": {
 					"enum": ["inbound", "outbound", "reactivation", "system"]
 				},
-				"description": { "type": "string", "minLength": 1 },
+				"description": {
+					"type": "string",
+					"minLength": 1
+				},
 				"serverContext": {
 					"type": "object",
 					"additionalProperties": false,
@@ -78,7 +104,9 @@
 							"minItems": 2,
 							"maxItems": 2,
 							"uniqueItems": true,
-							"items": { "$ref": "#/$defs/slotCandidate" }
+							"items": {
+								"$ref": "#/$defs/slotCandidate"
+							}
 						}
 					}
 				},
@@ -100,26 +128,36 @@
 					"properties": {
 						"requiredStageOrder": {
 							"type": "array",
-							"items": { "type": "string" }
+							"items": {
+								"type": "string"
+							}
 						},
 						"finalStages": {
 							"type": "array",
 							"minItems": 1,
-							"items": { "type": "string" }
+							"items": {
+								"type": "string"
+							}
 						},
 						"requiredEventOrder": {
 							"type": "array",
-							"items": { "type": "string" }
+							"items": {
+								"type": "string"
+							}
 						},
 						"requiredSemantics": {
 							"type": "array",
 							"uniqueItems": true,
-							"items": { "type": "string" }
+							"items": {
+								"type": "string"
+							}
 						},
 						"forbiddenSemantics": {
 							"type": "array",
 							"uniqueItems": true,
-							"items": { "type": "string" }
+							"items": {
+								"type": "string"
+							}
 						},
 						"allowedTools": {
 							"type": "array",
@@ -133,7 +171,9 @@
 							"additionalProperties": false,
 							"required": ["outcome", "maxCreateCalls", "qualification"],
 							"properties": {
-								"outcome": { "enum": ["required", "forbidden", "optional"] },
+								"outcome": {
+									"enum": ["required", "forbidden", "optional"]
+								},
 								"maxCreateCalls": {
 									"type": "integer",
 									"minimum": 0,
@@ -147,14 +187,52 @@
 						"allowedCaseClaimIds": {
 							"type": "array",
 							"uniqueItems": true,
-							"items": { "type": "string" }
+							"items": {
+								"type": "string"
+							}
 						},
 						"expectedFailureModes": {
 							"type": "array",
 							"uniqueItems": true,
-							"items": { "type": "string" }
+							"items": {
+								"type": "string"
+							}
 						},
-						"ttsMode": { "enum": ["required", "outage"] }
+						"ttsMode": {
+							"enum": ["required", "outage"]
+						},
+						"qualificationFlow": {
+							"type": "object",
+							"additionalProperties": false,
+							"required": [
+								"initialKnownFields",
+								"expectedQuestionOrder",
+								"refusalOutcome"
+							],
+							"properties": {
+								"initialKnownFields": {
+									"type": "array",
+									"uniqueItems": true,
+									"items": {
+										"enum": ["monthlyLeadVolume", "salesManagerCount"]
+									}
+								},
+								"expectedQuestionOrder": {
+									"type": "array",
+									"uniqueItems": true,
+									"items": {
+										"enum": [
+											"monthlyLeadVolume",
+											"salesManagerCount",
+											"dailyLeadBasis"
+										]
+									}
+								},
+								"refusalOutcome": {
+									"enum": ["none", "booking_preserved", "partial_preserved"]
+								}
+							}
+						}
 					}
 				}
 			}

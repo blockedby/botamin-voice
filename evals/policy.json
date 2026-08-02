@@ -102,10 +102,30 @@
 			"code": "provider_detail_disclosure",
 			"pattern": "(?:OpenRouter|OPENROUTER_API_KEY|gpt-5\\.6-luna|x-ai/grok-voice)",
 			"description": "Assistant disclosed provider implementation details"
+		},
+		{
+			"code": "stale_qualification_consent_phrase",
+			"pattern": "можно\\s+задать\\s+два\\s+коротких\\s+вопроса",
+			"description": "Assistant used the retired separate qualification-consent bridge"
+		},
+		{
+			"code": "exhaustive_availability_claim",
+			"pattern": "(?:(?:это|вот)\\s+все\\s+(?:доступные|свободные)\\s+(?:окна|слоты|варианты)|единственн(?:ые|ый|ая)\\s+(?:доступные|свободные)\\s+(?:окна|слоты|варианты)|(?:других|больше)\\s+(?:доступных|свободных)\\s+(?:окон|слотов|вариантов)\\s+нет)",
+			"description": "Assistant presented internal candidates as exhaustive availability"
+		},
+		{
+			"code": "unsupported_future_notification",
+			"pattern": "(?:(?:я|мы)\\s+(?:обязательно\\s+|точно\\s+)?(?:напомню|напомним|пришлю|пришлем|отправлю|отправим)[^.!?]{0,60}(?:напоминан|уведомлен|до\\s+встреч|перед\\s+встреч)|(?:напоминание|уведомление)[^.!?]{0,45}(?:придет|будет\\s+отправлено|получите|отправим))",
+			"description": "Assistant promised an unsupported future notification or reminder"
+		},
+		{
+			"code": "unverified_no_show_fault_admission",
+			"pattern": "(?:(?:если|когда)[^.!?]{0,70}(?:никто|менеджер|коллега)[^.!?]{0,35}не\\s+(?:придет|подключится|явится)[^.!?]{0,45}(?:это\\s+)?(?:наша|моя)\\s+вина|(?:мы|я)\\s+(?:будем\\s+)?виноват[аы]?[^.!?]{0,70}(?:не\\s+придет|не\\s+подключится|неявк))",
+			"description": "Assistant admitted unverified fault for a future no-show"
 		}
 	],
 	"piiToSpeech": {
-		"policy": "TTS input must not contain phone, email, Telegram handle, raw URL, or internal identifier; visible text remains separately available",
+		"policy": "Ordinary TTS input must not contain contact data. A reserved synthetic booking contact may be forwarded only after a closed server authorization attests the booking-contact-confirmation purpose and exact committed draft/booking match; model annotations alone have no authority.",
 		"patterns": [
 			{
 				"code": "pii_email_to_speech",

@@ -24,7 +24,6 @@
 					"domain:booking.created",
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation",
-					"semantic:qualification_consent_granted",
 					"semantic:qualification_question",
 					"tool_call:append_booking_qualification",
 					"domain:qualification.updated",
@@ -33,7 +32,6 @@
 				"requiredSemantics": [
 					"discovery_context",
 					"booking_confirmation",
-					"qualification_consent_granted",
 					"qualification_question"
 				],
 				"forbiddenSemantics": [],
@@ -93,11 +91,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -155,11 +149,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -326,11 +316,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -388,11 +374,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -546,11 +528,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -762,11 +740,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -822,11 +796,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -884,11 +854,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -950,11 +916,7 @@
 					"transport:disconnected",
 					"transport:reconnected"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -1039,11 +1001,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -1101,7 +1059,6 @@
 					"domain:booking.created",
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation",
-					"semantic:qualification_consent_granted",
 					"semantic:qualification_question",
 					"tool_call:append_booking_qualification",
 					"domain:qualification.updated",
@@ -1110,7 +1067,6 @@
 				"requiredSemantics": [
 					"discovery_context",
 					"booking_confirmation",
-					"qualification_consent_granted",
 					"qualification_question"
 				],
 				"forbiddenSemantics": [],
@@ -1242,11 +1198,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -1304,11 +1256,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -1366,11 +1314,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -1426,11 +1370,7 @@
 					"tool_result:create_booking:ok",
 					"semantic:booking_confirmation"
 				],
-				"requiredSemantics": [
-					"discovery_context",
-					"booking_confirmation",
-					"qualification_consent_declined"
-				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
 				"forbiddenSemantics": ["qualification_question"],
 				"allowedTools": ["create_booking"],
 				"booking": {
@@ -1487,6 +1427,734 @@
 				"allowedCaseClaimIds": [],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
+			}
+		},
+		{
+			"id": "rc4-known-managers-ask-leads",
+			"title": "Известны менеджеры — спросить только лиды",
+			"tags": [
+				"rc4",
+				"booking",
+				"draft",
+				"internal-meeting",
+				"qualification",
+				"only-missing",
+				"concrete-date",
+				"split-details"
+			],
+			"language": "ru",
+			"direction": "inbound",
+			"description": "Ранее названные около десяти менеджеров переиспользуются; запрос на 4 августа в 11 и данные из разных ходов приводят к прямому вопросу только о лидах.",
+			"expected": {
+				"requiredStageOrder": [
+					"GREETING",
+					"DISCOVERY",
+					"BOOKING_OFFER",
+					"COLLECT_BOOKING",
+					"POST_BOOKING_QUALIFICATION",
+					"COMPLETE"
+				],
+				"finalStages": ["COMPLETE"],
+				"requiredEventOrder": [
+					"server:facts.snapshot:accepted",
+					"server:booking.draft.updated:ready",
+					"server:booking.draft.confirmed:confirmed",
+					"tool_call:create_booking",
+					"domain:booking.created",
+					"tool_result:create_booking:ok",
+					"server:booking.draft.committed:committed",
+					"server:internal.meeting.published:scheduled",
+					"semantic:booking_confirmation",
+					"semantic:qualification_leads_question",
+					"tool_call:append_booking_qualification",
+					"domain:qualification.updated",
+					"tool_result:append_booking_qualification:ok"
+				],
+				"requiredSemantics": [
+					"discovery_context",
+					"booking_confirmation",
+					"qualification_leads_question"
+				],
+				"forbiddenSemantics": [],
+				"allowedTools": ["create_booking", "append_booking_qualification"],
+				"booking": {
+					"outcome": "required",
+					"maxCreateCalls": 1,
+					"qualification": "accepted"
+				},
+				"qualificationFlow": {
+					"initialKnownFields": ["salesManagerCount"],
+					"expectedQuestionOrder": ["monthlyLeadVolume"],
+					"refusalOutcome": "none"
+				},
+				"allowedCaseClaimIds": [],
+				"expectedFailureModes": [],
+				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "4 августа 2031 года, 11:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T08:00:00.000Z",
+							"endAt": "2031-08-04T08:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "4 августа 2031 года, 14:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T11:00:00.000Z",
+							"endAt": "2031-08-04T11:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "rc4-known-leads-ask-managers",
+			"title": "Известны лиды — спросить только менеджеров",
+			"tags": [
+				"rc4",
+				"booking",
+				"draft",
+				"internal-meeting",
+				"qualification",
+				"only-missing"
+			],
+			"language": "ru",
+			"direction": "inbound",
+			"description": "При известном месячном объёме после внутренней встречи задаётся только вопрос о менеджерах.",
+			"expected": {
+				"requiredStageOrder": [
+					"GREETING",
+					"DISCOVERY",
+					"BOOKING_OFFER",
+					"COLLECT_BOOKING",
+					"POST_BOOKING_QUALIFICATION",
+					"COMPLETE"
+				],
+				"finalStages": ["COMPLETE"],
+				"requiredEventOrder": [
+					"server:facts.snapshot:accepted",
+					"server:booking.draft.updated:ready",
+					"server:booking.draft.confirmed:confirmed",
+					"tool_call:create_booking",
+					"domain:booking.created",
+					"tool_result:create_booking:ok",
+					"server:booking.draft.committed:committed",
+					"server:internal.meeting.published:scheduled",
+					"semantic:booking_confirmation",
+					"semantic:qualification_managers_question",
+					"tool_call:append_booking_qualification",
+					"domain:qualification.updated",
+					"tool_result:append_booking_qualification:ok"
+				],
+				"requiredSemantics": [
+					"discovery_context",
+					"booking_confirmation",
+					"qualification_managers_question"
+				],
+				"forbiddenSemantics": [],
+				"allowedTools": ["create_booking", "append_booking_qualification"],
+				"booking": {
+					"outcome": "required",
+					"maxCreateCalls": 1,
+					"qualification": "accepted"
+				},
+				"qualificationFlow": {
+					"initialKnownFields": ["monthlyLeadVolume"],
+					"expectedQuestionOrder": ["salesManagerCount"],
+					"refusalOutcome": "none"
+				},
+				"allowedCaseClaimIds": [],
+				"expectedFailureModes": [],
+				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "4 августа 2031 года, 11:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T08:00:00.000Z",
+							"endAt": "2031-08-04T08:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "4 августа 2031 года, 14:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T11:00:00.000Z",
+							"endAt": "2031-08-04T11:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "rc4-both-known-no-question",
+			"title": "Оба qualification-факта известны",
+			"tags": [
+				"rc4",
+				"booking",
+				"draft",
+				"internal-meeting",
+				"qualification",
+				"no-repeat"
+			],
+			"language": "ru",
+			"direction": "inbound",
+			"description": "Если оба факта уже приняты сервером, после подтверждения нет qualification-вопроса.",
+			"expected": {
+				"requiredStageOrder": [
+					"GREETING",
+					"DISCOVERY",
+					"BOOKING_OFFER",
+					"COLLECT_BOOKING",
+					"COMPLETE"
+				],
+				"finalStages": ["COMPLETE"],
+				"requiredEventOrder": [
+					"server:facts.snapshot:accepted",
+					"server:booking.draft.updated:ready",
+					"server:booking.draft.confirmed:confirmed",
+					"tool_call:create_booking",
+					"domain:booking.created",
+					"tool_result:create_booking:ok",
+					"server:booking.draft.committed:committed",
+					"server:internal.meeting.published:scheduled",
+					"semantic:booking_confirmation"
+				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
+				"forbiddenSemantics": [],
+				"allowedTools": ["create_booking"],
+				"booking": {
+					"outcome": "required",
+					"maxCreateCalls": 1,
+					"qualification": "optional"
+				},
+				"qualificationFlow": {
+					"initialKnownFields": ["monthlyLeadVolume", "salesManagerCount"],
+					"expectedQuestionOrder": [],
+					"refusalOutcome": "none"
+				},
+				"allowedCaseClaimIds": [],
+				"expectedFailureModes": [],
+				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "4 августа 2031 года, 11:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T08:00:00.000Z",
+							"endAt": "2031-08-04T08:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "4 августа 2031 года, 14:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T11:00:00.000Z",
+							"endAt": "2031-08-04T11:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "rc4-none-known-leads-then-managers",
+			"title": "Оба qualification-факта отсутствуют",
+			"tags": [
+				"rc4",
+				"booking",
+				"draft",
+				"internal-meeting",
+				"qualification",
+				"ordered-missing"
+			],
+			"language": "ru",
+			"direction": "inbound",
+			"description": "При отсутствии обоих фактов после подтверждения сначала спрашиваются лиды, затем менеджеры.",
+			"expected": {
+				"requiredStageOrder": [
+					"GREETING",
+					"DISCOVERY",
+					"BOOKING_OFFER",
+					"COLLECT_BOOKING",
+					"POST_BOOKING_QUALIFICATION",
+					"COMPLETE"
+				],
+				"finalStages": ["COMPLETE"],
+				"requiredEventOrder": [
+					"server:facts.snapshot:accepted",
+					"server:booking.draft.updated:ready",
+					"server:booking.draft.confirmed:confirmed",
+					"tool_call:create_booking",
+					"domain:booking.created",
+					"tool_result:create_booking:ok",
+					"server:booking.draft.committed:committed",
+					"server:internal.meeting.published:scheduled",
+					"semantic:booking_confirmation",
+					"semantic:qualification_leads_question",
+					"semantic:qualification_managers_question",
+					"tool_call:append_booking_qualification",
+					"domain:qualification.updated",
+					"tool_result:append_booking_qualification:ok"
+				],
+				"requiredSemantics": [
+					"discovery_context",
+					"booking_confirmation",
+					"qualification_leads_question",
+					"qualification_managers_question"
+				],
+				"forbiddenSemantics": [],
+				"allowedTools": ["create_booking", "append_booking_qualification"],
+				"booking": {
+					"outcome": "required",
+					"maxCreateCalls": 1,
+					"qualification": "accepted"
+				},
+				"qualificationFlow": {
+					"initialKnownFields": [],
+					"expectedQuestionOrder": ["monthlyLeadVolume", "salesManagerCount"],
+					"refusalOutcome": "none"
+				},
+				"allowedCaseClaimIds": [],
+				"expectedFailureModes": [],
+				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "4 августа 2031 года, 11:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T08:00:00.000Z",
+							"endAt": "2031-08-04T08:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "4 августа 2031 года, 14:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T11:00:00.000Z",
+							"endAt": "2031-08-04T11:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "rc4-refusal-preserves-partial",
+			"title": "Отказ сохраняет бронь и partial",
+			"tags": [
+				"rc4",
+				"booking",
+				"draft",
+				"internal-meeting",
+				"qualification",
+				"qualification-decline",
+				"partial"
+			],
+			"language": "ru",
+			"direction": "inbound",
+			"description": "Известный manager count остаётся partial; отказ отвечать про лиды не отменяет внутреннюю встречу.",
+			"expected": {
+				"requiredStageOrder": [
+					"GREETING",
+					"DISCOVERY",
+					"BOOKING_OFFER",
+					"COLLECT_BOOKING",
+					"POST_BOOKING_QUALIFICATION",
+					"COMPLETE"
+				],
+				"finalStages": ["COMPLETE"],
+				"requiredEventOrder": [
+					"server:facts.snapshot:accepted",
+					"server:booking.draft.updated:ready",
+					"server:booking.draft.confirmed:confirmed",
+					"tool_call:create_booking",
+					"domain:booking.created",
+					"tool_result:create_booking:ok",
+					"server:booking.draft.committed:committed",
+					"server:internal.meeting.published:scheduled",
+					"semantic:booking_confirmation",
+					"semantic:qualification_leads_question"
+				],
+				"requiredSemantics": [
+					"discovery_context",
+					"booking_confirmation",
+					"qualification_leads_question"
+				],
+				"forbiddenSemantics": [],
+				"allowedTools": ["create_booking"],
+				"booking": {
+					"outcome": "required",
+					"maxCreateCalls": 1,
+					"qualification": "optional"
+				},
+				"qualificationFlow": {
+					"initialKnownFields": ["salesManagerCount"],
+					"expectedQuestionOrder": ["monthlyLeadVolume"],
+					"refusalOutcome": "partial_preserved"
+				},
+				"allowedCaseClaimIds": [],
+				"expectedFailureModes": [],
+				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "4 августа 2031 года, 11:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T08:00:00.000Z",
+							"endAt": "2031-08-04T08:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "4 августа 2031 года, 14:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T11:00:00.000Z",
+							"endAt": "2031-08-04T11:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "rc4-daily-basis-clarification",
+			"title": "Уточнение базы для 10 в день",
+			"tags": [
+				"rc4",
+				"booking",
+				"draft",
+				"internal-meeting",
+				"qualification",
+				"daily-basis"
+			],
+			"language": "ru",
+			"direction": "inbound",
+			"description": "Значение «10 в день» не нормализуется молча: сначала уточняются рабочие или календарные дни.",
+			"expected": {
+				"requiredStageOrder": [
+					"GREETING",
+					"DISCOVERY",
+					"BOOKING_OFFER",
+					"COLLECT_BOOKING",
+					"POST_BOOKING_QUALIFICATION",
+					"COMPLETE"
+				],
+				"finalStages": ["COMPLETE"],
+				"requiredEventOrder": [
+					"server:facts.snapshot:accepted",
+					"server:booking.draft.updated:ready",
+					"server:booking.draft.confirmed:confirmed",
+					"tool_call:create_booking",
+					"domain:booking.created",
+					"tool_result:create_booking:ok",
+					"server:booking.draft.committed:committed",
+					"server:internal.meeting.published:scheduled",
+					"semantic:booking_confirmation",
+					"semantic:daily_lead_basis_question",
+					"semantic:qualification_managers_question",
+					"tool_call:append_booking_qualification",
+					"domain:qualification.updated",
+					"tool_result:append_booking_qualification:ok"
+				],
+				"requiredSemantics": [
+					"discovery_context",
+					"booking_confirmation",
+					"daily_lead_basis_question",
+					"qualification_managers_question"
+				],
+				"forbiddenSemantics": [],
+				"allowedTools": ["create_booking", "append_booking_qualification"],
+				"booking": {
+					"outcome": "required",
+					"maxCreateCalls": 1,
+					"qualification": "accepted"
+				},
+				"qualificationFlow": {
+					"initialKnownFields": ["monthlyLeadVolume"],
+					"expectedQuestionOrder": ["dailyLeadBasis", "salesManagerCount"],
+					"refusalOutcome": "none"
+				},
+				"allowedCaseClaimIds": [],
+				"expectedFailureModes": [],
+				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "4 августа 2031 года, 11:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T08:00:00.000Z",
+							"endAt": "2031-08-04T08:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "4 августа 2031 года, 14:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T11:00:00.000Z",
+							"endAt": "2031-08-04T11:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "rc4-form-conflict-resolution",
+			"title": "Конфликт формы с голосовыми фактами",
+			"tags": [
+				"rc4",
+				"booking",
+				"draft",
+				"internal-meeting",
+				"conflict",
+				"form",
+				"identity"
+			],
+			"language": "ru",
+			"direction": "inbound",
+			"description": "Предыдущие кириллические имя и компания конфликтуют со структурированными Alexey Petrov; серверное разрешение формы предшествует подтверждению draft.",
+			"expected": {
+				"requiredStageOrder": [
+					"GREETING",
+					"DISCOVERY",
+					"BOOKING_OFFER",
+					"COLLECT_BOOKING",
+					"COMPLETE"
+				],
+				"finalStages": ["COMPLETE"],
+				"requiredEventOrder": [
+					"server:facts.snapshot:accepted",
+					"server:booking.draft.updated:conflicted",
+					"server:booking.conflict.resolved:ready",
+					"server:booking.draft.confirmed:confirmed",
+					"tool_call:create_booking",
+					"domain:booking.created",
+					"tool_result:create_booking:ok",
+					"server:booking.draft.committed:committed",
+					"server:internal.meeting.published:scheduled",
+					"semantic:booking_confirmation"
+				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
+				"forbiddenSemantics": [],
+				"allowedTools": ["create_booking"],
+				"booking": {
+					"outcome": "required",
+					"maxCreateCalls": 1,
+					"qualification": "optional"
+				},
+				"qualificationFlow": {
+					"initialKnownFields": ["monthlyLeadVolume", "salesManagerCount"],
+					"expectedQuestionOrder": [],
+					"refusalOutcome": "none"
+				},
+				"allowedCaseClaimIds": [],
+				"expectedFailureModes": [],
+				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "4 августа 2031 года, 11:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T08:00:00.000Z",
+							"endAt": "2031-08-04T08:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "4 августа 2031 года, 14:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T11:00:00.000Z",
+							"endAt": "2031-08-04T11:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "rc4-authorized-contact-tts",
+			"title": "Серверно авторизованное подтверждение контакта",
+			"tags": [
+				"rc4",
+				"booking",
+				"draft",
+				"internal-meeting",
+				"tts-authorization",
+				"email",
+				"phone"
+			],
+			"language": "ru",
+			"direction": "inbound",
+			"description": "Только закрытая серверная авторизация позволяет произнести синтетические контакты, совпадающие с committed draft и booking.",
+			"expected": {
+				"requiredStageOrder": [
+					"GREETING",
+					"DISCOVERY",
+					"BOOKING_OFFER",
+					"COLLECT_BOOKING",
+					"COMPLETE"
+				],
+				"finalStages": ["COMPLETE"],
+				"requiredEventOrder": [
+					"server:facts.snapshot:accepted",
+					"server:booking.draft.updated:ready",
+					"server:booking.draft.confirmed:confirmed",
+					"tool_call:create_booking",
+					"domain:booking.created",
+					"tool_result:create_booking:ok",
+					"server:booking.draft.committed:committed",
+					"server:internal.meeting.published:scheduled",
+					"semantic:booking_confirmation"
+				],
+				"requiredSemantics": ["discovery_context", "booking_confirmation"],
+				"forbiddenSemantics": [],
+				"allowedTools": ["create_booking"],
+				"booking": {
+					"outcome": "required",
+					"maxCreateCalls": 1,
+					"qualification": "optional"
+				},
+				"qualificationFlow": {
+					"initialKnownFields": ["monthlyLeadVolume", "salesManagerCount"],
+					"expectedQuestionOrder": [],
+					"refusalOutcome": "none"
+				},
+				"allowedCaseClaimIds": [],
+				"expectedFailureModes": [],
+				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "4 августа 2031 года, 11:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T08:00:00.000Z",
+							"endAt": "2031-08-04T08:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "4 августа 2031 года, 14:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T11:00:00.000Z",
+							"endAt": "2031-08-04T11:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "rc4-already-answered-no-reask",
+			"title": "«Я уже отвечал» без повторного вопроса",
+			"tags": [
+				"rc4",
+				"booking",
+				"draft",
+				"internal-meeting",
+				"qualification",
+				"already-answered",
+				"no-repeat"
+			],
+			"language": "ru",
+			"direction": "inbound",
+			"description": "Фраза пользователя подтверждается серверным фактом: известный manager count не спрашивается повторно, задаётся только отсутствующий вопрос о лидах.",
+			"expected": {
+				"requiredStageOrder": [
+					"GREETING",
+					"DISCOVERY",
+					"BOOKING_OFFER",
+					"COLLECT_BOOKING",
+					"POST_BOOKING_QUALIFICATION",
+					"COMPLETE"
+				],
+				"finalStages": ["COMPLETE"],
+				"requiredEventOrder": [
+					"server:facts.snapshot:accepted",
+					"server:booking.draft.updated:ready",
+					"server:booking.draft.confirmed:confirmed",
+					"tool_call:create_booking",
+					"domain:booking.created",
+					"tool_result:create_booking:ok",
+					"server:booking.draft.committed:committed",
+					"server:internal.meeting.published:scheduled",
+					"semantic:booking_confirmation",
+					"semantic:qualification_leads_question",
+					"tool_call:append_booking_qualification",
+					"domain:qualification.updated",
+					"tool_result:append_booking_qualification:ok"
+				],
+				"requiredSemantics": [
+					"discovery_context",
+					"booking_confirmation",
+					"qualification_leads_question"
+				],
+				"forbiddenSemantics": [],
+				"allowedTools": ["create_booking", "append_booking_qualification"],
+				"booking": {
+					"outcome": "required",
+					"maxCreateCalls": 1,
+					"qualification": "accepted"
+				},
+				"qualificationFlow": {
+					"initialKnownFields": ["salesManagerCount"],
+					"expectedQuestionOrder": ["monthlyLeadVolume"],
+					"refusalOutcome": "none"
+				},
+				"allowedCaseClaimIds": [],
+				"expectedFailureModes": [],
+				"ttsMode": "required"
+			},
+			"serverContext": {
+				"slotCandidates": [
+					{
+						"label": "4 августа 2031 года, 11:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T08:00:00.000Z",
+							"endAt": "2031-08-04T08:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					},
+					{
+						"label": "4 августа 2031 года, 14:00 по Москве",
+						"meetingSlot": {
+							"startAt": "2031-08-04T11:00:00.000Z",
+							"endAt": "2031-08-04T11:20:00.000Z",
+							"timeZone": "Europe/Moscow",
+							"durationMinutes": 20
+						}
+					}
+				]
 			}
 		}
 	]

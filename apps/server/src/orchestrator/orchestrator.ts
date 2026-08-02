@@ -5,6 +5,7 @@ import type {
 	BrainTurnInput,
 	KnownFacts,
 	MeetingSlot,
+	MeetingTimePreference,
 	SafeErrorCode,
 	SttPort,
 	SttTranscriptionResult,
@@ -12,6 +13,7 @@ import type {
 	TtsPort,
 } from "@botamin/contracts";
 import { TtsAudioSegmentSchema } from "@botamin/contracts";
+import { parseMeetingTimePreference } from "../domain/booking";
 import type { ObservabilityMetrics } from "../observability";
 import { buildBrainContext } from "./context";
 import { GenerationCoordinator } from "./generation";
@@ -306,6 +308,7 @@ export class ConversationOrchestrator {
 	>();
 	#threadId: string | undefined;
 	#state: ConversationState;
+	#timeOfDayPreference: MeetingTimePreference = "none";
 	#lifecycleInterruption: Promise<void> = Promise.resolve();
 	#closed = false;
 	#closePromise: Promise<void> | null = null;
@@ -684,8 +687,13 @@ export class ConversationOrchestrator {
 		let schedulingReady = false;
 		try {
 			const now = this.#now();
-			const candidateMeetingSlots =
-				await this.#bookings.candidateMeetingSlots();
+			const parsedPreference = parseMeetingTimePreference(input.userText);
+			if (parsedPreference !== null) {
+				this.#timeOfDayPreference = parsedPreference;
+			}
+			const candidateMeetingSlots = await this.#bookings.candidateMeetingSlots(
+				this.#timeOfDayPreference,
+			);
 			if (!this.#generations.accept(input.generationId, input.turnId)) return;
 			const context = buildBrainContext({
 				conversationId: this.conversationId,
@@ -699,6 +707,7 @@ export class ConversationOrchestrator {
 				allowedActions: allowedActions(this.#state),
 				promptVersion: this.#promptVersion,
 				now,
+				timeOfDayPreference: this.#timeOfDayPreference,
 				candidateMeetingSlots,
 			});
 			schedulingReady = true;

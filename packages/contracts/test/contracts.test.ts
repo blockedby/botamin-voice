@@ -54,8 +54,8 @@ const meetingSlot = {
 } as const;
 const secondMeetingSlot = {
 	...meetingSlot,
-	startAt: "2026-08-03T06:20:00.000Z",
-	endAt: "2026-08-03T06:40:00.000Z",
+	startAt: "2026-08-03T13:00:00.000Z",
+	endAt: "2026-08-03T13:20:00.000Z",
 } as const;
 const candidateMeetingSlots = [meetingSlot, secondMeetingSlot] as const;
 function createStructurallyValidMp3Frame(): Uint8Array {
@@ -183,6 +183,7 @@ describe("shared contracts", () => {
 				currentInstant: "2025-01-09T09:00:00.000Z",
 				moscowLocalDate: "2025-01-09",
 				moscowWeekday: "четверг",
+				timeOfDayPreference: "none",
 				candidateMeetingSlots: candidateMeetingSlots.map((slot) => ({
 					meetingSlot: slot,
 					displayLabel:
@@ -195,6 +196,13 @@ describe("shared contracts", () => {
 
 		expect(BrainTurnInputSchema.safeParse(input).success).toBe(true);
 		for (const invalid of [
+			{
+				...input,
+				schedulingContext: {
+					...input.schedulingContext,
+					timeOfDayPreference: "late_night",
+				},
+			},
 			{
 				...input,
 				schedulingContext: {

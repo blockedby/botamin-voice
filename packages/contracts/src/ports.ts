@@ -8,6 +8,7 @@ import type {
 	BookingDomainEvent,
 	BookingSnapshot,
 	MeetingSlot,
+	MeetingTimePreference,
 	QualificationPatch,
 } from "./domain";
 import {
@@ -15,6 +16,7 @@ import {
 	ConversationStageSchema,
 	KnownFactsSchema,
 	MeetingSlotSchema,
+	MeetingTimePreferenceSchema,
 } from "./domain";
 import type {
 	AppendQualificationInput,
@@ -68,6 +70,7 @@ export const SchedulingContextSchema = z
 			}),
 		moscowLocalDate: z.iso.date(),
 		moscowWeekday: z.enum(MOSCOW_WEEKDAYS),
+		timeOfDayPreference: MeetingTimePreferenceSchema,
 		candidateMeetingSlots: z.tuple([
 			SchedulingCandidateSchema,
 			SchedulingCandidateSchema,
@@ -292,7 +295,9 @@ export interface BookingRepository {
 
 export interface BookingService {
 	/** Two current internal candidates; this is not an external availability claim. */
-	candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]>;
+	candidateMeetingSlots(
+		preference?: MeetingTimePreference,
+	): Promise<[MeetingSlot, MeetingSlot]>;
 	/** Commits booking.created before this promise resolves. */
 	createBooking(input: CreateBookingInput): Promise<CreateBookingResult>;
 

@@ -105,7 +105,7 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 	});
 
-	test("generates exactly two closest candidates for 2025-01-09 Thursday and skips committed slots", async () => {
+	test("generates contextual Thursday candidates and skips committed anchors", async () => {
 		const { database, input } = fixture();
 		const now = new Date("2025-01-09T09:00:00.000Z");
 		const expected = generateCandidateMeetingSlots(now);
@@ -116,20 +116,25 @@ describe("SQLite booking transaction", () => {
 		const afterCommit = await service.candidateMeetingSlots();
 
 		expect(afterCommit).toHaveLength(2);
-		expect(afterCommit[0]).toEqual(expected[1]);
+		expect(afterCommit[1]).toEqual(expected[1]);
 		expect(
 			afterCommit.every((slot) => slot.startAt !== expected[0].startAt),
 		).toBe(true);
+		expect(
+			(await service.candidateMeetingSlots("morning")).map(
+				(slot) => slot.startAt,
+			),
+		).toEqual(["2025-01-10T06:20:00.000Z", "2025-01-10T07:20:00.000Z"]);
 		expect(expected).toEqual(generateCandidateMeetingSlots(now));
 		expect(expected.map((slot) => slot.startAt)).toEqual([
 			"2025-01-10T06:00:00.000Z",
-			"2025-01-10T06:20:00.000Z",
+			"2025-01-10T13:00:00.000Z",
 		]);
 		expect(
 			generateCandidateMeetingSlots(new Date("2025-01-10T20:00:00.000Z")).map(
 				(slot) => slot.startAt,
 			),
-		).toEqual(["2025-01-13T06:00:00.000Z", "2025-01-13T06:20:00.000Z"]);
+		).toEqual(["2025-01-13T06:00:00.000Z", "2025-01-13T13:00:00.000Z"]);
 		expect(expected[0].timeZone).toBe("Europe/Moscow");
 		expect(
 			new Date(expected[0].startAt).getTime() - now.getTime(),

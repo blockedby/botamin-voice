@@ -123,6 +123,45 @@ describe("allowed action and tool authorization policy", () => {
 		).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
 	});
 
+	test("rejects stale and out-of-policy slots after contextual candidates change", () => {
+		const eveningCandidates = [
+			{
+				startAt: "2099-01-05T13:00:00.000Z",
+				endAt: "2099-01-05T13:20:00.000Z",
+				timeZone: "Europe/Moscow" as const,
+				durationMinutes: 20 as const,
+			},
+			{
+				startAt: "2099-01-05T14:00:00.000Z",
+				endAt: "2099-01-05T14:20:00.000Z",
+				timeZone: "Europe/Moscow" as const,
+				durationMinutes: 20 as const,
+			},
+		] as const;
+		expect(
+			authorizeTool(
+				collectionState(),
+				conversationId,
+				eveningCandidates,
+				request,
+			),
+		).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
+		expect(
+			authorizeTool(collectionState(), conversationId, eveningCandidates, {
+				...request,
+				args: {
+					...request.args,
+					meetingSlot: {
+						startAt: "2099-01-05T20:00:00.000Z",
+						endAt: "2099-01-05T20:20:00.000Z",
+						timeZone: "Europe/Moscow",
+						durationMinutes: 20,
+					},
+				},
+			}),
+		).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
+	});
+
 	test("qualification is allowed only after confirmation and explicit consent", async () => {
 		const service = new FakeBookingService();
 		const created = await service.createBooking(input);

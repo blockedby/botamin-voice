@@ -80,6 +80,13 @@ export const BookingContactsSchema = z
 
 export const MEETING_TIME_ZONE = "Europe/Moscow" as const;
 export const MEETING_DURATION_MINUTES = 20 as const;
+export const MeetingTimePreferenceSchema = z.enum([
+	"none",
+	"morning",
+	"daytime",
+	"second_half",
+	"evening",
+]);
 
 const CanonicalRfc3339UtcSchema = Rfc3339UtcSchema.refine(
 	(value) => new Date(value).toISOString() === value,
@@ -261,5 +268,6 @@ export type ConversationStage = z.infer<typeof ConversationStageSchema>;
 export type ConversationStatus = z.infer<typeof ConversationStatusSchema>;
 export type KnownFacts = z.infer<typeof KnownFactsSchema>;
 export type MeetingSlot = z.infer<typeof MeetingSlotSchema>;
+export type MeetingTimePreference = z.infer<typeof MeetingTimePreferenceSchema>;
 export type QualificationPatch = z.infer<typeof QualificationPatchSchema>;
 export type QualificationStatus = z.infer<typeof QualificationStatusSchema>;

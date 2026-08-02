@@ -12,6 +12,7 @@ import {
 	CreateBookingInputSchema,
 	type CreateBookingResult,
 	type MeetingSlot,
+	type MeetingTimePreference,
 	MpegAudioBytesSchema,
 	type Notifier,
 	type ProviderHealth,
@@ -225,9 +226,9 @@ export interface FakeBookingOptions {
 	bookingId?: () => string;
 	createdEventId?: () => string;
 	updatedEventId?: () => string;
-	candidateMeetingSlots?: () =>
-		| [MeetingSlot, MeetingSlot]
-		| Promise<[MeetingSlot, MeetingSlot]>;
+	candidateMeetingSlots?: (
+		preference?: MeetingTimePreference,
+	) => [MeetingSlot, MeetingSlot] | Promise<[MeetingSlot, MeetingSlot]>;
 }
 
 export class FakeBookingService implements BookingService {
@@ -261,8 +262,10 @@ export class FakeBookingService implements BookingService {
 		};
 	}
 
-	async candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]> {
-		return this.#options.candidateMeetingSlots();
+	async candidateMeetingSlots(
+		preference: MeetingTimePreference = "none",
+	): Promise<[MeetingSlot, MeetingSlot]> {
+		return this.#options.candidateMeetingSlots(preference);
 	}
 
 	async createBooking(input: unknown): Promise<CreateBookingResult> {

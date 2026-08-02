@@ -6,6 +6,7 @@ import type {
 	BrainPort,
 	BrainTurnInput,
 	CreateBookingInput,
+	MeetingTimePreference,
 	ProviderHealth,
 	SttHealth,
 	SttPort,
@@ -26,6 +27,7 @@ import {
 	FakeStt,
 	FakeTts,
 } from "../../../../packages/test-fixtures/src";
+import { generateCandidateMeetingSlots } from "../domain/booking";
 import {
 	ConversationOrchestrator,
 	type OrchestratorEvent,
@@ -151,6 +153,7 @@ function fixture(
 		bookings?: FakeBookingService;
 		tts?: TtsPort | null;
 		initialState?: ConversationState;
+		now?: () => Date;
 	} = {},
 ) {
 	const stt = options.stt ?? new FakeStt({ text: "Да, сохраните данные" });
@@ -165,6 +168,7 @@ function fixture(
 		bookings,
 		tts,
 		initialState: options.initialState ?? collectionState(),
+		...(options.now ? { now: options.now } : {}),
 	});
 	return { orchestrator, stt, brain, bookings, tts };
 }
@@ -446,6 +450,96 @@ describe("atomic transcript intake", () => {
 				code: "DB_UNAVAILABLE",
 			}),
 		);
+	});
+
+	test("typed and spoken preferences use the same server-owned proposal path", async () => {
+		const now = new Date("2025-01-09T09:00:00.000Z");
+		const requested: MeetingTimePreference[] = [];
+		const candidateMeetingSlots = (
+			preference: MeetingTimePreference = "none",
+		) => {
+			requested.push(preference);
+			return generateCandidateMeetingSlots(now, [], preference);
+		};
+		const typedBrain = new FakeBrain([]);
+		const typed = fixture({
+			brain: typedBrain,
+			bookings: new FakeBookingService({ candidateMeetingSlots }),
+			now: () => now,
+		});
+		await collect(
+			typed.orchestrator.acceptTextSubmit({
+				turnId: turn1,
+				generationId: generation1,
+				text: "Мне удобно во второй половине дня",
+				knownFacts: facts,
+			}),
+		);
+
+		const spokenBrain = new FakeBrain([]);
+		const spoken = fixture({
+			brain: spokenBrain,
+			stt: new FakeStt({ text: "Мне удобно во второй половине дня" }),
+			bookings: new FakeBookingService({ candidateMeetingSlots }),
+			now: () => now,
+		});
+		await collect(spoken.orchestrator.acceptAudioCommit(commit()));
+
+		expect(requested).toEqual(["second_half", "second_half"]);
+		expect(typedBrain.turns[0]?.schedulingContext).toEqual(
+			spokenBrain.turns[0]?.schedulingContext,
+		);
+		expect(typedBrain.turns[0]?.schedulingContext.timeOfDayPreference).toBe(
+			"second_half",
+		);
+	});
+
+	test("a later out-of-hours preference refreshes Luna data with evening policy slots", async () => {
+		const now = new Date("2025-01-09T09:00:00.000Z");
+		const requested: MeetingTimePreference[] = [];
+		const brain = new FakeBrain([], []);
+		const { orchestrator } = fixture({
+			brain,
+			bookings: new FakeBookingService({
+				candidateMeetingSlots: (preference = "none") => {
+					requested.push(preference);
+					return generateCandidateMeetingSlots(now, [], preference);
+				},
+			}),
+			now: () => now,
+		});
+
+		await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn1,
+				generationId: generation1,
+				text: "Давайте утром",
+				knownFacts: facts,
+			}),
+		);
+		await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn2,
+				generationId: generation2,
+				text: "Нет, лучше в 23:00",
+				knownFacts: facts,
+			}),
+		);
+
+		expect(requested).toEqual(["morning", "evening"]);
+		expect(brain.turns).toHaveLength(2);
+		expect(brain.turns[1]?.schedulingContext.timeOfDayPreference).toBe(
+			"evening",
+		);
+		expect(
+			brain.turns[1]?.schedulingContext.candidateMeetingSlots.map(
+				(candidate) => candidate.displayLabel,
+			),
+		).toEqual([
+			"10 января 2025 года, пятница, 16:00–16:20 по Москве",
+			"10 января 2025 года, пятница, 17:00–17:20 по Москве",
+		]);
+		expect(JSON.stringify(brain.turns[1])).not.toContain("23:00–23:20");
 	});
 
 	test("STT failure invokes no brain, tool, notifier, or TTS", async () => {

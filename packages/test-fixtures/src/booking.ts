@@ -18,6 +18,7 @@ export function createTestSchedulingContext(): SchedulingContext {
 		currentInstant: "2026-07-30T20:22:00.000Z",
 		moscowLocalDate: "2026-07-30",
 		moscowWeekday: "четверг",
+		timeOfDayPreference: "none",
 		candidateMeetingSlots: [
 			{
 				meetingSlot: createTestMeetingSlot(),
@@ -25,7 +26,7 @@ export function createTestSchedulingContext(): SchedulingContext {
 			},
 			{
 				meetingSlot: createTestMeetingSlot(1),
-				displayLabel: "05 января 2099 года, понедельник, 09:20–09:40 по Москве",
+				displayLabel: "05 января 2099 года, понедельник, 16:00–16:20 по Москве",
 			},
 		],
 	};
@@ -42,8 +43,8 @@ export function createTestMeetingSlot(index = 0): MeetingSlot {
 				durationMinutes: 20,
 			}
 		: {
-				startAt: "2099-01-05T06:20:00.000Z",
-				endAt: "2099-01-05T06:40:00.000Z",
+				startAt: "2099-01-05T13:00:00.000Z",
+				endAt: "2099-01-05T13:20:00.000Z",
 				timeZone: "Europe/Moscow",
 				durationMinutes: 20,
 			};

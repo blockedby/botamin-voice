@@ -16,6 +16,7 @@ import {
 	CreateBookingResultSchema,
 	type MeetingSlot,
 	MeetingSlotSchema,
+	type MeetingTimePreference,
 	PersistedQualificationPatchSchema,
 	type QualificationPatch,
 } from "@botamin/contracts";
@@ -139,11 +140,17 @@ export class SqliteBookingService implements BookingService {
 	 * Returns two deterministic internal candidates, excluding slots committed
 	 * at query time. This does not reserve a slot or assert external availability.
 	 */
-	async candidateMeetingSlots(): Promise<[MeetingSlot, MeetingSlot]> {
+	async candidateMeetingSlots(
+		preference: MeetingTimePreference = "none",
+	): Promise<[MeetingSlot, MeetingSlot]> {
 		const now = this.now();
 		const unavailable = new Set<string>();
 		while (true) {
-			const candidates = generateCandidateMeetingSlots(now, unavailable);
+			const candidates = generateCandidateMeetingSlots(
+				now,
+				unavailable,
+				preference,
+			);
 			const committed = this.database
 				.select({ startAt: bookings.meetingStartAt })
 				.from(bookings)

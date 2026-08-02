@@ -17,17 +17,17 @@
 
 ## Local P0 candidate checklist
 
-RC3 acceptance has not been run by this documentation-only change. Do not copy RC2 test/assertion/checksum counts or present historical browser/deploy/provider evidence as RC3 evidence.
+Fresh RC3 local evidence is recorded in [`../VALIDATION.md`](../VALIDATION.md); RC2 observations were not reused as proof.
 
-- [ ] Run fresh credential-free tests and record actual counts/results.
-- [ ] Run typecheck, lint/format checks, build, `scripts/build-spec.sh`, `scripts/validate-spec.py`, stale searches, and `git diff --check`; record exact results.
-- [ ] Run local Chrome acceptance for greeting autoplay success and blocked/error fallback, zero pre-consent REST/WS/mic/provider/session, greeting stop at session start, typed/spoken contextual slots, and skipped/partial/complete qualification.
-- [ ] Run `scripts/deploy-local.sh` from the final RC3 tree and record migration, app/Caddy health/readiness, limits, and file-secret evidence.
-- [ ] Run any OpenRouter STT/TTS/Codex smoke only with explicit paid-use approval; record actual safe evidence or leave not run.
-- [ ] Verify backup/restore/rollback readiness and preserve the immutable RC2 image shown below.
-- [ ] Parent records final SHA, counts, browser/deploy/provider observations, and release result in [`../VALIDATION.md`](../VALIDATION.md), then updates `MANIFEST.txt` and `CHECKSUMS.sha256` separately.
-- [ ] WebKit playback and complete journey acceptance — later gate unless explicitly run and recorded.
-- [ ] Target VPS deploy, DNS, TLS/WSS, and target-host paid smokes — later gate.
+- [x] Credential-free suite passed 510 tests across 58 files with 4,265 assertions and no failures.
+- [x] Typecheck, lint/format, production build, deterministic eval/spec generation, validator, and `git diff --check` passed.
+- [x] Chrome exercised proactive greeting success and fallback, zero pre-consent conversation calls, session-start cleanup, responsive layouts, and a real contextual evening request. Gateway/orchestrator tests cover typed/spoken preferences and qualification skipped/partial/complete. Firefox headless rendered 390×844 without CSP/runtime errors.
+- [x] `scripts/deploy-local.sh` completed from the RC3 tree; migration, app/Caddy health/readiness, 60-second/2 MB limits, and file-secret boundaries passed.
+- [x] Explicit paid checks passed: static OpenRouter TTS greeting generation, one typed Luna/TTS evening-slot turn, and one OpenRouter STT → Luna → OpenRouter TTS smoke with two decoder-accepted MP3 segments.
+- [x] Fresh protected backup and deterministic restore/rollback tests passed; RC2 remains the rollback tag shown below.
+- [x] Final evidence was recorded in `VALIDATION.md`; `MANIFEST.txt` and `CHECKSUMS.sha256` were regenerated separately.
+- [ ] WebKit playback and complete journey acceptance — later gate, unobserved.
+- [ ] Target VPS deploy, DNS, TLS/WSS, and target-host paid smokes — later gate, unobserved.
 
 The committed [T30 owner-observed artifact](../evidence/T30-observed-local-voice-smoke-2026-07-31.md) remains historical evidence only; it does not close RC3 acceptance.
 

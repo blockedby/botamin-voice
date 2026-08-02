@@ -299,16 +299,16 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ### Local release candidate `0.5.0-local-rc.3`
 
-RC3 is a candidate, not an accepted release. RC2 evidence may inform rollback but does not close RC3 gates. Record final command counts, checksum counts, SHA, browser observations, deployment observations, and paid-provider observations only in the parent-owned final evidence after those checks actually run.
+RC3 local acceptance is recorded in [`../VALIDATION.md`](../VALIDATION.md). RC2 remains the prior rollback candidate; local evidence does not close WebKit or target-host gates.
 
-- [ ] Run the fresh credential-free deterministic suite and record its actual result/counts without copying RC2 numbers.
-- [ ] Run typecheck, lint/format checks, build, `scripts/build-spec.sh`, `scripts/validate-spec.py`, required stale searches, and `git diff --check`; record exact commands/results.
-- [ ] Confirm changed docs and generated spec describe the committed code/contracts/tests for proactive greeting, contextual candidates, and deterministic two-question qualification; keep active prompts/code/assets/tests/evals unchanged for this documentation candidate.
-- [ ] Run local Chrome acceptance for immediate greeting success plus blocked/error fallback, zero pre-consent REST/WS/mic/provider/session, greeting stop on session start, typed/spoken scheduling refresh, booking, and skipped/partial/complete qualification. Run Firefox/WebKit only when explicitly included and report each browser separately.
-- [ ] Run `scripts/deploy-local.sh` from the final RC3 tree and collect app/Caddy migration/readiness evidence; do not infer it from RC2.
-- [ ] With explicit owner approval, run bounded OpenRouter STT/TTS/Codex smoke(s) and report safe actual evidence. Default tests/spec validation do not spend provider usage.
-- [ ] Verify backup/restore/rollback procedure and retain `botamin-voice:0.5.0-local-rc.2` as the prior rollback image before recommending `v0.5.0-local-rc.3`.
-- [ ] Parent updates `MANIFEST.txt`, `CHECKSUMS.sha256`, and `VALIDATION.md` with final evidence; this documentation change does not modify them.
+- [x] Fresh credential-free deterministic suite: 510 tests passed across 58 files with 4,265 assertions and no failures.
+- [x] Typecheck, lint/format, production build, deterministic eval baseline, `scripts/build-spec.sh`, `scripts/validate-spec.py`, and `git diff --check` passed.
+- [x] Docs and generated specification match proactive greeting, contextual candidates, and deterministic two-question qualification contracts.
+- [x] Disposable Chrome exercised automatic static greeting success, blocked/unavailable fallback, zero pre-consent conversation REST/WS/mic/provider calls, session-start cleanup, 780/390 px layouts, and a real typed evening request that received two server-supplied evening candidates. Deterministic gateway/orchestrator coverage proves typed/spoken equivalence plus skipped/partial/complete qualification. Firefox headless rendered 390×844 without CSP/runtime errors; WebKit was not run.
+- [x] `scripts/deploy-local.sh` completed from the RC3 tree; migration, app/Caddy health, dependency readiness, file-secret boundaries, and 60-second/2 MB limits passed.
+- [x] Explicit bounded paid checks passed: static greeting generation through OpenRouter TTS, one real typed Luna/TTS evening-slot turn, and one OpenRouter STT → Luna → OpenRouter TTS voice smoke with two decoder-accepted MP3 segments.
+- [x] Fresh protected backup succeeded; deterministic restore/rollback tests passed. `botamin-voice:0.5.0-local-rc.2` remains the prior rollback tag.
+- [x] Parent regenerated `MANIFEST.txt` and `CHECKSUMS.sha256` and recorded final evidence in `VALIDATION.md`.
 
 ### Later target release gates — not closed by local RC
 
@@ -323,14 +323,14 @@ A real calendar event is intentionally out of scope rather than an unchecked rel
 
 ## 11. Candidate evidence bundle
 
-The parent acceptance pass should add, after fresh observation:
+The RC3 evidence bundle contains:
 
-- final commit SHA and uncreated `v0.5.0-local-rc.3` recommendation;
-- actual deterministic test/type/lint/build/spec/validator results and separately generated checksum evidence;
-- credential-free Compose config, shell/wrapper, and file-secret checks;
-- browser results labeled by engine/viewport;
-- deploy/readiness results and any explicitly approved paid-provider results;
-- preserved RC2 rollback image and matching DB-backup guidance;
+- final candidate SHA and `v0.5.0-local-rc.3` recommendation;
+- deterministic test/type/lint/build/spec/validator and regenerated checksum evidence;
+- Compose migration, file-secret, health, readiness, and backup observations;
+- Chrome and Firefox results labeled by engine and viewport;
+- safe aggregate results from explicitly approved bounded provider checks;
+- preserved RC2 rollback tag and matching DB-backup guidance;
 - known limitations and explicit WebKit/VPS/TLS blockers.
 
 Target-VPS compose/health/preflight/provider evidence and benchmark-grade latency remain a later evidence bundle; they must not be inferred from this local release candidate.

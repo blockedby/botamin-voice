@@ -5050,47 +5050,45 @@ directly;</li>
 <h2 id="acceptance-checklist-p0">10. Acceptance checklist P0</h2>
 <h3 id="local-release-candidate-0.5.0-local-rc.3">Local release
 candidate <code>0.5.0-local-rc.3</code></h3>
-<p>RC3 is a candidate, not an accepted release. RC2 evidence may inform
-rollback but does not close RC3 gates. Record final command counts,
-checksum counts, SHA, browser observations, deployment observations, and
-paid-provider observations only in the parent-owned final evidence after
-those checks actually run.</p>
+<p>RC3 local acceptance is recorded in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>. RC2 remains the
+prior rollback candidate; local evidence does not close WebKit or
+target-host gates.</p>
 <ul class="task-list">
-<li><label><input type="checkbox"></input>Run the fresh credential-free
-deterministic suite and record its actual result/counts without copying
-RC2 numbers.</label></li>
-<li><label><input type="checkbox"></input>Run typecheck, lint/format checks,
-build, <code>scripts/build-spec.sh</code>,
-<code>scripts/validate-spec.py</code>, required stale searches, and
-<code>git diff --check</code>; record exact
-commands/results.</label></li>
-<li><label><input type="checkbox"></input>Confirm changed docs and generated
-spec describe the committed code/contracts/tests for proactive greeting,
-contextual candidates, and deterministic two-question qualification;
-keep active prompts/code/assets/tests/evals unchanged for this
-documentation candidate.</label></li>
-<li><label><input type="checkbox"></input>Run local Chrome acceptance for
-immediate greeting success plus blocked/error fallback, zero pre-consent
-REST/WS/mic/provider/session, greeting stop on session start,
-typed/spoken scheduling refresh, booking, and skipped/partial/complete
-qualification. Run Firefox/WebKit only when explicitly included and
-report each browser separately.</label></li>
-<li><label><input type="checkbox"></input>Run
-<code>scripts/deploy-local.sh</code> from the final RC3 tree and collect
-app/Caddy migration/readiness evidence; do not infer it from
-RC2.</label></li>
-<li><label><input type="checkbox"></input>With explicit owner approval, run
-bounded OpenRouter STT/TTS/Codex smoke(s) and report safe actual
-evidence. Default tests/spec validation do not spend provider
-usage.</label></li>
-<li><label><input type="checkbox"></input>Verify backup/restore/rollback
-procedure and retain <code>botamin-voice:0.5.0-local-rc.2</code> as the
-prior rollback image before recommending
-<code>v0.5.0-local-rc.3</code>.</label></li>
-<li><label><input type="checkbox"></input>Parent updates
-<code>MANIFEST.txt</code>, <code>CHECKSUMS.sha256</code>, and
-<code>VALIDATION.md</code> with final evidence; this documentation
-change does not modify them.</label></li>
+<li><label><input type="checkbox" checked></input>Fresh credential-free
+deterministic suite: 510 tests passed across 58 files with 4,265
+assertions and no failures.</label></li>
+<li><label><input type="checkbox" checked></input>Typecheck, lint/format,
+production build, deterministic eval baseline,
+<code>scripts/build-spec.sh</code>,
+<code>scripts/validate-spec.py</code>, and <code>git diff --check</code>
+passed.</label></li>
+<li><label><input type="checkbox" checked></input>Docs and generated
+specification match proactive greeting, contextual candidates, and
+deterministic two-question qualification contracts.</label></li>
+<li><label><input type="checkbox" checked></input>Disposable Chrome
+exercised automatic static greeting success, blocked/unavailable
+fallback, zero pre-consent conversation REST/WS/mic/provider calls,
+session-start cleanup, 780/390 px layouts, and a real typed evening
+request that received two server-supplied evening candidates.
+Deterministic gateway/orchestrator coverage proves typed/spoken
+equivalence plus skipped/partial/complete qualification. Firefox
+headless rendered 390×844 without CSP/runtime errors; WebKit was not
+run.</label></li>
+<li><label><input type="checkbox" checked></input><code>scripts/deploy-local.sh</code> completed from the RC3
+tree; migration, app/Caddy health, dependency readiness, file-secret
+boundaries, and 60-second/2 MB limits passed.</label></li>
+<li><label><input type="checkbox" checked></input>Explicit bounded paid
+checks passed: static greeting generation through OpenRouter TTS, one
+real typed Luna/TTS evening-slot turn, and one OpenRouter STT → Luna →
+OpenRouter TTS voice smoke with two decoder-accepted MP3
+segments.</label></li>
+<li><label><input type="checkbox" checked></input>Fresh protected backup
+succeeded; deterministic restore/rollback tests passed.
+<code>botamin-voice:0.5.0-local-rc.2</code> remains the prior rollback
+tag.</label></li>
+<li><label><input type="checkbox" checked></input>Parent regenerated
+<code>MANIFEST.txt</code> and <code>CHECKSUMS.sha256</code> and recorded
+final evidence in <code>VALIDATION.md</code>.</label></li>
 </ul>
 <h3 id="later-target-release-gates-not-closed-by-local-rc">Later target
 release gates — not closed by local RC</h3>
@@ -5115,18 +5113,18 @@ commercial operation.</label></li>
 unchecked release gate. The product stores an internal booking and
 notification outbox event only.</p>
 <h2 id="candidate-evidence-bundle">11. Candidate evidence bundle</h2>
-<p>The parent acceptance pass should add, after fresh observation:</p>
+<p>The RC3 evidence bundle contains:</p>
 <ul>
-<li>final commit SHA and uncreated <code>v0.5.0-local-rc.3</code>
+<li>final candidate SHA and <code>v0.5.0-local-rc.3</code>
 recommendation;</li>
-<li>actual deterministic test/type/lint/build/spec/validator results and
-separately generated checksum evidence;</li>
-<li>credential-free Compose config, shell/wrapper, and file-secret
+<li>deterministic test/type/lint/build/spec/validator and regenerated
+checksum evidence;</li>
+<li>Compose migration, file-secret, health, readiness, and backup
+observations;</li>
+<li>Chrome and Firefox results labeled by engine and viewport;</li>
+<li>safe aggregate results from explicitly approved bounded provider
 checks;</li>
-<li>browser results labeled by engine/viewport;</li>
-<li>deploy/readiness results and any explicitly approved paid-provider
-results;</li>
-<li>preserved RC2 rollback image and matching DB-backup guidance;</li>
+<li>preserved RC2 rollback tag and matching DB-backup guidance;</li>
 <li>known limitations and explicit WebKit/VPS/TLS blockers.</li>
 </ul>
 <p>Target-VPS compose/health/preflight/provider evidence and
@@ -5961,38 +5959,38 @@ monthly-leads-then-manager-count collection; both-at-once, skipped, and
 partial outcomes preserve booking.</li>
 </ul>
 <h2 id="local-p0-candidate-checklist">Local P0 candidate checklist</h2>
-<p>RC3 acceptance has not been run by this documentation-only change. Do
-not copy RC2 test/assertion/checksum counts or present historical
-browser/deploy/provider evidence as RC3 evidence.</p>
+<p>Fresh RC3 local evidence is recorded in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>; RC2 observations
+were not reused as proof.</p>
 <ul class="task-list">
-<li><label><input type="checkbox"></input>Run fresh credential-free tests and
-record actual counts/results.</label></li>
-<li><label><input type="checkbox"></input>Run typecheck, lint/format checks,
-build, <code>scripts/build-spec.sh</code>,
-<code>scripts/validate-spec.py</code>, stale searches, and
-<code>git diff --check</code>; record exact results.</label></li>
-<li><label><input type="checkbox"></input>Run local Chrome acceptance for
-greeting autoplay success and blocked/error fallback, zero pre-consent
-REST/WS/mic/provider/session, greeting stop at session start,
-typed/spoken contextual slots, and skipped/partial/complete
-qualification.</label></li>
-<li><label><input type="checkbox"></input>Run
-<code>scripts/deploy-local.sh</code> from the final RC3 tree and record
-migration, app/Caddy health/readiness, limits, and file-secret
-evidence.</label></li>
-<li><label><input type="checkbox"></input>Run any OpenRouter STT/TTS/Codex
-smoke only with explicit paid-use approval; record actual safe evidence
-or leave not run.</label></li>
-<li><label><input type="checkbox"></input>Verify backup/restore/rollback
-readiness and preserve the immutable RC2 image shown below.</label></li>
-<li><label><input type="checkbox"></input>Parent records final SHA, counts,
-browser/deploy/provider observations, and release result in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>, then updates
-<code>MANIFEST.txt</code> and <code>CHECKSUMS.sha256</code>
-separately.</label></li>
+<li><label><input type="checkbox" checked></input>Credential-free suite
+passed 510 tests across 58 files with 4,265 assertions and no
+failures.</label></li>
+<li><label><input type="checkbox" checked></input>Typecheck, lint/format,
+production build, deterministic eval/spec generation, validator, and
+<code>git diff --check</code> passed.</label></li>
+<li><label><input type="checkbox" checked></input>Chrome exercised
+proactive greeting success and fallback, zero pre-consent conversation
+calls, session-start cleanup, responsive layouts, and a real contextual
+evening request. Gateway/orchestrator tests cover typed/spoken
+preferences and qualification skipped/partial/complete. Firefox headless
+rendered 390×844 without CSP/runtime errors.</label></li>
+<li><label><input type="checkbox" checked></input><code>scripts/deploy-local.sh</code> completed from the RC3
+tree; migration, app/Caddy health/readiness, 60-second/2 MB limits, and
+file-secret boundaries passed.</label></li>
+<li><label><input type="checkbox" checked></input>Explicit paid checks
+passed: static OpenRouter TTS greeting generation, one typed Luna/TTS
+evening-slot turn, and one OpenRouter STT → Luna → OpenRouter TTS smoke
+with two decoder-accepted MP3 segments.</label></li>
+<li><label><input type="checkbox" checked></input>Fresh protected backup
+and deterministic restore/rollback tests passed; RC2 remains the
+rollback tag shown below.</label></li>
+<li><label><input type="checkbox" checked></input>Final evidence was
+recorded in <code>VALIDATION.md</code>; <code>MANIFEST.txt</code> and
+<code>CHECKSUMS.sha256</code> were regenerated separately.</label></li>
 <li><label><input type="checkbox"></input>WebKit playback and complete journey
-acceptance — later gate unless explicitly run and recorded.</label></li>
+acceptance — later gate, unobserved.</label></li>
 <li><label><input type="checkbox"></input>Target VPS deploy, DNS, TLS/WSS, and
-target-host paid smokes — later gate.</label></li>
+target-host paid smokes — later gate, unobserved.</label></li>
 </ul>
 <p>The committed <a href="evidence/T30-observed-local-voice-smoke-2026-07-31.md">T30
 owner-observed artifact</a> remains historical evidence only; it does

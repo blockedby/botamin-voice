@@ -466,6 +466,69 @@ button {
 	background: currentColor;
 }
 
+.proactive-greeting {
+	display: grid;
+	grid-template-columns: 2rem minmax(0, 1fr);
+	gap: 0.75rem;
+	min-width: 0;
+	margin-top: 1rem;
+	padding: 0.85rem;
+	border: 1px solid var(--line);
+	background: #f0eadf;
+}
+
+.proactive-greeting-mark {
+	color: var(--accent-dark);
+	font-family: Georgia, "Times New Roman", serif;
+	font-size: 2.8rem;
+	line-height: 0.8;
+}
+
+.proactive-greeting-copy {
+	min-width: 0;
+}
+
+.proactive-greeting-copy > strong {
+	display: block;
+	font-size: 0.74rem;
+	letter-spacing: 0.065em;
+	text-transform: uppercase;
+}
+
+.proactive-greeting-copy > p {
+	margin: 0.35rem 0 0;
+	font-size: 0.76rem;
+	line-height: 1.5;
+	text-wrap: pretty;
+}
+
+.proactive-greeting-copy > .proactive-greeting-state {
+	color: var(--ink-soft);
+	font-size: 0.67rem;
+}
+
+.proactive-greeting-fallback {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.55rem 0.75rem;
+	align-items: center;
+	justify-content: space-between;
+	margin-top: 0.7rem;
+}
+
+.proactive-greeting-fallback p {
+	flex: 1 1 12rem;
+	margin: 0;
+	color: var(--ink-soft);
+	font-size: 0.67rem;
+	line-height: 1.4;
+}
+
+.proactive-greeting-button {
+	flex: 0 1 auto;
+	background: var(--paper-light);
+}
+
 .consent-panel {
 	min-width: 0;
 	margin: 1rem 0 0;
@@ -1282,6 +1345,7 @@ button {
 		order: 2;
 	}
 
+	.proactive-greeting,
 	.consent-panel,
 	.booking-confirmation {
 		order: 3;
@@ -1453,6 +1517,18 @@ button {
 	.primary-voice-cta {
 		grid-template-columns: 1.8rem minmax(0, 1fr);
 		padding-inline: 0.75rem;
+	}
+
+	.proactive-greeting {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.proactive-greeting-mark {
+		display: none;
+	}
+
+	.proactive-greeting-button {
+		width: 100%;
 	}
 
 	.consent-note {

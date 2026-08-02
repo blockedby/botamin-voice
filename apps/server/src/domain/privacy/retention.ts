@@ -12,7 +12,7 @@ export interface TranscriptRetentionOptions {
 	cancel?: (handle: unknown) => void;
 }
 
-/** Deletes only transcript-bearing turn rows; conversations and bookings remain. */
+/** Deletes expired transcript and active-draft PII; conversations and bookings remain. */
 export function purgeExpiredTranscriptTurns(
 	database: DomainDatabase,
 	input: { cutoff: Date; limit: number },
@@ -25,8 +25,29 @@ export function purgeExpiredTranscriptTurns(
 		throw new RangeError("Transcript purge limit is invalid");
 	}
 	return database.transaction(
-		(): number =>
-			database.$client.run(
+		(): number => {
+			const contextChanges = database.$client.run(
+				`DELETE FROM conversation_contexts
+				 WHERE conversation_id IN (
+				   SELECT conversation_contexts.conversation_id
+				   FROM conversation_contexts
+				   INNER JOIN conversations
+				     ON conversations.id = conversation_contexts.conversation_id
+				   WHERE COALESCE(
+				     conversations.ended_at,
+				     conversation_contexts.updated_at,
+				     conversations.started_at
+				   ) < ?
+				   ORDER BY COALESCE(
+				     conversations.ended_at,
+				     conversation_contexts.updated_at,
+				     conversations.started_at
+				   ), conversation_contexts.conversation_id
+				   LIMIT ?
+				 )`,
+				[input.cutoff.toISOString(), input.limit],
+			).changes;
+			const turnChanges = database.$client.run(
 				`DELETE FROM turns
 				 WHERE id IN (
 				   SELECT turns.id
@@ -46,7 +67,9 @@ export function purgeExpiredTranscriptTurns(
 				   LIMIT ?
 				 )`,
 				[input.cutoff.toISOString(), input.limit],
-			).changes,
+			).changes;
+			return contextChanges + turnChanges;
+		},
 		{ behavior: "immediate" },
 	);
 }

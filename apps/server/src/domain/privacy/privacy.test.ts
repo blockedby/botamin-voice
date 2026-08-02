@@ -8,6 +8,7 @@ import { ConversationStore } from "../../db/conversation-store";
 import { closeDomainDatabase, openDomainDatabase } from "../../db/database";
 import {
 	bookings,
+	conversationContexts,
 	conversations,
 	domainEvents,
 	idempotencyKeys,
@@ -15,12 +16,25 @@ import {
 	turns,
 } from "../../db/schema";
 import { SqliteBookingService } from "../booking/service";
+import { SqliteBookingDraftStore } from "../booking-draft/store";
 import { LeadDataDeletionService } from "./deletion";
 import { redactForLog } from "./redaction";
 import { TranscriptRetentionWorker } from "./retention";
 
 const directories: string[] = [];
 const at = "2026-07-30T20:22:00.000Z";
+
+function draftSlots() {
+	const first = createTestMeetingSlot();
+	return [
+		first,
+		{
+			...first,
+			startAt: "2099-01-05T13:00:00.000Z",
+			endAt: "2099-01-05T13:20:00.000Z",
+		},
+	] as const;
+}
 
 afterEach(() => {
 	for (const directory of directories.splice(0)) {
@@ -36,6 +50,9 @@ describe("PII privacy services", () => {
 				contacts: [{ channel: "email", value: "alex@example.com" }],
 				user_text: "raw transcript",
 				contacts_json: '[{"value":"secret_handle"}]',
+				draft_json: '{"workEmail":"draft@example.com"}',
+				factRegistry: { company: "Private Draft Company" },
+				evidenceText: "private evidence quote",
 				meetingSlot: createTestMeetingSlot(),
 				message:
 					"Call +7 999 123-45-67 or @alex_private; telegram secret_handle",
@@ -46,6 +63,9 @@ describe("PII privacy services", () => {
 		expect(redacted).not.toContain("999 123");
 		expect(redacted).not.toContain("@alex_private");
 		expect(redacted).not.toContain("secret_handle");
+		expect(redacted).not.toContain("draft@example.com");
+		expect(redacted).not.toContain("Private Draft Company");
+		expect(redacted).not.toContain("private evidence quote");
 		expect(redacted).not.toContain("raw transcript");
 		expect(redacted).not.toContain("2099-01-05");
 		expect(redacted).toContain("[REDACTED]");
@@ -89,6 +109,9 @@ describe("PII privacy services", () => {
 			stateAfter: "COLLECT_BOOKING",
 			completedAt: "2026-08-20T00:00:00.000Z",
 		});
+		new SqliteBookingDraftStore(database, {
+			now: () => new Date("2026-07-03T00:00:00.000Z"),
+		}).initialize(conversationId, draftSlots());
 		await new SqliteBookingService(database, {
 			now: () => new Date("2026-07-03T00:00:00.000Z"),
 		}).createBooking({
@@ -117,7 +140,11 @@ describe("PII privacy services", () => {
 			},
 			cancel: () => undefined,
 		});
-		expect(worker.start()).toBe(1);
+		expect(worker.start()).toBe(2);
+		expect(
+			database.select({ value: count() }).from(conversationContexts).get()
+				?.value,
+		).toBe(0);
 		expect(database.select({ value: count() }).from(turns).get()?.value).toBe(
 			2,
 		);
@@ -133,6 +160,50 @@ describe("PII privacy services", () => {
 		).toBe(1);
 		expect(database.select().from(turns).get()?.userText).toBe("recent text");
 		worker.stop();
+		closeDomainDatabase(database);
+	});
+
+	test("cascades conversation deletion to turns and draft context", () => {
+		const directory = mkdtempSync(join(tmpdir(), "botamin-cascade-"));
+		directories.push(directory);
+		const database = openDomainDatabase({
+			filename: join(directory, "domain.db"),
+		});
+		const conversationId = Bun.randomUUIDv7();
+		const conversationStore = new ConversationStore(database);
+		conversationStore.create({
+			id: conversationId,
+			stage: "COLLECT_BOOKING",
+			promptVersion: "b".repeat(64),
+			source: "landing",
+			locale: "ru-RU",
+			qualificationEnabled: true,
+			consentAt: at,
+			startedAt: at,
+		});
+		conversationStore.appendTurn({
+			id: Bun.randomUUIDv7(),
+			conversationId,
+			userText: "private turn",
+			assistantText: "private response",
+			stateBefore: "COLLECT_BOOKING",
+			stateAfter: "COLLECT_BOOKING",
+			completedAt: at,
+		});
+		new SqliteBookingDraftStore(database, {
+			now: () => new Date(at),
+		}).initialize(conversationId, draftSlots());
+
+		database.$client.run("DELETE FROM conversations WHERE id = ?", [
+			conversationId,
+		]);
+		expect(database.select({ value: count() }).from(turns).get()?.value).toBe(
+			0,
+		);
+		expect(
+			database.select({ value: count() }).from(conversationContexts).get()
+				?.value,
+		).toBe(0);
 		closeDomainDatabase(database);
 	});
 
@@ -163,6 +234,20 @@ describe("PII privacy services", () => {
 			stateAfter: "BOOKED",
 			completedAt: at,
 		});
+		const draftStore = new SqliteBookingDraftStore(database, {
+			now: () => new Date(at),
+		});
+		const initialDraft = draftStore.initialize(conversationId, draftSlots());
+		draftStore.applyForm(conversationId, {
+			requestId: Bun.randomUUIDv7(),
+			baseRevision: initialDraft.revision,
+			details: {
+				name: "Александр",
+				company: "Private Company",
+				workEmail: "alex@example.com",
+				phone: "+79991234567",
+			},
+		});
 		const service = new SqliteBookingService(database);
 		const created = await service.createBooking({
 			conversationId,
@@ -192,11 +277,13 @@ describe("PII privacy services", () => {
 		expect(result).toMatchObject({
 			deleted: true,
 			deletedBookings: 1,
+			deletedConversationContexts: 1,
 			deletedTurns: 1,
 			deletedOutboxEntries: 2,
 		});
 		for (const table of [
 			bookings,
+			conversationContexts,
 			conversations,
 			idempotencyKeys,
 			notificationOutbox,

@@ -29,6 +29,40 @@ export const conversations = sqliteTable("conversations", {
 	lastErrorCode: text("last_error_code"),
 });
 
+export const conversationContexts = sqliteTable(
+	"conversation_contexts",
+	{
+		conversationId: text("conversation_id")
+			.primaryKey()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		revision: integer("revision").notNull(),
+		draftJson: text("draft_json").notNull(),
+		updatedAt: text("updated_at").notNull(),
+	},
+	(table) => [
+		check(
+			"conversation_contexts_revision_nonnegative",
+			sql`${table.revision} >= 0`,
+		),
+		check(
+			"conversation_contexts_draft_json_valid",
+			sql`json_valid(${table.draftJson}) AND json_type(${table.draftJson}) = 'object'`,
+		),
+		check(
+			"conversation_contexts_draft_revision_matches",
+			sql`json_extract(${table.draftJson}, '$.revision') = ${table.revision}`,
+		),
+		check(
+			"conversation_contexts_fact_revision_matches",
+			sql`json_extract(${table.draftJson}, '$.factRegistry.revision') = ${table.revision}`,
+		),
+		check(
+			"conversation_contexts_updated_at_matches",
+			sql`json_extract(${table.draftJson}, '$.updatedAt') = ${table.updatedAt}`,
+		),
+	],
+);
+
 export const turns = sqliteTable(
 	"turns",
 	{
@@ -164,6 +198,7 @@ export const notificationOutbox = sqliteTable(
 
 export const schema = {
 	bookings,
+	conversationContexts,
 	conversations,
 	domainEvents,
 	idempotencyKeys,

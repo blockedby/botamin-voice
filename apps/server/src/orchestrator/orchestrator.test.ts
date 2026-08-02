@@ -1214,7 +1214,6 @@ describe("terminal and transport lifecycle fencing", () => {
 			booking,
 			contactConsentConfirmed: true,
 			bookingConfirmationDelivered: true,
-			qualificationConsent: "granted",
 		};
 		const { orchestrator } = fixture({
 			stt,
@@ -1260,14 +1259,15 @@ describe("booking and tool timeline", () => {
 		expect(bookings.domainEvents.map((event) => event.type)).toEqual([
 			"booking.created",
 		]);
-		expect(spoken).toContain("Всё получила и зафиксировала");
-		expect(spoken).toContain("Календарная встреча пока не создана");
+		expect(spoken).toContain("Внутренняя виртуальная встреча создана");
+		expect(spoken).toContain(
+			"Внешнее календарное событие и приглашение не создавались",
+		);
 		expect(spoken).not.toMatch(/CRM|объём лидов/u);
 		expect(orchestrator.state).toMatchObject({
-			stage: "BOOKED",
+			stage: "POST_BOOKING_QUALIFICATION",
 			booking: { status: "booked" },
 			bookingConfirmationDelivered: true,
-			qualificationConsent: "unknown",
 		});
 		expect((brain as FakeBrain).turns).toHaveLength(1);
 		expect(tts.inputs[0]).toMatchObject({
@@ -1276,40 +1276,20 @@ describe("booking and tool timeline", () => {
 		});
 	});
 
-	test("booking confirmation asks exact consent and explicit consent deterministically asks leads first", async () => {
+	test("booking confirmation starts by asking only the first missing qualification field", async () => {
 		const brain = new FakeBrain(bookingScript());
 		const { orchestrator } = fixture({ brain });
 		const bookingEvents = await collect(
 			orchestrator.acceptAudioCommit(commit()),
 		);
-		expect(
-			bookingEvents
-				.filter((event) => event.type === "text.delta")
-				.map((event) => event.text)
-				.join(" "),
-		).toContain("Можно задать два коротких вопроса?");
-
-		const consentEvents = await collect(
-			orchestrator.acceptTextSubmit({
-				turnId: turn2,
-				generationId: generation2,
-				text: "Да, можно.",
-				knownFacts: facts,
-			}),
-		);
+		const confirmation = bookingEvents
+			.filter((event) => event.type === "text.delta")
+			.map((event) => event.text)
+			.join(" ");
+		expect(confirmation).toContain("Сколько входящих лидов приходит за месяц?");
+		expect(confirmation).not.toContain("Можно задать два коротких вопроса?");
 		expect(brain.turns).toHaveLength(1);
 		expect(orchestrator.state.stage).toBe("POST_BOOKING_QUALIFICATION");
-		expect(consentEvents).toContainEqual(
-			expect.objectContaining({
-				type: "state.changed",
-				reason: "explicit_qualification_consent",
-			}),
-		);
-		expect(
-			consentEvents
-				.filter((event) => event.type === "text.delta")
-				.map((event) => event.text),
-		).toEqual(["Сколько входящих лидов приходит за месяц?"]);
 	});
 
 	for (const scenario of [
@@ -1351,7 +1331,6 @@ describe("booking and tool timeline", () => {
 				booking,
 				contactConsentConfirmed: true,
 				bookingConfirmationDelivered: true,
-				qualificationConsent: "granted",
 			};
 			const brain = new FakeBrain([
 				{
@@ -1467,7 +1446,6 @@ describe("booking and tool timeline", () => {
 				booking: partialBooking,
 				contactConsentConfirmed: true,
 				bookingConfirmationDelivered: true,
-				qualificationConsent: "granted",
 			},
 		});
 		const updatesBeforeRefusal = partialBookings.domainEvents.length;
@@ -1584,8 +1562,10 @@ describe("booking and tool timeline", () => {
 		expect(
 			events.map((event) => event.type).indexOf("booking.committed"),
 		).toBeLessThan(events.map((event) => event.type).indexOf("text.delta"));
-		expect(spoken).toContain("Всё получила и зафиксировала");
-		expect(spoken).not.toContain("календарь создан");
+		expect(spoken).toContain("Внутренняя виртуальная встреча создана");
+		expect(spoken).toContain(
+			"Внешнее календарное событие и приглашение не создавались",
+		);
 		expect(brain.turns).toHaveLength(1);
 	});
 
@@ -1600,7 +1580,6 @@ describe("booking and tool timeline", () => {
 			booking,
 			contactConsentConfirmed: true,
 			bookingConfirmationDelivered: true,
-			qualificationConsent: "granted",
 		};
 		const brain = new FakeBrain([
 			{
@@ -1773,6 +1752,47 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			expect(input.text.length).toBeLessThanOrEqual(240);
 			expect(input.text).not.toMatch(/@|999|example\.com|https/u);
 		}
+	});
+
+	test("actual TTS forwards only committed contacts and redacts an unknown model contact", async () => {
+		const bookings = new FakeBookingService();
+		await bookings.createBooking(bookingInput);
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const approvedEmail = booking.contacts.find(
+			(contact) => contact.channel === "email",
+		)?.value;
+		if (!approvedEmail) throw new Error("approved email missing");
+		const visible = `Контакты ${approvedEmail} и unknown@example.com.`;
+		const tts = new FakeTts();
+		const brain = new FakeBrain(speechScript(visible, turn2, generation2));
+		const { orchestrator } = fixture({
+			bookings,
+			brain,
+			tts,
+			initialState: {
+				...createInitialConversationState(),
+				stage: "POST_BOOKING_QUALIFICATION",
+				booking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered: true,
+			},
+		});
+		const events = await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn2,
+				generationId: generation2,
+				text: "Продолжайте.",
+				knownFacts: facts,
+			}),
+		);
+		expect(events.find((event) => event.type === "text.done")).toMatchObject({
+			text: visible,
+		});
+		const spoken = tts.inputs.map((input) => input.text).join(" ");
+		expect(spoken).toContain("собака");
+		expect(spoken).toContain("контакт скрыт");
+		expect(spoken).not.toContain("unknown@example.com");
 	});
 
 	test("complete nested JSON envelope stays visible but no nested PII reaches TTS", async () => {

@@ -70,8 +70,7 @@ describe("conversation transition policy", () => {
 			{ type: "contact_consent_confirmed" },
 			{ type: "booking_committed", booking },
 			{ type: "booking_confirmation_delivered" },
-			{ type: "qualification_consent_granted" },
-			{ type: "qualification_consent_declined" },
+			{ type: "qualification_refused" },
 			{ type: "qualification_updated", booking },
 			{ type: "qualification_completed" },
 			{ type: "complete" },
@@ -100,62 +99,44 @@ describe("conversation transition policy", () => {
 		expect(cells).toBe(ConversationStageSchema.options.length * events.length);
 	});
 
-	test("qualification requires commit, confirmation, feature flag, and consent", () => {
-		for (const stage of [
-			"IDLE",
-			"GREETING",
-			"DISCOVERY",
-			"VALUE",
-			"BOOKING_OFFER",
-			"COLLECT_BOOKING",
-		] as const) {
-			const result = transition(stateAt(stage), {
-				type: "qualification_consent_granted",
-			});
-			expect(result.ok).toBe(false);
-		}
-
+	test("qualification starts automatically only after a retained booking confirmation", () => {
 		let state = stateAt("COLLECT_BOOKING");
 		state = apply(state, { type: "contact_consent_confirmed" });
 		state = apply(state, { type: "booking_committed", booking });
-		expect(
-			transition(state, { type: "qualification_consent_granted" }),
-		).toMatchObject({ ok: false, code: "CONFIRMATION_REQUIRED" });
 		state = apply(state, { type: "booking_confirmation_delivered" });
-		state = apply(state, { type: "qualification_consent_granted" });
 		expect(state).toMatchObject({
 			stage: "POST_BOOKING_QUALIFICATION",
 			booking: { id: booking.id, status: "booked" },
-			qualificationConsent: "granted",
 		});
 
 		const disabled = {
 			...stateAt("BOOKED"),
 			booking,
-			bookingConfirmationDelivered: true,
 			qualificationEnabled: false,
 		};
 		expect(
-			transition(disabled, { type: "qualification_consent_granted" }),
-		).toMatchObject({ ok: false, code: "QUALIFICATION_DISABLED" });
+			transition(disabled, { type: "booking_confirmation_delivered" }),
+		).toMatchObject({
+			ok: true,
+			state: { stage: "BOOKED", bookingConfirmationDelivered: true },
+		});
 	});
 
 	test("qualification refusal is optional, post-booking, and after confirmation only", () => {
 		const unconfirmed = { ...stateAt("BOOKED"), booking };
 		expect(
-			transition(unconfirmed, { type: "qualification_consent_declined" }),
+			transition(unconfirmed, { type: "qualification_refused" }),
 		).toMatchObject({ ok: false, code: "CONFIRMATION_REQUIRED" });
 		const confirmed = {
 			...unconfirmed,
 			bookingConfirmationDelivered: true,
 		};
 		expect(
-			transition(confirmed, { type: "qualification_consent_declined" }),
+			transition(confirmed, { type: "qualification_refused" }),
 		).toMatchObject({
 			ok: true,
 			state: {
 				stage: "COMPLETE",
-				qualificationConsent: "declined",
 				booking: { id: booking.id },
 			},
 		});
@@ -174,7 +155,6 @@ describe("conversation transition policy", () => {
 			...stateAt("POST_BOOKING_QUALIFICATION"),
 			booking,
 			bookingConfirmationDelivered: true,
-			qualificationConsent: "granted" as const,
 		};
 		const afterBooking = transition(booked, { type: "clear_refusal" });
 		expect(afterBooking).toMatchObject({
@@ -196,7 +176,6 @@ describe("conversation transition policy", () => {
 			...stateAt("POST_BOOKING_QUALIFICATION"),
 			booking,
 			bookingConfirmationDelivered: true,
-			qualificationConsent: "granted" as const,
 		};
 		const disconnected = apply(active, { type: "disconnect" });
 		expect(disconnected).toMatchObject({
@@ -217,7 +196,6 @@ describe("conversation transition policy", () => {
 			...stateAt("POST_BOOKING_QUALIFICATION"),
 			booking,
 			bookingConfirmationDelivered: true,
-			qualificationConsent: "granted" as const,
 		};
 		const updated = {
 			...booking,

@@ -801,11 +801,11 @@ describe("gateway fake full WebSocket path", () => {
 			),
 		).toBe(true);
 		expect(events.some((event) => event.type === "audio.segment")).toBe(false);
-		// The action envelope cannot grant qualification consent in the same turn.
-		expect(harness.orchestrator.state.stage).toBe("BOOKED");
+		// Qualification starts automatically only after the durable confirmation.
+		expect(harness.orchestrator.state.stage).toBe("POST_BOOKING_QUALIFICATION");
 	});
 
-	test("requires explicit consent, ignores ambiguity, then completes an explicit qualification decline", async () => {
+	test("starts qualification directly, ignores ambiguity, then preserves booking on explicit decline", async () => {
 		const stt = new Stt();
 		let scriptedTurn = 0;
 		const brain = new Brain((input) => {
@@ -862,18 +862,14 @@ describe("gateway fake full WebSocket path", () => {
 		const socket = new Socket();
 		await connect(harness.session, socket);
 		await sendUtterance(harness.session, socket, true, 0);
-		expect(harness.orchestrator.state.stage).toBe("BOOKED");
+		expect(harness.orchestrator.state.stage).toBe("POST_BOOKING_QUALIFICATION");
 
 		stt.text = "Не уверен, что сейчас удобно.";
 		await sendUtterance(harness.session, socket, true, 1);
-		expect(harness.orchestrator.state.stage).toBe("BOOKED");
-
-		stt.text = "Да, можно.";
-		await sendUtterance(harness.session, socket, true, 2);
 		expect(harness.orchestrator.state.stage).toBe("POST_BOOKING_QUALIFICATION");
 
 		stt.text = "Не хочу отвечать на дополнительные вопросы.";
-		await sendUtterance(harness.session, socket, true, 3);
+		await sendUtterance(harness.session, socket, true, 2);
 		expect(harness.orchestrator.state.stage).toBe("COMPLETE");
 		expect(harness.orchestrator.state.booking?.id).toBe(
 			harness.bookings.snapshot?.id,

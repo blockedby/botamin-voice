@@ -105,6 +105,16 @@ export interface BookingDraftProposalInput {
 	proposals: readonly LunaFactProposal[];
 }
 
+export interface BookingDraftServerDerivationInput {
+	conversationId: string;
+	expectedRevision: number;
+	turnId: string;
+	currentTurnText: string;
+	field: "monthlyLeadVolume";
+	value: string;
+	evidenceText: string;
+}
+
 export interface AcceptedConversationFacts {
 	name?: string;
 	company?: string;
@@ -160,7 +170,13 @@ export interface BookingDraftStore {
 		candidateSlots: readonly [MeetingSlot, MeetingSlot],
 	): InternalBookingDraft;
 	load(conversationId: string): InternalBookingDraft | null;
+	browserDraft(
+		conversationId: string,
+	): ReturnType<typeof deriveBrowserBookingDraft>;
 	ingestProposals(input: BookingDraftProposalInput): InternalBookingDraft;
+	ingestServerDerivation(
+		input: BookingDraftServerDerivationInput,
+	): InternalBookingDraft;
 	applyForm(
 		conversationId: string,
 		submission: BookingFormDetails,
@@ -361,7 +377,19 @@ export class SqliteBookingDraftStore implements BookingDraftStore {
 			input.conversationId,
 			input.expectedRevision,
 			(draft, timestamp) => {
-				assertMutable(draft);
+				if (draft.commitStatus === "committing") {
+					throw new BookingDraftError("INVALID_TRANSITION");
+				}
+				if (
+					draft.commitStatus === "committed" &&
+					proposals.some(
+						(proposal) =>
+							proposal.field !== "monthlyLeadVolume" &&
+							proposal.field !== "salesManagerCount",
+					)
+				) {
+					throw new BookingDraftError("ALREADY_COMMITTED");
+				}
 				let material = false;
 				for (const proposal of proposals) {
 					const provenance: FactProvenance = {
@@ -379,6 +407,45 @@ export class SqliteBookingDraftStore implements BookingDraftStore {
 						) || material;
 				}
 				return { material };
+			},
+		);
+	}
+
+	ingestServerDerivation(
+		input: BookingDraftServerDerivationInput,
+	): InternalBookingDraft {
+		this.parseInput(EntityIdSchema, input.turnId);
+		const proposal = this.parseInput(LunaFactProposalSchema, {
+			field: input.field,
+			value: input.value,
+			quote: input.evidenceText,
+		});
+		if (
+			proposal.field !== "monthlyLeadVolume" ||
+			!input.currentTurnText.includes(proposal.quote)
+		) {
+			throw new BookingDraftError("INVALID_INPUT");
+		}
+		return this.mutate(
+			input.conversationId,
+			input.expectedRevision,
+			(draft, timestamp) => {
+				if (draft.commitStatus === "committing") {
+					throw new BookingDraftError("INVALID_TRANSITION");
+				}
+				return {
+					material: this.mergeAccepted(
+						factsOf(draft),
+						"monthlyLeadVolume",
+						proposal.value,
+						{
+							source: "server_derivation",
+							turnId: input.turnId,
+							observedAt: timestamp,
+							evidenceText: proposal.quote,
+						},
+					),
+				};
 			},
 		);
 	}
@@ -724,7 +791,9 @@ export class SqliteBookingDraftStore implements BookingDraftStore {
 				}
 				const timestamp = this.timestamp(draft.updatedAt);
 				const result = mutation(draft, timestamp);
-				if (result?.material) draft.confirmationStatus = "unconfirmed";
+				if (result?.material && draft.commitStatus !== "committed") {
+					draft.confirmationStatus = "unconfirmed";
+				}
 				draft.readiness = ready(draft) ? "ready" : "not_ready";
 				draft.revision += 1;
 				draft.factRegistry.revision = draft.revision;

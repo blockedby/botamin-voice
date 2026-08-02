@@ -162,7 +162,7 @@ describe("allowed action and tool authorization policy", () => {
 		).toMatchObject({ ok: false, code: "BOOKING_VALIDATION_FAILED" });
 	});
 
-	test("qualification is allowed only after confirmation and explicit consent", async () => {
+	test("qualification is allowed automatically only after retained confirmation", async () => {
 		const service = new FakeBookingService();
 		const created = await service.createBooking(input);
 		const booking = await service.findByConversationId(conversationId);
@@ -179,7 +179,6 @@ describe("allowed action and tool authorization policy", () => {
 			allowedActions({
 				...base,
 				stage: "POST_BOOKING_QUALIFICATION",
-				qualificationConsent: "granted",
 			}),
 		).toEqual(["append_booking_qualification"]);
 		expect(created.status).toBe("booked");
@@ -197,7 +196,6 @@ describe("allowed action and tool authorization policy", () => {
 			contactConsentConfirmed: true,
 			bookingConfirmationDelivered: true,
 			qualificationEnabled: true,
-			qualificationConsent: "granted",
 		};
 		const executor = new BookingToolExecutor(service);
 		for (const [field, value] of [
@@ -245,7 +243,6 @@ describe("allowed action and tool authorization policy", () => {
 			booking,
 			contactConsentConfirmed: true,
 			bookingConfirmationDelivered: true,
-			qualificationConsent: "granted",
 		};
 		const executor = new BookingToolExecutor(service);
 		const qualificationRequest = {

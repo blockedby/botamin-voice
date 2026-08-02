@@ -1,13 +1,10 @@
 import type { BookingSnapshot, ConversationStage } from "@botamin/contracts";
 
-export type QualificationConsent = "unknown" | "granted" | "declined";
-
 export interface ConversationState {
 	stage: ConversationStage;
 	booking: BookingSnapshot | null;
 	contactConsentConfirmed: boolean;
 	qualificationEnabled: boolean;
-	qualificationConsent: QualificationConsent;
 	bookingConfirmationDelivered: boolean;
 	/** Stage restored after a transport reconnect. */
 	resumeStage: ConversationStage | null;
@@ -25,8 +22,7 @@ export type ConversationEvent =
 	| { type: "contact_consent_confirmed" }
 	| { type: "booking_committed"; booking: BookingSnapshot }
 	| { type: "booking_confirmation_delivered" }
-	| { type: "qualification_consent_granted" }
-	| { type: "qualification_consent_declined"; booking?: BookingSnapshot }
+	| { type: "qualification_refused"; booking?: BookingSnapshot }
 	| { type: "qualification_updated"; booking: BookingSnapshot }
 	| { type: "qualification_completed" }
 	| { type: "complete" }
@@ -44,8 +40,7 @@ export interface TransitionError {
 		| "BOOKING_REQUIRED"
 		| "BOOKING_MISMATCH"
 		| "CONSENT_REQUIRED"
-		| "CONFIRMATION_REQUIRED"
-		| "QUALIFICATION_DISABLED";
+		| "CONFIRMATION_REQUIRED";
 	message: string;
 }
 
@@ -110,7 +105,6 @@ export function createInitialConversationState(options?: {
 		booking: null,
 		contactConsentConfirmed: false,
 		qualificationEnabled: options?.qualificationEnabled ?? true,
-		qualificationConsent: "unknown",
 		bookingConfirmationDelivered: false,
 		resumeStage: null,
 	};
@@ -231,35 +225,12 @@ export function transition(
 		}
 		return {
 			ok: true,
-			state: { ...state, bookingConfirmationDelivered: true },
-		};
-	}
-
-	if (event.type === "qualification_consent_granted") {
-		if (!state.qualificationEnabled) {
-			return failure(
-				"QUALIFICATION_DISABLED",
-				"Post-booking qualification is disabled",
-			);
-		}
-		if (state.stage !== "BOOKED" || !state.booking) {
-			return failure(
-				"BOOKING_REQUIRED",
-				"Qualification requires a committed booking",
-			);
-		}
-		if (!state.bookingConfirmationDelivered) {
-			return failure(
-				"CONFIRMATION_REQUIRED",
-				"Booking must be confirmed before qualification consent",
-			);
-		}
-		return {
-			ok: true,
 			state: {
 				...state,
-				stage: "POST_BOOKING_QUALIFICATION",
-				qualificationConsent: "granted",
+				stage: state.qualificationEnabled
+					? "POST_BOOKING_QUALIFICATION"
+					: "BOOKED",
+				bookingConfirmationDelivered: true,
 			},
 		};
 	}
@@ -294,7 +265,7 @@ export function transition(
 		return { ok: true, state: { ...state, booking: event.booking } };
 	}
 
-	if (event.type === "qualification_consent_declined") {
+	if (event.type === "qualification_refused") {
 		if (
 			(state.stage !== "BOOKED" &&
 				state.stage !== "POST_BOOKING_QUALIFICATION") ||
@@ -327,7 +298,6 @@ export function transition(
 				...state,
 				stage: "COMPLETE",
 				booking: event.booking ?? state.booking,
-				qualificationConsent: "declined",
 			},
 		};
 	}

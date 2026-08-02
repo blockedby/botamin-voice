@@ -18,6 +18,8 @@ import {
 	openDomainDatabase,
 } from "../db";
 import { SqliteBookingService } from "../domain/booking";
+import { createEntityId } from "../domain/booking/support";
+import { SqliteBookingDraftStore } from "../domain/booking-draft/store";
 import { TranscriptRetentionWorker } from "../domain/privacy";
 import { SessionRegistry } from "../gateway/registry";
 import { GatewaySession, type SessionPersistence } from "../gateway/session";
@@ -177,12 +179,15 @@ export async function createProductionRuntime(
 		closeDomainDatabase(database);
 		throw new Error("Notifier override kind does not match runtime config");
 	}
+	const idFactory = createEntityId;
 	const bookings =
 		overrides.bookings ??
 		new SqliteBookingService(database, {
 			notifierKind: notifier.kind,
 			now,
+			idFactory,
 		});
+	const draftStore = new SqliteBookingDraftStore(database, { now, idFactory });
 	const outboxWorker = new PollingNotificationWorker(database, notifier, {
 		pollIntervalMs: overrides.outboxPollIntervalMs ?? 1_000,
 		workerOptions: { now, metrics },
@@ -269,6 +274,7 @@ export async function createProductionRuntime(
 				brain,
 				bookings,
 				tts,
+				draftStore,
 				initialState,
 				qualificationEnabled:
 					request.qualificationEnabled && config.qualificationEnabled,
@@ -302,6 +308,7 @@ export async function createProductionRuntime(
 				expiresAt,
 				orchestrator,
 				bookings,
+				draftStore,
 				persistence,
 				brainModel: config.brain.model,
 				maxUtteranceMs: config.voice.stt.maxUtteranceMs,

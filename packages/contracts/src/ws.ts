@@ -8,6 +8,15 @@ import {
 	SafeErrorSchema,
 } from "./common";
 import { ConversationStageSchema, QualificationFieldSchema } from "./domain";
+import {
+	BookingConflictResolutionSchema,
+	BookingDraftRevisionSchema,
+	BookingFormDetailsSchema,
+	BookingFormRejectionErrorSchema,
+	BookingRevisionConfirmationSchema,
+	BrowserBookingDraftSchema,
+	InternalVirtualMeetingProjectionSchema,
+} from "./rc4";
 import { AudioClientConfigSchema } from "./rest";
 
 /** Binary-frame sequences are unsigned integers exactly representable by JS. */
@@ -39,6 +48,14 @@ const ClientEventBaseShape = {
 	v: ContractVersionSchema,
 	conversationId: EntityIdSchema,
 	at: Rfc3339UtcSchema,
+};
+
+/** Booking commands derive conversation ownership from the authenticated socket. */
+const BookingClientEventBaseShape = {
+	v: ContractVersionSchema,
+	at: Rfc3339UtcSchema,
+	/** Keeps union property access compatible while rejecting client authority. */
+	conversationId: z.never().optional(),
 };
 
 export const ClientHelloEventSchema = z
@@ -132,6 +149,36 @@ export const ClientPingEventSchema = z
 	})
 	.strict();
 
+export const BookingFormSubmitEventSchema = z
+	.object({
+		...BookingClientEventBaseShape,
+		type: z.literal("booking.form.submit"),
+		payload: BookingFormDetailsSchema,
+	})
+	.strict();
+/** Compatibility aliases for early RC4 consumers. */
+export const BookingFormDetailsSubmitEventSchema = BookingFormSubmitEventSchema;
+export const BookingFormDetailsSubmittedEventSchema =
+	BookingFormSubmitEventSchema;
+
+export const BookingRevisionConfirmEventSchema = z
+	.object({
+		...BookingClientEventBaseShape,
+		type: z.literal("booking.draft.confirm"),
+		payload: BookingRevisionConfirmationSchema,
+	})
+	.strict();
+export const BookingRevisionConfirmedEventSchema =
+	BookingRevisionConfirmEventSchema;
+
+export const BookingConflictResolveEventSchema = z
+	.object({
+		...BookingClientEventBaseShape,
+		type: z.literal("booking.conflict.resolve"),
+		payload: BookingConflictResolutionSchema,
+	})
+	.strict();
+
 export const ClientWsEventSchema = z.discriminatedUnion("type", [
 	ClientHelloEventSchema,
 	AudioCommitEventSchema,
@@ -140,6 +187,9 @@ export const ClientWsEventSchema = z.discriminatedUnion("type", [
 	PlaybackInterruptedEventSchema,
 	SessionStopEventSchema,
 	ClientPingEventSchema,
+	BookingFormSubmitEventSchema,
+	BookingRevisionConfirmEventSchema,
+	BookingConflictResolveEventSchema,
 ]);
 
 const ServerEventBaseShape = {
@@ -158,6 +208,9 @@ export const SessionReadyEventSchema = z
 				state: ConversationStageSchema,
 				resumeToken: z.string().min(16).max(512),
 				clientConfig: AudioClientConfigSchema,
+				bookingDraft: BrowserBookingDraftSchema.nullable().default(null),
+				internalMeeting:
+					InternalVirtualMeetingProjectionSchema.nullable().default(null),
 			})
 			.strict(),
 	})
@@ -289,6 +342,45 @@ export const BookingUpdatedWsEventSchema = z
 	})
 	.strict();
 
+export const BookingDraftUpdatedWsEventSchema = z
+	.object({
+		...ServerEventBaseShape,
+		type: z.literal("booking.draft.updated"),
+		payload: z
+			.object({
+				requestId: EntityIdSchema.nullable(),
+				bookingDraft: BrowserBookingDraftSchema,
+			})
+			.strict(),
+	})
+	.strict();
+
+export const BookingFormRejectedWsEventSchema = z
+	.object({
+		...ServerEventBaseShape,
+		type: z.literal("booking.form.rejected"),
+		payload: z
+			.object({
+				requestId: EntityIdSchema,
+				currentRevision: BookingDraftRevisionSchema,
+				error: BookingFormRejectionErrorSchema,
+			})
+			.strict(),
+	})
+	.strict();
+
+export const InternalMeetingProjectionUpdatedWsEventSchema = z
+	.object({
+		...ServerEventBaseShape,
+		type: z.literal("internal.meeting.updated"),
+		payload: z
+			.object({ meeting: InternalVirtualMeetingProjectionSchema })
+			.strict(),
+	})
+	.strict();
+export const InternalMeetingProjectionEventSchema =
+	InternalMeetingProjectionUpdatedWsEventSchema;
+
 export const SessionCapacityWarningEventSchema = z
 	.object({
 		...ServerEventBaseShape,
@@ -332,6 +424,9 @@ export const ServerWsEventSchema = z.discriminatedUnion("type", [
 	AssistantInterruptedEventSchema,
 	BookingCreatedWsEventSchema,
 	BookingUpdatedWsEventSchema,
+	BookingDraftUpdatedWsEventSchema,
+	BookingFormRejectedWsEventSchema,
+	InternalMeetingProjectionUpdatedWsEventSchema,
 	SessionCapacityWarningEventSchema,
 	ErrorWsEventSchema,
 	ServerPongEventSchema,
@@ -528,7 +623,25 @@ export type AudioSegmentWsEvent = z.infer<typeof AudioSegmentEventSchema>;
 export type BinaryAudioFrameMetadata = z.infer<
 	typeof BinaryAudioFrameMetadataSchema
 >;
+export type BookingConflictResolveWsEvent = z.infer<
+	typeof BookingConflictResolveEventSchema
+>;
+export type BookingDraftUpdatedWsEvent = z.infer<
+	typeof BookingDraftUpdatedWsEventSchema
+>;
+export type BookingFormRejectedWsEvent = z.infer<
+	typeof BookingFormRejectedWsEventSchema
+>;
+export type BookingFormSubmitWsEvent = z.infer<
+	typeof BookingFormSubmitEventSchema
+>;
+export type BookingRevisionConfirmWsEvent = z.infer<
+	typeof BookingRevisionConfirmEventSchema
+>;
 export type ClientWsEvent = z.infer<typeof ClientWsEventSchema>;
+export type InternalMeetingProjectionUpdatedWsEvent = z.infer<
+	typeof InternalMeetingProjectionUpdatedWsEventSchema
+>;
 export type ServerWsEvent = z.infer<typeof ServerWsEventSchema>;
 export type WsJsonEvent = z.infer<typeof WsJsonEventSchema>;
 export type WsServerEventType = ServerWsEvent["type"];

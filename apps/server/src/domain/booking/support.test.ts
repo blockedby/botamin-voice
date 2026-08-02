@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { MeetingSlot } from "@botamin/contracts";
 import {
 	generateCandidateMeetingSlots,
+	generateMeetingSlotProposal,
+	parseConcreteMeetingRequest,
 	parseMeetingTimePreference,
 } from "./support";
 
@@ -171,5 +173,194 @@ describe("server-owned contextual Moscow slots", () => {
 		expect(localTimes(slots)).toEqual(["16:00", "17:00"]);
 		expect(slots.every((slot) => slot.timeZone === "Europe/Moscow")).toBe(true);
 		expect(slots.every((slot) => slot.durationMinutes === 20)).toBe(true);
+	});
+});
+
+describe("concrete Moscow date/time requests", () => {
+	const now = new Date("2026-08-02T05:00:00.000Z");
+
+	function moscowStartAt(date: string, time: string): string {
+		const [year, month, day] = date.split("-").map(Number);
+		const [hour, minute] = time.split(":").map(Number);
+		return new Date(
+			Date.UTC(
+				year as number,
+				(month as number) - 1,
+				day,
+				(hour as number) - 3,
+				minute,
+			),
+		).toISOString();
+	}
+
+	test("parses supported absolute, relative, and explicit-year forms", () => {
+		for (const text of [
+			"4 августа в 11",
+			"4 августа в 11:00",
+			"4 августа 2026 года в 11:00",
+			"послезавтра в 11:00",
+		]) {
+			expect(parseConcreteMeetingRequest(text, now)).toEqual({
+				kind: "valid",
+				requestedMoscowDate: "2026-08-04",
+				minuteOfDay: 11 * 60,
+				startAt: "2026-08-04T08:00:00.000Z",
+			});
+		}
+		expect(parseConcreteMeetingRequest("завтра в 09:20", now)).toEqual({
+			kind: "valid",
+			requestedMoscowDate: "2026-08-03",
+			minuteOfDay: 9 * 60 + 20,
+			startAt: "2026-08-03T06:20:00.000Z",
+		});
+	});
+
+	test("includes 4 August at 11:00 and pairs the nearest same-date start", () => {
+		const proposal = generateMeetingSlotProposal(now, "4 августа в 11");
+		expect(proposal.slots.map((slot) => slot.startAt)).toEqual([
+			"2026-08-04T07:40:00.000Z",
+			"2026-08-04T08:00:00.000Z",
+		]);
+		expect(proposal.requestedDateSatisfied).toBe(true);
+		expect(proposal.requestedExactTimeIncluded).toBe(true);
+		expect(new Set(proposal.slots.map((slot) => slot.startAt)).size).toBe(2);
+	});
+
+	test("rejects Moscow today rather than rolling an omitted year", () => {
+		for (const text of ["2 августа в 11", "сегодня в 11:00"]) {
+			expect(parseConcreteMeetingRequest(text, now)).toMatchObject({
+				kind: "invalid_or_ambiguous",
+				reason: "same_day",
+				requestedMoscowDate: "2026-08-02",
+			});
+		}
+	});
+
+	test("rejects weekends, past years, policy-invalid times, and long input", () => {
+		for (const [text, reason] of [
+			["8 августа в 11", "weekend"],
+			["4 августа 2025 в 11", "past"],
+			["4 августа в 08:40", "outside_hours"],
+			["4 августа в 17:20", "outside_hours"],
+			["4 августа в 11:10", "off_grid"],
+			["4 августа в 25:00", "invalid_time"],
+		] as const) {
+			expect(parseConcreteMeetingRequest(text, now)).toMatchObject({
+				kind: "invalid_or_ambiguous",
+				reason,
+			});
+		}
+		expect(parseConcreteMeetingRequest("x".repeat(501), now)).toEqual({
+			kind: "invalid_or_ambiguous",
+			reason: "too_long",
+		});
+	});
+
+	test("resolves omitted years forward and validates leap/calendar dates", () => {
+		expect(parseConcreteMeetingRequest("4 января в 11", now)).toMatchObject({
+			kind: "valid",
+			requestedMoscowDate: "2027-01-04",
+		});
+		for (const text of [
+			"29 февраля в 11",
+			"29 февраля 2027 в 11",
+			"31 апреля 2027 в 11",
+		]) {
+			expect(parseConcreteMeetingRequest(text, now)).toEqual({
+				kind: "invalid_or_ambiguous",
+				reason: "invalid_date",
+			});
+		}
+		expect(
+			parseConcreteMeetingRequest("29 февраля 2028 в 11", now),
+		).toMatchObject({
+			kind: "valid",
+			requestedMoscowDate: "2028-02-29",
+		});
+	});
+
+	test("accepts the 20-minute grid and rejects off-grid starts", () => {
+		expect(parseConcreteMeetingRequest("4 августа в 11:20", now)).toMatchObject(
+			{
+				kind: "valid",
+				minuteOfDay: 11 * 60 + 20,
+			},
+		);
+		expect(parseConcreteMeetingRequest("4 августа в 11:10", now)).toMatchObject(
+			{
+				kind: "invalid_or_ambiguous",
+				reason: "off_grid",
+				minuteOfDay: 11 * 60 + 10,
+			},
+		);
+	});
+
+	test("keeps the date but marks an occupied exact start as not included", () => {
+		const proposal = generateMeetingSlotProposal(now, "4 августа в 11", [
+			moscowStartAt("2026-08-04", "11:00"),
+		]);
+		expect(proposal.slots.map((slot) => slot.startAt)).toEqual([
+			moscowStartAt("2026-08-04", "10:40"),
+			moscowStartAt("2026-08-04", "11:20"),
+		]);
+		expect(proposal.requestedDateSatisfied).toBe(true);
+		expect(proposal.requestedExactTimeIncluded).toBe(false);
+	});
+
+	test("marks the date unsatisfied and rolls a fully occupied date", () => {
+		const occupied = Array.from({ length: 25 }, (_, index) => {
+			const minute = 9 * 60 + index * 20;
+			const time = `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+			return moscowStartAt("2026-08-04", time);
+		});
+		const proposal = generateMeetingSlotProposal(
+			now,
+			"4 августа в 11",
+			occupied,
+		);
+		expect(proposal.slots.map((slot) => slot.startAt)).toEqual([
+			moscowStartAt("2026-08-05", "10:40"),
+			moscowStartAt("2026-08-05", "11:00"),
+		]);
+		expect(proposal.requestedDateSatisfied).toBe(false);
+		expect(proposal.requestedExactTimeIncluded).toBe(false);
+	});
+
+	test("ignores unrelated numbers and rejects conflicting dates or times", () => {
+		expect(
+			parseConcreteMeetingRequest(
+				"У нас 42 сотрудника в 3 офисах, давайте встречу 4 августа в 11:00",
+				now,
+			),
+		).toMatchObject({ kind: "valid", minuteOfDay: 11 * 60 });
+		expect(
+			parseConcreteMeetingRequest("4 августа или 5 августа в 11", now),
+		).toEqual({
+			kind: "invalid_or_ambiguous",
+			reason: "conflicting_dates",
+		});
+		expect(
+			parseConcreteMeetingRequest("4 августа в 11 или в 12", now),
+		).toMatchObject({
+			kind: "invalid_or_ambiguous",
+			reason: "conflicting_times",
+			requestedMoscowDate: "2026-08-04",
+		});
+	});
+
+	test("falls back to unchanged contextual behavior for no or invalid concrete request", () => {
+		for (const text of ["Без конкретной даты", "4 августа в 11:10"]) {
+			const proposal = generateMeetingSlotProposal(
+				thursday,
+				text,
+				[],
+				"morning",
+			);
+			expect(proposal.slots).toEqual(
+				generateCandidateMeetingSlots(thursday, [], "morning"),
+			);
+			expect(proposal.requestedDateSatisfied).toBe(false);
+			expect(proposal.requestedExactTimeIncluded).toBe(false);
+		}
 	});
 });

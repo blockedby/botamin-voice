@@ -18,7 +18,10 @@ import {
 	collectedQualificationFields,
 	TtsAudioSegmentSchema,
 } from "@botamin/contracts";
-import { parseMeetingTimePreference } from "../domain/booking";
+import {
+	parseConcreteMeetingRequest,
+	parseMeetingTimePreference,
+} from "../domain/booking";
 import type { ObservabilityMetrics } from "../observability";
 import { buildBrainContext } from "./context";
 import { GenerationCoordinator } from "./generation";
@@ -744,17 +747,29 @@ export class ConversationOrchestrator {
 		let schedulingReady = false;
 		try {
 			const now = this.#now();
-			const parsedPreference = parseMeetingTimePreference(input.userText);
-			if (parsedPreference.kind === "selected") {
-				this.#timeOfDayPreference = parsedPreference.preference;
-				this.#rejectedTimeOfDayPreferences = [];
-			} else if (parsedPreference.kind === "rejected") {
+			const concreteRequest = parseConcreteMeetingRequest(input.userText, now);
+			if (concreteRequest.kind === "none") {
+				const parsedPreference = parseMeetingTimePreference(input.userText);
+				if (parsedPreference.kind === "selected") {
+					this.#timeOfDayPreference = parsedPreference.preference;
+					this.#rejectedTimeOfDayPreferences = [];
+				} else if (parsedPreference.kind === "rejected") {
+					this.#timeOfDayPreference = "none";
+					this.#rejectedTimeOfDayPreferences = [parsedPreference.preference];
+				}
+			} else {
 				this.#timeOfDayPreference = "none";
-				this.#rejectedTimeOfDayPreferences = [parsedPreference.preference];
+				this.#rejectedTimeOfDayPreferences = [];
 			}
 			const candidateMeetingSlots = await this.#bookings.candidateMeetingSlots(
 				this.#timeOfDayPreference,
 				this.#rejectedTimeOfDayPreferences,
+				concreteRequest.kind === "none"
+					? undefined
+					: {
+							userText: input.userText,
+							currentInstant: now.toISOString(),
+						},
 			);
 			if (!this.#generations.accept(input.generationId, input.turnId)) return;
 			const context = buildBrainContext({
@@ -771,6 +786,7 @@ export class ConversationOrchestrator {
 				now,
 				timeOfDayPreference: this.#timeOfDayPreference,
 				rejectedTimeOfDayPreferences: this.#rejectedTimeOfDayPreferences,
+				concreteRequest,
 				candidateMeetingSlots,
 			});
 			schedulingReady = true;

@@ -10,6 +10,7 @@ import {
 	type BookingSnapshot,
 	BookingSnapshotSchema,
 	BookingUpdatedEventSchema,
+	type ConcreteMeetingCandidateRequest,
 	type CreateBookingInput,
 	CreateBookingInputSchema,
 	type CreateBookingResult,
@@ -39,6 +40,7 @@ import {
 	canonicalJson,
 	createEntityId,
 	generateCandidateMeetingSlots,
+	generateMeetingSlotProposal,
 	type IdFactory,
 	isMeetingSlotBookable,
 	requestHash,
@@ -151,16 +153,27 @@ export class SqliteBookingService implements BookingService {
 	async candidateMeetingSlots(
 		preference: MeetingTimePreference = "none",
 		rejectedPreferences: readonly MeetingTimeBand[] = [],
+		concreteRequest?: ConcreteMeetingCandidateRequest,
 	): Promise<[MeetingSlot, MeetingSlot]> {
-		const now = this.now();
+		const now = concreteRequest
+			? new Date(concreteRequest.currentInstant)
+			: this.now();
 		const unavailable = new Set<string>();
 		while (true) {
-			const candidates = generateCandidateMeetingSlots(
-				now,
-				unavailable,
-				preference,
-				rejectedPreferences,
-			);
+			const candidates = concreteRequest
+				? generateMeetingSlotProposal(
+						now,
+						concreteRequest.userText,
+						unavailable,
+						preference,
+						rejectedPreferences,
+					).slots
+				: generateCandidateMeetingSlots(
+						now,
+						unavailable,
+						preference,
+						rejectedPreferences,
+					);
 			const committed = this.database
 				.select({ startAt: bookings.meetingStartAt })
 				.from(bookings)

@@ -28,7 +28,10 @@ import {
 	FakeStt,
 	FakeTts,
 } from "../../../../packages/test-fixtures/src";
-import { generateCandidateMeetingSlots } from "../domain/booking";
+import {
+	generateCandidateMeetingSlots,
+	generateMeetingSlotProposal,
+} from "../domain/booking";
 import {
 	ConversationOrchestrator,
 	type OrchestratorEvent,
@@ -506,6 +509,250 @@ describe("atomic transcript intake", () => {
 				rejectedTimeOfDayPreferences: [],
 			});
 		}
+	});
+
+	test("typed and spoken exact Moscow requests refresh the same candidates before Luna", async () => {
+		const now = new Date("2026-08-02T09:00:00.000Z");
+		const text = "4 августа в 11";
+		const contexts: BrainTurnInput["schedulingContext"][] = [];
+		for (const spoken of [false, true]) {
+			const brain = new FakeBrain([]);
+			const harness = fixture({
+				brain,
+				...(spoken ? { stt: new FakeStt({ text }) } : {}),
+				bookings: new FakeBookingService({
+					candidateMeetingSlots: (
+						preference = "none",
+						rejected = [],
+						request,
+					) => {
+						if (!request) throw new Error("missing concrete request input");
+						return generateMeetingSlotProposal(
+							new Date(request.currentInstant),
+							request.userText,
+							[],
+							preference,
+							rejected,
+						).slots;
+					},
+				}),
+				now: () => now,
+			});
+			if (spoken) {
+				await collect(harness.orchestrator.acceptAudioCommit(commit()));
+			} else {
+				await collect(
+					harness.orchestrator.acceptTextSubmit({
+						turnId: turn1,
+						generationId: generation1,
+						text,
+						knownFacts: facts,
+					}),
+				);
+			}
+			const scheduling = brain.turns[0]?.schedulingContext;
+			if (!scheduling) throw new Error("missing scheduling context");
+			contexts.push(scheduling);
+		}
+
+		expect(contexts[0]).toEqual(contexts[1]);
+		expect(contexts[0]).toMatchObject({
+			currentInstant: "2026-08-02T09:00:00.000Z",
+			timeOfDayPreference: "none",
+			rejectedTimeOfDayPreferences: [],
+			concreteRequestInterpretation: {
+				kind: "included",
+				requestedMoscowLocalDate: "2026-08-04",
+				requestedMoscowLocalTime: "11:00",
+				reason: "exact_request_included",
+				candidateIndex: 1,
+			},
+		});
+		expect(
+			contexts[0]?.candidateMeetingSlots.map(
+				(candidate) => candidate.meetingSlot.startAt,
+			),
+		).toEqual(["2026-08-04T07:40:00.000Z", "2026-08-04T08:00:00.000Z"]);
+	});
+
+	test("occupied exact time stays on date and a full requested date rolls forward", async () => {
+		const now = new Date("2026-08-02T09:00:00.000Z");
+		const moscowStartAt = (date: string, minute: number): string => {
+			const [year, month, day] = date.split("-").map(Number);
+			return new Date(
+				Date.UTC(
+					year as number,
+					(month as number) - 1,
+					day,
+					Math.floor(minute / 60) - 3,
+					minute % 60,
+				),
+			).toISOString();
+		};
+		const occupiedCases = [
+			{
+				occupied: [moscowStartAt("2026-08-04", 11 * 60)],
+				expectedStarts: [
+					moscowStartAt("2026-08-04", 10 * 60 + 40),
+					moscowStartAt("2026-08-04", 11 * 60 + 20),
+				],
+				expectedReason: "exact_time_not_included",
+			},
+			{
+				occupied: Array.from({ length: 25 }, (_, index) =>
+					moscowStartAt("2026-08-04", 9 * 60 + index * 20),
+				),
+				expectedStarts: [
+					moscowStartAt("2026-08-05", 10 * 60 + 40),
+					moscowStartAt("2026-08-05", 11 * 60),
+				],
+				expectedReason: "requested_date_unsatisfied",
+			},
+		] as const;
+
+		for (const testCase of occupiedCases) {
+			const brain = new FakeBrain([]);
+			const { orchestrator } = fixture({
+				brain,
+				bookings: new FakeBookingService({
+					candidateMeetingSlots: (
+						preference = "none",
+						rejected = [],
+						request,
+					) => {
+						if (!request) throw new Error("missing concrete request input");
+						return generateMeetingSlotProposal(
+							new Date(request.currentInstant),
+							request.userText,
+							testCase.occupied,
+							preference,
+							rejected,
+						).slots;
+					},
+				}),
+				now: () => now,
+			});
+			await collect(
+				orchestrator.acceptTextSubmit({
+					turnId: turn1,
+					generationId: generation1,
+					text: "4 августа в 11",
+					knownFacts: facts,
+				}),
+			);
+
+			const scheduling = brain.turns[0]?.schedulingContext;
+			expect(
+				scheduling?.candidateMeetingSlots.map(
+					(candidate) => candidate.meetingSlot.startAt,
+				),
+			).toEqual([...testCase.expectedStarts]);
+			expect(scheduling?.concreteRequestInterpretation).toEqual({
+				kind: "not_included",
+				requestedMoscowLocalDate: "2026-08-04",
+				requestedMoscowLocalTime: "11:00",
+				reason: testCase.expectedReason,
+				candidateIndex: null,
+			});
+		}
+	});
+
+	test("same-day and invalid concrete requests clear stale bands without becoming broad preferences", async () => {
+		const now = new Date("2026-08-02T09:00:00.000Z");
+		for (const [text, reason] of [
+			["сегодня в 11:00", "same_day"],
+			["4 августа в 11:10", "off_grid"],
+		] as const) {
+			const requested: MeetingTimePreference[] = [];
+			const brain = new FakeBrain([], []);
+			const { orchestrator } = fixture({
+				brain,
+				bookings: new FakeBookingService({
+					candidateMeetingSlots: (
+						preference = "none",
+						rejected = [],
+						request,
+					) => {
+						requested.push(preference);
+						return request
+							? generateMeetingSlotProposal(
+									new Date(request.currentInstant),
+									request.userText,
+									[],
+									preference,
+									rejected,
+								).slots
+							: generateCandidateMeetingSlots(now, [], preference, rejected);
+					},
+				}),
+				now: () => now,
+			});
+			await collect(
+				orchestrator.acceptTextSubmit({
+					turnId: turn1,
+					generationId: generation1,
+					text: "Давайте вечером",
+					knownFacts: facts,
+				}),
+			);
+			await collect(
+				orchestrator.acceptTextSubmit({
+					turnId: turn2,
+					generationId: generation2,
+					text,
+					knownFacts: facts,
+				}),
+			);
+
+			expect(requested).toEqual(["evening", "none"]);
+			expect(brain.turns[1]?.schedulingContext).toMatchObject({
+				timeOfDayPreference: "none",
+				rejectedTimeOfDayPreferences: [],
+				concreteRequestInterpretation: {
+					kind: "not_included",
+					reason,
+					candidateIndex: null,
+				},
+			});
+			expect(
+				brain.turns[1]?.schedulingContext.candidateMeetingSlots.map(
+					(candidate) => candidate.meetingSlot.startAt,
+				),
+			).toEqual(["2026-08-03T06:00:00.000Z", "2026-08-03T13:00:00.000Z"]);
+		}
+	});
+
+	test("a turn without a concrete mention retains the current broad preference", async () => {
+		const now = new Date("2026-08-02T09:00:00.000Z");
+		const brain = new FakeBrain([], []);
+		const { orchestrator } = fixture({
+			brain,
+			bookings: new FakeBookingService({
+				candidateMeetingSlots: (preference = "none", rejected = []) =>
+					generateCandidateMeetingSlots(now, [], preference, rejected),
+			}),
+			now: () => now,
+		});
+		for (const [turnId, generationId, text] of [
+			[turn1, generation1, "Давайте утром"],
+			[turn2, generation2, "Это подходит"],
+		] as const) {
+			await collect(
+				orchestrator.acceptTextSubmit({
+					turnId,
+					generationId,
+					text,
+					knownFacts: facts,
+				}),
+			);
+		}
+
+		expect(
+			brain.turns.map((turn) => turn.schedulingContext.timeOfDayPreference),
+		).toEqual(["morning", "morning"]);
+		expect(
+			brain.turns[1]?.schedulingContext.concreteRequestInterpretation,
+		).toEqual({ kind: "none" });
 	});
 
 	test("a later out-of-hours preference refreshes Luna data with evening policy slots", async () => {

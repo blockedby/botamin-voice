@@ -185,6 +185,7 @@ describe("shared contracts", () => {
 				moscowWeekday: "четверг",
 				timeOfDayPreference: "none",
 				rejectedTimeOfDayPreferences: [],
+				concreteRequestInterpretation: { kind: "none" },
 				candidateMeetingSlots: candidateMeetingSlots.map((slot) => ({
 					meetingSlot: slot,
 					displayLabel:
@@ -244,6 +245,51 @@ describe("shared contracts", () => {
 		]) {
 			expect(BrainTurnInputSchema.safeParse(invalid).success).toBe(false);
 		}
+
+		const exactRequestInput = {
+			...input,
+			schedulingContext: {
+				...input.schedulingContext,
+				concreteRequestInterpretation: {
+					kind: "included",
+					requestedMoscowLocalDate: "2026-08-03",
+					requestedMoscowLocalTime: "09:00",
+					reason: "exact_request_included",
+					candidateIndex: 0,
+				},
+			},
+		};
+		expect(BrainTurnInputSchema.safeParse(exactRequestInput).success).toBe(
+			true,
+		);
+		expect(
+			BrainTurnInputSchema.safeParse({
+				...exactRequestInput,
+				schedulingContext: {
+					...exactRequestInput.schedulingContext,
+					concreteRequestInterpretation: {
+						...exactRequestInput.schedulingContext
+							.concreteRequestInterpretation,
+						candidateIndex: 1,
+					},
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			BrainTurnInputSchema.safeParse({
+				...input,
+				schedulingContext: {
+					...input.schedulingContext,
+					concreteRequestInterpretation: {
+						kind: "not_included",
+						requestedMoscowLocalDate: "2026-08-03",
+						requestedMoscowLocalTime: "09:00",
+						reason: "same_day",
+						candidateIndex: null,
+					},
+				},
+			}).success,
+		).toBe(false);
 	});
 
 	test("limits qualification to two optional bounded fields", () => {

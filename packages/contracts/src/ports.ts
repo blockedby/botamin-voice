@@ -61,6 +61,74 @@ function slotFallsInTimeBand(
 	return minute >= 12 * 60 && minute <= 15 * 60 + 40;
 }
 
+export const ConcreteSchedulingReasonSchema = z.enum([
+	"exact_request_included",
+	"exact_time_not_included",
+	"requested_date_unsatisfied",
+	"too_long",
+	"conflicting_dates",
+	"conflicting_times",
+	"invalid_date",
+	"invalid_time",
+	"past",
+	"same_day",
+	"weekend",
+	"outside_hours",
+	"off_grid",
+]);
+
+const ConcreteSchedulingNoneSchema = z
+	.object({ kind: z.literal("none") })
+	.strict();
+
+const ConcreteSchedulingIncludedSchema = z
+	.object({
+		kind: z.literal("included"),
+		requestedMoscowLocalDate: z.iso.date(),
+		requestedMoscowLocalTime: z.string().regex(/^(?:0\d|1\d|2[0-3]):[0-5]\d$/u),
+		reason: z.literal("exact_request_included"),
+		candidateIndex: z.union([z.literal(0), z.literal(1)]),
+	})
+	.strict();
+
+const ConcreteSchedulingNotIncludedSchema = z
+	.object({
+		kind: z.literal("not_included"),
+		requestedMoscowLocalDate: z.iso.date().optional(),
+		requestedMoscowLocalTime: z
+			.string()
+			.regex(/^(?:0\d|1\d|2[0-3]):[0-5]\d$/u)
+			.optional(),
+		reason: ConcreteSchedulingReasonSchema.exclude(["exact_request_included"]),
+		candidateIndex: z.null(),
+	})
+	.strict()
+	.superRefine((interpretation, refinement) => {
+		const validRequestReason =
+			interpretation.reason === "exact_time_not_included" ||
+			interpretation.reason === "requested_date_unsatisfied";
+		const hasRequestedDate =
+			interpretation.requestedMoscowLocalDate !== undefined;
+		const hasRequestedTime =
+			interpretation.requestedMoscowLocalTime !== undefined;
+		if (
+			hasRequestedDate !== hasRequestedTime ||
+			validRequestReason !== (hasRequestedDate && hasRequestedTime)
+		) {
+			refinement.addIssue({
+				code: "custom",
+				message:
+					"Only a valid concrete request may include requested Moscow date and time",
+			});
+		}
+	});
+
+export const ConcreteSchedulingInterpretationSchema = z.union([
+	ConcreteSchedulingNoneSchema,
+	ConcreteSchedulingIncludedSchema,
+	ConcreteSchedulingNotIncludedSchema,
+]);
+
 export const SchedulingCandidateSchema = z
 	.object({
 		meetingSlot: MeetingSlotSchema,
@@ -88,6 +156,7 @@ export const SchedulingContextSchema = z
 			.array(MeetingTimeBandSchema)
 			.max(1)
 			.default([]),
+		concreteRequestInterpretation: ConcreteSchedulingInterpretationSchema,
 		candidateMeetingSlots: z.tuple([
 			SchedulingCandidateSchema,
 			SchedulingCandidateSchema,
@@ -144,6 +213,62 @@ export const SchedulingContextSchema = z
 				code: "custom",
 				path: ["candidateMeetingSlots"],
 				message: "Candidates must be unique",
+			});
+		}
+
+		const concrete = context.concreteRequestInterpretation;
+		if (concrete.kind === "none") return;
+		const candidateLocalStarts = context.candidateMeetingSlots.map(
+			(candidate) => {
+				const local = new Date(
+					new Date(candidate.meetingSlot.startAt).getTime() + MOSCOW_OFFSET_MS,
+				);
+				return {
+					date: local.toISOString().slice(0, 10),
+					time: `${String(local.getUTCHours()).padStart(2, "0")}:${String(local.getUTCMinutes()).padStart(2, "0")}`,
+				};
+			},
+		);
+		if (concrete.kind === "included") {
+			const included = candidateLocalStarts[concrete.candidateIndex];
+			if (
+				included?.date !== concrete.requestedMoscowLocalDate ||
+				included.time !== concrete.requestedMoscowLocalTime
+			) {
+				refinement.addIssue({
+					code: "custom",
+					path: ["concreteRequestInterpretation", "candidateIndex"],
+					message: "Included candidate must match the exact concrete request",
+				});
+			}
+			return;
+		}
+		if (!concrete.requestedMoscowLocalDate) return;
+		if (
+			candidateLocalStarts.some(
+				(candidate) =>
+					candidate.date === concrete.requestedMoscowLocalDate &&
+					candidate.time === concrete.requestedMoscowLocalTime,
+			)
+		) {
+			refinement.addIssue({
+				code: "custom",
+				path: ["concreteRequestInterpretation"],
+				message:
+					"A not-included interpretation cannot contain the exact request",
+			});
+		}
+		const requestedDateSatisfied = candidateLocalStarts.every(
+			(candidate) => candidate.date === concrete.requestedMoscowLocalDate,
+		);
+		if (
+			(concrete.reason === "exact_time_not_included") !==
+			requestedDateSatisfied
+		) {
+			refinement.addIssue({
+				code: "custom",
+				path: ["concreteRequestInterpretation", "reason"],
+				message: "Concrete reason must match requested-date fulfillment",
 			});
 		}
 	});
@@ -269,6 +394,12 @@ export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type BrainToolMode = z.infer<typeof BrainToolModeSchema>;
 export type BrainTurnInput = z.infer<typeof BrainTurnInputSchema>;
 export type SchedulingCandidate = z.infer<typeof SchedulingCandidateSchema>;
+export type ConcreteSchedulingInterpretation = z.infer<
+	typeof ConcreteSchedulingInterpretationSchema
+>;
+export type ConcreteSchedulingReason = z.infer<
+	typeof ConcreteSchedulingReasonSchema
+>;
 export type SchedulingContext = z.infer<typeof SchedulingContextSchema>;
 export type BrainDelta = z.infer<typeof BrainDeltaSchema>;
 export type SttTranscriptionRequestData = z.infer<
@@ -333,11 +464,19 @@ export interface BookingRepository {
 	): Promise<BookingSnapshot>;
 }
 
+export interface ConcreteMeetingCandidateRequest {
+	/** Accepted final turn text; consumed only by the deterministic server parser. */
+	userText: string;
+	/** Canonical server clock sample shared with the orchestrator turn. */
+	currentInstant: string;
+}
+
 export interface BookingService {
 	/** Two current internal candidates; this is not an external availability claim. */
 	candidateMeetingSlots(
 		preference?: MeetingTimePreference,
 		rejectedPreferences?: readonly MeetingTimeBand[],
+		concreteRequest?: ConcreteMeetingCandidateRequest,
 	): Promise<[MeetingSlot, MeetingSlot]>;
 	/** Commits booking.created before this promise resolves. */
 	createBooking(input: CreateBookingInput): Promise<CreateBookingResult>;

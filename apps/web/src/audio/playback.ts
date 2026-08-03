@@ -10,6 +10,12 @@ import {
 	PLAYBACK_FLOW_MAX_SEGMENTS,
 } from "@botamin/contracts";
 import {
+	AudioPlaybackRecoveryCoordinator,
+	type AudioPlaybackRecoveryEnvironment,
+	type AudioPlaybackRecoveryState,
+	type PlaybackLifecycleTarget,
+} from "./playbackRecovery";
+import {
 	REACTION_CLIP_MANIFEST,
 	type ReactionClipManifestEntry,
 } from "./reactionClipManifest";
@@ -27,6 +33,8 @@ export interface AudioPlaybackApis<TDecoded = unknown> {
 	currentTime(): number;
 	duration(buffer: TDecoded): number;
 	close?(): Promise<void>;
+	/** Browser lifecycle wiring is optional for deterministic non-DOM adapters. */
+	recovery?: AudioPlaybackRecoveryEnvironment;
 }
 
 export type CompletePlaybackSegment = AudioSegmentMetadata & {
@@ -154,6 +162,7 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 	private reactionGenerationId: string | null = null;
 	private readonly seenReactionTurns = new Set<string>();
 	private readonly reactionScheduler: PlaybackScheduler;
+	private readonly recoveryCoordinator: AudioPlaybackRecoveryCoordinator | null;
 
 	constructor(
 		private readonly apis: AudioPlaybackApis<TDecoded>,
@@ -166,15 +175,27 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 				segment: CompletePlaybackSegment,
 				reason: Exclude<PlaybackEnqueueRejection, "stale">,
 			): void;
+			onRecoveryStateChange?(state: AudioPlaybackRecoveryState): void;
 		} = {},
 		private readonly reactionOptions?: LocalReactionPlaybackOptions,
 	) {
 		this.reactionScheduler =
 			reactionOptions?.scheduler ?? browserPlaybackScheduler;
+		this.recoveryCoordinator = apis.recovery
+			? new AudioPlaybackRecoveryCoordinator(
+					() => apis.resume(),
+					apis.recovery,
+					{
+						onRunning: () => this.scheduleReady(),
+						onStateChange: (state) =>
+							this.callbacks.onRecoveryStateChange?.(state),
+					},
+				)
+			: null;
 	}
 
 	resume(): Promise<void> {
-		return this.apis.resume();
+		return this.recoveryCoordinator?.resumeFromGesture() ?? this.apis.resume();
 	}
 
 	beginGeneration(generationId: string): void {
@@ -345,6 +366,7 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 
 	async dispose(): Promise<void> {
 		this.bargeIn();
+		this.recoveryCoordinator?.dispose();
 		await this.apis.close?.();
 	}
 
@@ -535,6 +557,7 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 	}
 
 	private scheduleReady(): void {
+		if (this.recoveryCoordinator && !this.recoveryCoordinator.isRunning) return;
 		if (this.current?.phase === "decoded") {
 			if (!this.schedule(this.current, Math.max(this.apis.currentTime(), 0))) {
 				return;
@@ -777,6 +800,12 @@ export function createBrowserAudioPlaybackApis(): AudioPlaybackApis<AudioBuffer>
 		throw new Error("Web Audio playback is unavailable");
 	}
 	const context = new window.AudioContext();
+	const lifecycleTarget = (target: EventTarget): PlaybackLifecycleTarget => ({
+		addEventListener: (type, listener) =>
+			target.addEventListener(type, listener as EventListener),
+		removeEventListener: (type, listener) =>
+			target.removeEventListener(type, listener as EventListener),
+	});
 	return {
 		decodeAudioData: (bytes) => context.decodeAudioData(bytes),
 		createSource: (buffer) => {
@@ -795,5 +824,15 @@ export function createBrowserAudioPlaybackApis(): AudioPlaybackApis<AudioBuffer>
 		currentTime: () => context.currentTime,
 		duration: (buffer) => buffer.duration,
 		close: () => context.close(),
+		recovery: {
+			context: lifecycleTarget(context),
+			window: lifecycleTarget(window),
+			document: lifecycleTarget(document),
+			...(navigator.mediaDevices
+				? { mediaDevices: lifecycleTarget(navigator.mediaDevices) }
+				: {}),
+			getContextState: () => context.state,
+			getVisibilityState: () => document.visibilityState,
+		},
 	};
 }

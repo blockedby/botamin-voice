@@ -24,8 +24,10 @@ import {
 	PhrasePlaybackQueue,
 	type PlaybackEnqueueOutcome,
 } from "../audio/playback";
+import type { AudioPlaybackRecoveryState } from "../audio/playbackRecovery";
 import { REACTION_CLIP_IDS } from "../audio/reactionClipManifest";
 import type {
+	AudioRecoveryUiState,
 	BookingConflictSelection,
 	BookingFormSubmission,
 	BookingSubmissionState,
@@ -55,6 +57,7 @@ export interface BrowserVoiceSnapshot {
 	state: VoiceUiState;
 	transcript: readonly FinalTranscriptEntry[];
 	muted: boolean;
+	audioRecovery: AudioRecoveryUiState;
 	captureProgress: VoiceCaptureProgress | null;
 	conversationStage: ConversationStage | null;
 	textInputAvailable: boolean;
@@ -101,6 +104,7 @@ export interface PlaybackFactoryOptions {
 	onReleased?(segment: CompletePlaybackSegment): void;
 	onIdle(generationId: string): void;
 	onError(error: Error, segment: CompletePlaybackSegment): void;
+	onRecoveryStateChange?(state: AudioPlaybackRecoveryState): void;
 }
 
 export interface FetchResponseLike {
@@ -135,6 +139,7 @@ const INITIAL_SNAPSHOT: BrowserVoiceSnapshot = {
 	state: { kind: "idle" },
 	transcript: [],
 	muted: false,
+	audioRecovery: "ready",
 	captureProgress: null,
 	conversationStage: null,
 	textInputAvailable: false,
@@ -269,6 +274,7 @@ export class BrowserVoiceSession {
 			state: { kind: "connecting" },
 			transcript: [],
 			muted: false,
+			audioRecovery: "ready",
 			captureProgress: null,
 			conversationStage: null,
 			textInputAvailable: false,
@@ -603,6 +609,20 @@ export class BrowserVoiceSession {
 		this.setSnapshot({ ...this.snapshot, muted });
 	}
 
+	/** Retry output directly from the recovery button's trusted click gesture. */
+	recoverAudioPlayback(): void {
+		const playback = this.playback;
+		if (
+			this.disposed ||
+			!playback ||
+			this.snapshot.audioRecovery !== "gesture-required"
+		) {
+			return;
+		}
+		// Do not put an await before resume: browsers inspect this synchronous stack.
+		void playback.resume().catch(() => undefined);
+	}
+
 	private setPlaybackMuted(muted: boolean): void {
 		const playback = this.playback;
 		if (playback?.setMuted) {
@@ -760,6 +780,13 @@ export class BrowserVoiceSession {
 					if (!this.isCurrent(epoch) || this.playback !== playback) return;
 					this.recoverAudioGeneration(segment.generationId, epoch);
 				},
+				onRecoveryStateChange: (state) => {
+					if (!this.isCurrent(epoch) || this.playback !== playback) return;
+					const audioRecovery =
+						state === "gesture-required" ? "gesture-required" : "ready";
+					if (this.snapshot.audioRecovery === audioRecovery) return;
+					this.setSnapshot({ ...this.snapshot, audioRecovery });
+				},
 			});
 			this.playback = playback;
 			// Calling resume (not merely awaiting it) must stay in the user gesture.
@@ -768,6 +795,9 @@ export class BrowserVoiceSession {
 				if (!this.isCurrent(epoch) || this.playback !== playback) return;
 				this.playback = null;
 				this.playbackUnavailable = true;
+				if (this.snapshot.audioRecovery !== "ready") {
+					this.setSnapshot({ ...this.snapshot, audioRecovery: "ready" });
+				}
 				await playback?.dispose();
 			});
 		} catch {

@@ -8,6 +8,8 @@ import type {
 
 type ActiveBookingMarker = { bookingOutcome?: "committed" };
 
+export type AudioRecoveryUiState = "ready" | "gesture-required";
+
 export type VoiceUiState =
 	| { kind: "idle" }
 	| ({ kind: "connecting" } & ActiveBookingMarker)

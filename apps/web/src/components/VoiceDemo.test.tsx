@@ -40,6 +40,7 @@ function renderVoice(
 			consent={{ voiceProcessing: true, contactProcessing: true }}
 			transcript={[]}
 			muted={false}
+			audioRecovery="ready"
 			captureProgress={null}
 			conversationStage={null}
 			textInputAvailable={false}
@@ -52,6 +53,7 @@ function renderVoice(
 			onStart={noop}
 			onCommit={noop}
 			onRetryPermission={noop}
+			onRecoverAudio={noop}
 			onToggleMute={noop}
 			onStop={noop}
 			onInterrupt={noop}
@@ -206,6 +208,17 @@ describe("VoiceDemo controls and transcript", () => {
 		expect(
 			getUtteranceCountdown({ ...initial, durationMs: 49_001 }),
 		).toMatchObject({ remainingSeconds: 11, warning: false });
+	});
+
+	test("shows a gesture recovery action only after automatic audio recovery fails", () => {
+		const ready = renderVoice({ kind: "speaking" });
+		const blocked = renderVoice(
+			{ kind: "speaking" },
+			{ audioRecovery: "gesture-required" },
+		);
+		expect(ready).not.toContain("Восстановить звук");
+		expect(blocked).toContain("Восстановить звук");
+		expect(blocked).toContain("<button");
 	});
 
 	test("mute exposes one stable name whose pressed state means muting is active", () => {

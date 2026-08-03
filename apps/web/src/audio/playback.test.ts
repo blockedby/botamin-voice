@@ -18,6 +18,28 @@ import {
 
 const generationId = "01J00000000000000000000004";
 
+class FakeLifecycleTarget {
+	private readonly listeners = new Map<string, Set<() => void>>();
+
+	addEventListener(type: string, listener: () => void): void {
+		const listeners = this.listeners.get(type) ?? new Set<() => void>();
+		listeners.add(listener);
+		this.listeners.set(type, listeners);
+	}
+	removeEventListener(type: string, listener: () => void): void {
+		this.listeners.get(type)?.delete(listener);
+	}
+	dispatch(type: string): void {
+		for (const listener of this.listeners.get(type) ?? []) listener();
+	}
+	get listenerCount(): number {
+		return [...this.listeners.values()].reduce(
+			(total, listeners) => total + listeners.size,
+			0,
+		);
+	}
+}
+
 class FakeSource implements PlaybackSourceLike {
 	onended: (() => void) | null = null;
 	startTimes: number[] = [];
@@ -679,6 +701,196 @@ describe("bounded complete MP3 and WAV Web Audio playback", () => {
 		expect(scheduler.jobs).toHaveLength(0);
 		expect(await queue.enqueue(segment(0))).toEqual({ status: "accepted" });
 		expect(harness.sources).toHaveLength(1);
+	});
+
+	test("recovers suspended current, prefetched, and raw segments in exact order after background rejection", async () => {
+		const harness = playbackHarness();
+		const context = new FakeLifecycleTarget();
+		const windowTarget = new FakeLifecycleTarget();
+		const documentTarget = new FakeLifecycleTarget();
+		const mediaDevices = new FakeLifecycleTarget();
+		let contextState = "running";
+		let visibilityState = "visible";
+		let resumeCalls = 0;
+		const recoveryStates: string[] = [];
+		harness.apis.resume = async () => {
+			resumeCalls += 1;
+			if (resumeCalls === 1) return;
+			if (visibilityState === "hidden") {
+				throw new Error("background resume forbidden");
+			}
+			contextState = "running";
+			context.dispatch("statechange");
+		};
+		harness.apis.recovery = {
+			context,
+			window: windowTarget,
+			document: documentTarget,
+			mediaDevices,
+			getContextState: () => contextState,
+			getVisibilityState: () => visibilityState,
+		};
+		const released: number[] = [];
+		const idle: string[] = [];
+		const queue = new PhrasePlaybackQueue(harness.apis, {
+			onReleased: (value) => released.push(value.sequence),
+			onIdle: (value) => idle.push(value),
+			onRecoveryStateChange: (state) => recoveryStates.push(state),
+		});
+		await queue.resume();
+		queue.beginGeneration(generationId);
+		await queue.enqueue(segment(0));
+		await queue.enqueue(wavSegment(1));
+		const raw = [queue.enqueue(segment(2)), queue.enqueue(wavSegment(3))];
+		queue.sealGeneration(generationId);
+		expect(queue.bufferedSegmentCount).toBe(2);
+		expect(queue.pendingRawSegmentCount).toBe(2);
+
+		visibilityState = "hidden";
+		contextState = "suspended";
+		context.dispatch("statechange");
+		documentTarget.dispatch("visibilitychange");
+		documentTarget.dispatch("visibilitychange");
+		windowTarget.dispatch("blur");
+		await Bun.sleep(0);
+		expect(contextState).toBe("suspended");
+		expect(harness.sources).toHaveLength(2);
+		expect(released).toEqual([]);
+		expect(idle).toEqual([]);
+		expect(resumeCalls).toBe(3);
+
+		visibilityState = "visible";
+		documentTarget.dispatch("visibilitychange");
+		windowTarget.dispatch("focus");
+		windowTarget.dispatch("pageshow");
+		await Bun.sleep(0);
+		expect(contextState).toBe("running");
+		expect(resumeCalls).toBe(4);
+		expect(recoveryStates).not.toContain("gesture-required");
+		expect(recoveryStates.at(-1)).toBe("ready");
+
+		for (let index = 0; index < 4; index += 1) {
+			harness.sources[index]?.finish();
+			await Bun.sleep(0);
+		}
+		for (const outcome of raw) {
+			expect(await outcome).toEqual({ status: "accepted" });
+		}
+		expect(harness.sources.flatMap((source) => source.startTimes)).toEqual([
+			10, 11.25, 11.75, 12.5,
+		]);
+		expect(released).toEqual([0, 1, 2, 3]);
+		expect(idle).toEqual([generationId]);
+	});
+
+	test("requires a recovery gesture only after visible automatic resume fails", async () => {
+		const harness = playbackHarness();
+		const context = new FakeLifecycleTarget();
+		const windowTarget = new FakeLifecycleTarget();
+		const documentTarget = new FakeLifecycleTarget();
+		let contextState = "running";
+		let resumeCalls = 0;
+		let allowResume = true;
+		harness.apis.resume = async () => {
+			resumeCalls += 1;
+			if (!allowResume) throw new Error("gesture required");
+			contextState = "running";
+			context.dispatch("statechange");
+		};
+		harness.apis.recovery = {
+			context,
+			window: windowTarget,
+			document: documentTarget,
+			getContextState: () => contextState,
+			getVisibilityState: () => "visible",
+		};
+		const recoveryStates: string[] = [];
+		const queue = new PhrasePlaybackQueue(harness.apis, {
+			onRecoveryStateChange: (state) => recoveryStates.push(state),
+		});
+		await queue.resume();
+		allowResume = false;
+		contextState = "suspended";
+		context.dispatch("statechange");
+		windowTarget.dispatch("focus");
+		windowTarget.dispatch("focus");
+		windowTarget.dispatch("pageshow");
+		await Bun.sleep(0);
+		expect(resumeCalls).toBe(3);
+		expect(recoveryStates.at(-1)).toBe("gesture-required");
+
+		allowResume = true;
+		await queue.resume();
+		expect(recoveryStates.at(-1)).toBe("ready");
+	});
+
+	test("cancellation while interrupted fences recovery and removes every lifecycle listener", async () => {
+		const harness = playbackHarness();
+		const context = new FakeLifecycleTarget();
+		const windowTarget = new FakeLifecycleTarget();
+		const documentTarget = new FakeLifecycleTarget();
+		const mediaDevices = new FakeLifecycleTarget();
+		let contextState = "running";
+		let resumeCalls = 0;
+		let releaseResume: () => void = () => undefined;
+		const resumeGate = new Promise<void>((resolve) => {
+			releaseResume = resolve;
+		});
+		harness.apis.resume = async () => {
+			resumeCalls += 1;
+			if (resumeCalls > 1) await resumeGate;
+		};
+		harness.apis.recovery = {
+			context,
+			window: windowTarget,
+			document: documentTarget,
+			mediaDevices,
+			getContextState: () => contextState,
+			getVisibilityState: () => "hidden",
+		};
+		const released: number[] = [];
+		const queue = new PhrasePlaybackQueue(harness.apis, {
+			onReleased: (value) => released.push(value.sequence),
+		});
+		await queue.resume();
+		queue.beginGeneration(generationId);
+		await queue.enqueue(segment(0));
+		await queue.enqueue(segment(1));
+		const raw = [queue.enqueue(segment(2)), queue.enqueue(segment(3))];
+		contextState = "interrupted";
+		context.dispatch("statechange");
+		mediaDevices.dispatch("devicechange");
+		mediaDevices.dispatch("devicechange");
+		expect(resumeCalls).toBe(2);
+
+		expect(queue.bargeIn()).toBe(generationId);
+		for (const outcome of raw) {
+			expect(await outcome).toMatchObject({
+				status: "rejected",
+				reason: "stale",
+			});
+		}
+		expect(harness.sources.map((source) => source.stopped)).toEqual([
+			true,
+			true,
+		]);
+		contextState = "running";
+		releaseResume();
+		context.dispatch("statechange");
+		await Bun.sleep(0);
+		expect(harness.sources).toHaveLength(2);
+		expect(released).toEqual([]);
+
+		await queue.dispose();
+		expect(context.listenerCount).toBe(0);
+		expect(windowTarget.listenerCount).toBe(0);
+		expect(documentTarget.listenerCount).toBe(0);
+		expect(mediaDevices.listenerCount).toBe(0);
+		const callsAfterDispose = resumeCalls;
+		contextState = "suspended";
+		context.dispatch("statechange");
+		windowTarget.dispatch("pageshow");
+		expect(resumeCalls).toBe(callsAfterDispose);
 	});
 
 	test("resumes explicitly and dispose closes the output context", async () => {

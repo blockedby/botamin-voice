@@ -6,7 +6,7 @@
 
 **Tag state:** pending/recommendation only. No tag, PR, registry digest, or predecessor image is asserted by this handoff.
 
-**Implementation baseline:** integrated RC4 code through `58aa9ee`, followed by recorded review-closure, integration-harness, and release-handoff commits on the candidate branch.
+**Natural-voice implementation HEAD:** `739cb18`. This docs handoff does not claim final review closure.
 
 **Scope:** local hosting on one trusted machine. This is not target-VPS or public TLS/WSS acceptance.
 
@@ -18,20 +18,25 @@
 - a ready draft must be confirmed at its exact current revision; server orchestration then automatically commits one booking and publishes one server-derived `internal_virtual`/`scheduled` meeting projection;
 - the final widget appears only after durable commit and states that no external calendar event or invitation exists;
 - optional qualification starts directly after truthful meeting confirmation and asks only missing facts: volume first when neither is known, only the other field when one is known, and nothing when both are known;
-- TTS redacts contacts by default. The only exception is an exact server-approved contact from accepted durable draft facts or a committed booking while contact-processing consent is active.
+- TTS redacts contacts by default. The only exception is an exact server-approved contact from accepted durable draft facts or a committed booking while contact-processing consent is active;
+- ordinary speech is concise/natural; current + one ordered TTS prefetch feeds provider-neutral complete MP3/WAV rendering, gapless scheduled playback, and a four-segment/20 MB credit window with at most two decoded;
+- output `AudioContext` is created/resumed in the consent gesture before mic/network awaits;
+- 16 committed same-origin reaction MP3s are capability/stage/privacy gated and delayed 350 ms. Runtime provider calls for reactions are zero, and they have no transcript/state/provider/business effect;
+- default TTS remains exact xAI/eve/MP3. Gemini is an explicit four-env Preview profile; provider PCM is wrapped server-side as canonical complete WAV, and style is fixed server-owned neutral/curious/serious/excited with sensitive facts always neutral and visible transcript plain.
 
 No duplicate meeting table, external availability query, calendar event/invite, or CRM record is introduced.
 
 ## Evidence status
 
-Fresh RC4 results are recorded in [`../VALIDATION.md`](../VALIDATION.md). The RC3 report is preserved separately as historical evidence; it does not close RC4 gates.
+Pre-closure implementation evidence supplied for HEAD `739cb18` (not final review closure and allowed to change after review):
 
-- Chromium desktop/mobile Playwright **landing smoke** passed through the shared harness. It covers responsive/pre-consent boundaries, not a full voice booking journey.
-- Fixture-only eval baseline is 44/44 scenarios, 25/25 applicable booking-order checks, and 28/28 negative controls with zero provider calls; real Luna was not run.
-- Migration/cutover wrappers and RC3→RC4 schema compatibility are covered by deterministic tests.
-- The provider-independent repository suite is green: 715 tests across 68 files; exact evidence is in `VALIDATION.md`.
-- WebKit full journey is not run. Its browser binary is present, but this host lacks `libicu74`, `libxml2`, and `libflite1`.
-- Full voice booking, owner-configured live Compose cutover, target VPS, public TLS/WSS, and target-host provider live booking remain explicit gates.
+- provider-independent suite: **801 passed, 0 failed across 72 files, 16,742 assertions**;
+- Chromium desktop/mobile Playwright **landing smoke: 2/2 passed**. It covers responsive/pre-consent boundaries, not a full voice booking journey;
+- fixture/eval paths are credential-free with zero provider calls; this docs handoff does not claim a fresh fixture recount or real-Luna run;
+- deterministic coverage includes natural prompts, two-request ordered prefetch, provider-neutral MP3/WAV rendering, bounded gapless playback, reaction/style policy, exact TTS profiles, and migration/cutover behavior;
+- WebKit full journey is not run. Its browser binary is present, but this host lacks `libicu74`, `libxml2`, and `libflite1`;
+- full Chromium/WebKit voice booking, owner-configured live Compose cutover, target VPS, public TLS/WSS, target-host provider booking, and target-host latency/load remain explicit gates;
+- no formal voice A/B matrix exists.
 
 The committed [T30 owner-observed artifact](../evidence/T30-observed-local-voice-smoke-2026-07-31.md) and the preserved RC3 report remain historical evidence only.
 
@@ -97,11 +102,14 @@ The placeholder above is not a real image. Never use `docker compose down -v`. K
 
 ## Paid smokes: explicit opt-in only
 
-Deployment, tests, readiness, and schema verification do not spend provider usage. Static greeting regeneration is administrator-only and overwrites a tracked asset, so inspect it before commit:
+Deployment, tests, readiness, and schema verification do not spend provider usage. Static greeting/reaction regeneration is administrator-only, paid, explicit opt-in, and overwrites tracked assets; the assets are already committed, so do not regenerate them for ordinary setup:
 
 ```bash
 BOTAMIN_GENERATE_PROACTIVE_GREETING=1 \
   bun run scripts/generate-proactive-greeting.ts
+
+BOTAMIN_GENERATE_LOCAL_REACTION_CLIPS_PAID=1 \
+  bun run generate:reaction-clips:paid-opt-in
 ```
 
 Against an already-ready local server, an owner may deliberately run the integrated voice smoke:
@@ -118,14 +126,37 @@ This is not a browser full journey and does not close WebKit or target-host gate
 ```bash
 compose_secret_operation=paid-smoke
 . ./scripts/compose-secret-files.sh
-docker compose run --rm -e AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh stt
-docker compose run --rm -e AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh tts
+docker compose run --rm -e AUTO_MIGRATE=false -e OPENROUTER_EXTERNAL_SMOKE=1 app /app/scripts/run-openrouter-smoke.sh stt
+docker compose run --rm -e AUTO_MIGRATE=false -e OPENROUTER_EXTERNAL_SMOKE=1 app /app/scripts/run-openrouter-smoke.sh tts
+```
+
+The default remains xAI/eve/MP3. To deliberately smoke the opt-in Gemini profile from a checkout whose protected `.env` contains the key, set all four values and the paid gate together; do not print/source the key:
+
+```bash
+OPENROUTER_EXTERNAL_SMOKE=1 \
+OPENROUTER_TTS_PROFILE=gemini_3_1_pcm \
+OPENROUTER_TTS_MODEL=google/gemini-3.1-flash-tts-preview \
+OPENROUTER_TTS_VOICE=Schedar \
+OPENROUTER_TTS_RESPONSE_FORMAT=pcm \
+bun run scripts/openrouter-tts-smoke.ts
+```
+
+Voice names are case-sensitive and must match the exact 30-name release snapshot in [`../CURRENT_DECISIONS.md`](../CURRENT_DECISIONS.md). Gemini is Preview/dynamic-catalog; there is no automatic fallback or model/voice selection. On this host on 2026-08-03, the Schedar neutral smoke succeeded through OpenRouter: `audio/wav`, 188204 bytes, 3326ms. This is not a quality claim.
+
+Rollback is configuration-only and exact:
+
+```dotenv
+OPENROUTER_TTS_PROFILE=xai_mp3
+OPENROUTER_TTS_MODEL=x-ai/grok-voice-tts-1.0
+OPENROUTER_TTS_VOICE=eve
+OPENROUTER_TTS_RESPONSE_FORMAT=mp3
 ```
 
 ## Explicit remaining gates
 
-- WebKit complete-MP3 and full voice booking journey after installing `libicu74`, `libxml2`, and `libflite1` on a compatible host.
+- WebKit complete provider-neutral MP3/WAV and full voice booking journey after installing `libicu74`, `libxml2`, and `libflite1` on a compatible host.
 - Full Chromium voice booking journey; desktop/mobile landing smoke is not sufficient.
+- Owner listening review and a future formal voice A/B matrix if a quality comparison is required; the isolated smoke proves no quality preference.
 - Owner-configured live local Compose cutover/restore drill with retained backup path.
 - Clean target-VPS deploy and resource behavior.
 - Public DNS, TLS, and WSS.

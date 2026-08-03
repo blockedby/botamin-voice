@@ -43,13 +43,15 @@ Table-driven cases:
 - secret pattern scan;
 - dev hot reload does not affect active thread unexpectedly.
 
-### Speech sanitizer/chunker
+### Speech, style, prefetch, playback, and reactions
 
-- markdown/code/URL removal;
-- не режет `name@example.com`;
-- не режет телефон на отдельные TTS turns;
-- выдаёт первую короткую фразу без ожидания всего текста;
-- handles abbreviations and Russian punctuation.
+- prompt compiler preserves concise natural-speech rules: usually ≤2 short sentences/about 12 seconds, one useful thought, ≤1 question, no filler/progress invention;
+- sanitizer removes markdown/code/URL, style controls, and unsafe contacts without splitting approved contacts incorrectly;
+- current + one TTS prefetch starts concurrently but publishes in source order; first failure/barge-in/stale generation suppresses later results;
+- provider-neutral complete MP3/canonical-WAV validation, gapless scheduled starts, four-segment/20 MB/5 MB credit bounds, exact release acknowledgments, and no more than two decoded slots;
+- output `AudioContext` creation/resume occurs synchronously in the consent gesture before mic/network awaits;
+- 16-clip negotiated reaction allowlist, 350 ms delay, stage/privacy suppression, one per turn, same-origin fetch, and cancellation; failure has no transcript/state/provider/business effect;
+- server style enum is fixed to neutral/curious/serious/excited, sensitive facts stay neutral, and visible transcript/durable state never contain Gemini tags.
 
 ### Booking domain
 
@@ -104,9 +106,12 @@ The paid Russian smoke is tagged `external`, excluded from default CI and record
 
 Default deterministic suite uses a protocol-faithful fake `POST /api/v1/audio/speech` and no external credentials:
 
-- successful `audio/mpeg` response and valid MP3 fixture;
-- chunked network body buffered into one complete segment;
-- wrong content type, zero-byte/empty body and invalid MP3 fixture;
+- unchanged default exact xAI/eve/MP3 profile and successful complete `audio/mpeg` fixture;
+- exact opt-in Gemini Preview four-env PCM profile, case-sensitive 30-voice snapshot, no speed/automatic fallback/model selection, and fail-closed mismatches;
+- Gemini PCM content types/whole samples/size validated and wrapped server-side as canonical complete mono 24 kHz PCM16LE WAV; raw PCM never reaches browser contracts;
+- fixed server-owned style-tag mapping and rejection of bracket/tag bypass; sensitive facts and server authority remain neutral, while transcript stays plain;
+- chunked network body buffered into one complete provider-neutral segment;
+- wrong content type, zero-byte/empty body and invalid MP3/PCM/WAV fixture;
 - bounded JSON/text error body never forwarded as audio;
 - `400`, `401`, `402`, `404`, `429` with/without `Retry-After`, `502`, `503`;
 - one-retry maximum, timeout and user abort;
@@ -116,7 +121,7 @@ Default deterministic suite uses a protocol-faithful fake `POST /api/v1/audio/sp
 - no spoken text, PII or key in logs/snapshots/client bundles;
 - text-only fallback preserves visible text and booking effects.
 
-External paid tests are tagged `external` and excluded from default CI. Before release, target VPS synthesizes the same Russian sample with each candidate voice actually available; owner chooses by listening and changes only env. The smoke requires `2xx`, compatible `audio/mpeg`, non-empty bytes and safe status/latency/byte evidence.
+External paid tests are tagged `external` and excluded from default CI. The safe smoke requires explicit `OPENROUTER_EXTERNAL_SMOKE=1`, an intentionally selected exact profile, and safe aggregate output only. On this host on 2026-08-03, the Schedar neutral smoke succeeded through OpenRouter: `audio/wav`, 188204 bytes, 3326ms. This is not a quality claim. There is no formal voice A/B matrix; target-host/full-journey listening remains open.
 
 ### Codex app-server
 
@@ -138,7 +143,7 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 ## 4. Integration tests
 
 - landing entry attempts only the fixed same-origin proactive MP3; before both consents there are zero conversation REST requests, sockets, capture/mic objects, provider calls, or sessions; session start stops greeting;
-- bounded PCM16 chunks → `audio.commit` → gateway-produced validated WAV → atomic `SttPort` request → fake OpenRouter already-WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
+- bounded PCM16 chunks → `audio.commit` → gateway-produced validated STT WAV → atomic `SttPort` → fake OpenRouter final transcript → fake brain deltas → two-request ordered TTS prefetch → complete MP3/canonical-WAV WS segments;
 - sample-derived capture progress/countdown uses accepted PCM16 bytes and stricter server duration/byte ceiling, then auto-commits exactly once;
 - bounded monotonic `visitor.text.submit` clears uncommitted audio, suppresses pending duplicates, retains sequence on rejection, emits server final once, and follows the same brain/state/tool/persistence path as speech;
 - typed composer is stage-gated; structured booking form renders only from server-owned `COLLECT_BOOKING` and submits revisioned patches, never transcript-triggered tools;
@@ -163,7 +168,7 @@ Playwright with synthetic audio fixture:
 3. click CTA, provide both consents, and mock/allow mic;
 4. stream fixture PCM;
 5. observe listening/processing states and then exactly one `transcript.final`;
-6. receive assistant text and ordered complete MP3 segment events;
+6. receive plain assistant text and ordered provider-neutral complete MP3/canonical-WAV segment events;
 7. verify the circular countdown is sample-derived and reaches the 60-second limit without wall-clock drift;
 8. submit typed and spoken time-band plus supported concrete date/time requests and verify exactly two concretely dated current Moscow candidates;
 9. use the structured form only at `COLLECT_BOOKING`; verify auto-filled facts, explicit conflicts, stale revision/reselection, and exact-revision confirmation;
@@ -171,7 +176,7 @@ Playwright with synthetic audio fixture:
 11. verify missing-only qualification matrix: neither known → volume first; one known → only other; both known → no question; daily count → basis clarification; refusal preserves scheduled meeting;
 12. verify DB/event payload keeps booking `booked`, draft `committed`, and widget projection tied to the same booking ID.
 
-Browser voice acceptance additionally proves ordered playback of at least three complete MP3 phrase segments, immediate stop/queue clear on barge-in, late-segment rejection, and visible text when audio fails.
+Browser voice acceptance additionally proves ordered gapless playback of at least three complete MP3/WAV phrase segments, four-segment/20 MB credits with at most two decoded, gesture-owned AudioContext, capability-gated reactions, immediate stop/queue clear on barge-in, late-segment rejection, and visible plain text when audio fails.
 
 Browsers:
 
@@ -183,7 +188,7 @@ Mobile viewport and slow network profiles included.
 
 ## 6. Conversation eval suite
 
-The committed RC4 fixture catalog has **44 scenarios**. It is deterministic and credential-free; it does not run Luna/providers and therefore is not model-quality evidence. The scenario groups below describe its minimum behavioral surface:
+The committed RC4 fixture catalog is deterministic and credential-free; it does not run Luna/providers and therefore is not model-quality evidence. The scenario groups below describe its minimum behavioral surface without asserting a fresh recount:
 
 ### Happy paths
 
@@ -255,7 +260,7 @@ Release thresholds and current fixture baseline:
 - at least 24 scenarios and ≥90% without critical failure;
 - 100% booking-order/scheduled-payload checks among booking-required scenarios;
 - zero fabricated prices, guarantees, secrets, duplicate bookings, pre-booking qualification, widget-before-commit, external invite claims, repeated-known qualification, silent daily normalization, or unauthorized contact TTS;
-- committed artifact: **44/44 scenarios**, **25/25 applicable booking-order checks**, **28/28 negative controls**, zero critical failures;
+- the committed fixture artifact carries its own scenario/check totals; this docs change does not recertify them;
 - evidence mode is `fixture-only`, provider calls are `0`, and real Luna is explicitly `not-run`.
 
 ## 8. Latency/load test
@@ -300,19 +305,18 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ### Local release candidate `0.5.0-local-rc.4` (recommended; tag pending)
 
-Fresh RC4 command evidence is recorded in [`../VALIDATION.md`](../VALIDATION.md). The prior RC3 report is preserved separately under `evidence/`; it is historical and not reused as proof.
+Pre-closure implementation evidence supplied for the natural-voice/Gemini HEAD (not final review closure and allowed to change after review):
 
-- [x] Credential-free fixture baseline is current: 44/44 scenarios, 25/25 applicable booking-order checks, 28/28 negative controls, zero provider calls; real Luna not run.
-- [x] Chromium desktop/mobile Playwright landing smoke passed through the shared Chromium harness. This proves responsive/pre-consent transport boundaries only, not a full voice booking journey.
-- [x] Focused cutover tests prove protected backup precedes graceful stop, existing stopped DB is protected, migration is delegated to normal startup, readiness precedes `verify-rc4`, and RC3 schema upgrades to migration 0004 without a duplicate meeting table.
-- [x] The provider-independent repository suite is green: 715 tests across 68 files, including the RC4 provider-contract and production-component journeys.
-- [x] Typecheck, build, Biome, generated spec validation, release artifact regeneration, and `git diff --check` are reported with actual fresh outputs in `VALIDATION.md`.
+- [x] Credential-free fixture/eval paths make zero provider calls; this docs change does not claim a fresh fixture recount or real-Luna run.
+- [x] Provider-independent repository suite: **801 passed, 0 failed across 72 files, 16,742 assertions**.
+- [x] Chromium desktop/mobile landing smoke: **2/2 passed** through the shared harness. This proves responsive/pre-consent boundaries only, not a full voice booking journey.
+- [x] Focused deterministic coverage includes natural prompts, ordered two-request TTS prefetch, canonical WAV, provider-neutral playback, bounded credit flow, gesture ownership, local reactions, trusted style policy, profile validation, and migration/cutover behavior.
 - [ ] Docker Compose cutover against an owner-configured live local volume and credentials was not run by the documentation handoff; the wrapper is covered statically/fake-Docker and DB tests.
 - [ ] Full local voice booking journey was not run; do not infer it from Chromium landing smoke or fixture evals.
 
 ### External/not-run gates — not closed by RC4 handoff
 
-- [ ] WebKit complete-MP3/full voice journey. The browser binary is downloaded locally, but host libraries `libicu74`, `libxml2`, and `libflite1` are missing.
+- [ ] WebKit complete provider-neutral audio/full voice journey. The browser binary is downloaded locally, but host libraries `libicu74`, `libxml2`, and `libflite1` are missing.
 - [ ] Clean target-VPS deploy under target CPU/RAM/storage/network conditions.
 - [ ] Public DNS and TLS/WSS on the target host.
 - [ ] Explicitly approved target-host live provider booking through OpenRouter STT/TTS + Codex Luna, including the final internal-meeting widget.
@@ -326,9 +330,9 @@ The RC4 handoff bundle contains:
 
 - integrated RC4 implementation plus recorded closure fixes; no PR/tag is invented;
 - recommended/pending `v0.5.0-local-rc.4` label;
-- source docs plus regenerated `FULL_SPEC.md`, `technical-spec.html`, `MANIFEST.txt`, and `CHECKSUMS.sha256`;
-- deterministic migration/cutover, contracts, app, web, privacy, eval, type, and Biome evidence as actually run;
+- source documentation for natural voice and the opt-in Gemini profile; removed root validation/manifest/checksum artifacts are intentionally not recreated;
+- pre-closure implementation evidence clearly labeled as non-final;
 - Chromium desktop/mobile smoke clearly labeled as a landing smoke;
-- preserved RC3 historical report and explicit WebKit/VPS/TLS/WSS/provider-live-booking gates.
+- explicit full Chromium/WebKit, VPS/TLS/WSS, target-host provider/live-booking, latency/load, and voice-listening gates.
 
 Target-host and full-journey evidence must not be inferred from this local handoff.

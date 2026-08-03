@@ -94,7 +94,7 @@
 
 ### Блок 5. Voice demo
 
-Sticky/inline widget с transcript, статусом и одной главной кнопкой. При входе он один раз пытается проиграть committed product-owned same-origin MP3-приветствие. Это product preview, а не voice session: до consent нет conversation REST/WS, microphone или provider call. Если autoplay заблокирован или media не загрузилось, показывается `Включить приветствие`; запуск разговора останавливает приветствие.
+Sticky/inline widget с plain transcript, статусом и одной главной кнопкой. При входе он один раз пытается проиграть committed product-owned same-origin MP3-приветствие. Это product preview, а не voice session: до consent нет conversation REST/WS, microphone или provider call. Если autoplay заблокирован или media не загрузилось, показывается `Включить приветствие`; запуск разговора останавливает приветствие. После consent короткие естественные реплики идут через gapless provider-neutral playback; 16 capability-gated same-origin reactions могут ненавязчиво обозначить задержку после 350 ms, но не меняют transcript/state и не вызывают provider runtime.
 
 ### Блок 6. Trust and limits
 
@@ -111,7 +111,7 @@ Sticky/inline widget с transcript, статусом и одной главно�
 | Stage | Цель | Главный event | Drop-off reason examples |
 |---|---|---|---|
 | Visit | понять ценность и услышать короткий static product greeting | `landing.viewed` | autoplay blocked → явная `Включить приветствие` |
-| Voice start | получить оба consent до session/mic/provider path | `conversation.started` | permission denied |
+| Voice start | получить оба consent до session/mic/provider path и gesture-owned AudioContext | `conversation.started` | permission/audio unavailable |
 | Discovery | найти задачу максимум за два вопроса до мягкого offer | `discovery.completed` | слишком много вопросов |
 | Value | связать pain и use case | `value.presented` | общая презентация |
 | Intent | получить согласие на следующий шаг | `booking.offered` | нет доверия/времени |

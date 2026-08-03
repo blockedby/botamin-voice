@@ -3,8 +3,10 @@
 This is the single production-shaped Compose path for spec `0.5-demo`: one Bun
 `app`, one pinned Caddy proxy, SQLite data, and persistent Codex auth. OpenRouter
 is the only voice gateway: one runtime-only `OPENROUTER_API_KEY` authorizes both
-phrase-level STT and complete-segment TTS. There is no second voice provider,
-Python runtime, voice sidecar, or provider key in the image.
+phrase-level STT and complete-segment TTS. Default output remains exact
+xAI/eve/MP3; Gemini 3.1 Flash TTS Preview is an explicit four-env PCM profile,
+not a second gateway or fallback. There is no second voice provider, Python
+runtime, voice sidecar, or provider key in the image.
 
 ## Pinned runtime
 
@@ -41,6 +43,8 @@ docker compose exec -T app bun /app/ops/db.js verify-rc4
 ```
 
 That check is PII-safe and verifies SQLite integrity, exact RC4 context columns/FK/check constraints, persisted JSON revision/timestamp consistency, foreign keys, and absence of duplicate fact/evidence/virtual-meeting tables.
+
+The default `.env.example` profile is `xai_mp3` / `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`. Browser playback is provider-neutral and bounded; output `AudioContext` is owned by the consent gesture. The 16 committed same-origin reaction assets make zero runtime provider calls and should not be regenerated during deployment.
 
 Caddy proxies WebSocket upgrades automatically. `docker compose down` preserves
 all named volumes; never use `down -v` on a host containing real bookings or
@@ -124,8 +128,8 @@ or Codex preflight is missing. Public DNS/TLS, persisted device auth, provider
 credits, and paid probes remain target-VPS follow-up evidence (REV-005); local
 checks do not claim them.
 
-The external Russian STT and MP3 TTS smokes are separately paid and
-separately opt-in on the target VPS:
+The external Russian STT and TTS smokes are separately paid and separately
+opt-in on the target VPS:
 
 ```bash
 RUN_OPENROUTER_STT_SMOKE=true ./scripts/deploy-production.sh
@@ -135,9 +139,9 @@ RUN_OPENROUTER_STT_SMOKE=true RUN_OPENROUTER_TTS_SMOKE=true \
   ./scripts/deploy-production.sh
 
 # direct image forms after A2 integration:
-docker compose run --rm -e AUTO_MIGRATE=false app \
+docker compose run --rm -e AUTO_MIGRATE=false -e OPENROUTER_EXTERNAL_SMOKE=1 app \
   /app/scripts/run-openrouter-smoke.sh stt
-docker compose run --rm -e AUTO_MIGRATE=false app \
+docker compose run --rm -e AUTO_MIGRATE=false -e OPENROUTER_EXTERNAL_SMOKE=1 app \
   /app/scripts/run-openrouter-smoke.sh tts
 ```
 
@@ -146,6 +150,32 @@ The guarded image commands execute `/app/scripts/openrouter-stt-smoke.ts` and
 probe in local startup, image build, healthchecks, or default CI. No script
 prints the key. `401` and `404` mean key/model/profile configuration failure;
 `402` means exhausted credits. None should be retried by deployment loops.
+
+For the Gemini Preview profile, change all four application values together in
+protected `.env`; voice is case-sensitive and `OPENROUTER_TTS_SPEED` must remain
+empty/unset:
+
+```dotenv
+OPENROUTER_TTS_PROFILE=gemini_3_1_pcm
+OPENROUTER_TTS_MODEL=google/gemini-3.1-flash-tts-preview
+OPENROUTER_TTS_VOICE=Schedar
+OPENROUTER_TTS_RESPONSE_FORMAT=pcm
+```
+
+The exact 30-voice release snapshot is in [`../CURRENT_DECISIONS.md`](../CURRENT_DECISIONS.md).
+The public catalog is dynamic; profile mismatch fails closed and there is no
+automatic model/voice selection or xAI fallback. OpenRouter PCM is wrapped
+server-side as canonical complete mono 24 kHz PCM16 WAV; browser never receives
+raw PCM. On this host on 2026-08-03, the Schedar neutral smoke succeeded through
+OpenRouter: `audio/wav`, 188204 bytes, 3326ms. This is not a quality claim.
+Restore the default profile to roll back:
+
+```dotenv
+OPENROUTER_TTS_PROFILE=xai_mp3
+OPENROUTER_TTS_MODEL=x-ai/grok-voice-tts-1.0
+OPENROUTER_TTS_VOICE=eve
+OPENROUTER_TTS_RESPONSE_FORMAT=mp3
+```
 With `TTS_TEXT_ONLY_FALLBACK=true`, the application reports degraded TTS while
 text and booking continue; `false` makes missing shared voice configuration
 fail closed. `STT_TEXT_ONLY_INPUT_FALLBACK=false` always prevents silent typed
@@ -207,4 +237,4 @@ docker compose logs --tail=100 app caddy
 ```
 
 Logs and diagnostics must never print provider keys, Codex auth, spoken text,
-raw audio, or booking contact payloads.
+delivery tags, raw PCM/audio, or booking contact payloads.

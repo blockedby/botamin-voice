@@ -14,7 +14,7 @@
 
 До этого pipeline существует отдельный pre-consent path: page entry делает одну `HTMLAudio` playback attempt committed same-origin `/assets/botamin-proactive-greeting.mp3`. Он не создаёт conversation, REST/WS, microphone, provider call или session; blocked/error переводит UI к `Включить приветствие`, а session start останавливает/release-ит audio.
 
-Действующий post-consent pipeline: **browser PCM16 chunks → gateway/utterance assembler bounds mono PCM16 and emits one validated WAV → atomic `audio/wav` SttPort request → OpenRouter audio-input chat completion final transcript → Codex/Luna → OpenRouter TTS complete MP3 segment**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint. Static proactive MP3 не входит в этот runtime pipeline.
+Действующий post-consent pipeline: **browser PCM16 chunks → gateway/utterance assembler emits one validated STT WAV → atomic `audio/wav` SttPort → OpenRouter final transcript → Codex/Luna → two-request ordered TTS prefetch → complete provider-neutral MP3 or canonical WAV segments → gapless scheduled playback**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint. Static proactive greeting/reaction MP3s не входят в provider runtime pipeline.
 
 Это отличается от end-to-end speech-to-speech: добавляется один orchestration layer, зато используется уже оплаченная Codex subscription и мозг можно заменить без переделки audio UI.
 
@@ -27,6 +27,7 @@
 - ровно одна immediate entry attempt fixed same-origin proactive MP3 без session/network capabilities кроме same-origin asset fetch;
 - truthful `Включить приветствие` fallback после autoplay block/media error и release greeting при session start;
 - mic permission только после обоих consents;
+- synchronous creation/resume output `AudioContext` in the consent gesture before mic/network awaits;
 - AudioWorklet capture;
 - resample browser audio до mono PCM16 16 kHz;
 - отправка бинарных PCM16 чанков около 100 ms;
@@ -34,8 +35,10 @@
 - circular countdown по принятым samples, а не wall clock, с effective duration по stricter duration/byte ceiling;
 - secure `visitor.text.submit` for bounded final typed turns plus structured revisioned booking form commands only in server-owned `COLLECT_BOOKING`;
 - UI states `listening → processing → transcript.final`;
-- ordered playback queue для полных MP3 phrase segments;
-- decode через Web Audio или `HTMLAudio`;
+- provider-neutral validation/rendering of complete MP3 or canonical 24 kHz mono PCM16 WAV segments;
+- gapless Web Audio scheduling with current + prefetched decoded slots;
+- four-segment/20 MB/5 MB-per-segment credit window, at most two decoded/source slots, and release acknowledgment;
+- negotiated allowlist for 16 committed same-origin reaction MP3s; one eligible decoration after 350 ms, cancelled by dynamic audio, mute, barge-in, or staleness;
 - barge-in: немедленно stop local playback и clear queue;
 - rendering transcript/state/errors;
 - reconnect с тем же `conversationId`, если сессия ещё жива.
@@ -51,7 +54,8 @@
 - multiplex JSON events и binary audio;
 - bounded utterance assembly до `audio.commit`, duration/byte guards и encoding bounded mono PCM16 into exactly one validated WAV;
 - atomic provider request lifecycle, abort и stale-turn suppression;
-- backpressure;
+- playback credit backpressure negotiated at four segments / 20 MB and replenished only by exact `playback.segment.released` acknowledgment;
+- local-reaction capability negotiation and conservative stage/privacy selection with no provider call or business effect;
 - orchestration turns;
 - speech sanitizer + sentence chunker;
 - запись событий и latency;
@@ -103,18 +107,15 @@ P0 transport — direct typed JSON-RPC к app-server. Универсальный
 
 ### OpenRouterTtsAdapter
 
-- server-side native Bun `fetch` к `POST https://openrouter.ai/api/v1/audio/speech`;
-- default profile: `x-ai/grok-voice-tts-1.0`, voice `eve`, `response_format=mp3`;
-- model, voice, speed и format задаются env; `speed` не отправляется, если empty;
-- `Authorization` и optional attribution headers остаются server-side; `X-OpenRouter-Cache: false` обязателен для user-specific speech;
-- один HTTP request синтезирует одну короткую фразу; весь response буферизуется, проверяется как непустой bounded `audio/mpeg`, затем эмитится одним atomic segment;
-- raw network chunks не считаются самостоятельно playable MP3;
-- `AbortSignal` отменяет fetch, а generation filtering отбрасывает late result;
-- `429` и retryable `5xx` получают не более одного bounded retry; `400/401/402/403/404/413` не ретраятся по умолчанию;
-- `401`, `402` и `404` открывают safe degraded mode; text answer, booking и qualification продолжают работать;
-- circuit breaker открывается после трёх consecutive retryable failures и half-opens после cooldown;
-- per-segment/turn/session character budgets, concurrency и maximum response bytes ограничены;
-- telemetry содержит model/voice/format/chars/status/latency/bytes и safe IDs, но не spoken text, PII, key или audio.
+- server-side native Bun `fetch` к `POST https://openrouter.ai/api/v1/audio/speech`; default remains exact `xai_mp3` / `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`;
+- opt-in Preview profile requires exact `gemini_3_1_pcm` / `google/gemini-3.1-flash-tts-preview` / one case-sensitive release-snapshot voice / `pcm`, with no speed, automatic choice, or xAI fallback;
+- Gemini public catalog is dynamic; the exact 30-voice snapshot verified 2026-08-03 is recorded in [`../CURRENT_DECISIONS.md`](../CURRENT_DECISIONS.md) and configuration fails closed outside it;
+- OpenRouter PCM is validated as complete PCM16LE and wrapped server-side into canonical complete mono 24 kHz PCM16LE `audio/wav`; browser never receives raw PCM;
+- `TtsPort` carries plain sanitized text plus trusted low-cardinality delivery style `neutral|curious|serious|excited`. Gemini mapping is fixed server-side (`neutral` no tag, otherwise `[curious]`, `[serious]`, `[excited]`); bracket controls from text fail closed;
+- contacts, exact meeting/date/time, booking/qualification, server-authority/fallback, and interrupted-turn content always use neutral. Style is presentation-only: visible transcript stays plain and durable state/provider selection do not change;
+- one HTTP request synthesizes one short phrase; at most current + one prefetch are in flight, then complete segments publish strictly in source order;
+- `Authorization` and attribution stay server-side; `X-OpenRouter-Cache: false`, bounds, abort/stale suppression, one pure-synthesis retry maximum, circuit breaker, budgets, and text-only degradation remain mandatory;
+- telemetry contains safe aggregates only, never spoken text, style tags, PII, key, raw PCM/WAV/MP3, or provider body.
 
 ### BookingService
 
@@ -158,7 +159,7 @@ P0 adapter — fixed-schema non-PII console acknowledgment. P1 — signed HTTP w
 2. Autoplay block или media error не запускает alternate network/provider path: UI показывает `Включить приветствие`, и повтор возможен только по user action.
 3. До обоих consents не создаются conversation/WS/microphone/provider/session. При старте настоящей session greeting немедленно pause/reset/release.
 
-Asset создаётся отдельно от visitor runtime: admin явно запускает opt-in `scripts/generate-proactive-greeting.ts`, script синтезирует фиксированный product copy через OpenRouter, валидирует bounded complete MP3 и заменяет committed asset. В asset нет visitor input/data; обычный entry никогда его не генерирует.
+Assets создаются отдельно от visitor runtime. Admin explicitly opts in to the paid proactive-greeting or local-reaction generator; the 16 reaction MP3s and proactive greeting are already committed static same-origin assets. They contain no visitor data, and ordinary entry/turn handling never synthesizes them.
 
 ### Post-consent turn order
 
@@ -170,9 +171,11 @@ Asset создаётся отдельно от visitor runtime: admin явно �
 6. Structured form commands patch the same draft at `baseRevision`; exact-revision confirmation automatically commits the booking through `uncommitted → committing → committed`.
 7. Before readiness and then periodically, a bounded DB-only sweeper recovers orphaned `committing` drafts idempotently without Luna/STT/TTS or an in-memory session; confirmation and qualification remain pending for the visitor reconnect.
 8. Text deltas pass the sanitizer. Contacts are redacted unless they exactly match server-approved contacts and contact-processing consent is active.
-9. Complete bounded phrases go to OpenRouter TTS and then the ordered browser queue.
-10. Only a durable booking publishes `internal.meeting.updated`; the final widget cannot be synthesized from transcript/stage alone.
-11. After truthful meeting confirmation, server qualification asks only missing facts. Provider retries never repeat Luna, notifier, draft mutation, or booking effects.
+9. Complete bounded phrases enter a two-request TTS window; settlement is reordered to source order before provider-neutral complete MP3/WAV WS segments.
+10. Browser uses a four-segment/20 MB credit window, decodes at most two segments, schedules the next at the preceding end time, and returns credit only after release.
+11. If negotiated and policy-safe, server may request one allowlisted same-origin reaction after 350 ms. It is cancelled by dynamic audio/staleness and has no transcript, state, provider, tool, or booking effect.
+12. Only a durable booking publishes `internal.meeting.updated`; the final widget cannot be synthesized from transcript/stage alone.
+13. After truthful meeting confirmation, server qualification asks only missing facts. Provider retries never repeat Luna, notifier, draft mutation, or booking effects.
 
 ## 4. Latency design
 
@@ -183,7 +186,7 @@ Asset создаётся отдельно от visitor runtime: admin явно �
 - OpenRouter phrase-level STT request to final transcript: measured release-profile input, no provider latency guarantee;
 - Luna first delta after final transcript: target ≤ 900 ms;
 - first phrase buffer: default target 100 chars, idle flush 350 ms;
-- OpenRouter request + complete MP3 response: измеряется отдельно для release profile, без provider latency guarantee;
+- OpenRouter request + complete MP3 or canonical WAV response: измеряется отдельно для release profile, без provider latency guarantee;
 - total target is re-baselined from measured `audio.commit → final transcript → playback`; phrase-level STT necessarily adds post-commit upload/inference latency.
 
 ### Приёмы снижения задержки
@@ -191,9 +194,10 @@ Asset создаётся отдельно от visitor runtime: admin явно �
 - показывать client listening/processing state и только atomic `transcript.final`;
 - Luna effort `low`/минимально доступный после model capability check;
 - короткий state context вместо полного event log;
-- запускать phrase-level synthesis до завершения полного Luna ответа;
+- требовать concise natural spoken form (обычно ≤2 коротких предложений, одна мысль, ≤1 вопрос);
+- запускать current + one ordered prefetched synthesis до завершения полного Luna ответа;
 - первая фраза 60–120 chars, normal soft target 120–180, hard limit 240;
-- держать не более одного playing и одного prefetched segment;
+- schedule decoded current/prefetch by Web Audio end times; retain at most four/20 MB with at most two decoded;
 - исключить RAG/network tools из критического пути;
 - не делать второй classifier call на каждый turn.
 
@@ -310,6 +314,7 @@ export type TtsSynthesisRequest = {
   generationId: string;
   segmentId: string;
   text: string;
+  deliveryStyle?: "neutral" | "curious" | "serious" | "excited";
   signal: AbortSignal;
 };
 
@@ -317,7 +322,7 @@ export type TtsAudioSegment = {
   generationId: string;
   segmentId: string;
   providerGenerationId?: string;
-  contentType: "audio/mpeg";
+  contentType: "audio/mpeg" | "audio/wav";
   bytes: Uint8Array;
   final: true;
 };
@@ -352,9 +357,9 @@ LLM cannot directly write state or durable facts. It may propose quoted current-
 4. abort-ит in-flight OpenRouter requests этой generation;
 5. вызывает `turn/interrupt`, если Codex turn ещё активен;
 6. gateway продолжает принимать новые browser PCM16 chunks в новый bounded utterance;
-7. поздние STT results, text и complete MP3 segments старого turn/generation игнорируются.
+7. поздние STT results, text, complete MP3/WAV segments и reactions старого turn/generation игнорируются.
 
-Ключевой контракт: **устаревший complete audio segment никогда не проигрывается после нового user turn**. OpenRouter-specific cancellation contract не предполагается; cancellation локальна.
+Ключевой контракт: **устаревший complete MP3/WAV segment или reaction никогда не проигрывается после нового user turn**. OpenRouter-specific cancellation contract не предполагается; cancellation локальна.
 
 ## 11. Предлагаемый repository layout
 
@@ -459,14 +464,21 @@ STT_TEXT_ONLY_INPUT_FALLBACK=false
 OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 
-# TTS — complete MP3 phrase segments
+# TTS — exact xAI complete MP3 profile by default
 TTS_PROVIDER=openrouter
-
+OPENROUTER_TTS_PROFILE=xai_mp3
 OPENROUTER_TTS_MODEL=x-ai/grok-voice-tts-1.0
 OPENROUTER_TTS_VOICE=eve
 OPENROUTER_TTS_RESPONSE_FORMAT=mp3
-# Optional; omit from request if empty
+# Optional for xAI; omit from request if empty
 OPENROUTER_TTS_SPEED=
+
+# Paid opt-in Gemini Preview: change all four values together; speed must be empty.
+# Voice is case-sensitive and must be in the 30-voice release snapshot.
+# OPENROUTER_TTS_PROFILE=gemini_3_1_pcm
+# OPENROUTER_TTS_MODEL=google/gemini-3.1-flash-tts-preview
+# OPENROUTER_TTS_VOICE=Kore
+# OPENROUTER_TTS_RESPONSE_FORMAT=pcm
 
 # Optional app attribution; localhost is safe for local development
 OPENROUTER_HTTP_REFERER=http://localhost:5173

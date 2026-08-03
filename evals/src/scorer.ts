@@ -1290,7 +1290,9 @@ function scoreScenario(
 
 	const stageEvents = events.filter((event) => event.type === "stage");
 	const canonicalSlotLabels =
-		scenario.serverContext?.slotCandidates.map((candidate) => candidate.label) ?? [];
+		scenario.serverContext?.slotCandidates.map(
+			(candidate) => candidate.label,
+		) ?? [];
 	for (let index = 1; index < events.length; index += 1) {
 		const previous = events[index - 1];
 		const current = events[index];
@@ -1315,10 +1317,13 @@ function scoreScenario(
 			) &&
 			(canonicalResponse?.claimRefs?.includes(
 				"user-brief-revenue-10-15m-monthly",
-			) ?? false) &&
-			["DISCOVERY->VALUE", "VALUE->BOOKING_OFFER", "BOOKING_OFFER->COLLECT_BOOKING"].includes(
-				`${previous.stage}->${current.stage}`,
-			);
+			) ??
+				false) &&
+			[
+				"DISCOVERY->VALUE",
+				"VALUE->BOOKING_OFFER",
+				"BOOKING_OFFER->COLLECT_BOOKING",
+			].includes(`${previous.stage}->${current.stage}`);
 		assertCritical(
 			canonicalCompound,
 			"impossible_stage_transition",

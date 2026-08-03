@@ -40,6 +40,10 @@ export const conversationContexts = sqliteTable(
 		updatedAt: text("updated_at").notNull(),
 	},
 	(table) => [
+		index("conversation_contexts_committing_cursor_idx").on(
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN json_extract(${table.draftJson}, '$.commitStatus') ELSE NULL END`,
+			table.conversationId,
+		),
 		check(
 			"conversation_contexts_revision_nonnegative",
 			sql`typeof(${table.revision}) = 'integer' AND ${table.revision} >= 0`,

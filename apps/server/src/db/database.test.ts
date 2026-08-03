@@ -102,6 +102,31 @@ describe("domain database migrations", () => {
 		expect(
 			tables.filter((name) => /fact|evidence|virtual_meeting/.test(name)),
 		).toEqual([]);
+		const contextIndexes = database.$client
+			.query<{ name: string }, []>("PRAGMA index_list(conversation_contexts)")
+			.all()
+			.map((entry) => entry.name);
+		expect(contextIndexes).toContain(
+			"conversation_contexts_committing_cursor_idx",
+		);
+		const recoveryPlan = database.$client
+			.query<{ detail: string }, [string, number]>(
+				`EXPLAIN QUERY PLAN
+				 SELECT conversation_id, revision
+				 FROM conversation_contexts
+				 WHERE conversation_id > ?
+				   AND CASE WHEN json_valid(draft_json)
+				     THEN json_extract(draft_json, '$.commitStatus')
+				     ELSE NULL
+				   END = 'committing'
+				 ORDER BY conversation_id
+				 LIMIT ?`,
+			)
+			.all("", 10)
+			.map((entry) => entry.detail);
+		expect(recoveryPlan.join(" ")).toContain(
+			"conversation_contexts_committing_cursor_idx",
+		);
 		expect(database.select().from(conversationContexts).all()).toEqual([]);
 		closeDomainDatabase(database);
 	});

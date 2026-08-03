@@ -48,3 +48,12 @@ CREATE TABLE `conversation_contexts` (
     ELSE 0 END
   )
 );
+--> statement-breakpoint
+CREATE INDEX `conversation_contexts_committing_cursor_idx`
+ON `conversation_contexts` (
+  CASE WHEN json_valid(`draft_json`)
+    THEN json_extract(`draft_json`, '$.commitStatus')
+    ELSE NULL
+  END,
+  `conversation_id`
+);

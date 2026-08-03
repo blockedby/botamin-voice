@@ -54,7 +54,7 @@ bun run build: passed across all workspaces; production web/server bundles built
 bun run lint:format: passed, 173 files checked, no fixes
 bunx biome check infra/ops/db.ts infra/ops/db.test.ts infra/ops/scripts.test.ts: passed
 
-repository-wide test command: 715 passed, 0 failed across 68 files (11,631 assertions)
+repository-wide test command: 715 passed, 0 failed across 68 files (11,633 assertions)
 focused infra/ops command: 19 passed, 0 failed (147 assertions)
 offline eval: 44/44 scenarios; 25/25 booking-order; 28/28 negative controls; zero critical failures
 bun evals/src/generate-baseline.ts --check: deterministic artifact current

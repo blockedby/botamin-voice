@@ -156,7 +156,10 @@ export class OrphanBookingRecoveryWorker {
 				`SELECT conversation_id, revision
 				 FROM conversation_contexts
 				 WHERE conversation_id > ?
-				   AND json_extract(draft_json, '$.commitStatus') = 'committing'
+				   AND CASE WHEN json_valid(draft_json)
+				     THEN json_extract(draft_json, '$.commitStatus')
+				     ELSE NULL
+				   END = 'committing'
 				 ORDER BY conversation_id
 				 LIMIT ?`,
 			)

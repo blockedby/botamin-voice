@@ -122,6 +122,18 @@ type HistoryRecord =
 			bytes: number;
 	  };
 
+interface PlaybackFlowState {
+	readonly maxSegments: number;
+	readonly maxBytes: number;
+	readonly maxSegmentBytes: number;
+	availableSegments: number;
+	availableBytes: number;
+	readonly outstanding: Map<
+		string,
+		{ generationId: string; sequence: number; byteLength: number }
+	>;
+}
+
 /** One bounded conversation transport/session, independently testable from Bun. */
 export class GatewaySession {
 	readonly conversationId: string;
@@ -169,6 +181,9 @@ export class GatewaySession {
 	#bookingCommandPending = false;
 	#messageQueue: Promise<void> = Promise.resolve();
 	#pendingMessages = 0;
+	#playbackFlow: PlaybackFlowState | null = null;
+	readonly #playbackFlowWaiters = new Set<() => void>();
+	readonly #cancelledPlaybackGenerations = new Set<string>();
 	readonly #activeProcesses = new Set<Promise<void>>();
 	readonly #queuedTurnControllers = new Map<string, AbortController>();
 	readonly #turnsById = new Map<
@@ -337,6 +352,7 @@ export class GatewaySession {
 		this.#activeSocket = null;
 		this.#assembler?.clear();
 		this.#assembler = null;
+		this.#resetPlaybackFlow();
 		this.#trackProcess(this.#orchestrator.disconnect());
 		try {
 			this.#persistence.stopConversation(this.conversationId, "disconnected");
@@ -350,6 +366,7 @@ export class GatewaySession {
 		this.#stopped = true;
 		this.#assembler?.clear();
 		this.#assembler = null;
+		this.#resetPlaybackFlow();
 		for (const controller of this.#queuedTurnControllers.values()) {
 			controller.abort("session stopped");
 		}
@@ -403,6 +420,7 @@ export class GatewaySession {
 			const candidateLocalReactionClipIds = new Set(
 				hello.data.payload.capabilities?.localReactions?.clipIds ?? [],
 			);
+			this.#configurePlaybackFlow(hello.data.payload.playback);
 			await this.#ensureDraft();
 			let booking = null;
 			try {
@@ -430,7 +448,11 @@ export class GatewaySession {
 				this.conversationId,
 				this.#orchestrator.state.stage,
 			);
-			for (const record of this.#history) this.#sendRecord(socket, record);
+			// Reconnect always cancels local playback. Replay durable JSON state/text,
+			// never stale binary audio that could bypass the fresh flow window.
+			for (const record of this.#history) {
+				if (!("binary" in record)) this.#sendRecord(socket, record);
+			}
 			const token = this.#rotateResumeToken();
 			this.#sendEvent(
 				"session.ready",
@@ -474,14 +496,20 @@ export class GatewaySession {
 				);
 				break;
 			case "playback.interrupted": {
+				this.#cancelPlaybackGeneration(parsed.data.payload.generationId);
 				const event = await this.#orchestrator.interrupt(
 					parsed.data.payload.generationId,
 					parsed.data.payload.reason,
 				);
-				if (event.type === "assistant.interrupted") this.#mapEvent(event);
+				if (event.type === "assistant.interrupted") await this.#mapEvent(event);
 				break;
 			}
 			case "playback.started":
+				break;
+			case "playback.segment.released":
+				if (!this.#releasePlaybackSegment(parsed.data.payload)) {
+					this.#closeWithError(socket, "INVALID_EVENT", false);
+				}
 				break;
 			case "client.ping":
 				this.#sendEvent("server.pong", {
@@ -678,11 +706,12 @@ export class GatewaySession {
 		this.#expectedClientSequence += 1;
 		if (!this.#assembler) {
 			if (this.processing && this.#currentGenerationId) {
+				this.#cancelPlaybackGeneration(this.#currentGenerationId);
 				const interrupted = await this.#orchestrator.interrupt(
 					this.#currentGenerationId,
 				);
 				if (interrupted.type === "assistant.interrupted") {
-					this.#mapEvent(interrupted);
+					await this.#mapEvent(interrupted);
 				}
 			}
 			this.#assembler = new PcmUtteranceAssembler(this.#assemblerLimits);
@@ -988,7 +1017,7 @@ export class GatewaySession {
 				break;
 			}
 			case "audio.segment":
-				this.#publishAudioSegment(event);
+				await this.#publishAudioSegment(event);
 				break;
 			case "audio.done":
 				this.#sendEvent("assistant.audio.done", {
@@ -1034,12 +1063,16 @@ export class GatewaySession {
 			return;
 		}
 		turn.reactionSent = true;
-		this.#sendEvent("assistant.reaction.request", {
-			turnId: turn.id,
-			generationId,
-			clipId,
-			delayMs: LOCAL_REACTION_DELAY_MS,
-		});
+		this.#sendEvent(
+			"assistant.reaction.request",
+			{
+				turnId: turn.id,
+				generationId,
+				clipId,
+				delayMs: LOCAL_REACTION_DELAY_MS,
+			},
+			false,
+		);
 	}
 
 	#suppressReaction(generationId: string): void {
@@ -1048,10 +1081,137 @@ export class GatewaySession {
 		if (turn && !turn.reactionSent) turn.reactionSuppressed = true;
 	}
 
-	#publishAudioSegment(
+	#configurePlaybackFlow(config: {
+		maxBufferedSegments: number;
+		maxBufferedBytes: number;
+		maxSegmentBytes: number;
+	}): void {
+		this.#resetPlaybackFlow();
+		this.#playbackFlow = {
+			maxSegments: config.maxBufferedSegments,
+			maxBytes: config.maxBufferedBytes,
+			maxSegmentBytes: config.maxSegmentBytes,
+			availableSegments: config.maxBufferedSegments,
+			availableBytes: config.maxBufferedBytes,
+			outstanding: new Map(),
+		};
+	}
+
+	async #reservePlaybackSegment(
+		generationId: string,
+		segmentId: string,
+		sequence: number,
+		byteLength: number,
+	): Promise<boolean> {
+		while (!this.#stopped) {
+			const flow = this.#playbackFlow;
+			if (
+				!flow ||
+				!this.#activeSocket ||
+				this.#cancelledPlaybackGenerations.has(generationId) ||
+				byteLength <= 0 ||
+				byteLength > flow.maxSegmentBytes ||
+				flow.outstanding.has(segmentId)
+			) {
+				return false;
+			}
+			if (flow.availableSegments > 0 && flow.availableBytes >= byteLength) {
+				flow.availableSegments -= 1;
+				flow.availableBytes -= byteLength;
+				flow.outstanding.set(segmentId, {
+					generationId,
+					sequence,
+					byteLength,
+				});
+				return true;
+			}
+			await new Promise<void>((resolve) => {
+				this.#playbackFlowWaiters.add(resolve);
+			});
+		}
+		return false;
+	}
+
+	#releasePlaybackSegment(released: {
+		generationId: string;
+		segmentId: string;
+		sequence: number;
+		byteLength: number;
+	}): boolean {
+		const flow = this.#playbackFlow;
+		const outstanding = flow?.outstanding.get(released.segmentId);
+		if (
+			!flow ||
+			!outstanding ||
+			outstanding.generationId !== released.generationId ||
+			outstanding.sequence !== released.sequence ||
+			outstanding.byteLength !== released.byteLength
+		) {
+			return false;
+		}
+		flow.outstanding.delete(released.segmentId);
+		flow.availableSegments = Math.min(
+			flow.maxSegments,
+			flow.availableSegments + 1,
+		);
+		flow.availableBytes = Math.min(
+			flow.maxBytes,
+			flow.availableBytes + released.byteLength,
+		);
+		this.#wakePlaybackFlow();
+		return true;
+	}
+
+	#cancelPlaybackGeneration(generationId: string): void {
+		this.#cancelledPlaybackGenerations.add(generationId);
+		while (this.#cancelledPlaybackGenerations.size > 256) {
+			const oldest = this.#cancelledPlaybackGenerations.values().next().value;
+			if (!oldest) break;
+			this.#cancelledPlaybackGenerations.delete(oldest);
+		}
+		const flow = this.#playbackFlow;
+		if (flow) {
+			for (const [segmentId, outstanding] of flow.outstanding) {
+				if (outstanding.generationId !== generationId) continue;
+				flow.outstanding.delete(segmentId);
+				flow.availableSegments = Math.min(
+					flow.maxSegments,
+					flow.availableSegments + 1,
+				);
+				flow.availableBytes = Math.min(
+					flow.maxBytes,
+					flow.availableBytes + outstanding.byteLength,
+				);
+			}
+		}
+		this.#wakePlaybackFlow();
+	}
+
+	#resetPlaybackFlow(): void {
+		this.#playbackFlow = null;
+		this.#wakePlaybackFlow();
+	}
+
+	#wakePlaybackFlow(): void {
+		const waiters = [...this.#playbackFlowWaiters];
+		this.#playbackFlowWaiters.clear();
+		for (const wake of waiters) wake();
+	}
+
+	async #publishAudioSegment(
 		event: Extract<OrchestratorEvent, { type: "audio.segment" }>,
-	): void {
-		if (this.#stopped) return;
+	): Promise<void> {
+		if (
+			this.#stopped ||
+			!(await this.#reservePlaybackSegment(
+				event.generationId,
+				event.segmentId,
+				event.sequence,
+				event.bytes.byteLength,
+			))
+		) {
+			return;
+		}
 		const metadata = this.#createEvent("audio.segment", {
 			generationId: event.generationId,
 			segmentId: event.segmentId,
@@ -1099,6 +1259,7 @@ export class GatewaySession {
 			this.#activeSocket = null;
 			this.#assembler?.clear();
 			this.#assembler = null;
+			this.#resetPlaybackFlow();
 			this.#trackProcess(this.#orchestrator.disconnect());
 			try {
 				this.#persistence.stopConversation(this.conversationId, "disconnected");
@@ -1162,7 +1323,10 @@ export class GatewaySession {
 			socket.send(record.json);
 			if ("binary" in record) socket.send(record.binary);
 		} catch {
-			if (socket === this.#activeSocket) this.#activeSocket = null;
+			if (socket === this.#activeSocket) {
+				this.#activeSocket = null;
+				this.#resetPlaybackFlow();
+			}
 		}
 	}
 

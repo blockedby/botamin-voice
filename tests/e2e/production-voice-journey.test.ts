@@ -180,6 +180,7 @@ class VerifyingPlayback implements PlaybackAdapter {
 	readonly staleGenerations = new Set<string>();
 	private started = false;
 	private sealed = false;
+	private readonly buffered: Parameters<PlaybackAdapter["enqueue"]>[0][] = [];
 
 	constructor(
 		private readonly options: PlaybackFactoryOptions,
@@ -192,6 +193,7 @@ class VerifyingPlayback implements PlaybackAdapter {
 		if (this.staleGenerations.has(generationId)) return;
 		if (this.activeGenerationId !== generationId) {
 			this.bufferedSegmentCount = 0;
+			this.buffered.length = 0;
 			this.started = false;
 			this.sealed = false;
 		}
@@ -211,6 +213,7 @@ class VerifyingPlayback implements PlaybackAdapter {
 			};
 		}
 		this.bufferedSegmentCount += 1;
+		this.buffered.push({ ...segment, bytes: segment.bytes.slice() });
 		this.received.push(segment.bytes.slice());
 		this.timeline.push({
 			label: "audio.segment.client-paired",
@@ -234,6 +237,9 @@ class VerifyingPlayback implements PlaybackAdapter {
 		this.sealed = true;
 		// The fixture deterministically drives the real queue's seal/end boundary:
 		// every scheduled phrase ends in order only after the server seals it.
+		for (const segment of this.buffered.splice(0)) {
+			this.options.onReleased?.(segment);
+		}
 		this.bufferedSegmentCount = 0;
 		this.activeGenerationId = null;
 		this.timeline.push({
@@ -258,6 +264,7 @@ class VerifyingPlayback implements PlaybackAdapter {
 		this.bufferedSegmentCount = 0;
 		this.started = false;
 		this.sealed = false;
+		this.buffered.length = 0;
 		return generationId;
 	}
 
@@ -806,6 +813,9 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			// Only the next-turn affirmative confirms that exact revision. The server
 			// commits once without Luna and immediately asks the first missing fact.
 			const confirmedRevision = readyDraft.revision;
+			const playbackStartsBeforeCommit = timeline.filter(
+				(entry) => entry.label === "playback.started",
+			).length;
 			expect(happy.browser.submitText("Да, подтверждаю")).toBe(true);
 			await waitFor(
 				() =>
@@ -850,6 +860,9 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			expect(latestSpeakerText(happy.browser, "agent")).toBe(
 				expectedBookingConfirmation,
 			);
+			expect(
+				timeline.filter((entry) => entry.label === "playback.started").length,
+			).toBe(playbackStartsBeforeCommit + 1);
 			expect(brain.inputs.length).toBe(brainsBeforeBooking);
 			expect(countSpeaker(happy.browser, "visitor")).toBe(5);
 			expect(countSpeaker(happy.browser, "agent")).toBe(4);

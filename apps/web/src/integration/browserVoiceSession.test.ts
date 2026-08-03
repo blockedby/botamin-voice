@@ -9,10 +9,13 @@ import {
 	type InternalVirtualMeetingProjection,
 } from "@botamin/contracts";
 import { createDeterministicMp3Fixture } from "../../../../packages/test-fixtures/src";
-import type {
-	CompletePlaybackSegment,
-	LocalReactionRequest,
-	PlaybackEnqueueOutcome,
+import {
+	type AudioPlaybackApis,
+	type CompletePlaybackSegment,
+	type LocalReactionRequest,
+	PhrasePlaybackQueue,
+	type PlaybackEnqueueOutcome,
+	type PlaybackSourceLike,
 } from "../audio/playback";
 import type { VoiceUiState } from "../components/voiceTypes";
 import {
@@ -150,6 +153,7 @@ class FakePlayback implements PlaybackAdapter {
 	cancelReactionCalls = 0;
 	readonly reactions: LocalReactionRequest[] = [];
 	readonly enqueued: number[] = [];
+	readonly segments: CompletePlaybackSegment[] = [];
 
 	constructor(
 		readonly options: PlaybackFactoryOptions,
@@ -174,6 +178,7 @@ class FakePlayback implements PlaybackAdapter {
 	}
 	async enqueue(segment: CompletePlaybackSegment) {
 		this.enqueued.push(segment.sequence);
+		this.segments.push(segment);
 		await this.enqueueGate;
 		if (this.enqueueOutcome.status === "rejected") {
 			return this.enqueueOutcome;
@@ -203,12 +208,14 @@ class FakePlayback implements PlaybackAdapter {
 		const generation = this.generation;
 		this.generation = null;
 		this.bufferedSegmentCount = 0;
+		this.segments.length = 0;
 		return generation;
 	}
 	async dispose(): Promise<void> {
 		this.disposeCalls += 1;
 		this.generation = null;
 		this.bufferedSegmentCount = 0;
+		this.segments.length = 0;
 	}
 	get activeGenerationId(): string | null {
 		return this.generation;
@@ -217,6 +224,9 @@ class FakePlayback implements PlaybackAdapter {
 		if (!this.generation) return;
 		const generation = this.generation;
 		this.bufferedSegmentCount = 0;
+		for (const segment of this.segments.splice(0)) {
+			this.options.onReleased?.(segment);
+		}
 		if (this.sealed) this.options.onIdle(generation);
 	}
 }
@@ -330,6 +340,7 @@ function harness(
 		playbackResumeError?: Error;
 		playbackEnqueueOutcome?: PlaybackEnqueueOutcome;
 		playbackEnqueueGate?: Promise<void>;
+		createPlayback?: (options: PlaybackFactoryOptions) => PlaybackAdapter;
 		requestIds?: string[];
 	} = {},
 ) {
@@ -366,6 +377,8 @@ function harness(
 			return capture;
 		},
 		createPlayback: (playbackOptions) => {
+			if (options.createPlayback)
+				return options.createPlayback(playbackOptions);
 			const playback = new FakePlayback(
 				playbackOptions,
 				options.playbackResumeError,
@@ -1417,6 +1430,110 @@ describe("production browser voice integration", () => {
 		);
 		expect(playback.cancelReactionCalls).toBe(cancelCalls + 1);
 		expect(value.session.getSnapshot().state.kind).not.toBe("speaking");
+	});
+
+	test("plays four fast WS segments in order before the first ends without text-only degradation", async () => {
+		class OrderedSource implements PlaybackSourceLike {
+			onended: (() => void) | null = null;
+			readonly starts: number[] = [];
+			stopped = false;
+			start(when: number): void {
+				this.starts.push(when);
+			}
+			stop(): void {
+				this.stopped = true;
+			}
+			finish(): void {
+				this.onended?.();
+			}
+		}
+		const sources: OrderedSource[] = [];
+		let decoded = 0;
+		const apis: AudioPlaybackApis<number> = {
+			decodeAudioData: async () => decoded++,
+			createSource: () => {
+				const source = new OrderedSource();
+				sources.push(source);
+				return source;
+			},
+			resume: async () => undefined,
+			currentTime: () => 0,
+			duration: () => 1,
+		};
+		const queues: PhrasePlaybackQueue<number>[] = [];
+		const value = await readySession(
+			harness({
+				createPlayback: (options) => {
+					const playback = new PhrasePlaybackQueue(apis, options);
+					queues.push(playback);
+					return playback;
+				},
+			}),
+		);
+		const queue = queues[0];
+		if (!queue) throw new Error("playback queue missing");
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Подтвердите бронь" }),
+		);
+		value.socket.server(
+			event("assistant.text.delta", 3, {
+				generationId,
+				text: "Подтверждение бронирования.",
+			}),
+		);
+		const mp3 = createDeterministicMp3Fixture();
+		for (let sequence = 0; sequence < 4; sequence += 1) {
+			value.socket.server(
+				event("audio.segment", 4 + sequence, {
+					generationId,
+					segmentId: `01J${String(sequence + 5).padStart(23, "0")}`,
+					sequence,
+					contentType: "audio/mpeg",
+					byteLength: mp3.byteLength,
+					final: true,
+				}),
+			);
+			value.socket.binary(
+				encodeBinaryAudioFrame({
+					kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+					sequence,
+					payload: mp3,
+				}),
+			);
+		}
+		await flush();
+		expect(queue?.bufferedSegmentCount).toBe(2);
+		expect(queue?.pendingRawSegmentCount).toBe(2);
+		expect(sources).toHaveLength(2);
+		expect(value.session.getSnapshot().state.kind).toBe("speaking");
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.interrupted",
+			),
+		).toHaveLength(0);
+
+		value.socket.server(
+			event("assistant.text.done", 8, {
+				generationId,
+				fullText: "Подтверждение бронирования.",
+			}),
+		);
+		value.socket.server(event("assistant.audio.done", 9, { generationId }));
+		for (let index = 0; index < 4; index += 1) {
+			sources[index]?.finish();
+			await flush();
+		}
+		expect(sources.flatMap((source) => source.starts)).toEqual([0, 1, 2, 3]);
+		expect(queue?.bufferedSegmentCount).toBe(0);
+		expect(queue?.pendingRawSegmentCount).toBe(0);
+		expect(value.session.getSnapshot().state.kind).toBe("listening");
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.segment.released",
+			),
+		).toHaveLength(4);
 	});
 
 	test("enters speaking and sends playback.started only when the first source starts", async () => {

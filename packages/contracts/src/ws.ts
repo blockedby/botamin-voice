@@ -63,6 +63,34 @@ const BookingClientEventBaseShape = {
 	conversationId: z.never().optional(),
 };
 
+export const PLAYBACK_FLOW_MAX_SEGMENTS = 4;
+export const PLAYBACK_FLOW_MAX_BYTES = 20_000_000;
+export const PLAYBACK_FLOW_MAX_SEGMENT_BYTES = 5_000_000;
+
+export const PlaybackFlowControlSchema = z
+	.object({
+		maxBufferedSegments: z
+			.number()
+			.int()
+			.min(1)
+			.max(PLAYBACK_FLOW_MAX_SEGMENTS),
+		maxBufferedBytes: z
+			.number()
+			.int()
+			.min(PLAYBACK_FLOW_MAX_SEGMENT_BYTES)
+			.max(PLAYBACK_FLOW_MAX_BYTES),
+		maxSegmentBytes: z
+			.number()
+			.int()
+			.min(1)
+			.max(PLAYBACK_FLOW_MAX_SEGMENT_BYTES),
+	})
+	.strict()
+	.refine(
+		(value) => value.maxSegmentBytes <= value.maxBufferedBytes,
+		"A playback segment must fit in the advertised byte window",
+	);
+
 export const ClientHelloEventSchema = z
 	.object({
 		...ClientEventBaseShape,
@@ -77,6 +105,11 @@ export const ClientHelloEventSchema = z
 					})
 					.strict()
 					.optional(),
+				playback: PlaybackFlowControlSchema.default({
+					maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS,
+					maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
+					maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+				}),
 			})
 			.strict(),
 	})
@@ -131,6 +164,25 @@ export const PlaybackInterruptedEventSchema = z
 					"new_generation",
 					"playback_error",
 				]),
+			})
+			.strict(),
+	})
+	.strict();
+
+export const PlaybackSegmentReleasedEventSchema = z
+	.object({
+		...ClientEventBaseShape,
+		type: z.literal("playback.segment.released"),
+		payload: z
+			.object({
+				generationId: EntityIdSchema,
+				segmentId: EntityIdSchema,
+				sequence: BinaryAudioFrameSequenceSchema,
+				byteLength: z
+					.number()
+					.int()
+					.positive()
+					.max(PLAYBACK_FLOW_MAX_SEGMENT_BYTES),
 			})
 			.strict(),
 	})
@@ -196,6 +248,7 @@ export const ClientWsEventSchema = z.discriminatedUnion("type", [
 	VisitorTextSubmitEventSchema,
 	PlaybackStartedEventSchema,
 	PlaybackInterruptedEventSchema,
+	PlaybackSegmentReleasedEventSchema,
 	SessionStopEventSchema,
 	ClientPingEventSchema,
 	BookingFormSubmitEventSchema,
@@ -307,7 +360,11 @@ export const AudioSegmentMetadataSchema = z
 		segmentId: EntityIdSchema,
 		sequence: BinaryAudioFrameSequenceSchema,
 		contentType: z.literal("audio/mpeg"),
-		byteLength: z.number().int().positive(),
+		byteLength: z
+			.number()
+			.int()
+			.positive()
+			.max(PLAYBACK_FLOW_MAX_SEGMENT_BYTES),
 		final: z.literal(true),
 	})
 	.strict();

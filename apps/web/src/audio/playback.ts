@@ -4,6 +4,9 @@ import {
 	LOCAL_REACTION_DELAY_MIN_MS,
 	type LocalReactionClipId,
 	MpegAudioBytesSchema,
+	PLAYBACK_FLOW_MAX_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENTS,
 } from "@botamin/contracts";
 import {
 	REACTION_CLIP_MANIFEST,
@@ -110,7 +113,7 @@ interface ScheduledSlot<TDecoded> extends SlotBase {
 	endTime: number;
 }
 
-interface HandoffSlot {
+interface RawSlot {
 	segment: CompletePlaybackSegment;
 	epoch: number;
 	resolve: (outcome: PlaybackEnqueueOutcome) => void;
@@ -126,15 +129,18 @@ const browserPlaybackScheduler: PlaybackScheduler = {
 };
 
 /**
- * Ordered complete-MP3 player with a fixed capacity: one current slot, one
- * decoded/decoding/scheduled prefetch slot, and one raw transport handoff.
+ * Ordered complete-MP3 player with a fixed four-segment/20MB flow window:
+ * two decode/source slots and two validated raw slots. The server receives one
+ * credit only after a source ends, so longer valid turns stream through this
+ * bounded window without widening decoded memory.
  */
 export class PhrasePlaybackQueue<TDecoded = unknown> {
 	private generationId: string | null = null;
 	private lastAcceptedSequence: number | null = null;
 	private current: QueueSlot<TDecoded> | null = null;
 	private prefetch: QueueSlot<TDecoded> | null = null;
-	private handoff: HandoffSlot | null = null;
+	private readonly raw: RawSlot[] = [];
+	private retainedRawBytes = 0;
 	private epoch = 0;
 	private muted = false;
 	private sealed = false;
@@ -152,6 +158,7 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 		private readonly apis: AudioPlaybackApis<TDecoded>,
 		private readonly callbacks: {
 			onStarted?(segment: CompletePlaybackSegment): void;
+			onReleased?(segment: CompletePlaybackSegment): void;
 			onIdle?(generationId: string): void;
 			onError?(
 				error: Error,
@@ -210,11 +217,14 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 				),
 			);
 		}
-		if (this.current && this.prefetch && this.handoff) {
+		if (
+			this.totalSegmentCount >= PLAYBACK_FLOW_MAX_SEGMENTS ||
+			this.retainedRawBytes + segment.byteLength > PLAYBACK_FLOW_MAX_BYTES
+		) {
 			return Promise.resolve(
 				this.fail(
 					"overflow",
-					new Error("Audio playback queue capacity exceeded"),
+					new Error("Audio playback flow window exceeded"),
 					segment,
 				),
 			);
@@ -225,10 +235,11 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 			bytes: segment.bytes.slice(),
 		};
 		this.lastAcceptedSequence = isolated.sequence;
+		this.retainedRawBytes += isolated.byteLength;
 		const epoch = this.epoch;
 		return new Promise<PlaybackEnqueueOutcome>((resolve) => {
 			if (this.current && this.prefetch) {
-				this.handoff = { segment: isolated, epoch, resolve };
+				this.raw.push({ segment: isolated, epoch, resolve });
 				return;
 			}
 			this.reserveDecode(isolated, epoch, resolve);
@@ -261,7 +272,7 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 				!this.idleNotified ||
 				this.current !== null ||
 				this.prefetch !== null ||
-				this.handoff !== null
+				this.raw.length > 0
 			) {
 				return false;
 			}
@@ -335,9 +346,21 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 		return (this.current ? 1 : 0) + (this.prefetch ? 1 : 0);
 	}
 
-	/** Raw transport handoff is separate from the two decode/source slots. */
+	get pendingRawSegmentCount(): number {
+		return this.raw.length;
+	}
+
+	/** Compatibility name for callers that observed the former one-slot handoff. */
 	get pendingHandoffCount(): number {
-		return this.handoff === null ? 0 : 1;
+		return this.pendingRawSegmentCount;
+	}
+
+	get bufferedRawBytes(): number {
+		return this.retainedRawBytes;
+	}
+
+	private get totalSegmentCount(): number {
+		return this.bufferedSegmentCount + this.raw.length;
 	}
 
 	get activeReactionGenerationId(): string | null {
@@ -445,6 +468,7 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 			Number.isSafeInteger(segment.sequence) &&
 			segment.sequence >= 0 &&
 			segment.byteLength === segment.bytes.byteLength &&
+			segment.byteLength <= PLAYBACK_FLOW_MAX_SEGMENT_BYTES &&
 			MpegAudioBytesSchema.safeParse(segment.bytes).success
 		);
 	}
@@ -568,17 +592,26 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 		} else {
 			this.prefetch = null;
 		}
-		this.drainHandoff();
+		this.retainedRawBytes = Math.max(
+			0,
+			this.retainedRawBytes - slot.segment.byteLength,
+		);
+		this.callbacks.onReleased?.(slot.segment);
+		this.drainRaw();
 		this.scheduleReady();
 		this.maybeIdle();
 	}
 
-	private drainHandoff(): void {
-		const handoff = this.handoff;
-		if (!handoff || handoff.epoch !== this.epoch) return;
+	private drainRaw(): void {
 		if (this.current && this.prefetch) return;
-		this.handoff = null;
-		this.reserveDecode(handoff.segment, handoff.epoch, handoff.resolve);
+		const next = this.raw.shift();
+		if (!next) return;
+		if (next.epoch !== this.epoch) {
+			next.resolve(rejected("stale", "Audio buffering was cancelled"));
+			this.drainRaw();
+			return;
+		}
+		this.reserveDecode(next.segment, next.epoch, next.resolve);
 	}
 
 	private isCurrentSlot(slot: SlotBase): boolean {
@@ -605,7 +638,7 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 			this.idleNotified ||
 			this.current ||
 			this.prefetch ||
-			this.handoff ||
+			this.raw.length > 0 ||
 			!this.generationId
 		) {
 			return;
@@ -630,10 +663,10 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 	private clearSlots(): void {
 		this.epoch += 1;
 		const slots = [this.current, this.prefetch];
-		const handoff = this.handoff;
+		const raw = this.raw.splice(0);
 		this.current = null;
 		this.prefetch = null;
-		this.handoff = null;
+		this.retainedRawBytes = 0;
 		for (const slot of slots) {
 			if (!slot) continue;
 			if (slot.phase === "scheduled") {
@@ -646,7 +679,9 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 			}
 			slot.resolve(rejected("stale", "Audio playback was cancelled"));
 		}
-		handoff?.resolve(rejected("stale", "Audio handoff was cancelled"));
+		for (const slot of raw) {
+			slot.resolve(rejected("stale", "Raw audio buffering was cancelled"));
+		}
 	}
 }
 

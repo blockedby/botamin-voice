@@ -392,7 +392,7 @@ function hello(
 }
 
 function clientEvent(
-	type: "audio.commit" | "visitor.text.submit",
+	type: "audio.commit" | "visitor.text.submit" | "playback.segment.released",
 	payload: object = {},
 ): string {
 	return JSON.stringify({
@@ -536,8 +536,29 @@ describe("gateway fake full WebSocket path", () => {
 		const ready = events.find((event) => event.type === "session.ready");
 		if (ready?.type !== "session.ready") throw new Error("Expected ready");
 		capable.session.detach(capableSocket);
+		const resumedCapable = new Socket();
+		await connect(capable.session, resumedCapable, ready.payload.resumeToken, [
+			"neutral-good",
+		]);
+		expect(
+			resumedCapable
+				.events()
+				.some((event) => event.type === "assistant.reaction.request"),
+		).toBe(false);
+		const resumedReady = resumedCapable
+			.events()
+			.find((event) => event.type === "session.ready");
+		if (resumedReady?.type !== "session.ready") {
+			throw new Error("Expected resumed ready");
+		}
+
+		capable.session.detach(resumedCapable);
 		const resumedLegacy = new Socket();
-		await connect(capable.session, resumedLegacy, ready.payload.resumeToken);
+		await connect(
+			capable.session,
+			resumedLegacy,
+			resumedReady.payload.resumeToken,
+		);
 		expect(
 			resumedLegacy
 				.events()
@@ -603,6 +624,126 @@ describe("gateway fake full WebSocket path", () => {
 					.some((event) => event.type === "assistant.reaction.request"),
 			).toBe(false);
 		}
+	});
+
+	test("credit-gates a long valid turn at four segments and resumes in exact order", async () => {
+		const sentence = (index: number) =>
+			`Фраза ${index} содержит достаточно обычных слов для естественного отдельного речевого сегмента.`;
+		const source = Array.from({ length: 18 }, (_, index) =>
+			sentence(index),
+		).join(" ");
+		expect([...source].length).toBeGreaterThan(1_500);
+		expect([...source].length).toBeLessThanOrEqual(1_800);
+		const harness = createHarness({
+			brain: new Brain((input) => [
+				{
+					type: "speech.delta",
+					turnId: input.turnId,
+					generationId: input.generationId,
+					text: source,
+				},
+				{
+					type: "turn.completed",
+					turnId: input.turnId,
+					generationId: input.generationId,
+				},
+			]),
+		});
+		const socket = new Socket();
+		await connect(harness.session, socket);
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", { sequence: 0, text: "Продолжайте" }),
+		);
+		for (let attempt = 0; attempt < 100; attempt += 1) {
+			if (
+				socket.events().filter((event) => event.type === "audio.segment")
+					.length === 4
+			) {
+				break;
+			}
+			await Bun.sleep(1);
+		}
+		let audio = socket
+			.events()
+			.filter((event) => event.type === "audio.segment");
+		expect(audio).toHaveLength(4);
+		expect(
+			socket.events().some((event) => event.type === "assistant.audio.done"),
+		).toBe(false);
+
+		let releasedCount = 0;
+		for (let attempt = 0; attempt < 500; attempt += 1) {
+			audio = socket.events().filter((event) => event.type === "audio.segment");
+			if (
+				socket.events().some((event) => event.type === "assistant.audio.done")
+			) {
+				break;
+			}
+			const released = audio[releasedCount];
+			if (released) {
+				releasedCount += 1;
+				await harness.session.receive(
+					socket,
+					clientEvent("playback.segment.released", {
+						generationId: released.payload.generationId,
+						segmentId: released.payload.segmentId,
+						sequence: released.payload.sequence,
+						byteLength: released.payload.byteLength,
+					}),
+				);
+			} else {
+				await Bun.sleep(1);
+			}
+		}
+		expect(socket.closes).toEqual([]);
+		await harness.session.drain();
+		audio = socket.events().filter((event) => event.type === "audio.segment");
+		expect(audio.length).toBeGreaterThan(4);
+		expect(audio.map((event) => event.payload.sequence)).toEqual(
+			audio.map((_, sequence) => sequence),
+		);
+		expect(
+			socket.events().some((event) => event.type === "assistant.audio.done"),
+		).toBe(true);
+	});
+
+	test("fails closed on forged playback credit without widening the window", async () => {
+		const harness = createHarness();
+		const socket = new Socket();
+		await connect(harness.session, socket);
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", { sequence: 0, text: "Проверка" }),
+		);
+		await harness.session.drain();
+		const audio = socket
+			.events()
+			.find((event) => event.type === "audio.segment");
+		if (audio?.type !== "audio.segment") {
+			throw new Error("audio segment missing");
+		}
+		await harness.session.receive(
+			socket,
+			clientEvent("playback.segment.released", {
+				generationId: audio.payload.generationId,
+				segmentId: audio.payload.segmentId,
+				sequence: audio.payload.sequence,
+				byteLength: audio.payload.byteLength + 1,
+			}),
+		);
+		expect(socket.closes.at(-1)).toEqual({
+			code: 1008,
+			reason: "protocol policy",
+		});
+		expect(
+			socket
+				.events()
+				.some(
+					(event) =>
+						event.type === "error" && event.payload.code === "INVALID_EVENT",
+				),
+		).toBe(true);
 	});
 
 	test("accepts one sequenced typed final through brain without STT or client booking authority", async () => {
@@ -1187,8 +1328,8 @@ describe("gateway fake full WebSocket path", () => {
 		).toBe(2);
 	});
 
-	test("reconnect validates the opaque token and replays bounded event history", async () => {
-		const harness = createHarness({ tts: null });
+	test("reconnect replays bounded state/text but never stale audio outside the fresh window", async () => {
+		const harness = createHarness();
 		const first = new Socket();
 		await connect(harness.session, first);
 		const ready = first
@@ -1220,6 +1361,9 @@ describe("gateway fake full WebSocket path", () => {
 			second.events().some((event) => event.type === "transcript.final"),
 		).toBe(true);
 		expect(second.events().at(-1)?.type).toBe("session.ready");
+		expect(
+			second.sent.filter((entry) => entry instanceof Uint8Array),
+		).toHaveLength(0);
 
 		const attacker = new Socket();
 		harness.session.attach(attacker);

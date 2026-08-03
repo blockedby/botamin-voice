@@ -490,6 +490,36 @@ describe("orchestrator with durable SQLite booking service", () => {
 					payload: { sequence, text },
 				}),
 			);
+		const released = new Set<string>();
+		const drainWithPlayback = async () => {
+			for (let attempt = 0; attempt < 500; attempt += 1) {
+				const pending = socket
+					.events()
+					.filter((event) => event.type === "audio.segment")
+					.filter((event) => !released.has(event.payload.segmentId));
+				for (const event of pending) {
+					released.add(event.payload.segmentId);
+					await session.receive(
+						socket,
+						JSON.stringify({
+							v: 1,
+							type: "playback.segment.released",
+							conversationId,
+							at: timestamp,
+							payload: {
+								generationId: event.payload.generationId,
+								segmentId: event.payload.segmentId,
+								sequence: event.payload.sequence,
+								byteLength: event.payload.byteLength,
+							},
+						}),
+					);
+				}
+				if (!session.processing && pending.length === 0) break;
+				await Bun.sleep(1);
+			}
+			await session.drain();
+		};
 		await session.receive(
 			socket,
 			textEvent(
@@ -497,13 +527,13 @@ describe("orchestrator with durable SQLite booking service", () => {
 				"Меня зовут Алексей Петров, компания Ромашка. Почта alex.petrov@example.com, телефон +7 955 567-89-55. Первый вариант.",
 			),
 		);
-		await session.drain();
+		await drainWithPlayback();
 		expect(
 			socket.events().filter((event) => event.type === "booking.created"),
 		).toHaveLength(0);
 		expect(draftStore.load(conversationId)?.readiness).toBe("ready");
 		await session.receive(socket, textEvent(1, "да, подтверждаю"));
-		await session.drain();
+		await drainWithPlayback();
 		const events = socket.events();
 		expect(
 			events.filter((event) => event.type === "booking.created"),

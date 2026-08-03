@@ -33,6 +33,9 @@ import {
 	MeetingSlotSchema,
 	MpegAudioBytesSchema,
 	PersistedQualificationPatchSchema,
+	PLAYBACK_FLOW_MAX_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENTS,
 	QualificationPatchSchema,
 	ServerWsEventSchema,
 	STT_CONTRACT_MAX_AUDIO_BYTES,
@@ -560,6 +563,38 @@ describe("shared contracts", () => {
 		});
 
 		expect(hello.type).toBe("client.hello");
+		if (hello.type !== "client.hello") throw new Error("hello mismatch");
+		expect(hello.payload.playback).toEqual({
+			maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS,
+			maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
+			maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+		});
+		expect(
+			ClientWsEventSchema.safeParse({
+				...hello,
+				payload: {
+					...hello.payload,
+					playback: {
+						...hello.payload.playback,
+						maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS + 1,
+					},
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			ClientWsEventSchema.safeParse({
+				v: 1,
+				type: "playback.segment.released",
+				conversationId,
+				at,
+				payload: {
+					generationId: eventId,
+					segmentId: bookingId,
+					sequence: 0,
+					byteLength: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+				},
+			}).success,
+		).toBe(true);
 		expect(created.type).toBe("booking.created");
 		expect(
 			ServerWsEventSchema.safeParse({
@@ -958,6 +993,10 @@ describe("shared contracts", () => {
 			{ ...metadata.payload, sequence: Number.MAX_SAFE_INTEGER + 1 },
 			{ ...metadata.payload, contentType: "audio/wav" },
 			{ ...metadata.payload, byteLength: 0 },
+			{
+				...metadata.payload,
+				byteLength: PLAYBACK_FLOW_MAX_SEGMENT_BYTES + 1,
+			},
 			{ ...metadata.payload, final: false },
 			{ ...metadata.payload, audioSeq: 0 },
 			{ ...metadata.payload, encoding: "pcm16le" },

@@ -153,21 +153,34 @@ describe("bounded complete-MP3 Web Audio playback", () => {
 		expect(harness.sources[0]?.onended).not.toBeNull();
 	});
 
-	test("keeps one raw handoff and schedules it against the promoted tail", async () => {
+	test("buffers four fast segments with only two decoded and releases them in order", async () => {
 		const harness = playbackHarness();
-		const queue = new PhrasePlaybackQueue(harness.apis);
+		const released: number[] = [];
+		const queue = new PhrasePlaybackQueue(harness.apis, {
+			onReleased: (value) => released.push(value.sequence),
+		});
 		queue.beginGeneration(generationId);
 		await queue.enqueue(segment(0));
 		await queue.enqueue(segment(1));
-		const third = queue.enqueue(segment(2));
+		const raw = [queue.enqueue(segment(2)), queue.enqueue(segment(3))];
 
 		expect(queue.bufferedSegmentCount).toBe(2);
-		expect(queue.pendingHandoffCount).toBe(1);
+		expect(queue.pendingRawSegmentCount).toBe(2);
+		expect(queue.bufferedRawBytes).toBe(789 * 4);
 		expect(harness.decodedSizes).toEqual([789, 789]);
 		harness.sources[0]?.finish();
-		expect(await third).toEqual({ status: "accepted" });
+		expect(await raw[0]).toEqual({ status: "accepted" });
+		expect(queue.bufferedSegmentCount).toBe(2);
+		expect(queue.pendingRawSegmentCount).toBe(1);
 		expect(harness.sources[2]?.startTimes).toEqual([11.75]);
-		expect(queue.pendingHandoffCount).toBe(0);
+		harness.sources[1]?.finish();
+		expect(await raw[1]).toEqual({ status: "accepted" });
+		expect(harness.sources[3]?.startTimes).toEqual([12.5]);
+		harness.sources[2]?.finish();
+		harness.sources[3]?.finish();
+		expect(released).toEqual([0, 1, 2, 3]);
+		expect(queue.bufferedRawBytes).toBe(0);
+		expect(queue.bufferedSegmentCount).toBe(0);
 	});
 
 	test("never reports idle for a drained but unsealed generation", async () => {
@@ -224,15 +237,18 @@ describe("bounded complete-MP3 Web Audio playback", () => {
 		expect(idle).toEqual([generationId]);
 	});
 
-	test("barge-in stops current and future scheduled sources and fences late ends", async () => {
+	test("barge-in stops decoded sources, clears raw segments, and fences late ends", async () => {
 		const harness = playbackHarness();
 		const idle: string[] = [];
+		const released: number[] = [];
 		const queue = new PhrasePlaybackQueue(harness.apis, {
+			onReleased: (value) => released.push(value.sequence),
 			onIdle: (value) => idle.push(value),
 		});
 		queue.beginGeneration(generationId);
 		await queue.enqueue(segment(0));
 		await queue.enqueue(segment(1));
+		const raw = [queue.enqueue(segment(2)), queue.enqueue(segment(3))];
 		queue.sealGeneration(generationId);
 		const lateEnd = harness.sources[1]?.onended;
 
@@ -241,9 +257,18 @@ describe("bounded complete-MP3 Web Audio playback", () => {
 			true,
 			true,
 		]);
+		for (const pending of raw) {
+			expect(await pending).toMatchObject({
+				status: "rejected",
+				reason: "stale",
+			});
+		}
 		lateEnd?.();
 		expect(idle).toEqual([]);
+		expect(released).toEqual([]);
 		expect(queue.bufferedSegmentCount).toBe(0);
+		expect(queue.pendingRawSegmentCount).toBe(0);
+		expect(queue.bufferedRawBytes).toBe(0);
 	});
 
 	test("new generation stops all scheduled sources from the old generation", async () => {
@@ -259,7 +284,7 @@ describe("bounded complete-MP3 Web Audio playback", () => {
 		]);
 	});
 
-	test("surfaces overflow as typed failure and cancels every accepted slot", async () => {
+	test("surfaces over-count as typed failure and cancels every accepted slot", async () => {
 		const harness = playbackHarness();
 		const errors: string[] = [];
 		const queue = new PhrasePlaybackQueue(harness.apis, {
@@ -268,17 +293,19 @@ describe("bounded complete-MP3 Web Audio playback", () => {
 		queue.beginGeneration(generationId);
 		await queue.enqueue(segment(0));
 		await queue.enqueue(segment(1));
-		const handedOff = queue.enqueue(segment(2));
-		const overflow = await queue.enqueue(segment(3));
+		const raw = [queue.enqueue(segment(2)), queue.enqueue(segment(3))];
+		const overflow = await queue.enqueue(segment(4));
 
 		expect(overflow).toMatchObject({
 			status: "rejected",
 			reason: "overflow",
 		});
-		expect(await handedOff).toMatchObject({
-			status: "rejected",
-			reason: "stale",
-		});
+		for (const pending of raw) {
+			expect(await pending).toMatchObject({
+				status: "rejected",
+				reason: "stale",
+			});
+		}
 		expect(errors).toEqual(["overflow"]);
 		expect(harness.sources.map((source) => source.stopped)).toEqual([
 			true,
@@ -303,6 +330,21 @@ describe("bounded complete-MP3 Web Audio playback", () => {
 		expect(await queue.enqueue({ ...segment(0), byteLength: 1 })).toMatchObject(
 			{ status: "rejected", reason: "invalid" },
 		);
+	});
+
+	test("fails closed when one segment advertises bytes beyond the server bound", async () => {
+		const harness = playbackHarness();
+		const errors: string[] = [];
+		const queue = new PhrasePlaybackQueue(harness.apis, {
+			onError: (_error, _segment, reason) => errors.push(reason),
+		});
+		queue.beginGeneration(generationId);
+		expect(
+			await queue.enqueue({ ...segment(0), byteLength: 5_000_001 }),
+		).toMatchObject({ status: "rejected", reason: "invalid" });
+		expect(errors).toEqual(["invalid"]);
+		expect(queue.activeGenerationId).toBeNull();
+		expect(queue.bufferedRawBytes).toBe(0);
 	});
 
 	test("returns stale without damaging the active generation", async () => {
@@ -365,9 +407,13 @@ describe("bounded complete-MP3 Web Audio playback", () => {
 		const scheduler = new ManualScheduler();
 		const fetches: Array<{ input: string; init: RequestInit }> = [];
 		const dynamicStarts: number[] = [];
+		const dynamicReleases: number[] = [];
 		const queue = new PhrasePlaybackQueue(
 			harness.apis,
-			{ onStarted: (value) => dynamicStarts.push(value.sequence) },
+			{
+				onStarted: (value) => dynamicStarts.push(value.sequence),
+				onReleased: (value) => dynamicReleases.push(value.sequence),
+			},
 			{
 				scheduler,
 				fetch: async (input, init) => {
@@ -408,7 +454,9 @@ describe("bounded complete-MP3 Web Audio playback", () => {
 		});
 		expect(harness.sources).toHaveLength(1);
 		expect(harness.sources[0]?.startTimes).toEqual([10]);
+		harness.sources[0]?.finish();
 		expect(dynamicStarts).toEqual([]);
+		expect(dynamicReleases).toEqual([]);
 	});
 
 	test("dynamic metadata preempts reaction synchronously with no source overlap", async () => {

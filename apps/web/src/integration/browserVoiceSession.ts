@@ -97,6 +97,7 @@ export interface PlaybackAdapter {
 
 export interface PlaybackFactoryOptions {
 	onStarted(segment: CompletePlaybackSegment): void;
+	onReleased?(segment: CompletePlaybackSegment): void;
 	onIdle(generationId: string): void;
 	onError(error: Error, segment: CompletePlaybackSegment): void;
 }
@@ -712,6 +713,10 @@ export class BrowserVoiceSession {
 						segment.generationId,
 					);
 					this.transport?.playbackStarted(segment.generationId);
+				},
+				onReleased: (segment) => {
+					if (!this.isCurrent(epoch) || this.playback !== playback) return;
+					this.transport?.playbackSegmentReleased(segment);
 				},
 				onIdle: (generationId) => {
 					if (!this.isCurrent(epoch) || this.playback !== playback) return;

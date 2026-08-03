@@ -7,6 +7,9 @@ import {
 	ClientWsEventSchema,
 	CONTRACT_VERSION,
 	type LocalReactionCapability,
+	PLAYBACK_FLOW_MAX_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENTS,
 	type ServerWsEvent,
 	ServerWsEventSchema,
 } from "@botamin/contracts";
@@ -266,6 +269,15 @@ export class VoiceTransport {
 		return this.sendClientEvent("playback.started", { generationId });
 	}
 
+	playbackSegmentReleased(segment: AudioSegmentMetadata): boolean {
+		return this.sendClientEvent("playback.segment.released", {
+			generationId: segment.generationId,
+			segmentId: segment.segmentId,
+			sequence: segment.sequence,
+			byteLength: segment.byteLength,
+		});
+	}
+
 	interrupt(
 		generationId: string,
 		reason: "barge_in" | "user_stop" | "new_generation" | "playback_error",
@@ -517,6 +529,11 @@ export class VoiceTransport {
 			...(this.options.localReactions
 				? { capabilities: { localReactions: this.options.localReactions } }
 				: {}),
+			playback: {
+				maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS,
+				maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
+				maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+			},
 		});
 	}
 

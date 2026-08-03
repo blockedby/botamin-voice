@@ -191,6 +191,11 @@ describe("voice WebSocket transport", () => {
 					channels: 1,
 					chunkMs: 100,
 				},
+				playback: {
+					maxBufferedSegments: 4,
+					maxBufferedBytes: 20_000_000,
+					maxSegmentBytes: 5_000_000,
+				},
 			},
 		});
 		expect(transport.commit()).toBe(false);
@@ -254,6 +259,11 @@ describe("voice WebSocket transport", () => {
 						version: LOCAL_REACTION_CAPABILITY_VERSION,
 						clipIds: ["neutral-good"],
 					},
+				},
+				playback: {
+					maxBufferedSegments: 4,
+					maxBufferedBytes: 20_000_000,
+					maxSegmentBytes: 5_000_000,
 				},
 			},
 		});
@@ -825,7 +835,7 @@ describe("voice WebSocket transport", () => {
 		expect(errors).toEqual([]);
 	});
 
-	test("hands three one-shot WS segments to bounded playback without dropping one", async () => {
+	test("hands four one-shot WS segments to bounded playback without dropping one", async () => {
 		const socket = new FakeSocket();
 		const sources: FakePlaybackSource[] = [];
 		const decodedSequences: number[] = [];
@@ -867,6 +877,7 @@ describe("voice WebSocket transport", () => {
 			[2, 10],
 			[3, 11],
 			[4, 12],
+			[5, 13],
 		] as const) {
 			socket.serverJson(
 				audioSegment(eventSequence, audioSequence, mp3.byteLength),
@@ -880,18 +891,20 @@ describe("voice WebSocket transport", () => {
 			);
 		}
 
-		expect(accepted).toHaveLength(3);
+		expect(accepted).toHaveLength(4);
 		await Promise.all(accepted.slice(0, 2));
 		expect(playback.bufferedSegmentCount).toBe(2);
-		expect(playback.pendingHandoffCount).toBe(1);
+		expect(playback.pendingHandoffCount).toBe(2);
 		expect(decodedSequences).toHaveLength(2);
 
 		sources[0]?.finish();
 		expect(await accepted[2]).toEqual({ status: "accepted" });
 		sources[1]?.finish();
+		expect(await accepted[3]).toEqual({ status: "accepted" });
 		sources[2]?.finish();
+		sources[3]?.finish();
 		expect(started).toEqual([10]);
-		expect(decodedSequences).toHaveLength(3);
+		expect(decodedSequences).toHaveLength(4);
 		expect(playback.bufferedSegmentCount).toBe(0);
 	});
 

@@ -65,8 +65,9 @@ export const REQUIRED_POLICY_SENTENCES: Readonly<
 		"Сам не вычисляй и не утверждай умножение на 22 или 30 дней.",
 	],
 	"prompts/speech-style.md": [
-		"Выражай одну мысль и задавай не больше одного вопроса.",
-		"Ориентир — до двенадцати секунд речи без веской причины.",
+		"Форма обычной реплики: короткое подтверждение только когда оно полезно, затем одна полезная мысль, затем не более одного вопроса.",
+		"Обычно говори не больше двух коротких предложений с ориентиром до двенадцати секунд; обязательное точное подтверждение брони может быть чуть длиннее.",
+		"Следующий ответ после перебивания должен быть кратчайшей корректной формой для нового запроса: без возврата к оборванной мысли, повторного вступления и автоматического повтора уже выполненного tool effect.",
 	],
 };
 
@@ -77,6 +78,22 @@ export const FORBIDDEN_POLICY_PHRASES = [
 	"только после consent собери",
 ] as const;
 
+export const FORBIDDEN_NATURAL_DIALOGUE_GUIDANCE = [
+	"формула обычной реплики: признать контекст → дать короткую ценность → задать один следующий вопрос",
+	"сначала признай контекст, затем дай ценность, затем спроси следующий шаг",
+	"используй нейтральные подтверждения вроде «понимаю» и «зафиксировано»",
+	"обычно 1–3 коротких предложения",
+	"мне жаль, что так произошло",
+	"всегда начинай с «понял»",
+	"повтори ответ пользователя своими словами",
+	"перескажи ответ пользователя",
+	"сообщи, что проверяешь календарь",
+	"скажи, что запрос обрабатывается",
+	"определи тип личности пользователя",
+	"подстройся под психотип",
+	"можно задать несколько вопросов подряд",
+] as const;
+
 interface SynchronizedPolicyRule {
 	name: string;
 	activePath: string;
@@ -84,6 +101,61 @@ interface SynchronizedPolicyRule {
 	starterPath: string;
 	starterSentence: string;
 }
+
+interface NaturalDialogueExample {
+	name: string;
+	activePath: string;
+	starterPath: string;
+	sourceSentence: string;
+	spokenText: string;
+}
+
+export const NATURAL_DIALOGUE_EXAMPLES: readonly NaturalDialogueExample[] = [
+	{
+		name: "brief discovery",
+		activePath: "prompts/conversation-policy.md",
+		starterPath: "prompts/conversation-policy.md",
+		sourceSentence:
+			"- Короткий discovery после «Недозвоны»: «Botamin может первым возвращать пропущенные обращения. Как сейчас обрабатываются недозвоны?»",
+		spokenText:
+			"Botamin может первым возвращать пропущенные обращения. Как сейчас обрабатываются недозвоны?",
+	},
+	{
+		name: "objection",
+		activePath: "prompts/objections.md",
+		starterPath: "prompts/objections.md",
+		sourceSentence:
+			"Пример при сомнении «Будет звучать как робот»: «Такой риск есть. Показать, как сценарий настраивается под ваш процесс?» Это граница формы, а не обещание неотличимости от человека и не обязательная заготовка.",
+		spokenText:
+			"Такой риск есть. Показать, как сценарий настраивается под ваш процесс?",
+	},
+	{
+		name: "server-supplied scheduling",
+		activePath: "prompts/booking.md",
+		starterPath: "prompts/booking.md",
+		sourceSentence:
+			"Пример только для server context с точными `displayLabel` «завтра в одиннадцать по Москве» и «послезавтра в три часа по Москве»: «Есть два текущих варианта: завтра в одиннадцать по Москве или послезавтра в три часа по Москве. Какой выбрать?» Не переноси эти значения в другой разговор.",
+		spokenText:
+			"Есть два текущих варианта: завтра в одиннадцать по Москве или послезавтра в три часа по Москве. Какой выбрать?",
+	},
+	{
+		name: "exact booking confirmation",
+		activePath: "prompts/booking.md",
+		starterPath: "prompts/booking.md",
+		sourceSentence:
+			"Пример только после успешного результата с точным выбранным `displayLabel` «послезавтра в три часа по Москве» и отсутствующим `monthlyLeadVolume`: «Встреча внутри Botamin создана: послезавтра в три часа по Москве; внешнего календарного события и приглашения нет. Сколько входящих обращений у вас за месяц?» Если qualification facts уже полны, закончи после точного подтверждения без вопроса.",
+		spokenText:
+			"Встреча внутри Botamin создана: послезавтра в три часа по Москве; внешнего календарного события и приглашения нет. Сколько входящих обращений у вас за месяц?",
+	},
+	{
+		name: "missing-only qualification",
+		activePath: "prompts/qualification.md",
+		starterPath: "prompts/qualification.md",
+		sourceSentence:
+			"Пример, когда `monthlyLeadVolume` уже известен, а `salesManagerCount` отсутствует: «Сколько менеджеров продаж в вашей команде?» Пример после ответа только «около пятидесяти в день» без основания: «Это по рабочим или календарным дням?» Не добавляй подтверждение ради связки и не повторяй известное значение.",
+		spokenText: "Сколько менеджеров продаж в вашей команде?",
+	},
+] as const;
 
 export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[] =
 	[
@@ -133,13 +205,13 @@ export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[]
 				"Никогда не обещай будущее напоминание, уведомление, приглашение, срок обратного звонка или сообщение при появлении новых слотов без подтверждённой server capability.",
 		},
 		{
-			name: "prior no-show response",
+			name: "prior no-show response without fake empathy",
 			activePath: "prompts/conversation-policy.md",
 			activeSentence:
-				"Ответь нейтрально: «Мне жаль, что так произошло. Я не могу проверить предыдущую запись в этой сессии, но помогу подобрать новый вариант».",
+				"Ответь нейтрально: «Не могу проверить прошлую запись в этой сессии. Помочь подобрать новый вариант?»",
 			starterPath: "prompts/conversation-policy.md",
 			starterSentence:
-				"Ответь: «Мне жаль, что так произошло. Я не могу проверить предыдущую запись в этой сессии, но помогу подобрать новый вариант».",
+				"Ответь нейтрально: «Не могу проверить прошлую запись в этой сессии. Помочь подобрать новый вариант?»",
 		},
 		{
 			name: "same-day policy versus occupancy",
@@ -157,7 +229,7 @@ export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[]
 				"скажи, что внутренняя виртуальная встреча создана на точный выбранный `displayLabel` по Москве;",
 			starterPath: "prompts/booking.md",
 			starterSentence:
-				"скажи, что внутренняя виртуальная встреча создана на точный выбранный slot по Москве;",
+				"скажи, что внутренняя виртуальная встреча создана на точный выбранный `displayLabel` по Москве;",
 		},
 		{
 			name: "direct missing-only qualification",
@@ -205,13 +277,85 @@ export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[]
 				"Явный отказ в любой момент означает skipped без ответов или сохраняет partial с известным фактом; встреча остаётся созданной, больше не квалифицируй и не продавай.",
 		},
 		{
-			name: "neutral Russian persona wording",
+			name: "no inferred visitor personality",
+			activePath: "prompts/system.md",
+			activeSentence:
+				"Никогда не определяй характер, психотип, настроение или другие черты личности посетителя по его словам, длине ответа или голосу.",
+			starterPath: "prompts/system.md",
+			starterSentence:
+				"Никогда не определяй характер, психотип, настроение или другие черты личности посетителя по его словам, длине ответа или голосу.",
+		},
+		{
+			name: "plain spoken output only",
+			activePath: "prompts/system.md",
+			activeSentence:
+				"Пользователю отдавай только готовую реплику для произнесения: обычный текст без Markdown, списков, JSON, XML, аудиотегов, URL, tool names, внутренних полей и служебных комментариев.",
+			starterPath: "prompts/system.md",
+			starterSentence:
+				"Пользователю отдавай только готовую реплику для произнесения: обычный текст без Markdown, списков, JSON, XML, аудиотегов, URL, tool names, внутренних полей и служебных комментариев.",
+		},
+		{
+			name: "optional acknowledgement turn shape",
 			activePath: "prompts/speech-style.md",
 			activeSentence:
-				"Используй нейтральные подтверждения вроде «Понимаю» и «Зафиксировано»; не выбирай формы от мужского или женского лица.",
+				"Форма обычной реплики: короткое подтверждение только когда оно полезно, затем одна полезная мысль, затем не более одного вопроса.",
 			starterPath: "prompts/speech-style.md",
 			starterSentence:
-				"Используй нейтральные подтверждения вроде «Понимаю» и «Зафиксировано»; не выбирай формы от мужского или женского лица.",
+				"Форма обычной реплики: короткое подтверждение только когда оно полезно, затем одна полезная мысль, затем не более одного вопроса.",
+		},
+		{
+			name: "two-sentence twelve-second target",
+			activePath: "prompts/speech-style.md",
+			activeSentence:
+				"Обычно говори не больше двух коротких предложений с ориентиром до двенадцати секунд; обязательное точное подтверждение брони может быть чуть длиннее.",
+			starterPath: "prompts/speech-style.md",
+			starterSentence:
+				"Обычно говори не больше двух коротких предложений с ориентиром до двенадцати секунд; обязательное точное подтверждение брони может быть чуть длиннее.",
+		},
+		{
+			name: "no canned acknowledgements",
+			activePath: "prompts/speech-style.md",
+			activeSentence:
+				"Не начинай реплику дежурным подтверждением. «Понял», «Понимаю» и «Зафиксировано» не используй как универсальные переходы; предпочитай сразу ответить по существу.",
+			starterPath: "prompts/speech-style.md",
+			starterSentence:
+				"Не начинай реплику дежурным подтверждением. «Понял», «Понимаю» и «Зафиксировано» не используй как универсальные переходы; предпочитай сразу ответить по существу.",
+		},
+		{
+			name: "three-turn acknowledgement cooldown",
+			activePath: "prompts/speech-style.md",
+			activeSentence:
+				"Если контекст позволяет, не повторяй то же подтверждение, которое уже было в любой из трёх предыдущих реплик ассистента: пропусти его или выбери уместную альтернативу.",
+			starterPath: "prompts/speech-style.md",
+			starterSentence:
+				"Если контекст позволяет, не повторяй то же подтверждение, которое уже было в любой из трёх предыдущих реплик ассистента: пропусти его или выбери уместную альтернативу.",
+		},
+		{
+			name: "no fake empathy or progress",
+			activePath: "prompts/speech-style.md",
+			activeSentence:
+				"Не изображай чувства, которых у AI нет, не приписывай эмоции посетителю и не сообщай о прогрессе до подтверждённого server result.",
+			starterPath: "prompts/speech-style.md",
+			starterSentence:
+				"Не изображай чувства, которых у AI нет, не приписывай эмоции посетителю и не сообщай о прогрессе до подтверждённого server result.",
+		},
+		{
+			name: "visitor brevity matching",
+			activePath: "prompts/conversation-policy.md",
+			activeSentence:
+				"Короткое сообщение посетителя требует соразмерно короткого ответа без лекции и длинной подводки.",
+			starterPath: "prompts/conversation-policy.md",
+			starterSentence:
+				"Короткое сообщение посетителя требует соразмерно короткого ответа без лекции и длинной подводки.",
+		},
+		{
+			name: "shortest response after interruption",
+			activePath: "prompts/speech-style.md",
+			activeSentence:
+				"Следующий ответ после перебивания должен быть кратчайшей корректной формой для нового запроса: без возврата к оборванной мысли, повторного вступления и автоматического повтора уже выполненного tool effect.",
+			starterPath: "prompts/speech-style.md",
+			starterSentence:
+				"Следующий ответ после перебивания должен быть кратчайшей корректной формой для нового запроса: без возврата к оборванной мысли, повторного вступления и автоматического повтора уже выполненного tool effect.",
 		},
 		{
 			name: "server-approved spoken contacts",
@@ -276,6 +420,13 @@ export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[]
 			starterSentence:
 				"произносить или повторять контакт без server approval для озвучивания;",
 		},
+		...NATURAL_DIALOGUE_EXAMPLES.map((example) => ({
+			name: `natural ${example.name} example`,
+			activePath: example.activePath,
+			activeSentence: example.sourceSentence,
+			starterPath: example.starterPath,
+			starterSentence: example.sourceSentence,
+		})),
 	];
 
 const HEADINGS: Record<string, string[]> = {
@@ -533,13 +684,22 @@ function validateSource(relativePath: string, source: string): string {
 	}
 	if (SECRET_PATTERNS.some((pattern) => pattern.test(normalized)))
 		fail(`${relativePath} contains a secret-like pattern`);
+	const lowerCaseSource = normalized.toLocaleLowerCase("ru-RU");
 	if (
 		relativePath.startsWith("prompts/") &&
-		FORBIDDEN_POLICY_PHRASES.some((phrase) =>
-			normalized.toLocaleLowerCase("ru-RU").includes(phrase),
-		)
+		FORBIDDEN_POLICY_PHRASES.some((phrase) => lowerCaseSource.includes(phrase))
 	) {
 		fail(`${relativePath} contains forbidden qualification-permission wording`);
+	}
+	if (
+		relativePath.startsWith("prompts/") &&
+		FORBIDDEN_NATURAL_DIALOGUE_GUIDANCE.some((phrase) =>
+			lowerCaseSource.includes(phrase),
+		)
+	) {
+		fail(
+			`${relativePath} contains forbidden robotic or unsafe dialogue guidance`,
+		);
 	}
 	const sourceLines = normalized.split("\n");
 	if (

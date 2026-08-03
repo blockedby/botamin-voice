@@ -16,7 +16,7 @@ const RAW_URL = /(?:https?:\/\/|www\.)[^\s<>()]*[\p{L}\p{N}/#]/giu;
 const EMAIL =
 	/[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/giu;
 const PHONE =
-	/(?<![\p{L}\p{N}])(?:\+?[\p{Nd}](?:[\p{Nd}\p{Zs}\t().,/\\‐‑‒–—―−\u200B-\u200D\u2060\uFEFF-]*[\p{Nd}]){6,})(?![\p{L}\p{N}])/gu;
+	/(?<![\p{L}\p{N}])(?:\+?[\p{Nd}](?:[\p{Nd}\p{Zs}\t().,/\\（）‐‑‒–—―−\u200B-\u200D\u2060\uFEFF-]*[\p{Nd}]){6,})(?:[\p{L}_][\p{L}\p{N}_]*)?(?:\s*(?:доб\.?|ext\.?)\s*\p{Nd}+)?/giu;
 const TELEGRAM = /(?<![\p{L}\p{N}])@[a-zA-Z][a-zA-Z0-9_]{3,31}\b/gu;
 const UUID =
 	/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/giu;
@@ -243,7 +243,7 @@ export function prepareSpeech(
 			? options.approvedContacts
 			: [];
 	const stripped = stripCodeAndEnvelopes(
-		input.replace(/\r\n?/gu, "\n").normalize("NFKC"),
+		input.replace(/\r\n?/gu, "\n").normalize("NFC"),
 	);
 	const marked = markApprovedSpeechContacts(stripped, approvedContacts);
 	let spokenText = sanitizeSpeech(marked.text);

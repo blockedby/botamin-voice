@@ -422,17 +422,19 @@ describe("SqliteBookingDraftStore", () => {
 		const failed = store.markFailed(conversationId, committing.revision);
 		expect(failed.commitStatus).toBe("failed");
 		const retrying = store.markCommitting(conversationId, failed.revision);
-		const booking = await new SqliteBookingService(database, {
-			now: () => now,
-		}).createBooking({
+		const immutableInput = store.committingBookingInput(conversationId);
+		expect(immutableInput).toEqual({
 			conversationId,
-			idempotencyKey: "draft-commit-booking-0001",
+			idempotencyKey: `booking-draft-${conversationId}`,
 			name: "Алексей",
 			company: "Example LLC",
 			contacts: store.approvedContacts(conversationId),
 			meetingSlot: retrying.selectedCandidate?.meetingSlot ?? slots[0],
 			consentConfirmed: true,
 		});
+		const booking = await new SqliteBookingService(database, {
+			now: () => now,
+		}).createBooking(immutableInput);
 		expectDraftError(
 			() => store.markFailed(conversationId, retrying.revision),
 			"INVALID_TRANSITION",

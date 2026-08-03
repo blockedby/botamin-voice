@@ -94,8 +94,8 @@ describe("approved contact speech", () => {
 		);
 	});
 
-	test("canonical-matches +7 and 8 forms and speaks familiar Russian groups", () => {
-		for (const detected of ["+7 (955) 567-89-55", "8 955 567 89 55"]) {
+	test("canonical-matches +7 display forms and speaks familiar Russian groups", () => {
+		for (const detected of ["+7 (955) 567-89-55", "+7 955 567 89 55"]) {
 			const prepared = prepareSpeech(`Телефон ${detected}`, {
 				contactProcessing: true,
 				approvedContacts: [phone],
@@ -110,15 +110,67 @@ describe("approved contact speech", () => {
 		}
 	});
 
-	test("normalizes Unicode phone digits and punctuation without fuzzy matching", () => {
+	test("speaks exact approved +1 and +44 contacts in natural groups", () => {
+		const cases = [
+			{
+				value: "+12025550101",
+				detected: "+1 202-555-0101",
+				spoken:
+					"Телефон плюс один, двести два, пятьсот пятьдесят пять, ноль один, ноль один",
+			},
+			{
+				value: "+442079460958",
+				detected: "+44 20 7946 0958",
+				spoken:
+					"Телефон плюс сорок четыре, двести семь, девятьсот сорок шесть, ноль девять, пятьдесят восемь",
+			},
+		] as const;
+		for (const testCase of cases) {
+			const prepared = prepareSpeech(`Телефон ${testCase.detected}`, {
+				contactProcessing: true,
+				approvedContacts: [{ channel: "phone", value: testCase.value }],
+			});
+			expect(prepared.spokenText).toBe(testCase.spoken);
+			expect(prepared.metadata).toEqual({
+				forwardedChannels: ["phone"],
+				forwardedCount: 1,
+			});
+		}
+	});
+
+	test("rejects international near-matches and malformed display mutations", () => {
+		const approved = [
+			{ channel: "phone", value: "+12025550101" },
+			{ channel: "phone", value: "+442079460958" },
+		] as const;
+		for (const detected of [
+			"+1/202/555/0101",
+			"+1 202--555-0101",
+			"+1 202-555-0101x",
+			"+1 202-555-0102",
+			"+1 (202)) 555-0101",
+			"+１ ２０２-５５５-０１０１",
+			"+44,20,7946,0958",
+			"+44 20 7946 0959",
+		]) {
+			const prepared = prepareSpeech(`Телефон ${detected}`, {
+				contactProcessing: true,
+				approvedContacts: approved,
+			});
+			expect(prepared.spokenText).toBe("Телефон контакт скрыт");
+			expect(prepared.metadata.forwardedCount).toBe(0);
+		}
+	});
+
+	test("does not forward Unicode phone digits or punctuation", () => {
 		const prepared = prepareSpeech("Телефон +７（９５５）５６７–８９–５５", {
 			contactProcessing: true,
 			approvedContacts: [phone],
 		});
-		expect(prepared.metadata.forwardedCount).toBe(1);
-		expect(prepared.spokenText).toContain(
-			"плюс семь, девятьсот пятьдесят пять",
-		);
+		expect(prepared).toEqual({
+			spokenText: "Телефон контакт скрыт",
+			metadata: { forwardedChannels: [], forwardedCount: 0 },
+		});
 	});
 
 	test("redacts unapproved slash, comma, zero-width, Unicode, and mixed phone shapes", () => {
@@ -128,6 +180,10 @@ describe("approved contact speech", () => {
 			"+7\u200B999\u200C123\u206045\uFEFF67",
 			"+٧/٩٩٩/١٢٣/٤٥/٦٧",
 			"+7 (999)/123,45\u200B67",
+			"+7 )999( 123-45-67",
+			"+7 ((999)) 123-45-67",
+			"+7  999 123-45-67",
+			"+1 (202 555-0101",
 		]) {
 			const prepared = prepareSpeech(`Телефон ${detected}`, {
 				contactProcessing: true,
@@ -148,6 +204,9 @@ describe("approved contact speech", () => {
 			"555678955",
 			"+79555678956",
 			"+7/955/567/89/55",
+			"+79555678955x",
+			"+79555678955 доб. 12",
+			"+1202555010100000",
 		]) {
 			const prepared = prepareSpeech(`Контакт ${detected}.`, {
 				contactProcessing: true,

@@ -11,6 +11,8 @@ import {
 	type Contact,
 	type ConversationFactField,
 	type ConversationFactSource,
+	type CreateBookingInput,
+	CreateBookingInputSchema,
 	deriveBrowserBookingDraft,
 	EntityIdSchema,
 	type InternalBookingDraft,
@@ -213,6 +215,7 @@ export interface BookingDraftStore {
 		expectedRevision: number,
 	): InternalBookingDraft;
 	reconcile(conversationId: string): InternalBookingDraft;
+	committingBookingInput(conversationId: string): CreateBookingInput;
 	acceptedFacts(conversationId: string): AcceptedConversationFacts;
 	approvedContacts(conversationId: string): Contact[];
 }
@@ -765,6 +768,39 @@ export class SqliteBookingDraftStore implements BookingDraftStore {
 		);
 	}
 
+	committingBookingInput(conversationId: string): CreateBookingInput {
+		const draft = this.requireDraft(conversationId);
+		if (
+			draft.commitStatus !== "committing" ||
+			draft.confirmationStatus !== "confirmed" ||
+			draft.readiness !== "ready" ||
+			draft.bookingId !== null ||
+			draft.selectedCandidate === null
+		) {
+			throw new BookingDraftError("INVALID_TRANSITION");
+		}
+		const facts = factsOf(draft);
+		if (
+			facts.name.status !== "accepted" ||
+			facts.company.status !== "accepted"
+		) {
+			throw new BookingDraftError("NOT_READY");
+		}
+		try {
+			return CreateBookingInputSchema.parse({
+				conversationId,
+				idempotencyKey: `booking-draft-${conversationId}`,
+				name: facts.name.value,
+				company: facts.company.value,
+				contacts: this.contactsOf(draft),
+				meetingSlot: draft.selectedCandidate.meetingSlot,
+				consentConfirmed: true,
+			});
+		} catch {
+			throw new BookingDraftError("NOT_READY");
+		}
+	}
+
 	acceptedFacts(conversationId: string): AcceptedConversationFacts {
 		const accepted: AcceptedConversationFacts = {};
 		const facts = factsOf(this.requireDraft(conversationId));
@@ -777,7 +813,11 @@ export class SqliteBookingDraftStore implements BookingDraftStore {
 	}
 
 	approvedContacts(conversationId: string): Contact[] {
-		const facts = factsOf(this.requireDraft(conversationId));
+		return this.contactsOf(this.requireDraft(conversationId));
+	}
+
+	private contactsOf(draft: InternalBookingDraft): Contact[] {
+		const facts = factsOf(draft);
 		const contacts: Contact[] = [];
 		if (facts.workEmail.status === "accepted") {
 			contacts.push({ channel: "email", value: String(facts.workEmail.value) });

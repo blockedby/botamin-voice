@@ -474,11 +474,42 @@ export class ConversationOrchestrator {
 		return this.#sttTurns.acceptedCommits;
 	}
 
-	/** Reconciles and hydrates the in-memory state from the durable booking. */
+	/** Recovers an orphan commit, then hydrates in-memory state from durable data. */
 	async reconcileDurableBooking(): Promise<BookingSnapshot | null> {
 		const store = this.#draftStore;
 		if (!store) return null;
-		const draft = store.reconcile(this.conversationId);
+		let draft = store.reconcile(this.conversationId);
+		if (draft.commitStatus === "committing") {
+			try {
+				const result = await this.#bookings.createBooking(
+					store.committingBookingInput(this.conversationId),
+				);
+				const booking = await this.#bookings.findByConversationId(
+					this.conversationId,
+				);
+				if (!booking || booking.id !== result.bookingId) {
+					throw new BookingDraftError("BOOKING_MISMATCH");
+				}
+				draft = store.reconcile(this.conversationId);
+			} catch (error) {
+				const booking = await this.#bookings
+					.findByConversationId(this.conversationId)
+					.catch(() => null);
+				if (booking) {
+					draft = store.reconcile(this.conversationId);
+				} else if (
+					error instanceof BookingDraftError ||
+					this.#isBookingValidationError(error)
+				) {
+					draft = this.#markOrphanFailed(store, draft.revision);
+					if (draft.commitStatus !== "committed") return null;
+				} else {
+					// Unknown database failures retain the immutable committing draft so a
+					// later attach can retry without racing an uncertain durable write.
+					throw error;
+				}
+			}
+		}
 		if (draft.commitStatus !== "committed" || !draft.bookingId) return null;
 		const booking = await this.#bookings.findByConversationId(
 			this.conversationId,
@@ -524,6 +555,33 @@ export class ConversationOrchestrator {
 			this.#state = { ...this.#state, booking };
 		}
 		return booking;
+	}
+
+	#isBookingValidationError(error: unknown): boolean {
+		return (
+			error !== null &&
+			typeof error === "object" &&
+			"code" in error &&
+			error.code === "BOOKING_VALIDATION_FAILED"
+		);
+	}
+
+	#markOrphanFailed(
+		store: BookingDraftStore,
+		expectedRevision: number,
+	): NonNullable<ReturnType<BookingDraftStore["load"]>> {
+		try {
+			return store.markFailed(this.conversationId, expectedRevision);
+		} catch (error) {
+			const current = store.reconcile(this.conversationId);
+			if (
+				current.commitStatus === "failed" ||
+				current.commitStatus === "committed"
+			) {
+				return current;
+			}
+			throw error;
+		}
 	}
 
 	apply(event: ConversationEvent): TransitionResult {
@@ -725,12 +783,11 @@ export class ConversationOrchestrator {
 		await this.reconcileDurableBooking();
 		const existing = store.load(this.conversationId);
 		if (existing?.commitStatus === "committed") {
-			const replayed = store.confirm(this.conversationId, input.confirmation);
 			yield {
 				type: "booking.draft.updated",
 				generationId: input.generationId,
 				requestId: input.confirmation.requestId,
-				bookingDraft: deriveBrowserBookingDraft(replayed),
+				bookingDraft: deriveBrowserBookingDraft(existing),
 			};
 			return;
 		}
@@ -760,24 +817,11 @@ export class ConversationOrchestrator {
 			this.#generations.finish(input.generationId);
 			return;
 		}
-		const facts = store.acceptedFacts(this.conversationId);
-		const contacts = store.approvedContacts(this.conversationId);
-		if (!facts.name || !facts.company || !confirmed.selectedCandidate) {
-			throw new BookingDraftError("NOT_READY");
-		}
-		const createInput: CreateBookingInput = {
-			conversationId: this.conversationId,
-			idempotencyKey: `booking-draft-${this.conversationId}`,
-			name: facts.name,
-			company: facts.company,
-			contacts,
-			meetingSlot: confirmed.selectedCandidate.meetingSlot,
-			consentConfirmed: true,
-		};
 		const committing = store.markCommitting(
 			this.conversationId,
 			confirmed.revision,
 		);
+		const createInput = store.committingBookingInput(this.conversationId);
 		let created = false;
 		let booking = null as Awaited<
 			ReturnType<BookingService["findByConversationId"]>
@@ -797,22 +841,15 @@ export class ConversationOrchestrator {
 			if (booking) {
 				confirmed = store.reconcile(this.conversationId);
 			} else {
-				const failed = store.markFailed(
-					this.conversationId,
-					committing.revision,
-				);
-				const candidates = await this.#bookings.candidateMeetingSlots();
-				const refreshed = store.refreshCandidates(
-					this.conversationId,
-					failed.revision,
-					candidates,
-				);
-				yield {
-					type: "booking.draft.updated",
-					generationId: input.generationId,
-					requestId: input.confirmation.requestId,
-					bookingDraft: deriveBrowserBookingDraft(refreshed),
-				};
+				if (this.#isBookingValidationError(error)) {
+					confirmed = this.#markOrphanFailed(store, committing.revision);
+					yield {
+						type: "booking.draft.updated",
+						generationId: input.generationId,
+						requestId: input.confirmation.requestId,
+						bookingDraft: deriveBrowserBookingDraft(confirmed),
+					};
+				}
 				this.#generations.finish(input.generationId);
 				throw error;
 			}

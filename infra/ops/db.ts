@@ -112,39 +112,61 @@ function verifyRc4(path: string): void {
 		const normalizedSql = createSql
 			?.replaceAll(/[`"'[\]\s]/g, "")
 			.toLowerCase();
+		const guardedJsonCheckCount = normalizedSql?.match(
+			/check\(casewhenjson_valid\(draft_json\)thencoalesce\(/g,
+		)?.length;
+		if (guardedJsonCheckCount !== 5) {
+			fail("RC4 conversation context JSON invariants are invalid");
+		}
 		for (const invariant of [
-			"check(revision>=0)",
-			"check(json_valid(draft_json)andjson_type(draft_json)=object)",
-			"check(json_extract(draft_json,$.revision)=revision)",
-			"check(json_extract(draft_json,$.factregistry.revision)=revision)",
-			"check(json_extract(draft_json,$.updatedat)=updated_at)",
+			"check(typeof(revision)=integerandrevision>=0)",
+			"check(casewhenjson_valid(draft_json)thencoalesce(json_type(draft_json,$)=object,0)else0end)",
+			"json_type(draft_json,$.revision)=integer",
+			"json_extract(draft_json,$.revision)>=0",
+			"json_extract(draft_json,$.revision)=revision",
+			"json_type(draft_json,$.factregistry)=object",
+			"json_type(draft_json,$.factregistry.schemaversion)=integer",
+			"json_extract(draft_json,$.factregistry.schemaversion)=1",
+			"json_type(draft_json,$.factregistry.facts)=object",
+			"json_type(draft_json,$.factregistry.revision)=integer",
+			"json_extract(draft_json,$.factregistry.revision)>=0",
+			"json_extract(draft_json,$.factregistry.revision)=revision",
+			"json_type(draft_json,$.updatedat)=text",
+			"json_extract(draft_json,$.updatedat)=updated_at",
 		]) {
 			if (!normalizedSql?.includes(invariant)) {
 				fail("RC4 conversation context JSON invariants are invalid");
 			}
 		}
 
-		const invalidJson = client
-			.query<{ count: number }, []>(
-				"SELECT count(*) AS count FROM conversation_contexts WHERE NOT json_valid(draft_json)",
-			)
-			.get()?.count;
-		if (invalidJson !== 0) {
-			fail("RC4 persisted conversation context JSON is invalid");
-		}
 		const invalidRows = client
 			.query<{ count: number }, []>(
 				`SELECT count(*) AS count
 				 FROM conversation_contexts
-				 WHERE revision < 0
-				    OR json_type(draft_json) <> 'object'
-				    OR json_extract(draft_json, '$.revision') <> revision
-				    OR json_extract(draft_json, '$.factRegistry.revision') <> revision
-				    OR json_extract(draft_json, '$.updatedAt') <> updated_at`,
+				 WHERE CASE
+				   WHEN json_valid(draft_json) <> 1 THEN 1
+				   WHEN typeof(revision) <> 'integer' OR revision < 0 THEN 1
+				   WHEN COALESCE(json_type(draft_json, '$') = 'object', 0) = 0 THEN 1
+				   WHEN COALESCE(json_type(draft_json, '$.revision') = 'integer', 0) = 0 THEN 1
+				   WHEN json_extract(draft_json, '$.revision') < 0 THEN 1
+				   WHEN json_extract(draft_json, '$.revision') <> revision THEN 1
+				   WHEN COALESCE(json_type(draft_json, '$.factRegistry') = 'object', 0) = 0 THEN 1
+				   WHEN COALESCE(json_type(draft_json, '$.factRegistry.schemaVersion') = 'integer', 0) = 0 THEN 1
+				   WHEN json_extract(draft_json, '$.factRegistry.schemaVersion') <> 1 THEN 1
+				   WHEN COALESCE(json_type(draft_json, '$.factRegistry.facts') = 'object', 0) = 0 THEN 1
+				   WHEN COALESCE(json_type(draft_json, '$.factRegistry.revision') = 'integer', 0) = 0 THEN 1
+				   WHEN json_extract(draft_json, '$.factRegistry.revision') < 0 THEN 1
+				   WHEN json_extract(draft_json, '$.factRegistry.revision') <> revision THEN 1
+				   WHEN COALESCE(json_type(draft_json, '$.updatedAt') = 'text', 0) = 0 THEN 1
+				   WHEN json_extract(draft_json, '$.updatedAt') <> updated_at THEN 1
+				   ELSE 0
+				 END = 1`,
 			)
 			.get()?.count;
 		if (invalidRows !== 0) {
-			fail("RC4 persisted conversation context invariants are invalid");
+			fail(
+				`[RC4_CONTEXT_ROWS_INVALID] persisted conversation context invariants are invalid; invalid row count: ${invalidRows ?? "unknown"}`,
+			);
 		}
 		if (client.query("PRAGMA foreign_key_check").all().length !== 0) {
 			fail("SQLite foreign key verification failed");

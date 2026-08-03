@@ -185,42 +185,96 @@ describe("RC4 schema verification", () => {
 		upgraded.close(false);
 	});
 
-	test("rejects a persisted revision mismatch without exposing draft data", async () => {
+	test("counts every invalid context shape without exposing draft data", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "botamin-rc4-row-invalid-"));
 		temporaryDirectories.push(directory);
 		const active = join(directory, "active.db");
 		expect(runDb(["migrate"], active).exitCode).toBe(0);
+		expect(runDb(["verify-rc4"], active).exitCode).toBe(0);
 		const client = new Database(active);
 		client.run("PRAGMA ignore_check_constraints = ON");
-		client.run(
-			`INSERT INTO conversations
-			 (id, status, stage, prompt_version, source, locale,
-			  qualification_enabled, consent_at, started_at)
-			 VALUES ('conversation-invalid', 'active', 'COLLECT_BOOKING',
-			  'prompt', 'landing', 'ru-RU', 1, ?, ?)`,
-			["2026-08-02T09:00:00.000Z", "2026-08-02T09:00:00.000Z"],
-		);
-		client.run(
-			`INSERT INTO conversation_contexts
-			 (conversation_id, revision, draft_json, updated_at)
-			 VALUES ('conversation-invalid', 1, ?, ?)`,
-			[
-				JSON.stringify({
-					revision: 1,
-					factRegistry: { revision: 2 },
-					updatedAt: "2026-08-02T09:00:00.000Z",
-					privateValue: "must-not-appear",
-				}),
-				"2026-08-02T09:00:00.000Z",
-			],
-		);
+		const timestamp = "2026-08-02T09:00:00.000Z";
+		const validDraft = {
+			revision: 1,
+			factRegistry: { schemaVersion: 1, revision: 1, facts: {} },
+			updatedAt: timestamp,
+			privateValue: "must-not-appear",
+		};
+		const { revision: _missingRevision, ...withoutRevision } = validDraft;
+		const { updatedAt: _missingUpdatedAt, ...withoutUpdatedAt } = validDraft;
+		const { factRegistry: _missingFactRegistry, ...withoutFactRegistry } =
+			validDraft;
+		const drafts = [
+			"{}",
+			"[]",
+			JSON.stringify(withoutRevision),
+			JSON.stringify({ ...validDraft, revision: null }),
+			JSON.stringify({ ...validDraft, revision: "1" }),
+			JSON.stringify({ ...validDraft, revision: 1.5 }),
+			JSON.stringify({ ...validDraft, revision: -1 }),
+			JSON.stringify({ ...validDraft, revision: 2 }),
+			JSON.stringify(withoutFactRegistry),
+			JSON.stringify({
+				...validDraft,
+				factRegistry: { schemaVersion: 1, revision: 1 },
+			}),
+			JSON.stringify({
+				...validDraft,
+				factRegistry: { schemaVersion: 1, revision: null, facts: {} },
+			}),
+			JSON.stringify({
+				...validDraft,
+				factRegistry: { schemaVersion: 1, revision: "1", facts: {} },
+			}),
+			JSON.stringify({
+				...validDraft,
+				factRegistry: { schemaVersion: 1, revision: 1.5, facts: {} },
+			}),
+			JSON.stringify({
+				...validDraft,
+				factRegistry: { schemaVersion: 1, revision: -1, facts: {} },
+			}),
+			JSON.stringify({
+				...validDraft,
+				factRegistry: { schemaVersion: 1, revision: 2, facts: {} },
+			}),
+			JSON.stringify(withoutUpdatedAt),
+			JSON.stringify({ ...validDraft, updatedAt: null }),
+			JSON.stringify({ ...validDraft, updatedAt: 3 }),
+			JSON.stringify({
+				...validDraft,
+				updatedAt: "2026-08-02T09:01:00.000Z",
+			}),
+			'{"privateValue":"must-not-appear"',
+		];
+		for (const [index, draftJson] of [
+			...drafts,
+			JSON.stringify(validDraft),
+		].entries()) {
+			const conversationId = `conversation-${index}`;
+			client.run(
+				`INSERT INTO conversations
+				 (id, status, stage, prompt_version, source, locale,
+				  qualification_enabled, consent_at, started_at)
+				 VALUES (?, 'active', 'COLLECT_BOOKING', 'prompt', 'landing',
+				  'ru-RU', 1, ?, ?)`,
+				[conversationId, timestamp, timestamp],
+			);
+			client.run(
+				`INSERT INTO conversation_contexts
+				 (conversation_id, revision, draft_json, updated_at)
+				 VALUES (?, 1, ?, ?)`,
+				[conversationId, draftJson, timestamp],
+			);
+		}
 		client.close(false);
 		const result = runDb(["verify-rc4"], active);
 		expect(result.exitCode).not.toBe(0);
-		expect(result.stderr.toString()).toContain(
-			"persisted conversation context invariants are invalid",
-		);
-		expect(result.stderr.toString()).not.toContain("must-not-appear");
+		const stderr = result.stderr.toString();
+		expect(stderr).toContain("[RC4_CONTEXT_ROWS_INVALID]");
+		expect(stderr).toContain(`invalid row count: ${drafts.length}`);
+		expect(stderr).not.toContain("must-not-appear");
+		expect(stderr).not.toContain("privateValue");
 	});
 
 	test("rejects duplicate legacy tables without exposing row values", async () => {

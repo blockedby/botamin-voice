@@ -42,23 +42,27 @@ export const conversationContexts = sqliteTable(
 	(table) => [
 		check(
 			"conversation_contexts_revision_nonnegative",
-			sql`${table.revision} >= 0`,
+			sql`typeof(${table.revision}) = 'integer' AND ${table.revision} >= 0`,
 		),
 		check(
 			"conversation_contexts_draft_json_valid",
-			sql`json_valid(${table.draftJson}) AND json_type(${table.draftJson}) = 'object'`,
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN COALESCE(json_type(${table.draftJson}, '$') = 'object', 0) ELSE 0 END`,
 		),
 		check(
 			"conversation_contexts_draft_revision_matches",
-			sql`json_extract(${table.draftJson}, '$.revision') = ${table.revision}`,
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN COALESCE(json_type(${table.draftJson}, '$.revision') = 'integer' AND json_extract(${table.draftJson}, '$.revision') >= 0 AND json_extract(${table.draftJson}, '$.revision') = ${table.revision}, 0) ELSE 0 END`,
+		),
+		check(
+			"conversation_contexts_fact_registry_structure",
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN COALESCE(json_type(${table.draftJson}, '$.factRegistry') = 'object' AND json_type(${table.draftJson}, '$.factRegistry.schemaVersion') = 'integer' AND json_extract(${table.draftJson}, '$.factRegistry.schemaVersion') = 1 AND json_type(${table.draftJson}, '$.factRegistry.facts') = 'object', 0) ELSE 0 END`,
 		),
 		check(
 			"conversation_contexts_fact_revision_matches",
-			sql`json_extract(${table.draftJson}, '$.factRegistry.revision') = ${table.revision}`,
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN COALESCE(json_type(${table.draftJson}, '$.factRegistry.revision') = 'integer' AND json_extract(${table.draftJson}, '$.factRegistry.revision') >= 0 AND json_extract(${table.draftJson}, '$.factRegistry.revision') = ${table.revision}, 0) ELSE 0 END`,
 		),
 		check(
 			"conversation_contexts_updated_at_matches",
-			sql`json_extract(${table.draftJson}, '$.updatedAt') = ${table.updatedAt}`,
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN COALESCE(json_type(${table.draftJson}, '$.updatedAt') = 'text' AND json_extract(${table.draftJson}, '$.updatedAt') = ${table.updatedAt}, 0) ELSE 0 END`,
 		),
 	],
 );

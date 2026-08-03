@@ -559,7 +559,11 @@ describe("SqliteBookingDraftStore", () => {
 			[
 				JSON.stringify({
 					revision: draft.revision,
-					factRegistry: { revision: draft.revision },
+					factRegistry: {
+						schemaVersion: 1,
+						revision: draft.revision,
+						facts: {},
+					},
 					updatedAt: draft.updatedAt,
 				}),
 				conversationId,

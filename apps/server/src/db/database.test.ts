@@ -106,6 +106,139 @@ describe("domain database migrations", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("rejects missing, mistyped, and mismatched context JSON members", () => {
+		const directory = mkdtempSync(join(tmpdir(), "botamin-context-checks-"));
+		directories.push(directory);
+		const database = openDomainDatabase({
+			filename: join(directory, "domain.db"),
+		});
+		const timestamp = "2026-08-03T09:00:00.000Z";
+		database.$client.run(
+			`INSERT INTO conversations
+			 (id, status, stage, prompt_version, source, locale,
+			  qualification_enabled, consent_at, started_at)
+			 VALUES ('conversation-checks', 'active', 'COLLECT_BOOKING',
+			  'prompt', 'landing', 'ru-RU', 1, ?, ?)`,
+			[timestamp, timestamp],
+		);
+		const validDraft = {
+			revision: 0,
+			factRegistry: { schemaVersion: 1, revision: 0, facts: {} },
+			updatedAt: timestamp,
+		};
+		const { revision: _missingRevision, ...withoutRevision } = validDraft;
+		const { updatedAt: _missingUpdatedAt, ...withoutUpdatedAt } = validDraft;
+		const { factRegistry: _missingFactRegistry, ...withoutFactRegistry } =
+			validDraft;
+		const invalidDrafts: Array<[string, string]> = [
+			["empty object", "{}"],
+			["draft root is not an object", "[]"],
+			["missing revision", JSON.stringify(withoutRevision)],
+			["null revision", JSON.stringify({ ...validDraft, revision: null })],
+			["string revision", JSON.stringify({ ...validDraft, revision: "0" })],
+			["fraction revision", JSON.stringify({ ...validDraft, revision: 0.5 })],
+			["negative revision", JSON.stringify({ ...validDraft, revision: -1 })],
+			[
+				"draft revision mismatch",
+				JSON.stringify({ ...validDraft, revision: 1 }),
+			],
+			["missing fact registry", JSON.stringify(withoutFactRegistry)],
+			[
+				"missing facts object",
+				JSON.stringify({
+					...validDraft,
+					factRegistry: { schemaVersion: 1, revision: 0 },
+				}),
+			],
+			[
+				"missing fact revision",
+				JSON.stringify({
+					...validDraft,
+					factRegistry: { schemaVersion: 1, facts: {} },
+				}),
+			],
+			[
+				"null fact revision",
+				JSON.stringify({
+					...validDraft,
+					factRegistry: { schemaVersion: 1, revision: null, facts: {} },
+				}),
+			],
+			[
+				"string fact revision",
+				JSON.stringify({
+					...validDraft,
+					factRegistry: { schemaVersion: 1, revision: "0", facts: {} },
+				}),
+			],
+			[
+				"fraction fact revision",
+				JSON.stringify({
+					...validDraft,
+					factRegistry: { schemaVersion: 1, revision: 0.5, facts: {} },
+				}),
+			],
+			[
+				"negative fact revision",
+				JSON.stringify({
+					...validDraft,
+					factRegistry: { schemaVersion: 1, revision: -1, facts: {} },
+				}),
+			],
+			[
+				"fact revision mismatch",
+				JSON.stringify({
+					...validDraft,
+					factRegistry: { schemaVersion: 1, revision: 1, facts: {} },
+				}),
+			],
+			["missing updatedAt", JSON.stringify(withoutUpdatedAt)],
+			["null updatedAt", JSON.stringify({ ...validDraft, updatedAt: null })],
+			["wrong-type updatedAt", JSON.stringify({ ...validDraft, updatedAt: 3 })],
+			[
+				"nonmatching updatedAt",
+				JSON.stringify({
+					...validDraft,
+					updatedAt: "2026-08-03T09:01:00.000Z",
+				}),
+			],
+			["malformed JSON", '{"privateValue":"must-not-appear"'],
+		];
+		const insert = database.$client.query(
+			`INSERT INTO conversation_contexts
+			 (conversation_id, revision, draft_json, updated_at)
+			 VALUES ('conversation-checks', 0, ?, ?)`,
+		);
+		for (const [label, draftJson] of invalidDrafts) {
+			let thrown: unknown;
+			try {
+				insert.run(draftJson, timestamp);
+			} catch (error) {
+				thrown = error;
+			}
+			expect(String(thrown), label).toContain("CHECK constraint failed");
+			expect(String(thrown), label).not.toContain("malformed JSON");
+			expect(String(thrown), label).not.toContain("must-not-appear");
+		}
+		expect(
+			database.$client
+				.query(
+					`SELECT json_type('{}', '$.revision') AS missing_type,
+					        json_extract('{}', '$.revision') IS NULL AS extract_is_null`,
+				)
+				.get(),
+		).toEqual({ missing_type: null, extract_is_null: 1 });
+		expect(() =>
+			insert.run(JSON.stringify(validDraft), timestamp),
+		).not.toThrow();
+		expect(
+			database.$client
+				.query("SELECT count(*) AS count FROM conversation_contexts")
+				.get(),
+		).toEqual({ count: 1 });
+		closeDomainDatabase(database);
+	});
+
 	test("upgrades legacy scopes and adds internal meeting slot constraints", () => {
 		const { database: legacy, filename } = legacyDatabaseFixture();
 		legacy

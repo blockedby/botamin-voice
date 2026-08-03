@@ -216,7 +216,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-BRAIN-005:** ответы проходят speech sanitizer перед TTS.
 - **FR-BRAIN-006:** system/product/conversation prompts загружаются из Markdown.
 - **FR-BRAIN-007:** tool mode имеет feature flag: `dynamic` и стабильный fallback `envelope`.
-- **FR-BRAIN-008:** reasoning effort задаётся конфигурацией; стартовый профиль Luna использует минимальный уровень, который проходит quality evals.
+- **FR-BRAIN-008:** reasoning effort зафиксирован exact `low`: отсутствие значения default-ится в `low`, любое иное значение отклоняется до запуска Codex process для standard и priority.
 - **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, parsed time-of-day/concrete-date-time request и ровно два structured meeting candidates с concrete Moscow date/time labels.
 - **FR-BRAIN-010:** cadence умеренно проактивен: один вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting offer, без повторного давления после ясного отказа.
 - **FR-BRAIN-011:** ordinary spoken reply uses concise natural Russian: usually no more than two short sentences/about twelve seconds, one useful thought, and at most one question; filler acknowledgements and invented progress are forbidden.
@@ -254,7 +254,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-WEB-005A:** final meeting widget appears only from `session.ready.internalMeeting` or `internal.meeting.updated` derived from the durable booking; legacy UI state or transcript wording cannot synthesize it.
 - **FR-WEB-006:** mobile viewport поддерживается.
 - **FR-WEB-007:** при voice failure пользователю не показываются stack traces/provider details.
-- **FR-WEB-008:** proactive MP3 содержит только фиксированный product copy без visitor data. Его замена выполняется отдельным explicit admin opt-in OpenRouter generation script и commit-ится как static asset; runtime visit не генерирует greeting.
+- **FR-WEB-008:** proactive canonical WAV содержит только фиксированный product copy без visitor data. Его замена выполняется отдельным explicit admin opt-in OpenRouter generation script с exact Gemini PCM/Sulafat profile и commit-ится как static asset; runtime visit не генерирует greeting.
 - **FR-WEB-009:** playback `AudioContext` создаётся/resume-ится в synchronous consent gesture path до mic/network awaits; live WebKit acceptance remains a release gate.
 - **FR-WEB-010:** local reaction corpus generation is a separate explicit paid admin opt-in; committed assets are runtime-static and reaction fetch/decode failure is decoration-only.
 
@@ -506,9 +506,9 @@ Name, company, working email, phone or Telegram, qualification facts и candidat
 - **Bun gateway/utterance assembler** — единственный владелец utterance buffers, PCM16 bounds и PCM16-to-WAV encoding;
 - **Bun backend** — владелец state, tools, credentials, voice budgets и persistence.
 
-До этого pipeline существует отдельный pre-consent path: page entry делает одну `HTMLAudio` playback attempt committed same-origin `/assets/botamin-proactive-greeting.mp3`. Он не создаёт conversation, REST/WS, microphone, provider call или session; blocked/error переводит UI к `Включить приветствие`, а session start останавливает/release-ит audio.
+До этого pipeline существует отдельный pre-consent path: page entry делает одну `HTMLAudio` playback attempt committed same-origin `/assets/botamin-proactive-greeting.wav`. Он не создаёт conversation, REST/WS, microphone, provider call или session; blocked/error переводит UI к `Включить приветствие`, а session start останавливает/release-ит audio.
 
-Действующий post-consent pipeline: **browser PCM16 chunks → gateway/utterance assembler emits one validated STT WAV → atomic `audio/wav` SttPort → OpenRouter final transcript → Codex/Luna → two-request ordered TTS prefetch → complete provider-neutral MP3 or canonical WAV segments → gapless scheduled playback**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint. The static proactive greeting MP3 and Sulafat canonical-WAV reactions не входят в provider runtime pipeline.
+Действующий post-consent pipeline: **browser PCM16 chunks → gateway/utterance assembler emits one validated STT WAV → atomic `audio/wav` SttPort → OpenRouter final transcript → Codex/Luna → two-request ordered TTS prefetch → complete provider-neutral MP3 or canonical WAV segments → gapless scheduled playback**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint. The static Sulafat proactive greeting WAV and Sulafat canonical-WAV reactions не входят в provider runtime pipeline.
 
 Это отличается от end-to-end speech-to-speech: добавляется один orchestration layer, зато используется уже оплаченная Codex subscription и мозг можно заменить без переделки audio UI.
 
@@ -518,7 +518,7 @@ Name, company, working email, phone or Telegram, qualification facts и candidat
 
 Ответственность:
 
-- ровно одна immediate entry attempt fixed same-origin proactive MP3 без session/network capabilities кроме same-origin asset fetch;
+- ровно одна immediate entry attempt fixed same-origin proactive canonical WAV без session/network capabilities кроме same-origin asset fetch;
 - truthful `Включить приветствие` fallback после autoplay block/media error и release greeting при session start;
 - mic permission только после обоих consents;
 - synchronous creation/resume output `AudioContext` in the consent gesture before mic/network awaits;
@@ -654,7 +654,7 @@ P0 adapter — fixed-schema non-PII console acknowledgment. P1 — signed HTTP w
 2. Autoplay block или media error не запускает alternate network/provider path: UI показывает `Включить приветствие`, и повтор возможен только по user action.
 3. До обоих consents не создаются conversation/WS/microphone/provider/session. При старте настоящей session greeting немедленно pause/reset/release.
 
-Assets создаются отдельно от visitor runtime. Admin explicitly opts in to the paid proactive-greeting or local-reaction generator; the 16 Sulafat canonical mono PCM16LE 24 kHz reaction WAVs and proactive greeting MP3 are already committed static same-origin assets. Reaction regeneration additionally requires the exact Gemini PCM/Sulafat production profile. They contain no visitor data, and ordinary entry/turn handling never synthesizes them.
+Assets создаются отдельно от visitor runtime. Admin explicitly opts in to the paid proactive-greeting or local-reaction generator; the 16 Sulafat canonical mono PCM16LE 24 kHz reaction WAVs and proactive greeting WAV are committed static same-origin assets. Both regeneration paths require the exact Gemini PCM/Sulafat production profile. They contain no visitor data, and ordinary entry/turn handling never synthesizes them.
 
 ### Post-consent turn order
 
@@ -935,7 +935,7 @@ ABANDONED_SESSION_TIMEOUT_MS=10000
 # Keep CODEX_HOME outside this source repository and use an absolute path.
 BRAIN_PROVIDER=codex-subscription
 CODEX_MODEL=gpt-5.6-luna
-# Luna reasoning cannot be disabled; low is the lowest supported effort.
+# Missing defaults to low; any non-low value fails before Codex starts.
 CODEX_EFFORT=low
 # Empty is portable standard service; exact priority opts into Fast routing.
 CODEX_SERVICE_TIER=
@@ -1062,9 +1062,9 @@ STORE_RAW_AUDIO=false
 
 ### PRE-CONSENT STATIC GREETING
 
-На entry browser немедленно и ровно один раз пытается проиграть committed same-origin `/assets/botamin-proactive-greeting.mp3` с фиксированным product copy. До consent этот controller не имеет conversation REST/WS, microphone, provider или session capabilities. `NotAllowedError`/media error раскрывает только user-action fallback `Включить приветствие`; начало real session останавливает и освобождает MP3.
+На entry browser немедленно и ровно один раз пытается проиграть committed same-origin `/assets/botamin-proactive-greeting.wav` с фиксированным product copy. До consent этот controller не имеет conversation REST/WS, microphone, provider или session capabilities. `NotAllowedError`/media error раскрывает только user-action fallback `Включить приветствие`; начало real session останавливает и освобождает WAV.
 
-Asset не содержит visitor data: администратор отдельно и явно запускает opt-in OpenRouter generation script для фиксированного текста, проверяет MP3 и commit-ит результат. Runtime visitor не инициирует генерацию.
+Asset не содержит visitor data: администратор отдельно и явно запускает opt-in OpenRouter generation script с точным Gemini PCM/Sulafat profile для фиксированного текста, проверяет canonical WAV и commit-ит результат. Runtime visitor не инициирует генерацию.
 
 ### GREETING
 
@@ -1076,11 +1076,11 @@ Asset не содержит visitor data: администратор отдел�
 
 ### DISCOVERY
 
-Сначала выяснить отрасль или бизнес одним вопросом. Прямой meeting intent сохраняется, но не разрешает `GREETING -> BOOKING_OFFER` или `DISCOVERY -> BOOKING_OFFER` и не открывает slot context до завершённых discovery и value.
+Сначала выяснить отрасль или бизнес одним вопросом. `GREETING` никогда не получает slot context. Первый ответ об отрасли или бизнесе всегда получает одну canonical assistant response: дословный attributed hook, затем ровно два текущих server-owned 20-minute Moscow `displayLabel` и один вопрос выбора — без filler, повторного meeting intent или второго brain call. Brain предлагает `COLLECT_BOOKING`, а server применяет и публикует только эту ordered compound sequence: `DISCOVERY -> VALUE -> BOOKING_OFFER -> COLLECT_BOOKING`.
 
 ### VALUE
 
-Использовать только канонический hook, без другого кейса или числа:
+В canonical discovery response использовать только этот hook, без другого кейса или числа:
 
 > По пользовательскому брифу Botamin, в этой отрасли были случаи: компании с AI-агентами увеличивали выручку на 10–15 миллионов рублей ежемесячно; без гарантий.
 
@@ -1094,13 +1094,11 @@ Asset не содержит visitor data: администратор отдел�
 
 ### BOOKING_OFFER
 
-Только после discovery и канонического value hook предложить 20-минутную видеовстречу с экспертом. Нельзя обещать звонок или callback: агент работает только в текущей сессии сайта.
-
-> Согласуем двадцатиминутную видеовстречу с экспертом?
+Два текущих 20-minute Moscow candidates в canonical discovery response являются offer; отдельная filler-реплика или повторное согласие не нужны. Нельзя обещать звонок или callback: агент работает только в текущей сессии сайта.
 
 ### COLLECT_BOOKING
 
-После согласия использовать ровно два current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Typed/spoken time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
+Следующий typed/spoken turn сразу принимает выбор одного из двух уже предложенных current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
 
 Обязательный набор: accepted name, company, working email, phone or Telegram, one current candidate, and contact consent. Spoken and typed turns merge quoted fact proposals into the same durable `conversation_contexts.draft_json`. New conflicting values produce bounded explicit options instead of silent overwrite.
 
@@ -1332,8 +1330,8 @@ Backend возвращает safe result:
 - Ошибки providers не пробрасываются клиенту напрямую.
 - Binary WebSocket frames несут client PCM16 input или один полный provider-neutral server MP3/canonical-WAV phrase payload; raw provider PCM/network chunks никогда не публикуются как playable audio.
 - Tool handlers не доступны как публичные HTTP endpoints.
-- Proactive greeting не является API/session contract: page entry делает один same-origin GET/playback static MP3, без conversation REST/WS/mic/provider/session до обоих consents. Blocked/error fallback — `Включить приветствие`; session start прекращает static playback.
-- The committed proactive greeting MP3 and 16 Sulafat canonical mono PCM16LE 24 kHz reaction WAVs are same-origin static product assets without visitor data. Their generation is explicit paid admin opt-in; reaction regeneration also requires the exact Gemini PCM/Sulafat production profile. Visitor runtime never synthesizes them, and reactions have no transcript/state/provider/business effect.
+- Proactive greeting не является API/session contract: page entry делает один same-origin GET/playback static canonical WAV, без conversation REST/WS/mic/provider/session до обоих consents. Blocked/error fallback — `Включить приветствие`; session start прекращает static playback.
+- The committed Sulafat proactive greeting WAV and 16 Sulafat canonical mono PCM16LE 24 kHz reaction WAVs are same-origin static product assets without visitor data. Their generation is explicit paid admin opt-in; reaction regeneration also requires the exact Gemini PCM/Sulafat production profile. Visitor runtime never synthesizes them, and reactions have no transcript/state/provider/business effect.
 
 ## 2. REST endpoints
 
@@ -2605,7 +2603,7 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 ## 4. Integration tests
 
-- landing entry attempts only the fixed same-origin proactive MP3; before both consents there are zero conversation REST requests, sockets, capture/mic objects, provider calls, or sessions; session start stops greeting;
+- landing entry attempts only the fixed same-origin proactive canonical WAV; before both consents there are zero conversation REST requests, sockets, capture/mic objects, provider calls, or sessions; session start stops greeting;
 - bounded PCM16 chunks → `audio.commit` → gateway-produced validated STT WAV → atomic `SttPort` → fake OpenRouter final transcript → fake brain deltas → two-request ordered TTS prefetch → complete MP3/canonical-WAV WS segments;
 - sample-derived capture progress/countdown uses accepted PCM16 bytes and stricter server duration/byte ceiling, then auto-commits exactly once;
 - bounded monotonic `visitor.text.submit` clears uncommitted audio, suppresses pending duplicates, retains sequence on rejection, emits server final once, and follows the same brain/state/tool/persistence path as speech;
@@ -2626,7 +2624,7 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 Playwright with synthetic audio fixture:
 
-1. load landing and verify one immediate same-origin proactive MP3 attempt with no conversation REST/WS/mic/provider/session;
+1. load landing and verify one immediate same-origin proactive canonical-WAV attempt with no conversation REST/WS/mic/provider/session;
 2. exercise autoplay success and blocked/error `Включить приветствие`, then verify CTA/session start stops greeting;
 3. click CTA, provide both consents, and mock/allow mic;
 4. stream fixture PCM;
@@ -3129,7 +3127,7 @@ T01, T10 и T15 не должны задерживать первые adapter sp
 - **OpenRouter STT:** native Bun `fetch` к `/api/v1/chat/completions`; gateway/utterance assembler supplies one bounded, validated `audio/wav` request after `audio.commit`, adapter validates and base64-encodes those unchanged WAV bytes as `input_audio`, and returns one final transcript.
 - **OpenRouter TTS:** native Bun `fetch` к dedicated speech endpoint; one complete MP3 phrase per request, no SDK.
 - **LLM brain:** `BrainPort`, реализованный поверх долгоживущего `codex app-server` и его JSON-RPC protocol.
-- **Model:** `gpt-5.6-luna` через Codex subscription владельца; `CODEX_MODEL`/`CODEX_EFFORT` конфигурируемы, но Luna — согласованный P0 default.
+- **Model:** exact `gpt-5.6-luna` через Codex subscription владельца; `CODEX_EFFORT` допускает только exact `low` (missing default-ится в `low`, non-low блокирует startup) для standard и priority.
 - **Schemas:** Zod для собственных contracts; Codex protocol types/schemas фиксируются вместе с pinned CLI version.
 - **Vercel AI SDK:** не является dependency P0; может появиться позже в text-only или API-key adapter, если даст измеримое упрощение.
 - **`@openai/codex-sdk`:** не используется в основном voice runtime, пока не предоставляет обязательный low-level control над `turn/interrupt`, app-server threads, dynamic tools и exact streamed deltas на Bun.

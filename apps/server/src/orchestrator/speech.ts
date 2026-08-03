@@ -311,15 +311,41 @@ function boundaries(text: string): number[] {
 	return result;
 }
 
+const NUMERIC_BOUNDARY_CONTEXT = 96;
+
+function splitsNumericExemption(
+	text: string,
+	index: number,
+	numericSeparators: ReadonlySet<number> | null,
+): boolean {
+	if (numericSeparators === null || numericSeparators.has(index)) return true;
+	const start = Math.max(0, index - NUMERIC_BOUNDARY_CONTEXT);
+	const end = Math.min(text.length, index + NUMERIC_BOUNDARY_CONTEXT);
+	const window = text.slice(start, end);
+	const localIndex = index - start;
+	const whole = scanPhoneLikeText(window);
+	if (whole.overflow || whole.regions.length > 0) return false;
+	const left = scanPhoneLikeText(window.slice(0, localIndex));
+	const right = scanPhoneLikeText(window.slice(localIndex));
+	return (
+		left.overflow ||
+		right.overflow ||
+		left.regions.length > 0 ||
+		right.regions.length > 0
+	);
+}
+
 function safeWordBoundary(text: string, limit: number): number {
 	const phoneScan = scanPhoneLikeText(text);
+	const numericSeparators = phoneLikeNumericSeparatorOffsets(text);
 	for (let index = Math.min(limit, text.length); index > 0; index -= 1) {
 		if (!/\s/u.test(text[index] ?? "")) continue;
 		if (
 			phoneScan.overflow ||
 			phoneScan.regions.some(
 				(region) => index > region.start && index < region.end,
-			)
+			) ||
+			splitsNumericExemption(text, index, numericSeparators)
 		) {
 			continue;
 		}

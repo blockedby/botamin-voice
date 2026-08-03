@@ -3,6 +3,7 @@ import {
 	containsPhoneLikeText,
 	PHONE_SCAN_MAX_INPUT_CODE_UNITS,
 	scanPhoneLikeText,
+	trailingPhoneLikeHoldbackStart,
 } from "../src/phone-detection";
 
 const REVIEWER_BYPASSES = [
@@ -164,6 +165,45 @@ describe("shared Unicode phone-like detector", () => {
 			"\u0301+79991234567\u20DD",
 		]) {
 			expectSingleOriginalSpan(`До ${candidate} после`, candidate);
+		}
+	});
+
+	test("retains bounded semantic prefixes needed to classify streaming numeric tails", () => {
+		for (const source of [
+			"Обычная вводная Дело № 1234567.",
+			"Обычная вводная кейс N 7654321.",
+			"Обычная вводная заказ # 2345678.",
+			"Обычная вводная тикет 3456789.",
+			"Обычная вводная Телефон +⁷.",
+		]) {
+			const expected = source.search(/(?:дело|кейс|заказ|тикет|телефон)/iu);
+			expect(trailingPhoneLikeHoldbackStart(source)).toBe(expected);
+		}
+		expect(trailingPhoneLikeHoldbackStart("Обычная вводная Дело №")).toBe(
+			"Обычная вводная ".length,
+		);
+		expect(trailingPhoneLikeHoldbackStart("Дата 10.08.2026.")).toBe(
+			"Дата ".length,
+		);
+		for (const label of [
+			"Дело",
+			"кейс",
+			"заявка",
+			"заказ",
+			"тикет",
+			"обращение",
+			"счёт",
+			"Телефон",
+			"номер",
+			"мобильный",
+			"phone",
+		]) {
+			for (let offset = 1; offset < label.length; offset += 1) {
+				const source = `Обычная вводная ${label.slice(0, offset)}`;
+				expect(trailingPhoneLikeHoldbackStart(source)).toBe(
+					"Обычная вводная ".length,
+				);
+			}
 		}
 	});
 

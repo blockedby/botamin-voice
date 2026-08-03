@@ -462,6 +462,158 @@ describe("bounded streaming phrase chunker", () => {
 		expect(chunks.every((chunk) => !chunk.endsWith("ООО"))).toBe(true);
 	});
 
+	test("keeps reviewer case-number context with the held numeric tail", () => {
+		const source = "Обычная вводная Дело № 1234567.";
+		const chunker = new StreamingSentenceChunker({
+			firstMinimum: 1,
+			firstTarget: 30,
+			softTarget: 120,
+			hardLimit: 120,
+		});
+		const chunks = [...chunker.push(source), ...chunker.flush()];
+		expect(chunks).toEqual(["Обычная вводная", "Дело № 1234567."]);
+		expect(
+			chunks
+				.map(
+					(chunk) =>
+						prepareSpeech(chunk, {
+							contactProcessing: false,
+							approvedContacts: [],
+						}).spokenText,
+				)
+				.filter(Boolean)
+				.join(" "),
+		).toBe(source);
+	});
+
+	test("preserves every numeric exemption across trailing, delta, idle, and hard boundaries", () => {
+		const controls = [
+			"Обычная вводная Дело № 1234567.",
+			"Дата 10.08.2026.",
+			"Время 16:00.",
+			"Доля 1234567 %.",
+			"Значение 1234567,89.",
+			"Диапазон 1000000 - 2000000.",
+			"Обработано 1 000 000 заявок.",
+		] as const;
+		const options = {
+			firstMinimum: 1,
+			firstTarget: 20,
+			softTarget: 120,
+			hardLimit: 120,
+			idleFlushMs: 1,
+		} as const;
+		for (const control of controls) {
+			const firstDigit = control.search(/\p{N}/u);
+			expect(firstDigit).toBeGreaterThan(0);
+			const hardPadding = "текст ".repeat(
+				Math.max(1, Math.ceil((116 - firstDigit) / 6)),
+			);
+			const hardSource = `${hardPadding}${control}`;
+			const scenarios = [
+				{
+					name: "trailing",
+					source: control,
+					run(chunker: StreamingSentenceChunker): string[] {
+						return [...chunker.push(control), ...chunker.flush()];
+					},
+				},
+				{
+					name: "delta",
+					source: control,
+					run(chunker: StreamingSentenceChunker): string[] {
+						return [
+							...chunker.push(control.slice(0, firstDigit)),
+							...chunker.push(control.slice(firstDigit)),
+							...chunker.flush(),
+						];
+					},
+				},
+				{
+					name: "idle",
+					source: control,
+					run(chunker: StreamingSentenceChunker): string[] {
+						return [
+							...chunker.push(control.slice(0, firstDigit)),
+							...chunker.flushIdle(1),
+							...chunker.push(control.slice(firstDigit)),
+							...chunker.flushIdle(1),
+							...chunker.flush(),
+						];
+					},
+				},
+				{
+					name: "hard",
+					source: hardSource,
+					run(chunker: StreamingSentenceChunker): string[] {
+						return [...chunker.push(hardSource), ...chunker.flush()];
+					},
+				},
+			] as const;
+			for (const scenario of scenarios) {
+				const chunks = scenario.run(new StreamingSentenceChunker(options));
+				const providerBound = chunks
+					.map(
+						(chunk) =>
+							prepareSpeech(chunk, {
+								contactProcessing: false,
+								approvedContacts: [],
+							}).spokenText,
+					)
+					.filter(Boolean)
+					.join(" ");
+				expect(chunks.every((chunk) => [...chunk].length <= 120)).toBe(true);
+				if (scenario.name === "hard") expect(chunks.length).toBeGreaterThan(1);
+				expect(providerBound, `${control} at ${scenario.name}`).toBe(
+					scenario.source,
+				);
+				expect(providerBound).not.toContain("контакт скрыт");
+			}
+		}
+	});
+
+	test("retains split identifier labels across idle flushes", () => {
+		for (const { source, label } of [
+			{ source: "Обычная вводная Дело № 1234567.", label: "Дело" },
+			{ source: "Обычная вводная кейс N 7654321.", label: "кейс" },
+			{ source: "Обычная вводная заявка # 2345678.", label: "заявка" },
+			{ source: "Обычная вводная заказ № 3456789.", label: "заказ" },
+			{ source: "Обычная вводная тикет 4567890.", label: "тикет" },
+			{ source: "Обычная вводная обращение № 5678901.", label: "обращение" },
+			{ source: "Обычная вводная счёт № 6789012.", label: "счёт" },
+		] as const) {
+			const labelStart = source.indexOf(label);
+			for (let offset = 1; offset < label.length; offset += 1) {
+				const split = labelStart + offset;
+				const chunker = new StreamingSentenceChunker({
+					firstMinimum: 1,
+					firstTarget: 20,
+					softTarget: 120,
+					hardLimit: 120,
+					idleFlushMs: 1,
+				});
+				const chunks = [
+					...chunker.push(source.slice(0, split)),
+					...chunker.flushIdle(1),
+					...chunker.push(source.slice(split)),
+					...chunker.flush(),
+				];
+				const providerBound = chunks
+					.map(
+						(chunk) =>
+							prepareSpeech(chunk, {
+								contactProcessing: false,
+								approvedContacts: [],
+							}).spokenText,
+					)
+					.filter(Boolean)
+					.join(" ");
+				expect(providerBound, `${label} split at ${offset}`).toBe(source);
+				expect(providerBound).not.toContain("контакт скрыт");
+			}
+		}
+	});
+
 	test("holds Unicode phone prefixes across punctuation deltas and idle flushes", () => {
 		const source = "Телефон +⁷.⁹⁹⁹.¹²³.⁴⁵.⁶⁷";
 		const chunker = new StreamingSentenceChunker({
@@ -485,6 +637,36 @@ describe("bounded streaming phrase chunker", () => {
 		);
 	});
 
+	test("redacts phone context split at every idle label boundary", () => {
+		const source = "Обычная вводная Телефон +⁷.⁹⁹⁹.¹²³.⁴⁵.⁶⁷";
+		const label = "Телефон";
+		const labelStart = source.indexOf(label);
+		for (let offset = 1; offset < label.length; offset += 1) {
+			const split = labelStart + offset;
+			const chunker = new StreamingSentenceChunker({
+				firstMinimum: 1,
+				firstTarget: 20,
+				softTarget: 120,
+				hardLimit: 120,
+				idleFlushMs: 1,
+			});
+			const providerBound = [
+				...chunker.push(source.slice(0, split)),
+				...chunker.flushIdle(1),
+				...chunker.push(source.slice(split)),
+				...chunker.flushIdle(1),
+				...chunker.flush(),
+			]
+				.map(sanitizeSpeech)
+				.filter(Boolean)
+				.join(" ");
+			expect(providerBound).toBe("Обычная вводная Телефон контакт скрыт");
+			expect(providerBound.normalize("NFKC").replace(/\D/gu, "")).not.toMatch(
+				/79991234567/u,
+			);
+		}
+	});
+
 	test("releases an exact approved phone only as one natural marker-allowlisted phrase", () => {
 		const chunker = new StreamingSentenceChunker({
 			firstMinimum: 1,
@@ -497,7 +679,7 @@ describe("bounded streaming phrase chunker", () => {
 			chunks.push(...chunker.push(delta));
 		}
 		chunks.push(...chunker.flush());
-		expect(chunks).toEqual(["Телефон", "+7 955 567-89-55"]);
+		expect(chunks).toEqual(["Телефон +7 955 567-89-55"]);
 		expect(
 			chunks
 				.map(

@@ -1758,6 +1758,79 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		}
 	});
 
+	test("keeps every allowed numeric form intact at provider-bound delta and hard boundaries", async () => {
+		const controls = [
+			"Обычная вводная Дело № 1234567.",
+			"Дата 10.08.2026.",
+			"Время 16:00.",
+			"Доля 1234567 %.",
+			"Значение 1234567,89.",
+			"Диапазон 1000000 - 2000000.",
+			"Обработано 1 000 000 заявок.",
+		] as const;
+		for (const control of controls) {
+			const firstDigit = control.search(/\p{N}/u);
+			if (firstDigit <= 0) throw new Error("numeric control is malformed");
+			const hardPadding = "текст ".repeat(
+				Math.max(1, Math.ceil((116 - firstDigit) / 6)),
+			);
+			const hardSource = `${hardPadding}${control}`;
+			const scenarios = [
+				{ name: "trailing", source: control, deltas: [control] },
+				{
+					name: "delta",
+					source: control,
+					deltas: [control.slice(0, firstDigit), control.slice(firstDigit)],
+				},
+				{ name: "hard", source: hardSource, deltas: [hardSource] },
+			] as const;
+			for (const scenario of scenarios) {
+				const brain = new FakeBrain([
+					...scenario.deltas.map(
+						(text): BrainDelta => ({
+							type: "speech.delta",
+							turnId: turn1,
+							generationId: generation1,
+							text,
+						}),
+					),
+					{
+						type: "turn.completed",
+						turnId: turn1,
+						generationId: generation1,
+					},
+				]);
+				const tts = new FakeTts();
+				const { orchestrator } = fixture({
+					brain,
+					tts,
+					initialState: valueState(),
+					speechChunker: {
+						firstMinimum: 1,
+						firstTarget: 20,
+						softTarget: 120,
+						hardLimit: 120,
+					},
+				});
+				const events = await collect(orchestrator.acceptAudioCommit(commit()));
+				const providerBound = tts.inputs.map((input) => input.text).join(" ");
+				expect(
+					events.find((event) => event.type === "text.done"),
+				).toMatchObject({ text: scenario.source });
+				expect(providerBound, `${control} at ${scenario.name}`).toBe(
+					scenario.source,
+				);
+				expect(providerBound).not.toContain("контакт скрыт");
+				expect(tts.inputs.every((input) => input.text.length <= 120)).toBe(
+					true,
+				);
+				if (scenario.name === "hard") {
+					expect(tts.inputs.length).toBeGreaterThan(1);
+				}
+			}
+		}
+	});
+
 	test("never reconstructs the reviewer Unicode phone across provider calls or retries", async () => {
 		const source = "Телефон +⁷.⁹⁹⁹.¹²³.⁴⁵.⁶⁷";
 		const twoDeltaSplits = Array.from(
@@ -1813,6 +1886,67 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			expect(containsPhoneLikeText(providerBound)).toBe(false);
 			expect(normalizedDigits).not.toMatch(/\d{8}/u);
 		}
+	});
+
+	test("actual TTS speaks an exact committed phone atomically across model deltas", async () => {
+		const approvedPhone = "+79555678955";
+		const bookings = new FakeBookingService();
+		await bookings.createBooking({
+			...bookingInput,
+			contacts: [
+				{ channel: "email", value: "fixture@example.com" },
+				{ channel: "phone", value: approvedPhone },
+			],
+		});
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const visible = "Телефон +7 955 567-89-55.";
+		const brain = new FakeBrain([
+			...["Телефон +7 ", "955 ", "567-", "89-", "55."].map(
+				(text): BrainDelta => ({
+					type: "speech.delta",
+					turnId: turn2,
+					generationId: generation2,
+					text,
+				}),
+			),
+			{ type: "turn.completed", turnId: turn2, generationId: generation2 },
+		]);
+		const tts = new FakeTts();
+		const { orchestrator } = fixture({
+			bookings,
+			brain,
+			tts,
+			initialState: {
+				...createInitialConversationState(),
+				stage: "POST_BOOKING_QUALIFICATION",
+				booking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered: true,
+			},
+			speechChunker: {
+				firstMinimum: 1,
+				firstTarget: 20,
+				softTarget: 120,
+				hardLimit: 120,
+			},
+		});
+		const events = await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn2,
+				generationId: generation2,
+				text: "Продолжайте.",
+				knownFacts: facts,
+			}),
+		);
+		expect(events.find((event) => event.type === "text.done")).toMatchObject({
+			text: visible,
+		});
+		expect(tts.inputs).toHaveLength(1);
+		expect(tts.inputs[0]?.text).toBe(
+			"Телефон плюс семь, девятьсот пятьдесят пять, пятьсот шестьдесят семь, восемьдесят девять, пятьдесят пять.",
+		);
+		expect(tts.inputs[0]?.text).not.toMatch(/7955|контакт скрыт/u);
 	});
 
 	test("actual TTS forwards only committed contacts and redacts an unknown model contact", async () => {

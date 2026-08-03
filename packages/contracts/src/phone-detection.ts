@@ -85,6 +85,30 @@ const CASE_NUMBER_PREFIX =
 	/(?:(?:^|[^\p{L}])(?:дело|кейс|заявк[аи]|заказ|тикет|обращение|сч[её]т)\s*(?:No|№|#|N)?|[№#])\s*$/iu;
 const PHONE_CONTEXT_PREFIX =
 	/(?:тел(?:ефон)?|номер(?:а|у|ом)?|моб(?:ильный)?|phone|telephone|mobile|call|контакт)\s*(?::|;|#|№|-)?\s*$/iu;
+const NUMERIC_CONTEXT_WORDS = [
+	"дело",
+	"кейс",
+	"заявка",
+	"заявки",
+	"заказ",
+	"тикет",
+	"обращение",
+	"счет",
+	"счёт",
+	"тел",
+	"телефон",
+	"номер",
+	"номера",
+	"номеру",
+	"номером",
+	"моб",
+	"мобильный",
+	"phone",
+	"telephone",
+	"mobile",
+	"call",
+	"контакт",
+] as const;
 
 interface ScanView {
 	text: string;
@@ -276,9 +300,9 @@ export function containsPhoneLikeText(input: string): boolean {
 }
 
 /**
- * Return the source offset of a suffix that may still become phone-like when
- * more model text arrives. This is deliberately conservative: callers use it
- * only to keep a short-lived streaming suffix out of a provider-bound phrase.
+ * Return the source offset of a bounded semantic suffix needed to classify a
+ * numeric continuation. Context labels stay attached to held numeric tails so
+ * streaming callers never classify an identifier or phone without its prefix.
  */
 export function trailingPhoneLikeHoldbackStart(input: string): number | null {
 	const view = createScanView(input);
@@ -289,10 +313,43 @@ export function trailingPhoneLikeHoldbackStart(input: string): number | null {
 	for (const match of prospective.matchAll(PHONE_CANDIDATE)) {
 		const normalizedEnd = match.index + match[0].length;
 		if (match.index >= originalEnd || normalizedEnd <= originalEnd) continue;
-		const sourceStart = view.starts[match.index];
-		return sourceStart === undefined ? 0 : sourceStart;
+		return semanticNumericPrefixStart(view, match.index);
 	}
-	return null;
+	const contextStart = trailingNumericContextStart(view.text);
+	return contextStart === null
+		? null
+		: (view.starts[contextStart] ??
+				(contextStart === originalEnd ? input.length : 0));
+}
+
+function trailingNumericContextStart(input: string): number | null {
+	let start: number | null = null;
+	for (const pattern of [CASE_NUMBER_PREFIX, PHONE_CONTEXT_PREFIX]) {
+		const match = pattern.exec(input);
+		if (match?.index === undefined) continue;
+		const meaningfulOffset = match[0].search(/[\p{L}№#]/u);
+		const matchStart = match.index + Math.max(0, meaningfulOffset);
+		start = Math.min(start ?? matchStart, matchStart);
+	}
+	const partialWord = /\p{L}+$/u.exec(input);
+	if (partialWord?.index !== undefined) {
+		const folded = partialWord[0].toLocaleLowerCase("ru");
+		if (NUMERIC_CONTEXT_WORDS.some((word) => word.startsWith(folded))) {
+			start = Math.min(start ?? partialWord.index, partialWord.index);
+		}
+	}
+	return start;
+}
+
+function semanticNumericPrefixStart(
+	view: ScanView,
+	numericStart: number,
+): number {
+	const contextStart = trailingNumericContextStart(
+		view.text.slice(0, numericStart),
+	);
+	const normalizedStart = contextStart ?? numericStart;
+	return view.starts[normalizedStart] ?? 0;
 }
 
 /** Source offsets whose NFKC scan characters separate two normalized digits. */

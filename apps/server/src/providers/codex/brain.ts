@@ -824,7 +824,11 @@ export class CodexAppServerBrain implements BrainPort {
 						type: "speech.delta",
 						turnId: active.input.turnId,
 						generationId: active.input.generationId,
-						text: envelope.speech,
+						text: modelSpeechForDelivery(
+							active.input,
+							envelope.nextStage,
+							envelope.speech,
+						),
 					});
 				if (envelope.action.type !== "none") {
 					const request = ToolRequestSchema.safeParse({
@@ -1093,6 +1097,68 @@ export function createCodexBrainFromEnv(
 		turnTimeoutMs: positiveInt(env.TURN_TIMEOUT_MS, 30_000),
 		supervisor,
 	});
+}
+
+const ORDINARY_SPEECH_STAGES = new Set<BrainTurnInput["stage"]>([
+	"GREETING",
+	"DISCOVERY",
+	"VALUE",
+	"OBJECTION",
+	"BOOKING_OFFER",
+]);
+const ORDINARY_SPEECH_WORD_LIMIT = 22;
+const ORDINARY_SPEECH_SENTENCE_LIMIT = 2;
+const GREETING_DISCOVERY_QUESTION =
+	"Я голосовой AI-консультант Botamin. Чем занимается ваша компания?";
+
+/**
+ * The model proposes dialogue, but the server owns the audible product shape.
+ * Exact meeting/contact/booking output is handled outside these ordinary stages.
+ */
+export function modelSpeechForDelivery(
+	input: BrainTurnInput,
+	nextStage: BrainTurnInput["stage"],
+	speech: string,
+): string {
+	if (input.stage === "GREETING") return GREETING_DISCOVERY_QUESTION;
+	if (input.stage === "DISCOVERY" && nextStage === "COLLECT_BOOKING") {
+		const [first, second] = input.schedulingContext.candidateMeetingSlots;
+		if (first && second) {
+			return `По брифу Botamin, в этой отрасли есть кейсы: компании с AI-агентами увеличивали выручку на 10–15 миллионов рублей в месяц — без гарантий. Встреча: ${first.displayLabel} или ${second.displayLabel}. Какой вариант выбрать?`;
+		}
+	}
+	if (!ORDINARY_SPEECH_STAGES.has(input.stage)) return speech;
+
+	const sentences =
+		speech
+			.match(/[^.!?]+(?:[.!?]+|$)/gu)
+			?.map((sentence) => sentence.trim())
+			.filter(Boolean) ?? [];
+	const words = speech.trim().split(/\s+/u).filter(Boolean);
+	if (
+		sentences.length <= ORDINARY_SPEECH_SENTENCE_LIMIT &&
+		words.length <= ORDINARY_SPEECH_WORD_LIMIT
+	) {
+		return speech;
+	}
+
+	for (let index = sentences.length - 1; index >= 0; index -= 1) {
+		const sentence = sentences[index];
+		if (!sentence?.endsWith("?")) continue;
+		if (
+			sentence.split(/\s+/u).filter(Boolean).length <=
+			ORDINARY_SPEECH_WORD_LIMIT
+		)
+			return sentence;
+	}
+
+	const first = sentences[0] ?? speech.trim();
+	const firstWords = first.split(/\s+/u).filter(Boolean);
+	if (firstWords.length <= ORDINARY_SPEECH_WORD_LIMIT) return first;
+	return `${firstWords
+		.slice(0, ORDINARY_SPEECH_WORD_LIMIT)
+		.join(" ")
+		.replace(/[,:;—-]+$/u, "")}.`;
 }
 
 function parseEnvelope(text: string, input: BrainTurnInput) {

@@ -144,7 +144,8 @@ describe("browser-to-production-runtime terminal ERROR cleanup", () => {
 			health: async () => "ready",
 		};
 		const ttsReset: string[] = [];
-		const tts: TtsPort = {
+		const tts: TtsPort & { readonly outputContentType: "audio/mpeg" } = {
+			outputContentType: "audio/mpeg",
 			synthesize: async () => {
 				throw new Error("terminal brain fallback must not call TTS");
 			},

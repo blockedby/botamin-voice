@@ -25,6 +25,7 @@ import {
 	ContactSchema,
 	CreateBookingInputSchema,
 	CreateConversationRequestSchema,
+	CreateConversationResponseSchema,
 	decodeBinaryAudioFrame,
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
@@ -47,6 +48,7 @@ import {
 	TtsAudioSegmentSchema,
 	TtsHealthSchema,
 	TtsSynthesisRequestDataSchema,
+	VOICE_WS_PROTOCOL_VERSION,
 } from "../src";
 
 const conversationId = "01J00000000000000000000000";
@@ -111,6 +113,44 @@ describe("shared contracts", () => {
 				consent: { ...request.consent, voiceProcessing: false },
 			}).success,
 		).toBe(false);
+	});
+
+	test("allows only legacy or low-cardinality v2 conversation WebSocket paths", () => {
+		const response = {
+			conversationId,
+			wsUrl: `/ws/v1/conversations/${conversationId}?voiceProtocol=2`,
+			clientToken: "c".repeat(43),
+			expiresAt: "2026-07-30T21:22:00.000Z",
+			clientConfig: {
+				inputSampleRate: 16_000,
+				inputEncoding: "pcm16le",
+				chunkMs: 100,
+				maxUtteranceMs: 60_000,
+				maxPcmBytes: 1_920_000,
+				outputContentType: "audio/mpeg",
+				outputMode: "complete-phrase-segments",
+			},
+		};
+		expect(CreateConversationResponseSchema.safeParse(response).success).toBe(
+			true,
+		);
+		expect(
+			CreateConversationResponseSchema.safeParse({
+				...response,
+				wsUrl: `/ws/v1/conversations/${conversationId}`,
+			}).success,
+		).toBe(true);
+		for (const wsUrl of [
+			`/ws/v1/conversations/${foreignConversationId}?voiceProtocol=2`,
+			`/ws/v1/conversations/${conversationId}?voiceProtocol=3`,
+			`/ws/v1/conversations/${conversationId}?voiceProtocol=2&visitor=private`,
+			`https://attacker.invalid/ws/v1/conversations/${conversationId}`,
+		]) {
+			expect(
+				CreateConversationResponseSchema.safeParse({ ...response, wsUrl })
+					.success,
+			).toBe(false);
+		}
 	});
 
 	test("accepts bounded international phone contacts without unsafe separators", () => {
@@ -566,19 +606,34 @@ describe("shared contracts", () => {
 
 		expect(hello.type).toBe("client.hello");
 		if (hello.type !== "client.hello") throw new Error("hello mismatch");
-		expect(hello.payload.playback).toEqual({
-			maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS,
-			maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
-			maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+		expect(Object.keys(hello.payload).sort()).toEqual(["audio", "resumeToken"]);
+		const protocolAccept = ClientWsEventSchema.parse({
+			v: 1,
+			type: "client.protocol.accept",
+			conversationId,
+			at,
+			payload: {
+				version: VOICE_WS_PROTOCOL_VERSION,
+				capabilities: { localReactions: null },
+				playback: {
+					maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS,
+					maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
+					maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+				},
+			},
 		});
+		expect(protocolAccept.type).toBe("client.protocol.accept");
+		if (protocolAccept.type !== "client.protocol.accept") {
+			throw new Error("protocol accept mismatch");
+		}
 		expect(
 			ClientWsEventSchema.safeParse({
-				...hello,
+				...protocolAccept,
 				payload: {
-					...hello.payload,
+					...protocolAccept.payload,
 					playback: {
-						...hello.payload.playback,
-						maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS + 1,
+						...protocolAccept.payload.playback,
+						maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS - 1,
 					},
 				},
 			}).success,
@@ -613,7 +668,7 @@ describe("shared contracts", () => {
 		).toBe(true);
 	});
 
-	test("negotiates strict additive local reactions without changing legacy hello", () => {
+	test("keeps origin/main hello exact and negotiates strict v2 capabilities separately", () => {
 		const legacyHello = {
 			v: 1,
 			type: "client.hello",
@@ -643,7 +698,28 @@ describe("shared contracts", () => {
 					},
 				},
 			}).success,
-		).toBe(true);
+		).toBe(false);
+		const protocolAccept = {
+			v: 1,
+			type: "client.protocol.accept",
+			conversationId,
+			at,
+			payload: {
+				version: VOICE_WS_PROTOCOL_VERSION,
+				capabilities: {
+					localReactions: {
+						version: LOCAL_REACTION_CAPABILITY_VERSION,
+						clipIds: [...LOCAL_REACTION_CLIP_IDS],
+					},
+				},
+				playback: {
+					maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS,
+					maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
+					maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+				},
+			},
+		};
+		expect(ClientWsEventSchema.safeParse(protocolAccept).success).toBe(true);
 		for (const localReactions of [
 			{ version: 2, clipIds: [LOCAL_REACTION_CLIP_IDS[0]] },
 			{ version: 1, clipIds: [] },
@@ -660,9 +736,9 @@ describe("shared contracts", () => {
 		]) {
 			expect(
 				ClientWsEventSchema.safeParse({
-					...legacyHello,
+					...protocolAccept,
 					payload: {
-						...legacyHello.payload,
+						...protocolAccept.payload,
 						capabilities: { localReactions },
 					},
 				}).success,

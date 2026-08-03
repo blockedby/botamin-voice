@@ -53,13 +53,29 @@ export const CreateConversationRequestSchema = z
 export const CreateConversationResponseSchema = z
 	.object({
 		conversationId: EntityIdSchema,
-		wsUrl: z.string().startsWith("/ws/v1/conversations/"),
+		wsUrl: z
+			.string()
+			.max(200)
+			.regex(/^\/ws\/v1\/conversations\/[^/?#]+(?:\?voiceProtocol=2)?$/u),
 		/** One-use bearer presented in the first client.hello, then rotated. */
 		clientToken: z.string().min(32).max(256),
 		expiresAt: Rfc3339UtcSchema,
 		clientConfig: AudioClientConfigSchema,
 	})
-	.strict();
+	.strict()
+	.superRefine((response, context) => {
+		const legacyPath = `/ws/v1/conversations/${response.conversationId}`;
+		if (
+			response.wsUrl !== legacyPath &&
+			response.wsUrl !== `${legacyPath}?voiceProtocol=2`
+		) {
+			context.addIssue({
+				code: "custom",
+				message: "wsUrl must target the response conversation",
+				path: ["wsUrl"],
+			});
+		}
+	});
 
 export const StopConversationRequestSchema = z
 	.object({

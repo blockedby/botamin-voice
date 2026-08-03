@@ -7,6 +7,10 @@ import {
 	type SafeErrorCode,
 	StopConversationRequestSchema,
 	StopConversationResponseSchema,
+	VOICE_WS_PROTOCOL_QUERY_PARAM,
+	VOICE_WS_PROTOCOL_V2_QUERY_VALUE,
+	VOICE_WS_PROTOCOL_VERSION,
+	type VoiceWsProtocolVersion,
 } from "@botamin/contracts";
 import { type Context, Hono } from "hono";
 import { serveStatic, upgradeWebSocket } from "hono/bun";
@@ -135,12 +139,13 @@ export function createServerApp(runtime: ServerRuntime): Hono<ServerAppEnv> {
 		}
 		const response = CreateConversationResponseSchema.parse({
 			conversationId: session.conversationId,
-			wsUrl: `/ws/v1/conversations/${session.conversationId}`,
+			wsUrl: `/ws/v1/conversations/${session.conversationId}?${VOICE_WS_PROTOCOL_QUERY_PARAM}=${VOICE_WS_PROTOCOL_V2_QUERY_VALUE}`,
 			clientToken: session.takeClientToken(),
 			expiresAt: session.expiresAt.toISOString(),
 			clientConfig: createAudioClientConfig(
 				runtime.config.voice.stt.maxUtteranceMs,
 				runtime.config.voice.stt.maxAudioBytes,
+				runtime.config.voice.tts.outputContentType,
 			),
 		});
 		return context.json(response, 201);
@@ -187,6 +192,10 @@ export function createServerApp(runtime: ServerRuntime): Hono<ServerAppEnv> {
 		if (!validRequiredOrigin(context, runtime.config.appOrigin)) {
 			return apiError(context, 403, "INVALID_EVENT", false);
 		}
+		const protocolVersion = requestedVoiceProtocol(context.req.url);
+		if (protocolVersion === "invalid") {
+			return apiError(context, 400, "INVALID_EVENT", false);
+		}
 		const sourceKey = requestSourceKey(
 			context,
 			admissionConfig.trustedProxyHops,
@@ -207,7 +216,7 @@ export function createServerApp(runtime: ServerRuntime): Hono<ServerAppEnv> {
 		return upgradeWebSocket(context, {
 			onOpen: (_event, ws) => {
 				socket = adaptSocket(ws);
-				session.attach(socket);
+				session.attach(socket, protocolVersion);
 			},
 			onMessage: (event) => {
 				if (!socket) return;
@@ -241,6 +250,27 @@ export function createServerApp(runtime: ServerRuntime): Hono<ServerAppEnv> {
 		return apiError(context, 500, "INTERNAL_ERROR", false);
 	});
 	return app;
+}
+
+function requestedVoiceProtocol(
+	requestUrl: string,
+): VoiceWsProtocolVersion | null | "invalid" {
+	let url: URL;
+	try {
+		url = new URL(requestUrl);
+	} catch {
+		return "invalid";
+	}
+	const entries = [...url.searchParams.entries()];
+	if (entries.length === 0) return null;
+	if (
+		entries.length !== 1 ||
+		entries[0]?.[0] !== VOICE_WS_PROTOCOL_QUERY_PARAM ||
+		entries[0]?.[1] !== VOICE_WS_PROTOCOL_V2_QUERY_VALUE
+	) {
+		return "invalid";
+	}
+	return VOICE_WS_PROTOCOL_VERSION;
 }
 
 function adaptSocket(ws: WSContext): GatewaySocket {

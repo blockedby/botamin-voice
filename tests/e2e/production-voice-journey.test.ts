@@ -37,6 +37,7 @@ import type {
 	BrainTurnInput,
 	CreateBookingInput,
 	MeetingSlot,
+	SttPort,
 	TtsPort,
 } from "../../packages/contracts/src";
 import {
@@ -389,7 +390,10 @@ class ScriptedLuna implements BrainPort {
 	readonly inputs: BrainTurnInput[] = [];
 	interrupts = 0;
 
-	constructor(private readonly timeline: TimelineEntry[]) {}
+	constructor(
+		private readonly timeline: TimelineEntry[],
+		private readonly greetingSpeech = "Короткий тестовый ответ.",
+	) {}
 
 	async createThread(): Promise<string> {
 		return "credential-free-luna-thread";
@@ -423,7 +427,7 @@ class ScriptedLuna implements BrainPort {
 
 		switch (input.stage) {
 			case "GREETING":
-				yield observed(speech("Короткий тестовый ответ."));
+				yield observed(speech(this.greetingSpeech));
 				yield complete("DISCOVERY");
 				return;
 			case "DISCOVERY":
@@ -658,7 +662,8 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			config: voiceConfig,
 			credentialHealth,
 		});
-		const tts: TtsPort = {
+		const tts: TtsPort & { readonly outputContentType: "audio/mpeg" } = {
+			outputContentType: "audio/mpeg",
 			async synthesize(request) {
 				const segment = await ttsAdapter.synthesize(request);
 				timeline.push({
@@ -1161,4 +1166,141 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			await rm(directory, { recursive: true, force: true });
 		}
 	}, 20_000);
+
+	test("production runtime advertises and plays three Gemini canonical WAV segments", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "botamin-gemini-e2e-"));
+		const promptDir = join(directory, "brain");
+		const codexHome = join(directory, "codex-home");
+		await mkdir(promptDir, { recursive: true });
+		await mkdir(codexHome, { recursive: true });
+		const prompt = join(promptDir, "AGENTS.md");
+		await writeFile(prompt, "# deterministic Gemini integration prompt\n", {
+			mode: 0o444,
+		});
+		await chmod(prompt, 0o444);
+
+		const pcm = createDeterministicPcm16Fixture();
+		const providerInputs: unknown[] = [];
+		const providerServer = Bun.serve({
+			port: 0,
+			async fetch(request) {
+				providerInputs.push(await request.json());
+				return new Response(pcm.slice(), {
+					status: 200,
+					headers: {
+						"Content-Type": "audio/pcm; rate=24000; channels=1",
+						"Content-Length": String(pcm.byteLength),
+					},
+				});
+			},
+		});
+		const runtimeEnv = {
+			APP_ORIGIN: appOrigin,
+			AUTO_MIGRATE: "true",
+			DATABASE_URL: `file:${join(directory, "data", "app.db")}`,
+			MIGRATIONS_DIR: resolve("drizzle"),
+			BRAIN_PROVIDER: "codex-subscription",
+			CODEX_MODEL: "gpt-5.6-luna",
+			CODEX_HOME: codexHome,
+			CODEX_CWD: promptDir,
+			PROMPT_RUNTIME_DIR: promptDir,
+			CODEX_TOOL_MODE: "envelope",
+			CODEX_MAX_CONCURRENT_TURNS: "2",
+			MAX_ACTIVE_CONVERSATIONS: "2",
+			MAX_ACTIVE_CONVERSATIONS_PER_SOURCE: "2",
+			MAX_CONCURRENT_BRAIN_TURNS: "2",
+			MAX_PENDING_BRAIN_TURNS: "2",
+			STT_PROVIDER: "openrouter",
+			TTS_PROVIDER: "openrouter",
+			OPENROUTER_API_KEY: apiKey,
+			OPENROUTER_BASE_URL: `http://127.0.0.1:${providerServer.port}/api/v1`,
+			OPENROUTER_STT_AUDIO_FORMAT: "wav",
+			OPENROUTER_STT_LANGUAGE: "ru",
+			OPENROUTER_TTS_PROFILE: "gemini_3_1_pcm",
+			OPENROUTER_TTS_MODEL: "google/gemini-3.1-flash-tts-preview",
+			OPENROUTER_TTS_VOICE: "Kore",
+			OPENROUTER_TTS_RESPONSE_FORMAT: "pcm",
+			TTS_FIRST_SEGMENT_TARGET_CHARS: "60",
+			TTS_SOFT_SEGMENT_CHARS: "120",
+			TTS_MAX_SEGMENT_CHARS: "160",
+			STT_TEXT_ONLY_INPUT_FALLBACK: "false",
+			STORE_RAW_AUDIO: "false",
+		};
+		const voiceConfig = loadOpenRouterVoiceConfig(runtimeEnv);
+		const ttsAdapter = new OpenRouterTtsAdapter({ config: voiceConfig });
+		let synthesisCalls = 0;
+		const tts: TtsPort & { readonly outputContentType: "audio/wav" } = {
+			outputContentType: "audio/wav",
+			synthesize: (request) => {
+				synthesisCalls += 1;
+				return ttsAdapter.synthesize(request);
+			},
+			resetSession: (conversationId) => ttsAdapter.resetSession(conversationId),
+			health: () => ttsAdapter.health(),
+		};
+		const brainTimeline: TimelineEntry[] = [];
+		const brain = new ScriptedLuna(
+			brainTimeline,
+			"Первая фраза подробно объясняет безопасный тест канонического звука для браузера. Вторая фраза продолжает проверку производственного пути и содержит достаточно слов для отдельного полного сегмента воспроизведения. Третья фраза завершает проверку ещё одним самостоятельным полным сегментом, который должен прийти строго после предыдущего.",
+		);
+		const stt: SttPort = {
+			transcribe: async (request) => ({
+				conversationId: request.conversationId,
+				turnId: request.turnId,
+				text: "Первая тестовая реплика",
+				final: true,
+			}),
+			health: async () => "ready",
+		};
+		const runtime = await createProductionRuntime(runtimeEnv, {
+			brain,
+			stt,
+			tts,
+			outboxPollIntervalMs: 5,
+			retentionIntervalMs: 60_000,
+		});
+		const app = createServerApp(runtime);
+		const server = Bun.serve({
+			port: 0,
+			fetch: app.fetch,
+			websocket,
+			maxRequestBodySize: bunRequestBodyHardLimit(runtime.config),
+		});
+		const timeline: TimelineEntry[] = [];
+		const conversations: string[] = [];
+		const browser = createBrowserHarness(
+			`http://127.0.0.1:${server.port}`,
+			timeline,
+			conversations,
+		);
+		try {
+			expect(runtime.config.voice.tts.outputContentType).toBe("audio/wav");
+			expect((await runtime.readiness()).status).toBe("ready");
+			expect(await browser.browser.start(consent)).toBe(true);
+			await waitFor(
+				() => browser.browser.getSnapshot().state.kind === "listening",
+				"Gemini browser did not become ready",
+			);
+			await commitCurrent(browser.browser, browser.captures);
+			await waitFor(
+				() => browser.playbacks.flatMap((item) => item.received).length === 3,
+				() =>
+					`Gemini segments did not reach playback (received=${browser.playbacks.flatMap((item) => item.received).length}, provider=${providerInputs.length}, syntheses=${synthesisCalls}, brain=${brain.inputs.length}, errors=${JSON.stringify(browser.errorCodes)}, events=${JSON.stringify(Object.fromEntries(browser.eventCounts))}, state=${browser.browser.getSnapshot().state.kind})`,
+			);
+			const received = browser.playbacks.flatMap((item) => item.received);
+			expect(received).toHaveLength(3);
+			for (const wav of received) {
+				expect(new TextDecoder().decode(wav.slice(0, 4))).toBe("RIFF");
+				expect(new TextDecoder().decode(wav.slice(8, 12))).toBe("WAVE");
+			}
+			expect(providerInputs).toHaveLength(3);
+			expect(browser.errorCodes).toEqual([]);
+		} finally {
+			await browser.browser.dispose();
+			server.stop(true);
+			await runtime.dispose();
+			providerServer.stop(true);
+			await rm(directory, { recursive: true, force: true });
+		}
+	}, 10_000);
 });

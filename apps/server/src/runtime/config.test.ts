@@ -37,6 +37,7 @@ describe("validated runtime configuration", () => {
 			maxAudioBytes: 2_000_000,
 		});
 		expect(config.voice.tts.responseFormat).toBe("mp3");
+		expect(config.voice.tts.outputContentType).toBe("audio/mpeg");
 		expect(config.transcriptRetentionDays).toBe(30);
 		expect(config.orphanRecovery).toEqual({
 			batchSize: 25,
@@ -58,6 +59,7 @@ describe("validated runtime configuration", () => {
 		};
 		expect(createRuntimeConfig(geminiEnv).voice.tts).toMatchObject({
 			profile: "gemini_3_1_pcm",
+			outputContentType: "audio/wav",
 			model: "google/gemini-3.1-flash-tts-preview",
 			voice: "Kore",
 			responseFormat: "pcm",

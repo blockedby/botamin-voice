@@ -54,6 +54,7 @@ class FakeSocket implements WebSocketLike {
 	onmessage: ((event: { data: unknown }) => void) | null = null;
 	readonly sent: Array<string | Uint8Array> = [];
 	closed = false;
+	protocolOffered = false;
 
 	send(data: string | Uint8Array): void {
 		if (this.readyState !== 1) throw new Error("socket closed");
@@ -75,6 +76,31 @@ class FakeSocket implements WebSocketLike {
 		this.onerror?.(new Error("network failure"));
 	}
 	server(value: unknown): void {
+		if (
+			value !== null &&
+			typeof value === "object" &&
+			"type" in value &&
+			value.type === "session.ready" &&
+			!this.protocolOffered
+		) {
+			this.protocolOffered = true;
+			const ready = value as unknown as {
+				v: number;
+				conversationId: string;
+				seq: number;
+				at: string;
+			};
+			this.onmessage?.({
+				data: JSON.stringify({
+					v: ready.v,
+					conversationId: ready.conversationId,
+					seq: ready.seq,
+					at: ready.at,
+					type: "session.protocol.offer",
+					payload: { version: 2 },
+				}),
+			});
+		}
 		this.onmessage?.({ data: JSON.stringify(value) });
 	}
 	binary(value: Uint8Array): void {
@@ -570,7 +596,10 @@ describe("production browser voice integration", () => {
 			durationMs: 0,
 			maxUtteranceMs: 60_000,
 		});
-		expect(sentJson(value.socket)[0]).toMatchObject({
+		expect(sentJson(value.socket)[0]).toEqual({
+			v: 1,
+			conversationId,
+			at,
 			type: "client.hello",
 			payload: {
 				resumeToken: "initial-client-token-00000000000000000000",
@@ -580,6 +609,12 @@ describe("production browser voice integration", () => {
 					channels: 1,
 					chunkMs: 100,
 				},
+			},
+		});
+		expect(sentJson(value.socket)[1]).toMatchObject({
+			type: "client.protocol.accept",
+			payload: {
+				version: 2,
 				capabilities: {
 					localReactions: {
 						version: 1,
@@ -588,6 +623,11 @@ describe("production browser voice integration", () => {
 							"clarification-meaning",
 						]),
 					},
+				},
+				playback: {
+					maxBufferedSegments: 4,
+					maxBufferedBytes: 20_000_000,
+					maxSegmentBytes: 5_000_000,
 				},
 			},
 		});
@@ -2567,7 +2607,7 @@ describe("production browser voice integration", () => {
 				"/ws/v1/conversations/test",
 				"https://botamin.test/page",
 			),
-		).toBe("wss://botamin.test/ws/v1/conversations/test");
+		).toBe("wss://botamin.test/ws/v1/conversations/test?voiceProtocol=2");
 		expect(() =>
 			resolveSameOriginWebSocketUrl(
 				"https://elsewhere.test/ws",

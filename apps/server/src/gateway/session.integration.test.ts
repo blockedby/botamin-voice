@@ -18,6 +18,9 @@ import {
 	LOCAL_REACTION_CAPABILITY_VERSION,
 	type LOCAL_REACTION_CLIP_IDS,
 	type MeetingSlot,
+	PLAYBACK_FLOW_MAX_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENTS,
 	qualificationStatusFor,
 	ServerWsEventSchema,
 	type SttPort,
@@ -25,6 +28,7 @@ import {
 	type TtsAudioSegment,
 	type TtsPort,
 	type TtsSynthesisRequest,
+	VOICE_WS_PROTOCOL_VERSION,
 } from "@botamin/contracts";
 import {
 	createDeterministicTtsWavFixture,
@@ -352,9 +356,7 @@ function createHarness(
 		brainModel: "gpt-5.6-luna",
 		maxUtteranceMs: 60_000,
 		maxAudioBytes: 2_000_000,
-		...(options.outputContentType === undefined
-			? {}
-			: { outputContentType: options.outputContentType }),
+		outputContentType: options.outputContentType ?? "audio/mpeg",
 		maxFrameBytes: 3_209,
 		maxJsonBytes: 8_192,
 		maxHistoryEvents: 128,
@@ -379,10 +381,7 @@ function createHarness(
 	return { session, stt, brain, tts, bookings, persisted, orchestrator };
 }
 
-function hello(
-	token: string | null = initialClientToken,
-	clipIds?: readonly (typeof LOCAL_REACTION_CLIP_IDS)[number][],
-): string {
+function hello(token: string | null = initialClientToken): string {
 	return JSON.stringify(
 		ClientWsEventSchema.parse({
 			v: 1,
@@ -397,16 +396,35 @@ function hello(
 					channels: 1,
 					chunkMs: 100,
 				},
-				...(clipIds
-					? {
-							capabilities: {
-								localReactions: {
-									version: LOCAL_REACTION_CAPABILITY_VERSION,
-									clipIds: [...clipIds],
-								},
-							},
-						}
-					: {}),
+			},
+		}),
+	);
+}
+
+function protocolAccept(
+	clipIds?: readonly (typeof LOCAL_REACTION_CLIP_IDS)[number][],
+): string {
+	return JSON.stringify(
+		ClientWsEventSchema.parse({
+			v: 1,
+			type: "client.protocol.accept",
+			conversationId,
+			at: now,
+			payload: {
+				version: VOICE_WS_PROTOCOL_VERSION,
+				capabilities: {
+					localReactions: clipIds
+						? {
+								version: LOCAL_REACTION_CAPABILITY_VERSION,
+								clipIds: [...clipIds],
+							}
+						: null,
+				},
+				playback: {
+					maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS,
+					maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
+					maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+				},
 			},
 		}),
 	);
@@ -431,8 +449,9 @@ async function connect(
 	token: string | null = initialClientToken,
 	clipIds?: readonly (typeof LOCAL_REACTION_CLIP_IDS)[number][],
 ): Promise<void> {
-	session.attach(socket);
-	await session.receive(socket, hello(token, clipIds));
+	session.attach(socket, VOICE_WS_PROTOCOL_VERSION);
+	await session.receive(socket, hello(token));
+	await session.receive(socket, protocolAccept(clipIds));
 }
 
 async function sendUtterance(
@@ -1420,6 +1439,74 @@ describe("gateway fake full WebSocket path", () => {
 		).toBe(2);
 	});
 
+	test("rejects an origin/main old client before turns and preserves its token for v2 reload", async () => {
+		const harness = createHarness({ tts: null, clientHelloTimeoutMs: 5 });
+		const oldClient = new Socket();
+		harness.session.attach(oldClient, VOICE_WS_PROTOCOL_VERSION);
+		await harness.session.receive(oldClient, hello());
+		expect(oldClient.events().map((event) => event.type)).toEqual([
+			"session.protocol.offer",
+		]);
+		expect(harness.session.established).toBe(false);
+		await Bun.sleep(10);
+		expect(oldClient.events().at(-1)).toMatchObject({
+			type: "error",
+			payload: { code: "BRAIN_NOT_READY", retryable: true },
+		});
+		expect(oldClient.closes.at(-1)?.code).toBe(1008);
+		expect(harness.brain.runs).toBe(0);
+		expect(harness.persisted).toHaveLength(0);
+
+		const reloadedClient = new Socket();
+		harness.session.attach(reloadedClient, VOICE_WS_PROTOCOL_VERSION);
+		await harness.session.receive(reloadedClient, hello());
+		await harness.session.receive(reloadedClient, protocolAccept());
+		expect(reloadedClient.closes).toHaveLength(0);
+		expect(reloadedClient.events().at(-1)?.type).toBe("session.ready");
+		expect(harness.session.established).toBe(true);
+	});
+
+	test("rejects missing, forged, or mismatched protocol negotiation without defaults", async () => {
+		const missing = createHarness({ tts: null });
+		const legacySocket = new Socket();
+		missing.session.attach(legacySocket, null);
+		await missing.session.receive(legacySocket, hello());
+		expect(legacySocket.events().at(-1)).toMatchObject({
+			type: "error",
+			payload: { code: "BRAIN_NOT_READY" },
+		});
+		expect(legacySocket.closes.at(-1)?.code).toBe(1008);
+		expect(missing.session.established).toBe(false);
+
+		const forged = createHarness({ tts: null });
+		const forgedSocket = new Socket();
+		forged.session.attach(forgedSocket, VOICE_WS_PROTOCOL_VERSION);
+		await forged.session.receive(forgedSocket, hello());
+		await forged.session.receive(
+			forgedSocket,
+			JSON.stringify({
+				v: 1,
+				type: "client.protocol.accept",
+				conversationId,
+				at: now,
+				payload: {
+					version: VOICE_WS_PROTOCOL_VERSION,
+					capabilities: { localReactions: null },
+					playback: {
+						maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS - 1,
+						maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
+						maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+					},
+				},
+			}),
+		);
+		expect(forgedSocket.closes.at(-1)?.code).toBe(1008);
+		expect(
+			forgedSocket.events().some((event) => event.type === "session.ready"),
+		).toBe(false);
+		expect(forged.session.established).toBe(false);
+	});
+
 	test("reconnect replays bounded state/text but never stale audio outside the fresh window", async () => {
 		const harness = createHarness();
 		const first = new Socket();
@@ -1443,11 +1530,12 @@ describe("gateway fake full WebSocket path", () => {
 		harness.session.detach(first);
 
 		const second = new Socket();
-		harness.session.attach(second);
+		harness.session.attach(second, VOICE_WS_PROTOCOL_VERSION);
 		await harness.session.receive(
 			second,
 			hello(ready?.type === "session.ready" ? ready.payload.resumeToken : null),
 		);
+		await harness.session.receive(second, protocolAccept());
 		expect(second.closes).toHaveLength(0);
 		expect(
 			second.events().some((event) => event.type === "transcript.final"),
@@ -1458,7 +1546,7 @@ describe("gateway fake full WebSocket path", () => {
 		).toHaveLength(0);
 
 		const attacker = new Socket();
-		harness.session.attach(attacker);
+		harness.session.attach(attacker, VOICE_WS_PROTOCOL_VERSION);
 		await harness.session.receive(attacker, hello("not-the-resume-token"));
 		expect(attacker.closes.at(-1)?.code).toBe(1008);
 	});
@@ -1474,19 +1562,20 @@ describe("gateway fake full WebSocket path", () => {
 			throw new Error("Expected ready token");
 
 		const invalid = new Socket();
-		harness.session.attach(invalid);
+		harness.session.attach(invalid, VOICE_WS_PROTOCOL_VERSION);
 		await harness.session.receive(invalid, hello("invalid-resume-token"));
 		expect(invalid.closes.at(-1)?.code).toBe(1008);
 		expect(first.closes).toHaveLength(0);
 
 		const resumed = new Socket();
-		harness.session.attach(resumed);
+		harness.session.attach(resumed, VOICE_WS_PROTOCOL_VERSION);
 		await harness.session.receive(resumed, hello(ready.payload.resumeToken));
+		await harness.session.receive(resumed, protocolAccept());
 		expect(first.closes.at(-1)?.reason).toBe("session resumed elsewhere");
 		expect(resumed.closes).toHaveLength(0);
 
 		const silent = new Socket();
-		harness.session.attach(silent);
+		harness.session.attach(silent, VOICE_WS_PROTOCOL_VERSION);
 		await Bun.sleep(10);
 		expect(silent.closes.at(-1)).toMatchObject({
 			code: 1008,
@@ -1547,8 +1636,9 @@ describe("gateway fake full WebSocket path", () => {
 		expect(harness.brain.runs).toBe(0);
 
 		const resumed = new Socket();
-		harness.session.attach(resumed);
+		harness.session.attach(resumed, VOICE_WS_PROTOCOL_VERSION);
 		await harness.session.receive(resumed, hello(ready.payload.resumeToken));
+		await harness.session.receive(resumed, protocolAccept());
 		expect(
 			resumed
 				.events()

@@ -34,7 +34,8 @@ const stt: SttPort = {
 	},
 	health: async () => "ready",
 };
-const tts: TtsPort = {
+const tts: TtsPort & { readonly outputContentType: "audio/mpeg" } = {
+	outputContentType: "audio/mpeg",
 	synthesize: async () => {
 		throw new Error("not used by readiness");
 	},
@@ -42,6 +43,46 @@ const tts: TtsPort = {
 };
 
 describe("production runtime readiness with injected credential-free ports", () => {
+	test("fails closed before startup when an injected TTS output mismatches Gemini", async () => {
+		const directory = await mkdtemp(
+			join(tmpdir(), "botamin-runtime-mismatch-"),
+		);
+		directories.push(directory);
+		await expect(
+			createProductionRuntime(
+				{
+					APP_ORIGIN: "http://localhost:5173",
+					AUTO_MIGRATE: "true",
+					DATABASE_URL: `file:${join(directory, "must-not-exist", "app.db")}`,
+					BRAIN_PROVIDER: "codex-subscription",
+					CODEX_MODEL: "gpt-5.6-luna",
+					CODEX_HOME: join(directory, "codex-home"),
+					CODEX_CWD: join(directory, "brain"),
+					CODEX_TOOL_MODE: "envelope",
+					CODEX_MAX_CONCURRENT_TURNS: "1",
+					MAX_ACTIVE_CONVERSATIONS: "1",
+					MAX_CONCURRENT_BRAIN_TURNS: "1",
+					STT_PROVIDER: "openrouter",
+					TTS_PROVIDER: "openrouter",
+					OPENROUTER_STT_AUDIO_FORMAT: "wav",
+					OPENROUTER_STT_LANGUAGE: "ru",
+					OPENROUTER_TTS_PROFILE: "gemini_3_1_pcm",
+					OPENROUTER_TTS_MODEL: "google/gemini-3.1-flash-tts-preview",
+					OPENROUTER_TTS_VOICE: "Kore",
+					OPENROUTER_TTS_RESPONSE_FORMAT: "pcm",
+					STT_TEXT_ONLY_INPUT_FALLBACK: "false",
+					STORE_RAW_AUDIO: "false",
+				},
+				{ brain, stt, tts },
+			),
+		).rejects.toThrow(
+			"Injected TTS output content type does not match runtime configuration",
+		);
+		expect(
+			await Bun.file(join(directory, "must-not-exist", "app.db")).exists(),
+		).toBe(false);
+	});
+
 	test("terminal failure status is one guarded SQLite transition", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "botamin-runtime-status-"));
 		directories.push(directory);

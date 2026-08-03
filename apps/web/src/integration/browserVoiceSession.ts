@@ -163,6 +163,13 @@ export function resolveSameOriginWebSocketUrl(
 	if (resolved.origin !== pageUrl.origin) {
 		throw new Error("Cross-origin WebSocket URL is not allowed");
 	}
+	if (
+		resolved.hash !== "" ||
+		(resolved.search !== "" && resolved.search !== "?voiceProtocol=2")
+	) {
+		throw new Error("Unsupported WebSocket URL fields");
+	}
+	resolved.search = "?voiceProtocol=2";
 	resolved.protocol = pageUrl.protocol === "https:" ? "wss:" : "ws:";
 	return resolved.toString();
 }

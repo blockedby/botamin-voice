@@ -67,6 +67,11 @@ const BookingClientEventBaseShape = {
 	conversationId: z.never().optional(),
 };
 
+export const VOICE_WS_PROTOCOL_QUERY_PARAM = "voiceProtocol" as const;
+export const VOICE_WS_PROTOCOL_V2_QUERY_VALUE = "2" as const;
+export const VOICE_WS_PROTOCOL_VERSION = 2 as const;
+export type VoiceWsProtocolVersion = typeof VOICE_WS_PROTOCOL_VERSION;
+
 export const PLAYBACK_FLOW_MAX_SEGMENTS = 4;
 export const PLAYBACK_FLOW_MAX_BYTES = 20_000_000;
 export const PLAYBACK_FLOW_MAX_SEGMENT_BYTES = COMPLETE_AUDIO_SEGMENT_MAX_BYTES;
@@ -95,7 +100,16 @@ export const PlaybackFlowControlSchema = z
 		"A playback segment must fit in the advertised byte window",
 	);
 
-export const ClientHelloEventSchema = z
+export const NegotiatedPlaybackFlowControlSchema = z
+	.object({
+		maxBufferedSegments: z.literal(PLAYBACK_FLOW_MAX_SEGMENTS),
+		maxBufferedBytes: z.literal(PLAYBACK_FLOW_MAX_BYTES),
+		maxSegmentBytes: z.literal(PLAYBACK_FLOW_MAX_SEGMENT_BYTES),
+	})
+	.strict();
+
+/** Exact origin/main hello: safe to send before either peer proves v2. */
+export const LegacyClientHelloEventSchema = z
 	.object({
 		...ClientEventBaseShape,
 		type: z.literal("client.hello"),
@@ -103,17 +117,27 @@ export const ClientHelloEventSchema = z
 			.object({
 				resumeToken: z.string().min(16).max(512).nullable(),
 				audio: InputAudioConfigSchema,
+			})
+			.strict(),
+	})
+	.strict();
+
+export const ClientHelloEventSchema = LegacyClientHelloEventSchema;
+
+/** Sent only after a trusted upgrade query and a valid legacy-shaped hello. */
+export const ClientProtocolAcceptEventSchema = z
+	.object({
+		...ClientEventBaseShape,
+		type: z.literal("client.protocol.accept"),
+		payload: z
+			.object({
+				version: z.literal(VOICE_WS_PROTOCOL_VERSION),
 				capabilities: z
 					.object({
-						localReactions: LocalReactionCapabilitySchema.optional(),
+						localReactions: LocalReactionCapabilitySchema.nullable(),
 					})
-					.strict()
-					.optional(),
-				playback: PlaybackFlowControlSchema.default({
-					maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS,
-					maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
-					maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
-				}),
+					.strict(),
+				playback: NegotiatedPlaybackFlowControlSchema,
 			})
 			.strict(),
 	})
@@ -248,6 +272,7 @@ export const BookingConflictResolveEventSchema = z
 
 export const ClientWsEventSchema = z.discriminatedUnion("type", [
 	ClientHelloEventSchema,
+	ClientProtocolAcceptEventSchema,
 	AudioCommitEventSchema,
 	VisitorTextSubmitEventSchema,
 	PlaybackStartedEventSchema,
@@ -266,6 +291,16 @@ const ServerEventBaseShape = {
 	seq: z.number().int().positive(),
 	at: Rfc3339UtcSchema,
 };
+
+export const SessionProtocolOfferEventSchema = z
+	.object({
+		...ServerEventBaseShape,
+		type: z.literal("session.protocol.offer"),
+		payload: z
+			.object({ version: z.literal(VOICE_WS_PROTOCOL_VERSION) })
+			.strict(),
+	})
+	.strict();
 
 export const SessionReadyEventSchema = z
 	.object({
@@ -513,6 +548,7 @@ export const ServerPongEventSchema = z
 	.strict();
 
 export const ServerWsEventSchema = z.discriminatedUnion("type", [
+	SessionProtocolOfferEventSchema,
 	SessionReadyEventSchema,
 	StateChangedEventSchema,
 	TranscriptFinalEventSchema,

@@ -127,6 +127,17 @@ function sessionReady(seq = 1, resumeToken = "resume-token-0001") {
 	};
 }
 
+function protocolOffer(seq = 1) {
+	return {
+		v: 1,
+		conversationId,
+		seq,
+		at,
+		type: "session.protocol.offer",
+		payload: { version: 2 },
+	};
+}
+
 function transcriptFinal(seq: number) {
 	return {
 		v: 1,
@@ -176,7 +187,7 @@ describe("voice WebSocket transport", () => {
 		const events: string[] = [];
 		const transport = new VoiceTransport({
 			conversationId,
-			url: "/ws/v1/conversations/test",
+			url: "/ws/v1/conversations/test?voiceProtocol=2",
 			createWebSocket: () => socket,
 			now: () => new Date(at),
 			onEvent: (event) => events.push(event.type),
@@ -185,9 +196,10 @@ describe("voice WebSocket transport", () => {
 		socket.open();
 
 		const hello = sentJson(socket)[0];
-		expect(hello).toMatchObject({
+		expect(hello).toEqual({
 			v: 1,
 			conversationId,
+			at,
 			type: "client.hello",
 			payload: {
 				resumeToken: null,
@@ -197,13 +209,18 @@ describe("voice WebSocket transport", () => {
 					channels: 1,
 					chunkMs: 100,
 				},
-				playback: {
-					maxBufferedSegments: 4,
-					maxBufferedBytes: 20_000_000,
-					maxSegmentBytes: 5_000_000,
-				},
 			},
 		});
+		expect(
+			transport.playbackSegmentReleased({
+				generationId,
+				segmentId,
+				sequence: 0,
+				contentType: "audio/mpeg",
+				byteLength: 417,
+				final: true,
+			}),
+		).toBe(false);
 		expect(transport.commit()).toBe(false);
 
 		socket.serverJson(sessionReady());
@@ -245,7 +262,7 @@ describe("voice WebSocket transport", () => {
 		const errors: string[] = [];
 		const transport = new VoiceTransport({
 			conversationId,
-			url: "ws://local",
+			url: "ws://local?voiceProtocol=2",
 			createWebSocket: () => socket,
 			now: () => new Date(at),
 			localReactions: {
@@ -260,6 +277,17 @@ describe("voice WebSocket transport", () => {
 		expect(sentJson(socket)[0]).toMatchObject({
 			type: "client.hello",
 			payload: {
+				resumeToken: null,
+				audio: { encoding: "pcm16le" },
+			},
+		});
+		expect(sentJson(socket)[0]).not.toHaveProperty("payload.capabilities");
+		expect(sentJson(socket)[0]).not.toHaveProperty("payload.playback");
+		socket.serverJson(protocolOffer());
+		expect(sentJson(socket)[1]).toMatchObject({
+			type: "client.protocol.accept",
+			payload: {
+				version: 2,
 				capabilities: {
 					localReactions: {
 						version: LOCAL_REACTION_CAPABILITY_VERSION,

@@ -13,6 +13,12 @@ export const GEMINI_3_1_TTS_MODEL =
 
 export type OpenRouterTtsProfile = "xai_mp3" | "gemini_3_1_pcm";
 
+export function outputContentTypeForTtsProfile(
+	profile: OpenRouterTtsProfile,
+): "audio/mpeg" | "audio/wav" {
+	return profile === "xai_mp3" ? "audio/mpeg" : "audio/wav";
+}
+
 /**
  * Case-sensitive release snapshot verified 2026-08-03 against the 30 voices
  * advertised for Gemini TTS. The public catalog is dynamic: update this list
@@ -86,6 +92,7 @@ export interface OpenRouterVoiceConfig {
 	};
 	readonly tts: {
 		readonly profile: OpenRouterTtsProfile;
+		readonly outputContentType: "audio/mpeg" | "audio/wav";
 		readonly model: string;
 		readonly voice: string;
 		readonly responseFormat: "mp3" | "pcm";
@@ -233,6 +240,7 @@ function readTtsProfileConfig(
 ): Pick<
 	OpenRouterVoiceConfig["tts"],
 	| "profile"
+	| "outputContentType"
 	| "model"
 	| "voice"
 	| "responseFormat"
@@ -257,6 +265,7 @@ function readTtsProfileConfig(
 		}
 		return {
 			profile,
+			outputContentType: outputContentTypeForTtsProfile(profile),
 			model,
 			voice,
 			responseFormat,
@@ -279,6 +288,7 @@ function readTtsProfileConfig(
 	}
 	return {
 		profile,
+		outputContentType: outputContentTypeForTtsProfile(profile),
 		model,
 		voice,
 		responseFormat,

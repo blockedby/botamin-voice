@@ -7,6 +7,7 @@ import {
 	type BookingFormDetails,
 	type BookingRevisionConfirmation,
 	ClientHelloEventSchema,
+	ClientProtocolAcceptEventSchema,
 	ClientWsEventSchema,
 	decodeBinaryAudioFrame,
 	deriveInternalVirtualMeetingProjection,
@@ -18,6 +19,8 @@ import {
 	type SafeErrorCode,
 	type ServerWsEvent,
 	ServerWsEventSchema,
+	VOICE_WS_PROTOCOL_VERSION,
+	type VoiceWsProtocolVersion,
 } from "@botamin/contracts";
 import {
 	BookingDraftError,
@@ -38,7 +41,7 @@ import {
 export function createAudioClientConfig(
 	maxUtteranceMs: number,
 	maxAudioBytes: number,
-	outputContentType: AudioClientConfig["outputContentType"] = "audio/mpeg",
+	outputContentType: AudioClientConfig["outputContentType"],
 ): AudioClientConfig {
 	const durationPcmBytes = Math.floor(maxUtteranceMs * 32);
 	const audioPcmBytes = Math.max(0, maxAudioBytes - WAV_HEADER_BYTES);
@@ -54,8 +57,6 @@ export function createAudioClientConfig(
 		outputMode: "complete-phrase-segments",
 	};
 }
-
-const CLIENT_CONFIG = Object.freeze(createAudioClientConfig(60_000, 2_000_000));
 
 export interface GatewaySocket {
 	send(data: string | Uint8Array): void;
@@ -90,7 +91,7 @@ export interface GatewaySessionOptions {
 	brainModel: string;
 	maxUtteranceMs: number;
 	maxAudioBytes: number;
-	outputContentType?: AudioClientConfig["outputContentType"];
+	outputContentType: AudioClientConfig["outputContentType"];
 	maxFrameBytes: number;
 	maxJsonBytes: number;
 	maxHistoryEvents: number;
@@ -171,6 +172,8 @@ export class GatewaySession {
 	#historyBytes = 0;
 	#activeSocket: GatewaySocket | null = null;
 	#pendingSocket: GatewaySocket | null = null;
+	#pendingProtocolVersion: VoiceWsProtocolVersion | null = null;
+	#pendingHelloVerified = false;
 	#helloTimer: ReturnType<typeof setTimeout> | null = null;
 	#helloAccepted = false;
 	#localReactionClipIds = new Set<LocalReactionClipId>();
@@ -266,7 +269,10 @@ export class GatewaySession {
 		return this.#history.length;
 	}
 
-	attach(socket: GatewaySocket): void {
+	attach(
+		socket: GatewaySocket,
+		protocolVersion: VoiceWsProtocolVersion | null,
+	): void {
 		if (this.#stopped || this.isExpired()) {
 			socket.close(1008, "session unavailable");
 			return;
@@ -276,10 +282,14 @@ export class GatewaySession {
 		this.#clearPendingHello();
 		previous?.close(1008, "new connection candidate");
 		this.#pendingSocket = socket;
+		this.#pendingProtocolVersion = protocolVersion;
+		this.#pendingHelloVerified = false;
 		this.#helloTimer = setTimeout(() => {
 			if (this.#pendingSocket !== socket) return;
-			this.#pendingSocket = null;
-			this.#helloTimer = null;
+			if (this.#pendingHelloVerified) {
+				this.#sendDirectSafeError(socket, "BRAIN_NOT_READY", true);
+			}
+			this.#clearPendingHello();
 			socket.close(1008, "client hello timeout");
 		}, this.#clientHelloTimeoutMs);
 		this.#helloTimer.unref?.();
@@ -411,19 +421,45 @@ export class GatewaySession {
 				this.#closeWithError(socket, "INVALID_EVENT", false);
 				return;
 			}
-			const hello = ClientHelloEventSchema.safeParse(value);
-			if (!hello.success || hello.data.conversationId !== this.conversationId) {
+			if (!this.#pendingHelloVerified) {
+				const hello = ClientHelloEventSchema.safeParse(value);
+				if (
+					!hello.success ||
+					hello.data.conversationId !== this.conversationId
+				) {
+					this.#closeWithError(socket, "INVALID_EVENT", false);
+					return;
+				}
+				if (!this.#resumeTokenMatches(hello.data.payload.resumeToken)) {
+					this.#closeWithError(socket, "SESSION_EXPIRED", false);
+					return;
+				}
+				if (this.#pendingProtocolVersion !== VOICE_WS_PROTOCOL_VERSION) {
+					this.#sendDirectSafeError(socket, "BRAIN_NOT_READY", true);
+					this.#clearPendingHello();
+					socket.close(1008, "protocol upgrade required");
+					return;
+				}
+				this.#pendingHelloVerified = true;
+				this.#sendDirectEvent(socket, "session.protocol.offer", {
+					version: VOICE_WS_PROTOCOL_VERSION,
+				});
+				return;
+			}
+
+			const accepted = ClientProtocolAcceptEventSchema.safeParse(value);
+			if (
+				!accepted.success ||
+				accepted.data.conversationId !== this.conversationId ||
+				this.#pendingProtocolVersion !== VOICE_WS_PROTOCOL_VERSION
+			) {
 				this.#closeWithError(socket, "INVALID_EVENT", false);
 				return;
 			}
-			if (!this.#acceptResumeToken(hello.data.payload.resumeToken)) {
-				this.#closeWithError(socket, "SESSION_EXPIRED", false);
-				return;
-			}
 			const candidateLocalReactionClipIds = new Set(
-				hello.data.payload.capabilities?.localReactions?.clipIds ?? [],
+				accepted.data.payload.capabilities.localReactions?.clipIds ?? [],
 			);
-			this.#configurePlaybackFlow(hello.data.payload.playback);
+			this.#configurePlaybackFlow(accepted.data.payload.playback);
 			await this.#ensureDraft();
 			let booking = null;
 			try {
@@ -438,6 +474,7 @@ export class GatewaySession {
 			const previous = this.#activeSocket;
 			this.#clearPendingHello();
 			this.#activeSocket = socket;
+			this.#helloAccepted = true;
 			this.#localReactionClipIds = candidateLocalReactionClipIds;
 			if (previous && previous !== socket) {
 				previous.close(1000, "session resumed elsewhere");
@@ -484,7 +521,8 @@ export class GatewaySession {
 		}
 		switch (parsed.data.type) {
 			case "client.hello":
-				// Duplicate hello on an already-bound socket is a protocol error.
+			case "client.protocol.accept":
+				// Handshake events on an already-bound socket are protocol errors.
 				this.#closeWithError(socket, "INVALID_EVENT", false);
 				break;
 			case "audio.commit":
@@ -1340,20 +1378,45 @@ export class GatewaySession {
 		}
 	}
 
+	#sendDirectEvent(
+		socket: GatewaySocket,
+		type: ServerWsEvent["type"],
+		payload: unknown,
+	): void {
+		try {
+			socket.send(JSON.stringify(this.#createEvent(type, payload)));
+		} catch {
+			// The pending socket remains unbound and owns no session state.
+		}
+	}
+
+	#sendDirectSafeError(
+		socket: GatewaySocket,
+		code: SafeErrorCode,
+		retryable: boolean,
+	): void {
+		this.#sendDirectEvent(socket, "error", {
+			code,
+			message: safeMessage(code),
+			retryable,
+		});
+	}
+
 	#clearPendingHello(): void {
 		if (this.#helloTimer) clearTimeout(this.#helloTimer);
 		this.#helloTimer = null;
 		this.#pendingSocket = null;
+		this.#pendingProtocolVersion = null;
+		this.#pendingHelloVerified = false;
 	}
 
-	#acceptResumeToken(token: string | null): boolean {
+	#resumeTokenMatches(token: string | null): boolean {
 		if (!token) return false;
 		const candidate = createHash("sha256").update(token).digest();
-		const accepted =
+		return (
 			candidate.byteLength === this.#resumeTokenHash.byteLength &&
-			timingSafeEqual(candidate, this.#resumeTokenHash);
-		if (accepted && !this.#helloAccepted) this.#helloAccepted = true;
-		return accepted;
+			timingSafeEqual(candidate, this.#resumeTokenHash)
+		);
 	}
 
 	#rotateResumeToken(): string {
@@ -1446,5 +1509,3 @@ function safeMessage(code: SafeErrorCode): string {
 			return "Запрос не удалось обработать безопасно.";
 	}
 }
-
-export { CLIENT_CONFIG };

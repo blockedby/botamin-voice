@@ -1140,6 +1140,13 @@ test("phone TTS detector covers separator mutations without numeric false positi
 		"Номер +٧∶９９９：١٢٣；٤٥．６７",
 		"Номер +７：９９９：１２３：４５：６７",
 		"Номер ＋７∶999；١٢٣・45•６７",
+		"Номер +⁷⁹⁹⁹¹²³⁴⁵⁶⁷",
+		"Номер +₇₉₉₉₁₂₃₄₅₆₇",
+		"Номер +⑦⑨⑨⑨①②③④⑤⑥⑦",
+		"Номер +7;999;123;45;67",
+		"Номер +٧⁹９₉①۲३④٥６⑦",
+		"Номер +7́⃝999͏123️45҈67",
+		"Номер +7‫999‬123⁦45⁩67",
 	]) {
 		assert.ok(
 			detectPolicyViolations(text, policy, "tts").includes(

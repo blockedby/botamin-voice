@@ -56,6 +56,10 @@ generationId=01J00000000000000000000002
 		for (const mutation of [
 			"+７：９９９：１２３：４５：６７",
 			"＋٧∶９９９；١٢٣・٤٥•６７",
+			"+⁷⁹⁹⁹¹²³⁴⁵⁶⁷",
+			"+₇₉₉₉₁₂₃₄₅₆₇",
+			"+⑦⑨⑨⑨①②③④⑤⑥⑦",
+			"+7;999;123;45;67",
 		]) {
 			expect(sanitizeSpeech(`Номер ${mutation}`)).toBe("Номер контакт скрыт");
 		}
@@ -172,15 +176,26 @@ describe("approved contact speech", () => {
 		}
 	});
 
-	test("does not forward Unicode phone digits or punctuation", () => {
-		const prepared = prepareSpeech("Телефон +７（９５５）５６７–８９–５５", {
-			contactProcessing: true,
-			approvedContacts: [phone],
-		});
-		expect(prepared).toEqual({
-			spokenText: "Телефон контакт скрыт",
-			metadata: { forwardedChannels: [], forwardedCount: 0 },
-		});
+	test("does not forward normalized mutations of an exact approved phone", () => {
+		for (const detected of [
+			"+７（９５５）５６７–８９–５５",
+			"+⁷⁹⁵⁵⁵⁶⁷⁸⁹⁵⁵",
+			"+₇₉₅₅₅₆₇₈₉₅₅",
+			"+⑦⑨⑤⑤⑤⑥⑦⑧⑨⑤⑤",
+			"+7;955;567;89;55",
+			"\u200B+79555678955",
+			"+79555678955\u200B",
+			"\u0301+79555678955\u20DD",
+		]) {
+			const prepared = prepareSpeech(`Телефон ${detected}`, {
+				contactProcessing: true,
+				approvedContacts: [phone],
+			});
+			expect(prepared).toEqual({
+				spokenText: "Телефон контакт скрыт",
+				metadata: { forwardedChannels: [], forwardedCount: 0 },
+			});
+		}
 	});
 
 	test("redacts conservative phone mutations with either contact-processing mode", () => {

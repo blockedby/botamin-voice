@@ -349,10 +349,11 @@ export function BookingForm({
 					{errors.candidate ?? ""}
 				</p>
 
-				{submission.status === "rejected" ? (
-					<p className="booking-submit-message">{submission.message}</p>
-				) : null}
-				<p className="booking-submit-message">{errors.form ?? ""}</p>
+				<p className="booking-submit-message" role="alert">
+					{submission.status === "rejected"
+						? submission.message
+						: (errors.form ?? "")}
+				</p>
 				<button
 					className="booking-details-submit"
 					type="submit"

@@ -87,6 +87,25 @@ describe("BookingForm markup", () => {
 		}
 	});
 
+	test("announces a bounded asynchronous booking rejection", () => {
+		const html = renderToStaticMarkup(
+			<BookingForm
+				draft={createBrowserBookingDraft()}
+				submission={{
+					status: "rejected",
+					requestId: "01J00000000000000000000023",
+					message: "Данные обновились. Проверьте форму.",
+					retryable: true,
+				}}
+				available={true}
+				onSubmit={noop}
+				onResolveConflict={noop}
+			/>,
+		);
+		expect(html).toContain('class="booking-submit-message" role="alert"');
+		expect(html).toContain("Данные обновились. Проверьте форму.");
+	});
+
 	test("associates unresolved server conflict options with the field and keeps option IDs as actions", () => {
 		const draft = createBrowserBookingDraft(2);
 		draft.name = {

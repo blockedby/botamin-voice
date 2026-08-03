@@ -143,7 +143,7 @@ function TextComposer({
 			<p id="visitor-message-hint" className="composer-hint">
 				Enter — отправить, Shift+Enter — новая строка.
 			</p>
-			<p id="visitor-message-error" className="field-error">
+			<p id="visitor-message-error" className="field-error" role="alert">
 				{error ?? ""}
 			</p>
 		</form>

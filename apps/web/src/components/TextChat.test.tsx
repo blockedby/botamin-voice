@@ -41,6 +41,19 @@ describe("typed chat composer", () => {
 		expect(html).toContain("Enter — отправить, Shift+Enter — новая строка");
 	});
 
+	test("announces an asynchronous typed-message rejection", () => {
+		const value = props("GREETING");
+		value.textSubmission = {
+			status: "rejected",
+			message: "Сообщение не отправлено. Повторите попытку.",
+		};
+		const html = renderToStaticMarkup(<TextChat {...value} />);
+		expect(html).toContain(
+			'id="visitor-message-error" class="field-error" role="alert"',
+		);
+		expect(html).toContain("Сообщение не отправлено. Повторите попытку.");
+	});
+
 	test("Enter submits, Shift+Enter inserts a newline, and composition is preserved", () => {
 		expect(
 			isComposerSubmitKey({

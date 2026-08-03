@@ -58,6 +58,46 @@ const PENDING_STATUSES = new Set<BookingSubmissionState["status"]>([
 	"conflict-resolution-pending",
 ]);
 
+interface BookingLocalConflictControlsProps {
+	field: BookingFormField;
+	serverValue: string;
+	submission: BookingSubmissionState;
+	onUseServer(): void;
+	onKeepLocal(): void;
+	useServerRef?(node: HTMLButtonElement | null): void;
+}
+
+export function BookingLocalConflictControls({
+	field,
+	serverValue,
+	submission,
+	onUseServer,
+	onKeepLocal,
+	useServerRef,
+}: BookingLocalConflictControlsProps) {
+	const pending = PENDING_STATUSES.has(submission.status);
+	return (
+		<div id={`booking-${field}-local-conflict`} className="booking-conflict">
+			<p>
+				Распознано: <strong>{serverValue}</strong>
+			</p>
+			<div>
+				<button
+					ref={useServerRef}
+					type="button"
+					disabled={pending}
+					onClick={onUseServer}
+				>
+					Использовать распознанное
+				</button>
+				<button type="button" disabled={pending} onClick={onKeepLocal}>
+					Оставить введённое
+				</button>
+			</div>
+		</div>
+	);
+}
+
 export interface BookingFormProps {
 	draft: BrowserBookingDraft;
 	submission: BookingSubmissionState;
@@ -211,43 +251,28 @@ export function BookingForm({
 									{errors[field] ?? ""}
 								</p>
 								{localConflict ? (
-									<div
-										id={`booking-${field}-local-conflict`}
-										className="booking-conflict"
-									>
-										<p>
-											Распознано: <strong>{localConflict.serverValue}</strong>
-										</p>
-										<div>
-											<button
-												ref={(node) => {
-													if (node) fieldRefs.current[field] = node;
-												}}
-												type="button"
-												onClick={() => {
-													dispatch({
-														type: "local-conflict.use-server",
-														field,
-													});
-													setErrors((current) => withoutErrors(current, field));
-												}}
-											>
-												Использовать распознанное
-											</button>
-											<button
-												type="button"
-												onClick={() => {
-													dispatch({
-														type: "local-conflict.keep-local",
-														field,
-													});
-													setErrors((current) => withoutErrors(current, field));
-												}}
-											>
-												Оставить введённое
-											</button>
-										</div>
-									</div>
+									<BookingLocalConflictControls
+										field={field}
+										serverValue={localConflict.serverValue}
+										submission={submission}
+										useServerRef={(node) => {
+											if (node) fieldRefs.current[field] = node;
+										}}
+										onUseServer={() => {
+											dispatch({
+												type: "local-conflict.use-server",
+												field,
+											});
+											setErrors((current) => withoutErrors(current, field));
+										}}
+										onKeepLocal={() => {
+											dispatch({
+												type: "local-conflict.keep-local",
+												field,
+											});
+											setErrors((current) => withoutErrors(current, field));
+										}}
+									/>
 								) : null}
 								{serverConflict ? (
 									<div

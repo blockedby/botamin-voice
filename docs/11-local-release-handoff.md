@@ -28,9 +28,9 @@ No duplicate meeting table, external availability query, calendar event/invite, 
 
 ## Evidence status
 
-Pre-closure implementation evidence supplied for HEAD `739cb18` (not final review closure and allowed to change after review):
+Pre-closure implementation evidence after Gemini production wiring and v2 protocol compatibility closure (not final review closure and allowed to change after review):
 
-- provider-independent suite: **801 passed, 0 failed across 72 files, 16,742 assertions**;
+- provider-independent suite: **807 passed, 0 failed across 72 files, 16,794 assertions**;
 - Chromium desktop/mobile Playwright **landing smoke: 2/2 passed**. It covers responsive/pre-consent boundaries, not a full voice booking journey;
 - fixture/eval paths are credential-free with zero provider calls; this docs handoff does not claim a fresh fixture recount or real-Luna run;
 - deterministic coverage includes natural prompts, two-request ordered prefetch, provider-neutral MP3/WAV rendering, bounded gapless playback, reaction/style policy, exact TTS profiles, and migration/cutover behavior;

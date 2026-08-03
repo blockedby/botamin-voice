@@ -37,8 +37,9 @@
 - UI states `listening → processing → transcript.final`;
 - provider-neutral validation/rendering of complete MP3 or canonical 24 kHz mono PCM16 WAV segments;
 - gapless Web Audio scheduling with current + prefetched decoded slots;
-- four-segment/20 MB/5 MB-per-segment credit window, at most two decoded/source slots, and release acknowledgment;
+- explicitly negotiated v2 four-segment/20 MB/5 MB-per-segment credit window, at most two decoded/source slots, and release acknowledgment;
 - negotiated allowlist for 16 committed same-origin reaction MP3s; one eligible decoration after 350 ms, cancelled by dynamic audio, mute, barge-in, or staleness;
+- mixed-version safety: a legacy-shaped JSON hello plus trusted same-origin `?voiceProtocol=2` offer/accept negotiation lets the new browser fall back against exact `origin/main`; an old browser is rejected by the new server before readiness or turn consumption rather than entering ACK-dependent flow;
 - barge-in: немедленно stop local playback и clear queue;
 - rendering transcript/state/errors;
 - reconnect с тем же `conversationId`, если сессия ещё жива.

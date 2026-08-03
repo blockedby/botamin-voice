@@ -143,7 +143,8 @@ Server:
 
 | Event | Payload | Назначение |
 |---|---|---|
-| `client.hello` | audio config, resume token | handshake |
+| `client.hello` | legacy-shaped audio config + resume token only | strict first handshake, compatible with exact `origin/main` |
+| `client.protocol.accept` | version 2, exact reaction capability or null, literal four-segment/20 MB playback window | accepts only a preceding trusted v2 server offer |
 | `audio.commit` | `{}` | закрыть bounded utterance и создать ровно один atomic final-transcription request |
 | `visitor.text.submit` | `{ sequence, text }` | one final typed turn; same durable fact path as spoken transcript |
 | `booking.form.submit` | `{ requestId, baseRevision, details, selectedCandidateId? }` | structured patch/current candidate against exact draft revision |
@@ -155,7 +156,9 @@ Server:
 | `session.stop` | reason | корректное завершение |
 | `client.ping` | timestamp | keepalive |
 
-Первый `client.hello` обязан предъявить одноразовый `clientToken` из REST response; `session.ready` сразу заменяет его новым resume token. На session допускается один pending hello-кандидат с коротким deadline и один bound socket. Reconnect заменяет bound socket только после полной проверки hello/token; неподтверждённый кандидат его не вытесняет.
+Первый `client.hello` обязан предъявить одноразовый `clientToken` из REST response and remains strict legacy-shaped: v2 capability fields are not injected into it. The same-origin REST URL contains only the low-cardinality `?voiceProtocol=2` signal. A new server then emits `session.protocol.offer`; only an exact `client.protocol.accept` enables reactions and ACK-dependent credits, after which `session.ready` replaces the token. Exact `origin/main` ignores the query and emits `session.ready` directly, so the new browser stays in legacy mode and sends no unknown v2 event. An old browser reaching the new server has no trusted v2 query and is rejected with a bounded legacy-valid error/policy close before readiness, token rotation, or turn consumption; a reload obtains the co-deployed browser while durable booking state remains intact. Unknown, duplicate, or additional query fields and mismatched accept values fail closed.
+
+На session допускается один pending hello-кандидат с коротким deadline и один bound socket. Reconnect заменяет bound socket only after complete hello/token/protocol validation; an unconfirmed candidate does not displace it.
 
 После handshake PCM16 audio идёт binary frames без base64. Gateway/utterance assembler ограничивает accumulated input максимумом 60,000 ms и так, чтобы atomic WAV не превысил 2,000,000 bytes; при 16 kHz mono PCM16 default duration ceiling строже и даёт `maxPcmBytes=1,920,000`. После `audio.commit` gateway кодирует ровно один validated WAV и передаёт его atomic `SttPort`; только OpenRouter adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks не означают streaming transport до provider.
 
@@ -167,7 +170,8 @@ The booking form is not encoded as visitor text in RC4. It sends strict revision
 
 | Event | Payload |
 |---|---|
-| `session.ready` | state/config |
+| `session.protocol.offer` | `{ version: 2 }`; emitted only for a trusted exact v2 upgrade query after valid legacy-shaped hello |
+| `session.ready` | state/config; means negotiation is complete (v2) or exact old-server legacy fallback selected |
 | `state.changed` | from/to/reason; voice UI uses listening/processing states |
 | `transcript.final` | turnId/text; единственное STT text event после atomic provider result |
 | `assistant.reaction.request` | turnId, generationId, allowlisted clipId, `delayMs=350`; decoration only, no text/state/provider effect |
@@ -205,7 +209,7 @@ The implementation may use a referenced binary payload instead of adjacency if i
 - один accepted `audio.commit` создаёт не более одного active STT request и одного `transcript.final`; duplicate commits и stale results подавляются.
 - audio segments имеют `generationId`, unique `segmentId` и monotonic `sequence`; server may synthesize current + one prefetch but publishes only in source order.
 - client validates/decodes/plays complete MP3/WAV in order and ignores interrupted/obsolete generations.
-- negotiated credit is at most four segments / 20 MB / 5 MB each; browser has at most two decoding/decoded/scheduled slots plus at most two raw slots and returns credit only after exact release.
+- v2 credit flow is enabled only after exact offer/accept negotiation and is at most four segments / 20 MB / 5 MB each; browser has at most two decoding/decoded/scheduled slots plus at most two raw slots and returns credit only after exact release. Missing negotiation never receives silent default credits.
 - gapless playback schedules prefetched audio at the current segment's end time rather than from an `ended` callback.
 - one reaction per eligible turn is capability/stage/privacy gated, delayed 350 ms, same-origin only, and cancelled before dynamic audio or on mute/barge-in/staleness.
 - booking events записываются в DB до отправки клиенту.

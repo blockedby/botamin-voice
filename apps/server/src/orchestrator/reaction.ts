@@ -3,16 +3,8 @@ import type {
 	LocalReactionClipId,
 } from "@botamin/contracts";
 
-export type ReactionTriggerIntent =
-	| "latency_backchannel_needed"
-	| "scheduling_calculation_active"
-	| "data_validation_active"
-	| "objection_detected"
-	| "clarification_required";
-
 interface ReactionPolicyEntry {
 	readonly clipId: LocalReactionClipId;
-	readonly trigger: ReactionTriggerIntent;
 	readonly allowedStages: readonly ConversationStage[];
 }
 
@@ -24,55 +16,18 @@ const INTERACTIVE_STAGES = [
 	"BOOKING_OFFER",
 ] as const satisfies readonly ConversationStage[];
 
-/** Server policy mirrors only the manifest's IDs, stages, and trigger classes. */
+/**
+ * Runtime-safe acknowledgements only. Every other corpus clip either claims an
+ * active operation or can imply validation/acceptance. Those clips stay in the
+ * corpus but require a future explicit, server-owned operation signal before
+ * they can be added to runtime policy.
+ */
 const REACTION_POLICY = [
-	...[
-		"neutral-good",
-		"neutral-accepted",
-		"neutral-checking",
-		"neutral-moment",
-	].map((clipId) => ({
-		clipId,
-		trigger: "latency_backchannel_needed",
+	{
+		clipId: "neutral-moment",
 		allowedStages: INTERACTIVE_STAGES,
-	})),
-	...[
-		"schedule-calculating-options",
-		"schedule-checking-intervals",
-		"schedule-matching-time",
-	].map((clipId) => ({
-		clipId,
-		trigger: "scheduling_calculation_active",
-		allowedStages: ["BOOKING_OFFER"],
-	})),
-	...[
-		"validation-checking-data",
-		"validation-checking-format",
-		"validation-checking-fields",
-	].map((clipId) => ({
-		clipId,
-		trigger: "data_validation_active",
-		allowedStages: ["DISCOVERY"],
-	})),
-	...[
-		"objection-examine",
-		"objection-more-detail",
-		"objection-to-the-point",
-	].map((clipId) => ({
-		clipId,
-		trigger: "objection_detected",
-		allowedStages: ["OBJECTION"],
-	})),
-	...[
-		"clarification-one-point",
-		"clarification-one-detail",
-		"clarification-meaning",
-	].map((clipId) => ({
-		clipId,
-		trigger: "clarification_required",
-		allowedStages: ["DISCOVERY", "VALUE", "OBJECTION", "BOOKING_OFFER"],
-	})),
-] as readonly ReactionPolicyEntry[];
+	},
+] as const satisfies readonly ReactionPolicyEntry[];
 
 const TERMINAL_OR_PRIVATE_STAGES = new Set<ConversationStage>([
 	"IDLE",
@@ -96,29 +51,6 @@ export function hasPrivateOrExactReactionContent(text: string): boolean {
 	return CONTACT_OR_DATE_PATTERN.test(text) || EXACT_FACT_PATTERN.test(text);
 }
 
-function classifyTrigger(
-	stage: ConversationStage,
-	userText: string,
-): ReactionTriggerIntent {
-	const normalized = userText.toLocaleLowerCase("ru-RU");
-	if (
-		/(?:уточн|не понял|не поняла|что значит|поясни|проясни)\p{L}*/u.test(
-			normalized,
-		)
-	) {
-		return "clarification_required";
-	}
-	if (
-		stage === "DISCOVERY" &&
-		/(?:провер|формат|валид|корректн)\p{L}*/u.test(normalized)
-	) {
-		return "data_validation_active";
-	}
-	if (stage === "OBJECTION") return "objection_detected";
-	if (stage === "BOOKING_OFFER") return "scheduling_calculation_active";
-	return "latency_backchannel_needed";
-}
-
 export function selectLocalReaction(input: {
 	turnId: string;
 	generationId: string;
@@ -134,15 +66,14 @@ export function selectLocalReaction(input: {
 	) {
 		return null;
 	}
-	const trigger = classifyTrigger(input.stage, input.userText);
 	const candidates = REACTION_POLICY.filter(
 		(entry) =>
-			entry.trigger === trigger &&
-			entry.allowedStages.includes(input.stage) &&
-			input.supportedClipIds.has(entry.clipId),
+			(entry.allowedStages as readonly ConversationStage[]).includes(
+				input.stage,
+			) && input.supportedClipIds.has(entry.clipId),
 	);
 	if (candidates.length === 0) return null;
-	const seed = `${input.turnId}:${input.generationId}:${trigger}`;
+	const seed = `${input.turnId}:${input.generationId}:${input.stage}:safe-neutral`;
 	let hash = 2_166_136_261;
 	for (let index = 0; index < seed.length; index += 1) {
 		hash ^= seed.charCodeAt(index);

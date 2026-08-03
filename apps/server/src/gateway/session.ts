@@ -137,6 +137,11 @@ interface PlaybackFlowState {
 	>;
 }
 
+interface PlaybackReservation {
+	readonly flow: PlaybackFlowState;
+	readonly socket: GatewaySocket;
+}
+
 /** One bounded conversation transport/session, independently testable from Bun. */
 export class GatewaySession {
 	readonly conversationId: string;
@@ -174,6 +179,9 @@ export class GatewaySession {
 	#pendingSocket: GatewaySocket | null = null;
 	#pendingProtocolVersion: VoiceWsProtocolVersion | null = null;
 	#pendingHelloVerified = false;
+	#pendingSocketEpoch = 0;
+	#pendingResumeTokenEpoch: number | null = null;
+	#resumeTokenEpoch = 0;
 	#helloTimer: ReturnType<typeof setTimeout> | null = null;
 	#helloAccepted = false;
 	#localReactionClipIds = new Set<LocalReactionClipId>();
@@ -362,6 +370,7 @@ export class GatewaySession {
 			return;
 		}
 		if (socket !== this.#activeSocket || this.#stopped) return;
+		this.#fenceCurrentPlaybackGeneration();
 		this.#activeSocket = null;
 		this.#assembler?.clear();
 		this.#assembler = null;
@@ -441,6 +450,7 @@ export class GatewaySession {
 					return;
 				}
 				this.#pendingHelloVerified = true;
+				this.#pendingResumeTokenEpoch = this.#resumeTokenEpoch;
 				this.#sendDirectEvent(socket, "session.protocol.offer", {
 					version: VOICE_WS_PROTOCOL_VERSION,
 				});
@@ -456,26 +466,71 @@ export class GatewaySession {
 				this.#closeWithError(socket, "INVALID_EVENT", false);
 				return;
 			}
+			const candidateSocketEpoch = this.#pendingSocketEpoch;
+			const candidateResumeTokenEpoch = this.#pendingResumeTokenEpoch;
 			const candidateLocalReactionClipIds = new Set(
 				accepted.data.payload.capabilities.localReactions?.clipIds ?? [],
 			);
-			this.#configurePlaybackFlow(accepted.data.payload.playback);
+			const candidatePlaybackFlow = this.#createPlaybackFlow(
+				accepted.data.payload.playback,
+			);
+			if (
+				!this.#pendingCandidateMatches(
+					socket,
+					candidateSocketEpoch,
+					candidateResumeTokenEpoch,
+				)
+			) {
+				return;
+			}
 			await this.#ensureDraft();
+			if (
+				!this.#pendingCandidateMatches(
+					socket,
+					candidateSocketEpoch,
+					candidateResumeTokenEpoch,
+				)
+			) {
+				return;
+			}
 			let booking = null;
 			try {
 				booking = await this.#orchestrator.reconcileDurableBooking();
 			} catch {
-				this.#closeWithError(socket, "INTERNAL_ERROR", false);
+				if (
+					this.#pendingCandidateMatches(
+						socket,
+						candidateSocketEpoch,
+						candidateResumeTokenEpoch,
+					)
+				) {
+					this.#closeWithError(socket, "INTERNAL_ERROR", false);
+				}
+				return;
+			}
+			if (
+				!this.#pendingCandidateMatches(
+					socket,
+					candidateSocketEpoch,
+					candidateResumeTokenEpoch,
+				)
+			) {
 				return;
 			}
 			const draft = this.#draftStore
 				? this.#draftStore.browserDraft(this.conversationId)
 				: null;
 			const previous = this.#activeSocket;
-			this.#clearPendingHello();
+			const previousFlow = this.#playbackFlow;
+			this.#fenceCurrentPlaybackGeneration(previousFlow);
+			// Ownership and all negotiated transport state move in one synchronous
+			// step. Only after that may old-flow waiters observe the replacement.
 			this.#activeSocket = socket;
-			this.#helloAccepted = true;
+			this.#playbackFlow = candidatePlaybackFlow;
 			this.#localReactionClipIds = candidateLocalReactionClipIds;
+			this.#helloAccepted = true;
+			this.#clearPendingHello();
+			this.#wakePlaybackFlow();
 			if (previous && previous !== socket) {
 				previous.close(1000, "session resumed elsewhere");
 			}
@@ -1061,9 +1116,11 @@ export class GatewaySession {
 				await this.#publishAudioSegment(event);
 				break;
 			case "audio.done":
-				this.#sendEvent("assistant.audio.done", {
-					generationId: event.generationId,
-				});
+				if (!this.#cancelledPlaybackGenerations.has(event.generationId)) {
+					this.#sendEvent("assistant.audio.done", {
+						generationId: event.generationId,
+					});
+				}
 				break;
 			case "assistant.interrupted":
 				this.#sendEvent("assistant.interrupted", {
@@ -1122,13 +1179,12 @@ export class GatewaySession {
 		if (turn && !turn.reactionSent) turn.reactionSuppressed = true;
 	}
 
-	#configurePlaybackFlow(config: {
+	#createPlaybackFlow(config: {
 		maxBufferedSegments: number;
 		maxBufferedBytes: number;
 		maxSegmentBytes: number;
-	}): void {
-		this.#resetPlaybackFlow();
-		this.#playbackFlow = {
+	}): PlaybackFlowState {
+		return {
 			maxSegments: config.maxBufferedSegments,
 			maxBytes: config.maxBufferedBytes,
 			maxSegmentBytes: config.maxSegmentBytes,
@@ -1143,18 +1199,20 @@ export class GatewaySession {
 		segmentId: string,
 		sequence: number,
 		byteLength: number,
-	): Promise<boolean> {
+	): Promise<PlaybackReservation | null> {
+		const flow = this.#playbackFlow;
+		const socket = this.#activeSocket;
+		if (!flow || !socket) return null;
 		while (!this.#stopped) {
-			const flow = this.#playbackFlow;
 			if (
-				!flow ||
-				!this.#activeSocket ||
+				this.#playbackFlow !== flow ||
+				this.#activeSocket !== socket ||
 				this.#cancelledPlaybackGenerations.has(generationId) ||
 				byteLength <= 0 ||
 				byteLength > flow.maxSegmentBytes ||
 				flow.outstanding.has(segmentId)
 			) {
-				return false;
+				return null;
 			}
 			if (flow.availableSegments > 0 && flow.availableBytes >= byteLength) {
 				flow.availableSegments -= 1;
@@ -1164,13 +1222,13 @@ export class GatewaySession {
 					sequence,
 					byteLength,
 				});
-				return true;
+				return { flow, socket };
 			}
 			await new Promise<void>((resolve) => {
 				this.#playbackFlowWaiters.add(resolve);
 			});
 		}
-		return false;
+		return null;
 	}
 
 	#releasePlaybackSegment(released: {
@@ -1203,13 +1261,28 @@ export class GatewaySession {
 		return true;
 	}
 
-	#cancelPlaybackGeneration(generationId: string): void {
+	#rememberCancelledPlaybackGeneration(generationId: string): void {
 		this.#cancelledPlaybackGenerations.add(generationId);
 		while (this.#cancelledPlaybackGenerations.size > 256) {
 			const oldest = this.#cancelledPlaybackGenerations.values().next().value;
 			if (!oldest) break;
 			this.#cancelledPlaybackGenerations.delete(oldest);
 		}
+	}
+
+	#fenceCurrentPlaybackGeneration(flow = this.#playbackFlow): void {
+		if (this.#currentGenerationId) {
+			this.#rememberCancelledPlaybackGeneration(this.#currentGenerationId);
+			this.#suppressReaction(this.#currentGenerationId);
+		}
+		if (!flow) return;
+		for (const outstanding of flow.outstanding.values()) {
+			this.#rememberCancelledPlaybackGeneration(outstanding.generationId);
+		}
+	}
+
+	#cancelPlaybackGeneration(generationId: string): void {
+		this.#rememberCancelledPlaybackGeneration(generationId);
 		const flow = this.#playbackFlow;
 		if (flow) {
 			for (const [segmentId, outstanding] of flow.outstanding) {
@@ -1246,14 +1319,18 @@ export class GatewaySession {
 			this.#sendSafeError("TTS_UNAVAILABLE", true);
 			return;
 		}
+		if (this.#stopped) return;
+		const reservation = await this.#reservePlaybackSegment(
+			event.generationId,
+			event.segmentId,
+			event.sequence,
+			event.bytes.byteLength,
+		);
 		if (
-			this.#stopped ||
-			!(await this.#reservePlaybackSegment(
-				event.generationId,
-				event.segmentId,
-				event.sequence,
-				event.bytes.byteLength,
-			))
+			!reservation ||
+			this.#playbackFlow !== reservation.flow ||
+			this.#activeSocket !== reservation.socket ||
+			this.#cancelledPlaybackGenerations.has(event.generationId)
 		) {
 			return;
 		}
@@ -1282,7 +1359,7 @@ export class GatewaySession {
 			bytes: new TextEncoder().encode(json).byteLength + binary.byteLength,
 		};
 		this.#remember(record);
-		if (this.#activeSocket) this.#sendRecord(this.#activeSocket, record);
+		this.#sendRecord(reservation.socket, record);
 	}
 
 	#sendSafeError(code: SafeErrorCode, retryable: boolean): void {
@@ -1304,6 +1381,7 @@ export class GatewaySession {
 		if (wasPending) this.#clearPendingHello();
 		socket?.close(1008, "protocol policy");
 		if (wasActive) {
+			this.#fenceCurrentPlaybackGeneration();
 			this.#activeSocket = null;
 			this.#assembler?.clear();
 			this.#assembler = null;
@@ -1372,6 +1450,7 @@ export class GatewaySession {
 			if ("binary" in record) socket.send(record.binary);
 		} catch {
 			if (socket === this.#activeSocket) {
+				this.#fenceCurrentPlaybackGeneration();
 				this.#activeSocket = null;
 				this.#resetPlaybackFlow();
 			}
@@ -1402,12 +1481,29 @@ export class GatewaySession {
 		});
 	}
 
+	#pendingCandidateMatches(
+		socket: GatewaySocket,
+		socketEpoch: number,
+		resumeTokenEpoch: number | null,
+	): boolean {
+		return (
+			this.#pendingSocket === socket &&
+			this.#pendingSocketEpoch === socketEpoch &&
+			this.#pendingHelloVerified &&
+			resumeTokenEpoch !== null &&
+			this.#pendingResumeTokenEpoch === resumeTokenEpoch &&
+			this.#resumeTokenEpoch === resumeTokenEpoch
+		);
+	}
+
 	#clearPendingHello(): void {
 		if (this.#helloTimer) clearTimeout(this.#helloTimer);
 		this.#helloTimer = null;
 		this.#pendingSocket = null;
 		this.#pendingProtocolVersion = null;
 		this.#pendingHelloVerified = false;
+		this.#pendingResumeTokenEpoch = null;
+		this.#pendingSocketEpoch += 1;
 	}
 
 	#resumeTokenMatches(token: string | null): boolean {
@@ -1422,6 +1518,7 @@ export class GatewaySession {
 	#rotateResumeToken(): string {
 		const token = randomBytes(32).toString("base64url");
 		this.#resumeTokenHash = createHash("sha256").update(token).digest();
+		this.#resumeTokenEpoch += 1;
 		return token;
 	}
 

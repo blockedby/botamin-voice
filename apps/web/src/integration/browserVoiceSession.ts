@@ -38,6 +38,7 @@ import {
 } from "../state/voice";
 import {
 	createBrowserWebSocket,
+	type PendingBookingCommand,
 	type ReconnectScheduler,
 	VoiceTransport,
 	type VoiceTransportStatus,
@@ -173,6 +174,7 @@ export class BrowserVoiceSession {
 	/** Legacy lifecycle marker is presentation-only and never renders the widget. */
 	private legacyBookingPresentation = false;
 	private bookingSubmission: BookingSubmissionState = { status: "idle" };
+	private pendingBookingBaseline: BrowserBookingDraft | null = null;
 	private pendingTypedText: string | null = null;
 	private qualificationStatus: "none" | "partial" | "complete" | "skipped" =
 		"none";
@@ -218,6 +220,7 @@ export class BrowserVoiceSession {
 		this.internalMeeting = null;
 		this.legacyBookingPresentation = false;
 		this.bookingSubmission = { status: "idle" };
+		this.pendingBookingBaseline = null;
 		this.conversationStage = null;
 		this.pendingTypedText = null;
 		this.qualificationStatus = "none";
@@ -338,6 +341,15 @@ export class BrowserVoiceSession {
 				onStatus: (status) => this.receiveTransportStatus(status, epoch),
 				onProtocolError: () => {
 					// Contract/parser details remain internal; the transport can still reconnect.
+				},
+				onBookingRequestCancelled: (requestId) => {
+					if (!this.isCurrent(epoch)) return;
+					this.rejectPendingBookingRequest(
+						requestId,
+						"Связь прервалась до подтверждения запроса. Проверьте данные и повторите.",
+						epoch,
+						false,
+					);
 				},
 			});
 			if (!this.transport.connect()) {
@@ -475,6 +487,7 @@ export class BrowserVoiceSession {
 			void this.beginCapture(this.epoch);
 			return false;
 		}
+		this.pendingBookingBaseline = draft;
 		this.bookingSubmission = {
 			status: "details-pending",
 			requestId,
@@ -507,6 +520,7 @@ export class BrowserVoiceSession {
 			void this.beginCapture(this.epoch);
 			return false;
 		}
+		this.pendingBookingBaseline = draft;
 		this.bookingSubmission = {
 			status: "conflict-resolution-pending",
 			requestId,
@@ -586,6 +600,7 @@ export class BrowserVoiceSession {
 		this.internalMeeting = null;
 		this.legacyBookingPresentation = false;
 		this.bookingSubmission = { status: "idle" };
+		this.pendingBookingBaseline = null;
 		this.pendingTypedText = null;
 		this.setSnapshot({ ...INITIAL_SNAPSHOT });
 	}
@@ -825,7 +840,14 @@ export class BrowserVoiceSession {
 					previousBookingSubmission,
 					this.internalMeeting,
 				);
-				if (this.internalMeeting) this.transport?.settleBookingRequest();
+				if (this.internalMeeting) {
+					this.transport?.settleBookingRequest(
+						pendingBookingRequestId(previousBookingSubmission) ?? undefined,
+					);
+					this.pendingBookingBaseline = null;
+				} else {
+					this.reconcilePendingBookingAfterReady(epoch);
+				}
 				this.qualificationStatus =
 					this.internalMeeting?.qualificationStatus ?? "none";
 				this.qualificationFields = qualificationFieldNames(
@@ -1009,19 +1031,121 @@ export class BrowserVoiceSession {
 		}
 	}
 
+	private reconcilePendingBookingAfterReady(epoch: number): void {
+		const requestId = pendingBookingRequestId(this.bookingSubmission);
+		if (!requestId) return;
+		const transport = this.transport;
+		const command = transport?.currentPendingBookingCommand;
+		if (
+			!transport ||
+			!command ||
+			command.payload.requestId !== requestId ||
+			!bookingCommandMatchesSubmission(command, this.bookingSubmission)
+		) {
+			this.rejectPendingBookingRequest(
+				requestId,
+				"Не удалось безопасно восстановить запрос. Проверьте данные и повторите.",
+				epoch,
+			);
+			return;
+		}
+
+		const outcome = bookingCommandAfterResync(
+			command,
+			this.pendingBookingBaseline,
+			this.bookingDraft,
+		);
+		if (outcome === "replay") {
+			const replay = transport.replayPendingBookingCommand(requestId);
+			if (replay === "unavailable" || replay === "no-pending") {
+				this.rejectPendingBookingRequest(
+					requestId,
+					"Запрос не удалось повторить после восстановления связи. Проверьте данные и повторите.",
+					epoch,
+				);
+			}
+			return;
+		}
+		if (outcome === "unsafe") {
+			this.rejectPendingBookingRequest(
+				requestId,
+				"Данные на сервере изменились. Проверьте форму и отправьте запрос ещё раз.",
+				epoch,
+			);
+			return;
+		}
+
+		transport.settleBookingRequest(requestId);
+		this.pendingBookingBaseline = null;
+		if (
+			command.type === "booking.form.submit" &&
+			this.bookingDraft &&
+			isDraftConfirmable(this.bookingDraft)
+		) {
+			this.bookingSubmission = { status: "idle" };
+			if (!this.sendBookingConfirmation(this.bookingDraft.revision)) {
+				this.bookingSubmission = {
+					status: "rejected",
+					requestId,
+					message: "Подтверждение пока не отправлено. Повторите попытку.",
+					retryable: true,
+				};
+				void this.beginCapture(epoch);
+			}
+			return;
+		}
+		this.bookingSubmission = { status: "idle" };
+		void this.beginCapture(epoch);
+	}
+
+	private rejectPendingBookingRequest(
+		requestId: string,
+		message: string,
+		epoch: number,
+		cancelTransport = true,
+	): void {
+		if (pendingBookingRequestId(this.bookingSubmission) !== requestId) return;
+		if (cancelTransport) this.transport?.cancelBookingRequest(requestId);
+		this.pendingBookingBaseline = null;
+		this.bookingSubmission = {
+			status: "rejected",
+			requestId,
+			message,
+			retryable: true,
+		};
+		this.syncBookingSnapshot();
+		void this.beginCapture(epoch);
+	}
+
 	private acceptBookingDraft(
 		draft: BrowserBookingDraft,
 		requestId: string | null,
 		epoch: number,
 	): void {
-		if (this.bookingDraft && draft.revision <= this.bookingDraft.revision)
-			return;
-		this.bookingDraft = draft;
 		const pending = this.bookingSubmission;
+		const correlated =
+			requestId !== null && pendingBookingRequestId(pending) === requestId;
+		if (this.bookingDraft && draft.revision < this.bookingDraft.revision) {
+			if (correlated && requestId) {
+				this.rejectPendingBookingRequest(
+					requestId,
+					"Данные на сервере изменились. Проверьте форму и отправьте запрос ещё раз.",
+					epoch,
+				);
+			}
+			return;
+		}
 		if (
-			pending.status === "details-pending" &&
-			requestId === pending.requestId
+			this.bookingDraft &&
+			draft.revision === this.bookingDraft.revision &&
+			!correlated
 		) {
+			return;
+		}
+		this.bookingDraft = draft;
+
+		if (pending.status === "details-pending" && correlated) {
+			this.pendingBookingBaseline = null;
 			if (isDraftConfirmable(draft)) {
 				this.syncBookingSnapshot();
 				if (!this.sendBookingConfirmation(draft.revision)) {
@@ -1041,10 +1165,24 @@ export class BrowserVoiceSession {
 			void this.beginCapture(epoch);
 			return;
 		}
-		if (
-			pending.status === "conflict-resolution-pending" &&
-			requestId === pending.requestId
-		) {
+		if (pending.status === "confirmation-pending" && correlated) {
+			this.pendingBookingBaseline = null;
+			this.bookingSubmission =
+				draft.confirmationStatus === "confirmed" ||
+				draft.commitStatus === "committing" ||
+				draft.commitStatus === "committed"
+					? { status: "idle" }
+					: {
+							status: "rejected",
+							requestId: pending.requestId,
+							message:
+								"Подтверждение не было применено. Проверьте данные и повторите попытку.",
+							retryable: true,
+						};
+			void this.beginCapture(epoch);
+		}
+		if (pending.status === "conflict-resolution-pending" && correlated) {
+			this.pendingBookingBaseline = null;
 			this.bookingSubmission = { status: "idle" };
 			void this.beginCapture(epoch);
 		}
@@ -1064,6 +1202,7 @@ export class BrowserVoiceSession {
 			return;
 		}
 		if (event.payload.requestId !== pending.requestId) return;
+		this.pendingBookingBaseline = null;
 		this.bookingSubmission = {
 			status: "rejected",
 			requestId: event.payload.requestId,
@@ -1109,7 +1248,8 @@ export class BrowserVoiceSession {
 		this.legacyBookingPresentation = false;
 		this.qualificationStatus = meeting.qualificationStatus;
 		this.qualificationFields = qualificationFieldNames(meeting);
-		this.transport?.settleBookingRequest();
+		this.transport?.settleBookingRequest(requestId ?? undefined);
+		this.pendingBookingBaseline = null;
 		this.bookingSubmission = formInitiated
 			? {
 					status: "committed",
@@ -1136,6 +1276,7 @@ export class BrowserVoiceSession {
 			void this.beginCapture(this.epoch);
 			return false;
 		}
+		this.pendingBookingBaseline = this.bookingDraft;
 		this.bookingSubmission = {
 			status: "confirmation-pending",
 			requestId,
@@ -1324,6 +1465,7 @@ export class BrowserVoiceSession {
 		this.sessionEstablished = false;
 		this.textOnlyGenerationPending = null;
 		this.pendingTypedText = null;
+		this.pendingBookingBaseline = null;
 		this.abortController?.abort();
 		this.abortController = null;
 		const transport = this.transport;
@@ -1503,6 +1645,110 @@ function isDraftConfirmable(draft: BrowserBookingDraft): boolean {
 		draft.commitStatus !== "committed" &&
 		DRAFT_FACT_FIELDS.every((field) => draft[field].status !== "conflicted")
 	);
+}
+
+type BookingResyncOutcome = "replay" | "applied" | "unsafe";
+type BookingDetailField = keyof BookingFormDetails["details"];
+
+function pendingBookingRequestId(
+	submission: BookingSubmissionState,
+): string | null {
+	return submission.status === "details-pending" ||
+		submission.status === "confirmation-pending" ||
+		submission.status === "conflict-resolution-pending"
+		? submission.requestId
+		: null;
+}
+
+function bookingCommandMatchesSubmission(
+	command: Readonly<PendingBookingCommand>,
+	submission: BookingSubmissionState,
+): boolean {
+	return (
+		(command.type === "booking.form.submit" &&
+			submission.status === "details-pending") ||
+		(command.type === "booking.draft.confirm" &&
+			submission.status === "confirmation-pending") ||
+		(command.type === "booking.conflict.resolve" &&
+			submission.status === "conflict-resolution-pending")
+	);
+}
+
+function bookingCommandAfterResync(
+	command: Readonly<PendingBookingCommand>,
+	baseline: BrowserBookingDraft | null,
+	draft: BrowserBookingDraft | null,
+): BookingResyncOutcome {
+	if (!draft) return "unsafe";
+	if (draft.commitStatus === "committed") return "applied";
+
+	switch (command.type) {
+		case "booking.form.submit":
+			if (draft.revision === command.payload.baseRevision) return "replay";
+			if (draft.revision < command.payload.baseRevision) return "unsafe";
+			return formCommandEffectIsProjected(command.payload, draft)
+				? "applied"
+				: "unsafe";
+		case "booking.draft.confirm":
+			if (
+				draft.confirmationStatus === "confirmed" ||
+				draft.commitStatus === "committing"
+			) {
+				return "applied";
+			}
+			return draft.revision === command.payload.revision &&
+				isDraftConfirmable(draft)
+				? "replay"
+				: "unsafe";
+		case "booking.conflict.resolve": {
+			const field = draft[command.payload.field];
+			if (draft.revision === command.payload.baseRevision) {
+				return field.status === "conflicted" &&
+					field.conflictOptions.some(
+						(option) => option.optionId === command.payload.conflictOptionId,
+					)
+					? "replay"
+					: "unsafe";
+			}
+			if (draft.revision < command.payload.baseRevision) return "unsafe";
+			const selectedValue = baseline?.[
+				command.payload.field
+			].conflictOptions.find(
+				(option) => option.optionId === command.payload.conflictOptionId,
+			)?.value;
+			return selectedValue !== undefined &&
+				field.status === "accepted" &&
+				field.value === selectedValue
+				? "applied"
+				: "unsafe";
+		}
+	}
+}
+
+function formCommandEffectIsProjected(
+	payload: BookingFormDetails,
+	draft: BrowserBookingDraft,
+): boolean {
+	for (const field of Object.keys(payload.details) as BookingDetailField[]) {
+		const expected = payload.details[field];
+		const projected = draft[field];
+		if (expected === null) {
+			if (projected.status !== "missing" || projected.value !== null)
+				return false;
+		} else if (
+			projected.status !== "accepted" ||
+			projected.value !== expected
+		) {
+			return false;
+		}
+	}
+	if (payload.selectedCandidateId !== undefined) {
+		return (
+			(draft.selectedCandidate?.candidateId ?? null) ===
+			payload.selectedCandidateId
+		);
+	}
+	return true;
 }
 
 function bookingSubmissionAfterResync(

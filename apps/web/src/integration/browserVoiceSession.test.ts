@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	BINARY_AUDIO_FRAME_KIND,
+	type BrowserBookingDraft,
 	type ConversationStage,
 	encodeBinaryAudioFrame,
 	type InternalVirtualMeetingProjection,
@@ -12,6 +13,7 @@ import type { VoiceUiState } from "../components/voiceTypes";
 import {
 	createBrowserBookingDraft,
 	createInternalMeeting,
+	RC4_IDS,
 } from "../testFixtures/rc4";
 import type { ReconnectScheduler, WebSocketLike } from "../transport/ws";
 import type {
@@ -221,6 +223,35 @@ function sessionReady(
 
 function event(type: string, seq: number, payload: Record<string, unknown>) {
 	return { v: 1, conversationId, seq, at, type, payload };
+}
+
+function bookingReady(
+	seq: number,
+	token: string,
+	draft: BrowserBookingDraft | null,
+	meeting: InternalVirtualMeetingProjection | null = null,
+) {
+	const ready = sessionReady(seq, token, "COLLECT_BOOKING", meeting);
+	return {
+		...ready,
+		payload: { ...ready.payload, bookingDraft: draft },
+	};
+}
+
+function conflictedNameDraft(revision = 1): BrowserBookingDraft {
+	return {
+		...createBrowserBookingDraft(revision),
+		name: {
+			required: true,
+			status: "conflicted",
+			value: null,
+			conflictOptions: [
+				{ optionId: RC4_IDS.optionOne, value: "Анна" },
+				{ optionId: RC4_IDS.optionTwo, value: "Мария" },
+			],
+		},
+		readiness: "not_ready",
+	};
 }
 
 function sentJson(socket: FakeSocket): Array<Record<string, unknown>> {
@@ -771,6 +802,381 @@ describe("production browser voice integration", () => {
 				revision: 2,
 			},
 		});
+	});
+
+	test("replays a lost form frame once per resumed ready socket with the exact request", async () => {
+		const requestId = "01J00000000000000000000040";
+		const value = await readySession(harness({ requestIds: [requestId] }));
+		value.socket.server(
+			event("state.changed", 2, {
+				from: "BOOKING_OFFER",
+				to: "COLLECT_BOOKING",
+				reason: "server collection",
+			}),
+		);
+		const draft = createBrowserBookingDraft(1);
+		value.socket.server(
+			event("booking.draft.updated", 3, {
+				requestId: null,
+				bookingDraft: draft,
+			}),
+		);
+		expect(
+			value.session.submitBookingForm({
+				baseRevision: 1,
+				details: { name: "Точный replay", phone: null },
+				selectedCandidateId: RC4_IDS.candidateTwo,
+			}),
+		).toBe(true);
+		const original = sentJson(value.socket).at(-1) as Record<string, unknown>;
+		value.socket.disconnect();
+		value.session.reconnect();
+		const firstResume = value.sockets[1] as FakeSocket;
+		firstResume.open();
+		expect(
+			sentJson(firstResume).filter((item) =>
+				String(item.type).startsWith("booking."),
+			),
+		).toHaveLength(0);
+		firstResume.server(bookingReady(4, "resume-form-one-0001", draft));
+		expect(sentJson(firstResume).at(-1)).toEqual(original);
+		firstResume.server(bookingReady(5, "resume-form-duplicate-0001", draft));
+		expect(
+			sentJson(firstResume).filter(
+				(item) => item.type === "booking.form.submit",
+			),
+		).toHaveLength(1);
+
+		firstResume.disconnect();
+		value.session.reconnect();
+		const secondResume = value.sockets[2] as FakeSocket;
+		secondResume.open();
+		secondResume.server(bookingReady(6, "resume-form-two-0002", draft));
+		expect(
+			sentJson(secondResume).filter(
+				(item) => item.type === "booking.form.submit",
+			),
+		).toEqual([original]);
+		expect(value.session.submitText("still fenced")).toBe(false);
+		expect(await value.session.commit()).toBe(false);
+	});
+
+	test("replays lost confirmation and conflict frames without changing revision or request ID", async () => {
+		const confirmationId = "01J00000000000000000000041";
+		const confirmation = await readySession(
+			harness({ requestIds: [confirmationId] }),
+		);
+		confirmation.socket.server(
+			event("state.changed", 2, {
+				from: "BOOKING_OFFER",
+				to: "COLLECT_BOOKING",
+				reason: "server collection",
+			}),
+		);
+		const readyDraft = createBrowserBookingDraft(3);
+		confirmation.socket.server(
+			event("booking.draft.updated", 3, {
+				requestId: null,
+				bookingDraft: readyDraft,
+			}),
+		);
+		expect(
+			confirmation.session.submitBookingForm({
+				baseRevision: 3,
+				details: {},
+			}),
+		).toBe(true);
+		const originalConfirmation = sentJson(confirmation.socket).at(-1);
+		confirmation.socket.disconnect();
+		confirmation.session.reconnect();
+		const confirmationResume = confirmation.sockets[1] as FakeSocket;
+		confirmationResume.open();
+		confirmationResume.server(
+			bookingReady(4, "resume-confirmation", readyDraft),
+		);
+		expect(sentJson(confirmationResume).at(-1)).toEqual(originalConfirmation);
+
+		const conflictId = "01J00000000000000000000042";
+		const conflict = await readySession(harness({ requestIds: [conflictId] }));
+		conflict.socket.server(
+			event("state.changed", 2, {
+				from: "BOOKING_OFFER",
+				to: "COLLECT_BOOKING",
+				reason: "server collection",
+			}),
+		);
+		const conflicted = conflictedNameDraft(1);
+		conflict.socket.server(
+			event("booking.draft.updated", 3, {
+				requestId: null,
+				bookingDraft: conflicted,
+			}),
+		);
+		expect(
+			conflict.session.resolveBookingConflict({
+				baseRevision: 1,
+				field: "name",
+				conflictOptionId: RC4_IDS.optionTwo,
+			}),
+		).toBe(true);
+		const originalConflict = sentJson(conflict.socket).at(-1);
+		conflict.socket.disconnect();
+		conflict.session.reconnect();
+		const conflictResume = conflict.sockets[1] as FakeSocket;
+		conflictResume.open();
+		conflictResume.server(bookingReady(4, "resume-conflict-0001", conflicted));
+		expect(sentJson(conflictResume).at(-1)).toEqual(originalConflict);
+	});
+
+	test("uses authoritative applied projections instead of replaying an ACK-lost command", async () => {
+		const formId = "01J00000000000000000000043";
+		const confirmationId = "01J00000000000000000000044";
+		const value = await readySession(
+			harness({ requestIds: [formId, confirmationId] }),
+		);
+		value.socket.server(
+			event("state.changed", 2, {
+				from: "BOOKING_OFFER",
+				to: "COLLECT_BOOKING",
+				reason: "server collection",
+			}),
+		);
+		value.socket.server(
+			event("booking.draft.updated", 3, {
+				requestId: null,
+				bookingDraft: createBrowserBookingDraft(1),
+			}),
+		);
+		expect(
+			value.session.submitBookingForm({
+				baseRevision: 1,
+				details: { company: "Применено без ACK" },
+			}),
+		).toBe(true);
+		value.socket.disconnect();
+		value.session.reconnect();
+		const resumed = value.sockets[1] as FakeSocket;
+		resumed.open();
+		const appliedBase = createBrowserBookingDraft(2);
+		const applied = {
+			...appliedBase,
+			company: { ...appliedBase.company, value: "Применено без ACK" },
+		};
+		resumed.server(bookingReady(4, "resume-applied-form", applied));
+		const resumedBookingEvents = sentJson(resumed).filter((item) =>
+			String(item.type).startsWith("booking."),
+		);
+		expect(resumedBookingEvents).toEqual([
+			{
+				v: 1,
+				at,
+				type: "booking.draft.confirm",
+				payload: { requestId: confirmationId, revision: 2 },
+			},
+		]);
+
+		resumed.disconnect();
+		value.session.reconnect();
+		const confirmationResume = value.sockets[2] as FakeSocket;
+		confirmationResume.open();
+		const confirmed = {
+			...applied,
+			confirmationStatus: "confirmed" as const,
+			commitStatus: "committing" as const,
+		};
+		confirmationResume.server(
+			bookingReady(5, "resume-applied-confirmation", confirmed),
+		);
+		expect(
+			sentJson(confirmationResume).filter((item) =>
+				String(item.type).startsWith("booking."),
+			),
+		).toHaveLength(0);
+		expect(value.session.getSnapshot().bookingSubmission).toEqual({
+			status: "idle",
+		});
+	});
+
+	test("settles a correlated confirmation projection without leaving inputs fenced", async () => {
+		const requestId = "01J00000000000000000000050";
+		const value = await readySession(harness({ requestIds: [requestId] }));
+		value.socket.server(
+			event("state.changed", 2, {
+				from: "BOOKING_OFFER",
+				to: "COLLECT_BOOKING",
+				reason: "server collection",
+			}),
+		);
+		const draft = createBrowserBookingDraft(1);
+		value.socket.server(
+			event("booking.draft.updated", 3, {
+				requestId: null,
+				bookingDraft: draft,
+			}),
+		);
+		expect(
+			value.session.submitBookingForm({ baseRevision: 1, details: {} }),
+		).toBe(true);
+		value.socket.server(
+			event("booking.draft.updated", 4, {
+				requestId,
+				bookingDraft: {
+					...draft,
+					confirmationStatus: "confirmed",
+					commitStatus: "committing",
+				},
+			}),
+		);
+		await flush();
+		expect(value.session.getSnapshot().bookingSubmission).toEqual({
+			status: "idle",
+		});
+		expect(value.session.getSnapshot().textInputAvailable).toBe(true);
+		expect(value.session.getSnapshot().bookingInputAvailable).toBe(true);
+	});
+
+	test("rejects an incompatible resumed revision and allows a fresh confirmation", async () => {
+		const staleId = "01J00000000000000000000045";
+		const freshId = "01J00000000000000000000046";
+		const value = await readySession(
+			harness({ requestIds: [staleId, freshId] }),
+		);
+		value.socket.server(
+			event("state.changed", 2, {
+				from: "BOOKING_OFFER",
+				to: "COLLECT_BOOKING",
+				reason: "server collection",
+			}),
+		);
+		value.socket.server(
+			event("booking.draft.updated", 3, {
+				requestId: null,
+				bookingDraft: createBrowserBookingDraft(1),
+			}),
+		);
+		expect(
+			value.session.submitBookingForm({ baseRevision: 1, details: {} }),
+		).toBe(true);
+		value.socket.disconnect();
+		value.session.reconnect();
+		const resumed = value.sockets[1] as FakeSocket;
+		resumed.open();
+		resumed.server(
+			bookingReady(
+				4,
+				"resume-stale-confirmation",
+				createBrowserBookingDraft(2),
+			),
+		);
+		await flush();
+		expect(
+			sentJson(resumed).filter((item) =>
+				String(item.type).startsWith("booking."),
+			),
+		).toHaveLength(0);
+		expect(value.session.getSnapshot().bookingSubmission).toMatchObject({
+			status: "rejected",
+			requestId: staleId,
+			retryable: true,
+		});
+		expect(value.session.getSnapshot().bookingInputAvailable).toBe(true);
+		expect(
+			value.session.submitBookingForm({ baseRevision: 2, details: {} }),
+		).toBe(true);
+		expect(sentJson(resumed).at(-1)).toMatchObject({
+			type: "booking.draft.confirm",
+			payload: { requestId: freshId, revision: 2 },
+		});
+	});
+
+	test("does not replay after a committed meeting or session stop/dispose", async () => {
+		const committedId = "01J00000000000000000000047";
+		const committed = await readySession(
+			harness({ requestIds: [committedId] }),
+		);
+		committed.socket.server(
+			event("state.changed", 2, {
+				from: "BOOKING_OFFER",
+				to: "COLLECT_BOOKING",
+				reason: "server collection",
+			}),
+		);
+		committed.socket.server(
+			event("booking.draft.updated", 3, {
+				requestId: null,
+				bookingDraft: createBrowserBookingDraft(1),
+			}),
+		);
+		expect(
+			committed.session.submitBookingForm({
+				baseRevision: 1,
+				details: {},
+			}),
+		).toBe(true);
+		committed.socket.disconnect();
+		committed.session.reconnect();
+		const committedResume = committed.sockets[1] as FakeSocket;
+		committedResume.open();
+		const committedDraft = {
+			...createBrowserBookingDraft(1),
+			confirmationStatus: "confirmed" as const,
+			commitStatus: "committed" as const,
+			bookingId,
+		};
+		committedResume.server(
+			bookingReady(
+				4,
+				"resume-committed",
+				committedDraft,
+				createInternalMeeting(),
+			),
+		);
+		expect(
+			sentJson(committedResume).filter((item) =>
+				String(item.type).startsWith("booking."),
+			),
+		).toHaveLength(0);
+		expect(committed.session.getSnapshot().bookingSubmission).toEqual({
+			status: "committed",
+			requestId: committedId,
+			bookingId,
+		});
+
+		for (const action of ["stop", "dispose"] as const) {
+			const requestId =
+				action === "stop"
+					? "01J00000000000000000000048"
+					: "01J00000000000000000000049";
+			const value = await readySession(harness({ requestIds: [requestId] }));
+			value.socket.server(
+				event("state.changed", 2, {
+					from: "BOOKING_OFFER",
+					to: "COLLECT_BOOKING",
+					reason: "server collection",
+				}),
+			);
+			value.socket.server(
+				event("booking.draft.updated", 3, {
+					requestId: null,
+					bookingDraft: createBrowserBookingDraft(1),
+				}),
+			);
+			expect(
+				value.session.submitBookingForm({
+					baseRevision: 1,
+					details: { name: action },
+				}),
+			).toBe(true);
+			value.socket.disconnect();
+			expect(value.scheduler.jobs).toHaveLength(1);
+			await value.session[action]();
+			expect(value.scheduler.jobs).toHaveLength(0);
+			expect(
+				sentJson(value.socket).filter(
+					(item) => item.type === "booking.form.submit",
+				),
+			).toHaveLength(1);
+		}
 	});
 
 	test("correlates bounded form rejection and gives an edited retry a fresh request ID", async () => {

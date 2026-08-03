@@ -527,6 +527,175 @@ describe("voice WebSocket transport", () => {
 		expect(transport.isReady).toBe(true);
 	});
 
+	test("retains and replays each exact booking command once per ready socket generation", () => {
+		const cases = [
+			{
+				requestId: "01J00000000000000000000030",
+				send: (transport: VoiceTransport) =>
+					transport.submitBookingForm({
+						requestId: "01J00000000000000000000030",
+						baseRevision: 7,
+						details: { name: "Анна replay", phone: null },
+						selectedCandidateId: RC4_IDS.candidateTwo,
+					}),
+			},
+			{
+				requestId: "01J00000000000000000000031",
+				send: (transport: VoiceTransport) =>
+					transport.confirmBookingRevision({
+						requestId: "01J00000000000000000000031",
+						revision: 9,
+					}),
+			},
+			{
+				requestId: "01J00000000000000000000032",
+				send: (transport: VoiceTransport) =>
+					transport.resolveBookingConflict({
+						requestId: "01J00000000000000000000032",
+						baseRevision: 11,
+						field: "company",
+						conflictOptionId: RC4_IDS.optionTwo,
+					}),
+			},
+		] as const;
+
+		for (const scenario of cases) {
+			const sockets: FakeSocket[] = [];
+			const scheduler = new FakeScheduler();
+			const transport = new VoiceTransport({
+				conversationId,
+				url: "ws://local",
+				createWebSocket: () => {
+					const socket = new FakeSocket();
+					sockets.push(socket);
+					return socket;
+				},
+				scheduler,
+				now: () => new Date(at),
+			});
+			transport.connect();
+			sockets[0]?.open();
+			sockets[0]?.serverJson(sessionReady());
+			expect(scenario.send(transport)).toBe(true);
+			const original = sentJson(sockets[0] as FakeSocket).at(-1);
+			expect(Object.isFrozen(transport.currentPendingBookingCommand)).toBe(
+				true,
+			);
+			expect(
+				Object.isFrozen(transport.currentPendingBookingCommand?.payload),
+			).toBe(true);
+
+			sockets[0]?.disconnect();
+			scheduler.runNext();
+			sockets[1]?.open();
+			expect(transport.replayPendingBookingCommand(scenario.requestId)).toBe(
+				"unavailable",
+			);
+			expect(
+				sentJson(sockets[1] as FakeSocket).filter((item) =>
+					String(item.type).startsWith("booking."),
+				),
+			).toHaveLength(0);
+			sockets[1]?.serverJson(sessionReady(2, "resume-token-replay-2"));
+			expect(transport.replayPendingBookingCommand(scenario.requestId)).toBe(
+				"replayed",
+			);
+			expect(sentJson(sockets[1] as FakeSocket).at(-1)).toEqual(original);
+			sockets[1]?.serverJson(sessionReady(3, "resume-token-duplicate-ready"));
+			expect(transport.replayPendingBookingCommand(scenario.requestId)).toBe(
+				"already-sent",
+			);
+			expect(
+				sentJson(sockets[1] as FakeSocket).filter((item) =>
+					String(item.type).startsWith("booking."),
+				),
+			).toHaveLength(1);
+
+			sockets[1]?.disconnect();
+			scheduler.runNext();
+			sockets[2]?.open();
+			sockets[2]?.serverJson(sessionReady(4, "resume-token-replay-3"));
+			expect(transport.replayPendingBookingCommand(scenario.requestId)).toBe(
+				"replayed",
+			);
+			expect(sentJson(sockets[2] as FakeSocket).at(-1)).toEqual(original);
+		}
+	});
+
+	test("settles rejected requests for a fresh retry and never replays after stop or reconnect exhaustion", () => {
+		const sockets: FakeSocket[] = [];
+		const scheduler = new FakeScheduler();
+		const cancelled: string[] = [];
+		const transport = new VoiceTransport({
+			conversationId,
+			url: "ws://local",
+			createWebSocket: () => {
+				const socket = new FakeSocket();
+				sockets.push(socket);
+				return socket;
+			},
+			scheduler,
+			reconnect: { maxAttempts: 1 },
+			onBookingRequestCancelled: (requestId, reason) =>
+				cancelled.push(`${requestId}:${reason}`),
+		});
+		transport.connect();
+		sockets[0]?.open();
+		sockets[0]?.serverJson(sessionReady());
+		const rejectedId = "01J00000000000000000000033";
+		expect(
+			transport.confirmBookingRevision({
+				requestId: rejectedId,
+				revision: 1,
+			}),
+		).toBe(true);
+		sockets[0]?.serverJson({
+			v: 1,
+			conversationId,
+			seq: 2,
+			at,
+			type: "booking.form.rejected",
+			payload: {
+				requestId: rejectedId,
+				currentRevision: 1,
+				error: { code: "INVALID_REVISION", retryable: true },
+			},
+		});
+		expect(transport.currentPendingBookingCommand).toBeNull();
+		const freshId = "01J00000000000000000000034";
+		expect(
+			transport.confirmBookingRevision({ requestId: freshId, revision: 2 }),
+		).toBe(true);
+		sockets[0]?.disconnect();
+		scheduler.runNext();
+		sockets[1]?.open();
+		sockets[1]?.disconnect();
+		expect(cancelled).toEqual([`${freshId}:reconnect_exhausted`]);
+		expect(transport.currentPendingBookingCommand).toBeNull();
+
+		const stopSocket = new FakeSocket();
+		const stopped = new VoiceTransport({
+			conversationId,
+			url: "ws://local",
+			createWebSocket: () => stopSocket,
+		});
+		stopped.connect();
+		stopSocket.open();
+		stopSocket.serverJson(sessionReady());
+		expect(
+			stopped.submitBookingForm({
+				requestId: "01J00000000000000000000035",
+				baseRevision: 1,
+				details: { company: "stop" },
+			}),
+		).toBe(true);
+		stopped.stop();
+		expect(stopped.currentPendingBookingCommand).toBeNull();
+		expect(
+			stopped.replayPendingBookingCommand("01J00000000000000000000035"),
+		).toBe("no-pending");
+	});
+
 	test("replays a metadata/binary pair exactly once after disconnect between frames", () => {
 		const sockets: FakeSocket[] = [];
 		const scheduler = new FakeScheduler();

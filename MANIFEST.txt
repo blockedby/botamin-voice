@@ -260,12 +260,14 @@ packages/contracts/package.json
 packages/contracts/src/common.ts
 packages/contracts/src/domain.ts
 packages/contracts/src/index.ts
+packages/contracts/src/phone-detection.ts
 packages/contracts/src/ports.ts
 packages/contracts/src/rc4.ts
 packages/contracts/src/rest.ts
 packages/contracts/src/tools.ts
 packages/contracts/src/ws.ts
 packages/contracts/test/contracts.test.ts
+packages/contracts/test/phone-detection.test.ts
 packages/contracts/test/rc4.test.ts
 packages/contracts/tsconfig.build.json
 packages/contracts/tsconfig.json

@@ -142,7 +142,7 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 ## 4. Integration tests
 
-- landing entry attempts only the fixed same-origin proactive MP3; before both consents there are zero conversation REST requests, sockets, capture/mic objects, provider calls, or sessions; session start stops greeting;
+- landing entry attempts only the fixed same-origin proactive canonical WAV; before both consents there are zero conversation REST requests, sockets, capture/mic objects, provider calls, or sessions; session start stops greeting;
 - bounded PCM16 chunks → `audio.commit` → gateway-produced validated STT WAV → atomic `SttPort` → fake OpenRouter final transcript → fake brain deltas → two-request ordered TTS prefetch → complete MP3/canonical-WAV WS segments;
 - sample-derived capture progress/countdown uses accepted PCM16 bytes and stricter server duration/byte ceiling, then auto-commits exactly once;
 - bounded monotonic `visitor.text.submit` clears uncommitted audio, suppresses pending duplicates, retains sequence on rejection, emits server final once, and follows the same brain/state/tool/persistence path as speech;
@@ -163,7 +163,7 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 
 Playwright with synthetic audio fixture:
 
-1. load landing and verify one immediate same-origin proactive MP3 attempt with no conversation REST/WS/mic/provider/session;
+1. load landing and verify one immediate same-origin proactive canonical-WAV attempt with no conversation REST/WS/mic/provider/session;
 2. exercise autoplay success and blocked/error `Включить приветствие`, then verify CTA/session start stops greeting;
 3. click CTA, provide both consents, and mock/allow mic;
 4. stream fixture PCM;

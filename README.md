@@ -12,7 +12,7 @@
 
 ## What this repository runs
 
-Botamin is a full-stack landing page with a browser voice AI seller. On page entry it immediately makes one playback attempt for the committed, product-owned same-origin `/assets/botamin-proactive-greeting.mp3`. This static greeting path creates no conversation, REST call, WebSocket, microphone request, provider call, or session before both consents. If autoplay is blocked or media loading fails, the UI shows `Включить приветствие`; starting a real session stops and releases the greeting.
+Botamin is a full-stack landing page with a browser voice AI seller. On page entry it immediately makes one playback attempt for the committed, product-owned same-origin `/assets/botamin-proactive-greeting.wav`. This static greeting path creates no conversation, REST call, WebSocket, microphone request, provider call, or session before both consents. If autoplay is blocked or media loading fails, the UI shows `Включить приветствие`; starting a real session stops and releases the greeting.
 
 After consent, the browser sends bounded PCM16 chunks to the backend; after `audio.commit`, the gateway creates one validated WAV for an atomic OpenRouter STT request. A secure provider-neutral `visitor.text.submit` path accepts a final typed turn through the same transcript, Luna, policy, tool, and persistence flow. One final transcript goes to Codex app-server with `gpt-5.6-luna`; OpenRouter TTS returns complete provider-neutral phrase segments. Each utterance is capped at 60 seconds and the atomic STT WAV at 2,000,000 bytes. The circular countdown is derived from accepted 16 kHz PCM16 samples and the stricter server-advertised duration/byte ceiling, not wall time.
 
@@ -110,7 +110,7 @@ Never use `docker compose down -v` on a host with bookings or Codex auth. Restor
 8. Phrase-level STT adds accepted end-of-turn latency; local synthetic timings and the isolated Gemini smoke are not quality or hosting benchmarks.
 9. Typed and spoken final turns have the same semantic authority; neither exposes provider or tool controls.
 10. A booking uses exactly one of the two current server-supplied, concretely dated internal Moscow slots; stale revisions and non-candidate slots are rejected.
-11. The pre-consent proactive greeting is one static same-origin MP3 attempt and cannot create a session or invoke microphone/provider capabilities.
+11. The pre-consent proactive greeting is one static same-origin canonical-WAV attempt and cannot create a session or invoke microphone/provider capabilities.
 12. The two candidates are current internal alternatives, never a claim of exhaustive global availability; the meeting remains committed across skipped or partial optional qualification.
 13. Browser draft projections exclude provenance/evidence; arbitrary contacts remain redacted from TTS.
 

@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { isCompleteMp3File } from "@botamin/contracts";
+import { CanonicalTtsWavBytesSchema } from "@botamin/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
 	type GreetingAudioLike,
@@ -88,22 +88,22 @@ describe("proactive static greeting asset", () => {
 		).toBeLessThanOrEqual(22);
 	});
 
-	test("ships one bounded complete product-owned MP3", async () => {
+	test("ships one bounded canonical product-owned WAV", async () => {
 		const file = Bun.file(
 			resolve(
 				import.meta.dir,
-				"../../public/assets/botamin-proactive-greeting.mp3",
+				"../../public/assets/botamin-proactive-greeting.wav",
 			),
 		);
 		const bytes = new Uint8Array(await file.arrayBuffer());
 		expect(bytes.byteLength).toBeGreaterThan(0);
 		expect(bytes.byteLength).toBeLessThanOrEqual(2_000_000);
-		expect(isCompleteMp3File(bytes)).toBe(true);
+		expect(CanonicalTtsWavBytesSchema.safeParse(bytes).success).toBe(true);
 	});
 });
 
 describe("proactive static greeting lifecycle", () => {
-	test("automatically attempts the fixed same-origin MP3 once without conversation, network, socket, or microphone capabilities", async () => {
+	test("automatically attempts the fixed same-origin WAV once without conversation, network, socket, or microphone capabilities", async () => {
 		const sources: string[] = [];
 		const audio = new FakeAudio(async () => undefined);
 		const controller = new ProactiveGreetingController((source) => {

@@ -34,9 +34,9 @@
 
 ### PRE-CONSENT STATIC GREETING
 
-На entry browser немедленно и ровно один раз пытается проиграть committed same-origin `/assets/botamin-proactive-greeting.mp3` с фиксированным product copy. До consent этот controller не имеет conversation REST/WS, microphone, provider или session capabilities. `NotAllowedError`/media error раскрывает только user-action fallback `Включить приветствие`; начало real session останавливает и освобождает MP3.
+На entry browser немедленно и ровно один раз пытается проиграть committed same-origin `/assets/botamin-proactive-greeting.wav` с фиксированным product copy. До consent этот controller не имеет conversation REST/WS, microphone, provider или session capabilities. `NotAllowedError`/media error раскрывает только user-action fallback `Включить приветствие`; начало real session останавливает и освобождает WAV.
 
-Asset не содержит visitor data: администратор отдельно и явно запускает opt-in OpenRouter generation script для фиксированного текста, проверяет MP3 и commit-ит результат. Runtime visitor не инициирует генерацию.
+Asset не содержит visitor data: администратор отдельно и явно запускает opt-in OpenRouter generation script с точным Gemini PCM/Sulafat profile для фиксированного текста, проверяет canonical WAV и commit-ит результат. Runtime visitor не инициирует генерацию.
 
 ### GREETING
 

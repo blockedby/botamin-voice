@@ -2716,7 +2716,7 @@ Fresh RC4 command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md). T
 - [x] Credential-free fixture baseline is current: 44/44 scenarios, 25/25 applicable booking-order checks, 28/28 negative controls, zero provider calls; real Luna not run.
 - [x] Chromium desktop/mobile Playwright landing smoke passed through the shared Chromium harness. This proves responsive/pre-consent transport boundaries only, not a full voice booking journey.
 - [x] Focused cutover tests prove protected backup precedes graceful stop, existing stopped DB is protected, migration is delegated to normal startup, readiness precedes `verify-rc4`, and RC3 schema upgrades to migration 0004 without a duplicate meeting table.
-- [x] The provider-independent repository suite is green: 700 tests across 68 files, including the RC4 provider-contract and production-component journeys.
+- [x] The provider-independent repository suite is green: 707 tests across 68 files, including the RC4 provider-contract and production-component journeys.
 - [x] Typecheck, build, Biome, generated spec validation, release artifact regeneration, and `git diff --check` are reported with actual fresh outputs in `VALIDATION.md`.
 - [ ] Docker Compose cutover against an owner-configured live local volume and credentials was not run by the documentation handoff; the wrapper is covered statically/fake-Docker and DB tests.
 - [ ] Full local voice booking journey was not run; do not infer it from Chromium landing smoke or fixture evals.
@@ -3297,7 +3297,7 @@ Fresh RC4 results are recorded in [`../VALIDATION.md`](VALIDATION.md). The RC3 r
 - Chromium desktop/mobile Playwright **landing smoke** passed through the shared harness. It covers responsive/pre-consent boundaries, not a full voice booking journey.
 - Fixture-only eval baseline is 44/44 scenarios, 25/25 applicable booking-order checks, and 28/28 negative controls with zero provider calls; real Luna was not run.
 - Migration/cutover wrappers and RC3→RC4 schema compatibility are covered by deterministic tests.
-- The provider-independent repository suite is green: 700 tests across 68 files; exact evidence is in `VALIDATION.md`.
+- The provider-independent repository suite is green: 707 tests across 68 files; exact evidence is in `VALIDATION.md`.
 - WebKit full journey is not run. Its browser binary is present, but this host lacks `libicu74`, `libxml2`, and `libflite1`.
 - Full voice booking, owner-configured live Compose cutover, target VPS, public TLS/WSS, and target-host provider live booking remain explicit gates.
 

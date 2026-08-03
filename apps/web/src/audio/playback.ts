@@ -179,6 +179,15 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 
 	beginGeneration(generationId: string): void {
 		this.cancelReaction();
+		if (this.muted) {
+			this.clearSlots();
+			this.generationId = null;
+			this.lastAcceptedSequence = null;
+			this.sealed = false;
+			this.started = false;
+			this.idleNotified = false;
+			return;
+		}
 		if (generationId === this.generationId) return;
 		this.clearSlots();
 		this.generationId = generationId;

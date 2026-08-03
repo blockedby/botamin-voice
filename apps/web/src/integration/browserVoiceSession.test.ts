@@ -176,6 +176,7 @@ class FakePlayback implements PlaybackAdapter {
 	bufferedSegmentCount = 0;
 	sealed = false;
 	started = false;
+	muted = false;
 	cancelReactionCalls = 0;
 	readonly reactions: LocalReactionRequest[] = [];
 	readonly enqueued: number[] = [];
@@ -231,11 +232,17 @@ class FakePlayback implements PlaybackAdapter {
 	}
 	bargeIn(): string | null {
 		this.bargeInCalls += 1;
+		this.cancelReaction();
 		const generation = this.generation;
 		this.generation = null;
 		this.bufferedSegmentCount = 0;
 		this.segments.length = 0;
 		return generation;
+	}
+	setMuted(muted: boolean): void {
+		if (this.muted === muted) return;
+		this.muted = muted;
+		if (muted) this.bargeIn();
 	}
 	async dispose(): Promise<void> {
 		this.disposeCalls += 1;
@@ -1576,6 +1583,173 @@ describe("production browser voice integration", () => {
 		).toHaveLength(4);
 	});
 
+	test("mute cancels reaction plus active, scheduled, and raw speech without resurrection or forged release", async () => {
+		class TrackedSource implements PlaybackSourceLike {
+			onended: (() => void) | null = null;
+			readonly starts: number[] = [];
+			stopped = false;
+			start(when: number): void {
+				this.starts.push(when);
+			}
+			stop(): void {
+				this.stopped = true;
+			}
+		}
+		const sources: TrackedSource[] = [];
+		let decoded = 0;
+		let runReaction: (() => void) | null = null;
+		const apis: AudioPlaybackApis<number> = {
+			decodeAudioData: async () => decoded++,
+			createSource: () => {
+				const source = new TrackedSource();
+				sources.push(source);
+				return source;
+			},
+			resume: async () => undefined,
+			currentTime: () => 0,
+			duration: () => 1,
+		};
+		const queues: PhrasePlaybackQueue<number>[] = [];
+		const fixture = createDeterministicMp3Fixture();
+		const value = await readySession(
+			harness({
+				createPlayback: (options) => {
+					const playback = new PhrasePlaybackQueue(apis, options, {
+						scheduler: {
+							schedule: (callback) => {
+								runReaction = callback;
+								return callback;
+							},
+							cancel: (handle) => {
+								if (runReaction === handle) runReaction = null;
+							},
+						},
+						fetch: async () => ({
+							ok: true,
+							status: 200,
+							headers: { get: () => String(fixture.byteLength) },
+							arrayBuffer: async () => fixture.slice().buffer,
+						}),
+					});
+					queues.push(playback);
+					return playback;
+				},
+			}),
+		);
+		const queue = queues[0];
+		if (!queue) throw new Error("playback queue missing");
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Остановите звук" }),
+		);
+		value.socket.server(
+			event("assistant.text.delta", 3, {
+				generationId,
+				text: "Ответ с очередью.",
+			}),
+		);
+		value.socket.server(
+			event("assistant.reaction.request", 4, {
+				turnId,
+				generationId,
+				clipId: "neutral-good",
+				delayMs: 350,
+			}),
+		);
+		const startReaction = runReaction as (() => void) | null;
+		if (!startReaction) throw new Error("reaction was not scheduled");
+		startReaction();
+		await flush();
+		expect(sources).toHaveLength(1);
+		expect(sources[0]?.stopped).toBe(false);
+
+		for (let sequence = 0; sequence < 4; sequence += 1) {
+			value.socket.server(
+				event("audio.segment", 5 + sequence, {
+					generationId,
+					segmentId: `01J${String(sequence + 5).padStart(23, "0")}`,
+					sequence,
+					contentType: "audio/mpeg",
+					byteLength: fixture.byteLength,
+					final: true,
+				}),
+			);
+			value.socket.binary(
+				encodeBinaryAudioFrame({
+					kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+					sequence,
+					payload: fixture,
+				}),
+			);
+		}
+		await flush();
+		expect(sources[0]?.stopped).toBe(true);
+		expect(queue.bufferedSegmentCount).toBe(2);
+		expect(queue.pendingRawSegmentCount).toBe(2);
+		expect(queue.bufferedRawBytes).toBe(fixture.byteLength * 4);
+		const canceledEnds = sources.slice(1).map((source) => source.onended);
+
+		value.session.toggleMute();
+		expect(value.session.getSnapshot().muted).toBe(true);
+		expect(sources.slice(1).map((source) => source.stopped)).toEqual([
+			true,
+			true,
+		]);
+		expect(queue.activeGenerationId).toBeNull();
+		expect(queue.bufferedSegmentCount).toBe(0);
+		expect(queue.pendingRawSegmentCount).toBe(0);
+		expect(queue.bufferedRawBytes).toBe(0);
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.interrupted",
+			),
+		).toEqual([
+			expect.objectContaining({
+				payload: { generationId, reason: "user_stop" },
+			}),
+		]);
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.segment.released",
+			),
+		).toHaveLength(0);
+		for (const canceledEnd of canceledEnds) canceledEnd?.();
+
+		value.session.toggleMute();
+		value.socket.server(
+			event("audio.segment", 9, {
+				generationId,
+				segmentId: "01J00000000000000000000019",
+				sequence: 4,
+				contentType: "audio/mpeg",
+				byteLength: fixture.byteLength,
+				final: true,
+			}),
+		);
+		value.socket.binary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+				sequence: 4,
+				payload: fixture,
+			}),
+		);
+		await flush();
+		expect(value.session.getSnapshot().muted).toBe(false);
+		expect(sources).toHaveLength(3);
+		expect(queue.activeGenerationId).toBeNull();
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.interrupted",
+			),
+		).toHaveLength(1);
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.segment.released",
+			),
+		).toHaveLength(0);
+	});
+
 	test("enters speaking and sends playback.started only when the first source starts", async () => {
 		const value = await readySession();
 		value.capture.emit();
@@ -1976,7 +2150,7 @@ describe("production browser voice integration", () => {
 		await flush();
 		expect(value.session.getSnapshot().state.kind).toBe("speaking");
 		value.session.interrupt();
-		expect(value.playbacks[0]?.bargeInCalls).toBe(1);
+		expect(value.playbacks[0]?.bargeInCalls).toBe(2);
 		expect(
 			sentJson(value.socket).some(
 				(item) => item.type === "playback.interrupted",

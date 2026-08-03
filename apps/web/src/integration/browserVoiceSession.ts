@@ -90,6 +90,7 @@ export interface PlaybackAdapter {
 	requestReaction(request: LocalReactionRequest): boolean;
 	cancelReaction(): void;
 	bargeIn(): string | null;
+	setMuted?(muted: boolean): void;
 	dispose(): Promise<void>;
 	readonly activeGenerationId: string | null;
 	readonly bufferedSegmentCount: number;
@@ -578,13 +579,37 @@ export class BrowserVoiceSession {
 	toggleMute(): void {
 		const muted = !this.snapshot.muted;
 		if (muted) {
-			this.playback?.cancelReaction();
+			this.textOnlyGenerationPending = null;
 			this.reactionGenerationId = null;
+			if (this.controller) {
+				this.controller.bargeIn(
+					{
+						stopLocalPlayback: () => this.setPlaybackMuted(true),
+						sendInterruption: (generationId, reason) => {
+							this.transport?.interrupt(generationId, reason);
+						},
+					},
+					"user_stop",
+				);
+			} else {
+				this.setPlaybackMuted(true);
+			}
+		} else {
+			this.setPlaybackMuted(false);
 		}
 		this.capture?.setMuted(muted);
 		this.transport?.setMuted(muted);
 		this.controller?.setMuted(muted);
 		this.setSnapshot({ ...this.snapshot, muted });
+	}
+
+	private setPlaybackMuted(muted: boolean): void {
+		const playback = this.playback;
+		if (playback?.setMuted) {
+			playback.setMuted(muted);
+		} else if (muted) {
+			playback?.bargeIn();
+		}
 	}
 
 	interrupt(): void {
@@ -1030,7 +1055,17 @@ export class BrowserVoiceSession {
 				this.playback?.cancelReaction();
 				this.reactionGenerationId = null;
 				if (this.controller.acceptEvent(event)) {
-					if (
+					if (this.snapshot.muted) {
+						this.controller.bargeIn(
+							{
+								stopLocalPlayback: () => this.setPlaybackMuted(true),
+								sendInterruption: (generationId, reason) => {
+									this.transport?.interrupt(generationId, reason);
+								},
+							},
+							"user_stop",
+						);
+					} else if (
 						this.audioDoneGenerations.has(event.payload.generationId) ||
 						this.playbackUnavailable ||
 						!this.playback

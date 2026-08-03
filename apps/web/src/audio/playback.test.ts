@@ -611,6 +611,39 @@ describe("bounded complete MP3 and WAV Web Audio playback", () => {
 		expect(harness.sources).toHaveLength(1);
 	});
 
+	test("mute stops an active reaction and does not retain generations seen while muted", async () => {
+		const harness = playbackHarness();
+		const scheduler = new ManualScheduler();
+		const queue = new PhrasePlaybackQueue(
+			harness.apis,
+			{},
+			{ scheduler, fetch: async () => reactionResponse() },
+		);
+		queue.requestReaction({
+			turnId: "01J00000000000000000000003",
+			generationId,
+			clipId: "neutral-good",
+			delayMs: 350,
+		});
+		scheduler.runNext();
+		await Bun.sleep(0);
+		expect(harness.sources[0]?.stopped).toBe(false);
+
+		queue.setMuted(true);
+		expect(harness.sources[0]?.stopped).toBe(true);
+		expect(queue.activeReactionGenerationId).toBeNull();
+		queue.beginGeneration(generationId);
+		expect(queue.activeGenerationId).toBeNull();
+		expect(await queue.enqueue(segment(0))).toMatchObject({
+			status: "rejected",
+			reason: "stale",
+		});
+
+		queue.setMuted(false);
+		expect(queue.activeGenerationId).toBeNull();
+		expect(harness.sources).toHaveLength(1);
+	});
+
 	test("silently skips reaction fetch failure and cancels an unstarted timer", async () => {
 		const harness = playbackHarness();
 		const scheduler = new ManualScheduler();

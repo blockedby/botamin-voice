@@ -74,6 +74,56 @@ function createStructurallyValidMp3Frame(): Uint8Array {
 	return bytes;
 }
 
+function withId3v2Tag(
+	majorVersion: 3 | 4,
+	options: { flags?: number; footer?: boolean; paddingBytes?: number } = {},
+): Uint8Array {
+	const flags = options.flags ?? (options.footer ? 0x10 : 0);
+	const padding = new Uint8Array(options.paddingBytes ?? 0);
+	const header = Uint8Array.from([
+		0x49,
+		0x44,
+		0x33,
+		majorVersion,
+		0,
+		flags,
+		0,
+		0,
+		0,
+		padding.byteLength,
+	]);
+	const footer = options.footer
+		? Uint8Array.from([
+				0x33,
+				0x44,
+				0x49,
+				majorVersion,
+				0,
+				flags,
+				0,
+				0,
+				0,
+				padding.byteLength,
+			])
+		: new Uint8Array();
+	return Uint8Array.from([
+		...header,
+		...padding,
+		...footer,
+		...createStructurallyValidMp3Frame(),
+	]);
+}
+
+function mutateByte(
+	bytes: Uint8Array,
+	offset: number,
+	value: number,
+): Uint8Array {
+	const mutated = bytes.slice();
+	mutated[offset] = value;
+	return mutated;
+}
+
 const bookingSnapshot = {
 	id: bookingId,
 	conversationId,
@@ -982,14 +1032,63 @@ describe("shared contracts", () => {
 
 	test("shares strict whole-file MP3 validation across provider and transport boundaries", () => {
 		const complete = createStructurallyValidMp3Frame();
-		expect(isCompleteMp3File(complete)).toBe(true);
-		expect(MpegAudioBytesSchema.safeParse(complete).success).toBe(true);
+		for (const valid of [
+			complete,
+			withId3v2Tag(3, { paddingBytes: 4 }),
+			withId3v2Tag(4, { paddingBytes: 4 }),
+			withId3v2Tag(4, { footer: true }),
+		]) {
+			expect(isCompleteMp3File(valid)).toBe(true);
+			expect(MpegAudioBytesSchema.safeParse(valid).success).toBe(true);
+		}
 		for (const invalid of [
 			new Uint8Array([0xff]),
 			new TextEncoder().encode("not-an-mp3"),
 			Uint8Array.from([0, ...complete]),
 			Uint8Array.from([...complete, 0]),
 			complete.slice(0, -1),
+		]) {
+			expect(isCompleteMp3File(invalid)).toBe(false);
+			expect(MpegAudioBytesSchema.safeParse(invalid).success).toBe(false);
+		}
+	});
+
+	test("rejects reserved ID3 versions, revisions, flags, and invalid v2.4 footers", () => {
+		const id3v23 = withId3v2Tag(3);
+		const id3v24 = withId3v2Tag(4);
+		const id3v24Footer = withId3v2Tag(4, { footer: true });
+		for (const invalid of [
+			...([0, 1, 2, 5, 0xff] as const).map((version) =>
+				mutateByte(id3v23, 3, version),
+			),
+			mutateByte(id3v23, 4, 0xff),
+			mutateByte(id3v24, 4, 0xff),
+			mutateByte(id3v23, 5, 0x10),
+			mutateByte(id3v23, 5, 0x01),
+			mutateByte(id3v24, 5, 0x08),
+			mutateByte(id3v24, 5, 0x01),
+			mutateByte(id3v24, 5, 0x10),
+			mutateByte(id3v24Footer, 5, 0),
+			mutateByte(id3v24Footer, 10, 0x49),
+			mutateByte(id3v24Footer, 13, 3),
+			mutateByte(id3v24Footer, 14, 1),
+			mutateByte(id3v24Footer, 15, 0),
+			mutateByte(id3v24Footer, 19, 1),
+		]) {
+			expect(isCompleteMp3File(invalid)).toBe(false);
+			expect(MpegAudioBytesSchema.safeParse(invalid).success).toBe(false);
+		}
+	});
+
+	test("rejects reserved MPEG Layer III header mutations", () => {
+		const complete = createStructurallyValidMp3Frame();
+		for (const invalid of [
+			mutateByte(complete, 1, ((complete[1] ?? 0) & 0xe7) | 0x08),
+			mutateByte(complete, 1, (complete[1] ?? 0) & 0xf9),
+			mutateByte(complete, 2, (complete[2] ?? 0) & 0x0f),
+			mutateByte(complete, 2, ((complete[2] ?? 0) & 0x0f) | 0xf0),
+			mutateByte(complete, 2, ((complete[2] ?? 0) & 0xf3) | 0x0c),
+			mutateByte(complete, 3, ((complete[3] ?? 0) & 0xfc) | 0x02),
 		]) {
 			expect(isCompleteMp3File(invalid)).toBe(false);
 			expect(MpegAudioBytesSchema.safeParse(invalid).success).toBe(false);

@@ -105,7 +105,19 @@ describe("cross-component OpenRouter voice contracts", () => {
 		servers.push(server);
 		const config = voiceConfig(`http://127.0.0.1:${server.port}/api/v1`);
 		const stt = new OpenRouterSttAdapter({ config });
-		const tts = new OpenRouterTtsAdapter({ config });
+		const ttsAttemptsByPhrase = new Map<string, number>();
+		const tts = new OpenRouterTtsAdapter({
+			config,
+			fetch: async (input, init) => {
+				const request = new Request(input, init);
+				const body = (await request.clone().json()) as { input: string };
+				ttsAttemptsByPhrase.set(
+					body.input,
+					(ttsAttemptsByPhrase.get(body.input) ?? 0) + 1,
+				);
+				return fetch(request);
+			},
+		});
 		const notifier = new FakeNotifier();
 		const bookings = new FakeBookingService({
 			notifier,
@@ -155,13 +167,17 @@ describe("cross-component OpenRouter voice contracts", () => {
 		);
 
 		expect(provider.protocolViolations).toEqual([]);
-		expect(provider.counters).toEqual({
-			total: 7,
-			chat: 2,
-			tts: 5,
-			invalid: 0,
-			statuses: { "200": 5, "503": 2 },
-		});
+		// STT and every distinct synthesized phrase may make one retry, while
+		// safe speech rendering is free to reduce the number of spoken phrases.
+		expect(provider.counters.chat).toBe(2);
+		expect(provider.counters.invalid).toBe(0);
+		expect(provider.counters.statuses["503"]).toBe(2);
+		expect([...ttsAttemptsByPhrase.values()]).toEqual(
+			expect.arrayContaining([2]),
+		);
+		expect(
+			[...ttsAttemptsByPhrase.values()].every((attempts) => attempts <= 2),
+		).toBe(true);
 		expect(brain.turns).toHaveLength(1);
 		expect(
 			events.filter(
@@ -190,8 +206,18 @@ describe("cross-component OpenRouter voice contracts", () => {
 			}),
 		]);
 		const audio = events.filter((event) => event.type === "audio.segment");
-		expect(audio).toHaveLength(4);
-		expect(provider.counters.tts).toBe(audio.length + 1);
+		expect(audio.length).toBeGreaterThan(0);
+		expect(audio.length).toBeLessThanOrEqual(2);
+		expect(audio.map((segment) => segment.sequence)).toEqual(
+			audio.map((_, sequence) => sequence),
+		);
+		expect(ttsAttemptsByPhrase.size).toBe(audio.length);
+		expect(provider.counters.tts).toBe(
+			[...ttsAttemptsByPhrase.values()].reduce(
+				(total, attempts) => total + attempts,
+				0,
+			),
+		);
 		for (const segment of audio) {
 			expect(segment).toMatchObject({
 				contentType: "audio/mpeg",

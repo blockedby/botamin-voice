@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+	type AudioClientConfig,
 	type BookingService,
 	type BrainPort,
 	ConversationStageSchema,
@@ -45,7 +46,10 @@ export interface RuntimeGatewaySession {
 	readonly conversationId: string;
 	readonly expiresAt: Date;
 	takeClientToken(): string;
-	attach(socket: import("../gateway/session").GatewaySocket): void;
+	attach(
+		socket: import("../gateway/session").GatewaySocket,
+		protocolVersion: import("@botamin/contracts").VoiceWsProtocolVersion | null,
+	): void;
 	receive(
 		socket: import("../gateway/session").GatewaySocket,
 		data: unknown,
@@ -82,7 +86,9 @@ export interface ProductionRuntimeOverrides {
 	/** Credential-free integration tests inject bounded fakes here. */
 	brain?: BrainPort & { close?(): Promise<void> };
 	stt?: SttPort;
-	tts?: TtsPort;
+	tts?: TtsPort & {
+		readonly outputContentType: AudioClientConfig["outputContentType"];
+	};
 	bookings?: BookingService;
 	notifier?: NamedLeadNotifier;
 	/** Wall clock for persisted/ISO timestamps and HTTP-date calculations. */
@@ -165,6 +171,14 @@ export async function createProductionRuntime(
 	overrides: ProductionRuntimeOverrides = {},
 ): Promise<ServerRuntime> {
 	const config = createRuntimeConfig(env);
+	if (
+		overrides.tts !== undefined &&
+		overrides.tts.outputContentType !== config.voice.tts.outputContentType
+	) {
+		throw new Error(
+			"Injected TTS output content type does not match runtime configuration",
+		);
+	}
 	const databaseFilename = sqliteFilename(config.databaseUrl);
 	mkdirSync(dirname(databaseFilename), { recursive: true, mode: 0o700 });
 	const database = openDomainDatabase({
@@ -335,6 +349,7 @@ export async function createProductionRuntime(
 				brainModel: config.brain.model,
 				maxUtteranceMs: config.voice.stt.maxUtteranceMs,
 				maxAudioBytes: config.voice.stt.maxAudioBytes,
+				outputContentType: config.voice.tts.outputContentType,
 				maxFrameBytes: config.limits.wsFrameBytes,
 				maxJsonBytes: config.limits.wsJsonBytes,
 				maxHistoryEvents: config.limits.historyEvents,
@@ -369,8 +384,11 @@ export async function createProductionRuntime(
 				prompt.ready &&
 				currentPrompt.ready &&
 				currentPrompt.version === prompt.version;
+			const ttsOutputMatches =
+				overrides.tts === undefined ||
+				overrides.tts.outputContentType === config.voice.tts.outputContentType;
 			const voiceStatus =
-				sttHealth !== "ready"
+				sttHealth !== "ready" || !ttsOutputMatches
 					? "unready"
 					: ttsHealth === "ready"
 						? "ready"
@@ -399,8 +417,9 @@ export async function createProductionRuntime(
 					...(voiceStatus === "ready"
 						? {}
 						: {
-								code:
-									sttHealth !== "ready"
+								code: !ttsOutputMatches
+									? "OPENROUTER_TTS_OUTPUT_MISMATCH"
+									: sttHealth !== "ready"
 										? "OPENROUTER_STT_NOT_READY"
 										: "OPENROUTER_TTS_DEGRADED",
 							}),

@@ -6,8 +6,15 @@ import {
 	type ClientWsEvent,
 	ClientWsEventSchema,
 	CONTRACT_VERSION,
+	type LocalReactionCapability,
+	PLAYBACK_FLOW_MAX_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENTS,
 	type ServerWsEvent,
 	ServerWsEventSchema,
+	VOICE_WS_PROTOCOL_QUERY_PARAM,
+	VOICE_WS_PROTOCOL_V2_QUERY_VALUE,
+	VOICE_WS_PROTOCOL_VERSION,
 } from "@botamin/contracts";
 import { CANONICAL_FRAME_BYTES } from "../audio/pcm";
 import { decodeAndPairServerSegment, encodeClientPcmFrame } from "./binary";
@@ -79,7 +86,9 @@ export interface VoiceTransportOptions {
 		maxDelayMs?: number;
 		maxAttempts?: number;
 	};
+	localReactions?: LocalReactionCapability;
 	onEvent?(event: ServerWsEvent): void;
+	onAudioMetadata?(metadata: AudioSegmentMetadata): void;
 	onAudio?(metadata: AudioSegmentMetadata, bytes: Uint8Array): void;
 	onStatus?(status: VoiceTransportStatus): void;
 	onProtocolError?(error: Error): void;
@@ -113,6 +122,8 @@ export class VoiceTransport {
 	private terminalFallbackOnly = false;
 	private outboundDisabled = false;
 	private sessionReady = false;
+	private protocolMode: "awaiting" | "negotiating" | "v2" | "legacy";
+	private readonly requestsProtocolV2: boolean;
 	private utteranceHasAudio = false;
 	private utteranceCommitted = false;
 	private utteranceNeedsRestart = false;
@@ -122,12 +133,15 @@ export class VoiceTransport {
 	constructor(private readonly options: VoiceTransportOptions) {
 		this.resumeToken = options.resumeToken ?? null;
 		this.scheduler = options.scheduler ?? browserScheduler;
+		this.requestsProtocolV2 = requestsVoiceProtocolV2(options.url);
+		this.protocolMode = this.requestsProtocolV2 ? "awaiting" : "legacy";
 	}
 
 	connect(): boolean {
 		if (this.stopped || this.reconnectDisabled) return false;
 		this.cancelReconnect();
 		this.sessionReady = false;
+		this.protocolMode = this.requestsProtocolV2 ? "awaiting" : "legacy";
 		this.options.onStatus?.(
 			this.reconnectAttempt === 0 ? "connecting" : "reconnecting",
 		);
@@ -261,6 +275,16 @@ export class VoiceTransport {
 
 	playbackStarted(generationId: string): boolean {
 		return this.sendClientEvent("playback.started", { generationId });
+	}
+
+	playbackSegmentReleased(segment: AudioSegmentMetadata): boolean {
+		if (this.protocolMode !== "v2") return false;
+		return this.sendClientEvent("playback.segment.released", {
+			generationId: segment.generationId,
+			segmentId: segment.segmentId,
+			sequence: segment.sequence,
+			byteLength: segment.byteLength,
+		});
 	}
 
 	interrupt(
@@ -407,6 +431,15 @@ export class VoiceTransport {
 		}
 		const result = ServerWsEventSchema.safeParse(value);
 		if (!result.success) {
+			if (
+				value !== null &&
+				typeof value === "object" &&
+				"type" in value &&
+				value.type === "session.protocol.offer"
+			) {
+				this.failProtocolNegotiation("Invalid protocol offer");
+				return;
+			}
 			this.reportProtocolError(new Error("Invalid server WebSocket event"));
 			return;
 		}
@@ -415,12 +448,52 @@ export class VoiceTransport {
 			this.reportProtocolError(new Error("Server event conversation mismatch"));
 			return;
 		}
+		if (
+			event.type === "assistant.reaction.request" &&
+			(this.protocolMode !== "v2" ||
+				!this.options.localReactions?.clipIds.includes(event.payload.clipId))
+		) {
+			this.reportProtocolError(new Error("Unsupported local reaction request"));
+			return;
+		}
+
+		if (event.type === "session.protocol.offer") {
+			if (
+				!this.requestsProtocolV2 ||
+				this.protocolMode !== "awaiting" ||
+				this.sessionReady
+			) {
+				this.failProtocolNegotiation("Unexpected protocol offer");
+				return;
+			}
+			if (
+				!this.sendClientEvent("client.protocol.accept", {
+					version: VOICE_WS_PROTOCOL_VERSION,
+					capabilities: {
+						localReactions: this.options.localReactions ?? null,
+					},
+					playback: {
+						maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS,
+						maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
+						maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+					},
+				})
+			) {
+				this.failProtocolNegotiation("Protocol acceptance failed");
+				return;
+			}
+			this.protocolMode = "negotiating";
+			return;
+		}
 
 		if (event.type === "audio.segment") {
 			const incomplete = this.incompleteAudioSequences.has(event.seq);
 			const suppressDelivery =
 				event.seq <= this.lastServerSequence && !incomplete;
-			if (!suppressDelivery) this.rememberIncompleteAudio(event.seq);
+			if (!suppressDelivery) {
+				this.rememberIncompleteAudio(event.seq);
+				this.options.onAudioMetadata?.(event.payload);
+			}
 			this.pendingSegment = { event, suppressDelivery };
 			return;
 		}
@@ -431,6 +504,12 @@ export class VoiceTransport {
 		this.lastServerSequence = event.seq;
 
 		if (event.type === "session.ready") {
+			if (this.protocolMode === "awaiting") {
+				// An old server ignored the v2 query and accepted the legacy hello.
+				this.protocolMode = "legacy";
+			} else if (this.protocolMode === "negotiating") {
+				this.protocolMode = "v2";
+			}
 			this.resumeToken = event.payload.resumeToken;
 			this.sessionReady = true;
 			// Keep an in-flight request fenced across reconnect. The session settles
@@ -651,9 +730,33 @@ export class VoiceTransport {
 		if (oldest !== undefined) this.incompleteAudioSequences.delete(oldest);
 	}
 
+	private failProtocolNegotiation(message: string): void {
+		this.reportProtocolError(new Error(message));
+		this.reconnectDisabled = true;
+		this.outboundDisabled = true;
+		this.sessionReady = false;
+		this.socket?.close(1008, "protocol policy");
+		this.options.onStatus?.("error");
+	}
+
 	private reportProtocolError(error: Error): void {
 		this.options.onProtocolError?.(error);
 	}
+}
+
+function requestsVoiceProtocolV2(rawUrl: string): boolean {
+	let url: URL;
+	try {
+		url = new URL(rawUrl, "http://voice-transport.invalid");
+	} catch {
+		return false;
+	}
+	const entries = [...url.searchParams.entries()];
+	return (
+		entries.length === 1 &&
+		entries[0]?.[0] === VOICE_WS_PROTOCOL_QUERY_PARAM &&
+		entries[0]?.[1] === VOICE_WS_PROTOCOL_V2_QUERY_VALUE
+	);
 }
 
 function isBookingCommand(

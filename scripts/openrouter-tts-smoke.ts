@@ -1,18 +1,11 @@
 import { loadOpenRouterVoiceConfig } from "../apps/server/src/providers/openrouter/stt/config";
-import {
-	OpenRouterTtsAdapter,
-	type OpenRouterTtsTelemetryEvent,
-} from "../apps/server/src/providers/openrouter/tts/adapter";
+import { OpenRouterTtsAdapter } from "../apps/server/src/providers/openrouter/tts/adapter";
 import { OpenRouterTtsError } from "../apps/server/src/providers/openrouter/tts/errors";
 
-const ARTIFACT_PATH = "/tmp/botamin-openrouter-tts-smoke.mp3";
 const SAMPLE = "Здравствуйте! Это короткая проверка русской речи.";
-const SMOKE_ID = crypto.randomUUID();
 
 function print(result: Record<string, unknown>): void {
-	console.info(
-		JSON.stringify({ smoke: "openrouter-tts", smokeId: SMOKE_ID, ...result }),
-	);
+	console.info(JSON.stringify({ smoke: "openrouter-tts", ...result }));
 }
 
 if (Bun.env.OPENROUTER_EXTERNAL_SMOKE !== "1") {
@@ -21,15 +14,9 @@ if (Bun.env.OPENROUTER_EXTERNAL_SMOKE !== "1") {
 }
 
 const startedAt = Date.now();
-let latest: OpenRouterTtsTelemetryEvent | undefined;
 try {
 	const config = loadOpenRouterVoiceConfig();
-	const adapter = new OpenRouterTtsAdapter({
-		config,
-		telemetry: (event) => {
-			latest = event;
-		},
-	});
+	const adapter = new OpenRouterTtsAdapter({ config });
 	const result = await adapter.synthesize({
 		conversationId: "01J00000000000000000000000",
 		turnId: "01J00000000000000000000001",
@@ -38,16 +25,11 @@ try {
 		text: SAMPLE,
 		signal: new AbortController().signal,
 	});
-	await Bun.write(ARTIFACT_PATH, result.bytes);
 	print({
-		status: latest?.status ?? 200,
+		status: "success",
+		contentType: result.contentType,
 		latencyMs: Date.now() - startedAt,
 		bytes: result.bytes.byteLength,
-		id: result.providerGenerationId ?? SMOKE_ID,
-		model: config.tts.model,
-		voice: config.tts.voice,
-		format: config.tts.responseFormat,
-		artifact: ARTIFACT_PATH,
 	});
 } catch (error) {
 	const typed = error instanceof OpenRouterTtsError ? error : undefined;
@@ -55,7 +37,6 @@ try {
 		status: typed?.status ?? typed?.code ?? "local_error",
 		latencyMs: Date.now() - startedAt,
 		bytes: 0,
-		id: SMOKE_ID,
 	});
 	process.exit(1);
 }

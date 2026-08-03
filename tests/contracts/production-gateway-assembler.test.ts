@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { PcmUtteranceAssembler } from "../../apps/server/src/gateway/wav";
 import { CANONICAL_FRAME_BYTES } from "../../apps/web/src/audio/pcm";
+import {
+	type AudioPlaybackApis,
+	PhrasePlaybackQueue,
+	type PlaybackSourceLike,
+} from "../../apps/web/src/audio/playback";
 import { decodeAndPairServerSegment } from "../../apps/web/src/transport/binary";
 import {
 	VoiceTransport,
@@ -10,10 +15,13 @@ import {
 	BINARY_AUDIO_FRAME_KIND,
 	decodeBinaryAudioFrame,
 	encodeBinaryAudioFrame,
+	encodeCanonicalTtsWav,
+	TtsAudioSegmentSchema,
 } from "../../packages/contracts/src";
 import {
 	createDeterministicMp3Fixture,
 	createDeterministicPcm16Fixture,
+	createDeterministicTtsPcm16Fixture,
 	createDeterministicWavFixture,
 	parseMonoPcm16Wav,
 } from "../../packages/test-fixtures/src";
@@ -145,6 +153,57 @@ describe("production gateway utterance assembler", () => {
 			expect.objectContaining({ code: "UTTERANCE_TOO_LARGE" }),
 		);
 		expect(assembler.hasAudio).toBe(false);
+	});
+
+	test("round-trips synthetic PCM through canonical WAV, gateway framing, browser pairing, and decode injection", async () => {
+		const pcm = createDeterministicTtsPcm16Fixture();
+		const wav = encodeCanonicalTtsWav(pcm);
+		const ttsSegment = TtsAudioSegmentSchema.parse({
+			generationId,
+			segmentId,
+			contentType: "audio/wav",
+			bytes: wav,
+			final: true,
+		});
+		const metadata = {
+			generationId: ttsSegment.generationId,
+			segmentId: ttsSegment.segmentId,
+			sequence: 7,
+			contentType: ttsSegment.contentType,
+			byteLength: ttsSegment.bytes.byteLength,
+			final: true as const,
+		};
+		const rawFrame = encodeBinaryAudioFrame({
+			kind: BINARY_AUDIO_FRAME_KIND.serverWavSegment,
+			sequence: metadata.sequence,
+			payload: ttsSegment.bytes,
+		});
+		const paired = decodeAndPairServerSegment(metadata, rawFrame);
+		const decodedBytes: Uint8Array[] = [];
+		const starts: number[] = [];
+		const source: PlaybackSourceLike = {
+			onended: null,
+			start: (when) => starts.push(when),
+			stop: () => undefined,
+		};
+		const apis: AudioPlaybackApis<number> = {
+			decodeAudioData: async (buffer) => {
+				decodedBytes.push(new Uint8Array(buffer).slice());
+				return 0.1;
+			},
+			createSource: () => source,
+			resume: async () => undefined,
+			currentTime: () => 3,
+			duration: (duration) => duration,
+		};
+		const playback = new PhrasePlaybackQueue(apis);
+		playback.beginGeneration(generationId);
+
+		expect(await playback.enqueue({ ...metadata, bytes: paired })).toEqual({
+			status: "accepted",
+		});
+		expect(decodedBytes).toEqual([wav]);
+		expect(starts).toEqual([3]);
 	});
 
 	test("browser server-audio codec preserves a complete canonical MP3 payload", () => {

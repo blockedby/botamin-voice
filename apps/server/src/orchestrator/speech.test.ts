@@ -3,8 +3,10 @@ import {
 	chunkPreparedSpeech,
 	chunkSpeech,
 	prepareSpeech,
+	renderPreparedSpeech,
 	SpeechBudgetGuard,
 	SpeechPrefetchCoordinator,
+	StreamingModelControlSanitizer,
 	StreamingSentenceChunker,
 	sanitizeSpeech,
 } from "./speech";
@@ -45,6 +47,33 @@ generationId=01J00000000000000000000002
 		);
 		const streamed = chunkSpeech(envelope).map(sanitizeSpeech).filter(Boolean);
 		expect(streamed).toEqual(["До конверта.", "После конверта."]);
+	});
+
+	test("strips bracket-style controls from provider speech", () => {
+		const source =
+			"[excited] Полезный ответ. [whispers] Только факт. [style: serious!] Без управления.";
+		expect(sanitizeSpeech(source)).toBe(
+			"Полезный ответ. Только факт. Без управления.",
+		);
+	});
+
+	test("strips nested model controls across deltas and fails closed on an open tail", () => {
+		const sanitizer = new StreamingModelControlSanitizer();
+		const visible = [
+			sanitizer.push("Обычный русский [ex"),
+			sanitizer.push("cited] текст [laughs [quietly]] сохранён. "),
+			sanitizer.push("Продолжение [whis"),
+			sanitizer.push("pers без закрытия"),
+		].join("");
+		sanitizer.flush();
+		expect(visible.replace(/\s+/gu, " ").trim()).toBe(
+			"Обычный русский текст сохранён. Продолжение",
+		);
+		expect(visible).not.toMatch(/\[|\]|excited|laughs|quietly|whispers/iu);
+		expect(sanitizer.push("Новый обычный текст.")).toBe("Новый обычный текст.");
+		expect(sanitizer.push(' Данные: [{"deliveryStyle":"serious"}].')).toBe(
+			" Данные:  .",
+		);
 	});
 
 	test("redacts phone, email, and Telegram before provider speech", () => {
@@ -520,6 +549,42 @@ describe("approved contact speech", () => {
 			forwardedCount: 0,
 		});
 		expect(chunkPreparedSpeech(prepared)).toEqual(["Почта контакт скрыт."]);
+	});
+});
+
+describe("provider-neutral speech rendering", () => {
+	test("adds ordinary Russian punctuation spacing and expands only known pronunciations", () => {
+		const prepared = prepareSpeech(
+			"Здравствуйте,это CRM!Расскажу о подходе!Продолжим?",
+			{ contactProcessing: false, approvedContacts: [] },
+		);
+		expect(renderPreparedSpeech(prepared).spokenText).toBe(
+			"Здравствуйте, это си-эр-эм! Расскажу о подходе! Продолжим?",
+		);
+		expect(prepared.spokenText).toBe(
+			"Здравствуйте,это CRM!Расскажу о подходе!Продолжим?",
+		);
+	});
+
+	test("leaves date, time, decimal, range, and grouped numeric semantics unchanged", () => {
+		const source =
+			"Дата 10.08.2026, время 16:00, рост 3,14%, диапазон 1000000-2000000 и 12 500 заявок.";
+		const prepared = prepareSpeech(source, {
+			contactProcessing: false,
+			approvedContacts: [],
+		});
+		expect(renderPreparedSpeech(prepared).spokenText).toBe(source);
+	});
+
+	test("returns protected approved-contact speech unchanged", () => {
+		const prepared = prepareSpeech("Почта: atomic.contact@example.com. CRM", {
+			contactProcessing: true,
+			approvedContacts: [
+				{ channel: "email", value: "atomic.contact@example.com" },
+			],
+		});
+		expect(prepared.protectedSpans).toHaveLength(1);
+		expect(renderPreparedSpeech(prepared)).toBe(prepared);
 	});
 });
 

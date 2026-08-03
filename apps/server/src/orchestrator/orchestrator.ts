@@ -18,6 +18,7 @@ import type {
 	SttPort,
 	SttTranscriptionResult,
 	ToolRequest,
+	TtsAudioSegment,
 	TtsPort,
 } from "@botamin/contracts";
 import {
@@ -54,12 +55,20 @@ import { AtomicSttTurnGate } from "./reliability";
 import {
 	chunkPreparedSpeech,
 	prepareSpeech,
+	renderPreparedSpeech,
 	SpeechBudgetGuard,
 	type SpeechBudgetOptions,
 	type SpeechChunkerOptions,
 	SpeechPrefetchCoordinator,
+	StreamingModelControlSanitizer,
 	StreamingSentenceChunker,
 } from "./speech";
+import {
+	classifyModelSpeechResponse,
+	type SpeechDeliveryStyle,
+	SpeechDeliveryStyleCooldown,
+	type SpeechResponseCategory,
+} from "./speech-style-policy";
 import {
 	type ConversationEvent,
 	type ConversationState,
@@ -115,7 +124,7 @@ export type OrchestratorEvent =
 			generationId: string;
 			segmentId: string;
 			sequence: number;
-			contentType: "audio/mpeg";
+			contentType: TtsAudioSegment["contentType"];
 			bytes: Uint8Array;
 			final: true;
 	  }
@@ -186,6 +195,37 @@ interface RenderResult {
 	audioProduced: boolean;
 }
 
+interface SpeechSynthesisJob {
+	segmentId: string;
+	visibleFallback: string;
+	startFailed: boolean;
+	promise: Promise<SpeechSynthesisOutcome>;
+}
+
+type SpeechSynthesisOutcome =
+	| { kind: "success"; result: TtsAudioSegment }
+	| { kind: "failure" }
+	| { kind: "stale" };
+
+interface SpeechPipeline {
+	readonly turn: { turnId: string; generationId: string };
+	readonly controller: AbortController;
+	readonly deliveryStyle: SpeechDeliveryStyle;
+	readonly pending: SpeechSynthesisJob[];
+	failed: boolean;
+	degraded: boolean;
+	audioProduced: boolean;
+	finalized: boolean;
+}
+
+interface ModelSpeechPresentation {
+	readonly provenance: "model_generated";
+	/** Trusted stage supplied to the model for this response. */
+	readonly stage: ConversationState["stage"];
+	/** False while later model deltas could still add sensitive facts. */
+	readonly completed: boolean;
+}
+
 interface TerminalResponsePermit {
 	generationId: string;
 	turnId: string;
@@ -213,6 +253,12 @@ interface PendingDraftConfirmation {
 	candidateId: string;
 	generationId: string;
 }
+
+type PlaybackInterruptionReason =
+	| "barge_in"
+	| "user_stop"
+	| "new_generation"
+	| "playback_error";
 
 const BOOKING_FAILURE =
 	"Не получилось сохранить данные, поэтому я не буду подтверждать бронь. Проверьте контакт и попробуйте ещё раз.";
@@ -402,6 +448,9 @@ export class ConversationOrchestrator {
 	readonly #generations = new GenerationCoordinator();
 	readonly #budgets: SpeechBudgetGuard;
 	readonly #prefetch = new SpeechPrefetchCoordinator();
+	readonly #deliveryStyleCooldown = new SpeechDeliveryStyleCooldown();
+	readonly #deliveryStyleByGeneration = new Map<string, SpeechDeliveryStyle>();
+	readonly #priorInterruptionByGeneration = new Map<string, boolean>();
 	readonly #chunkerOptions: SpeechChunkerOptions;
 	readonly #createId: () => string;
 	readonly #metrics: ObservabilityMetrics | undefined;
@@ -432,6 +481,7 @@ export class ConversationOrchestrator {
 	#rejectedTimeOfDayPreferences: MeetingTimeBand[] = [];
 	#pendingDailyLeadVolume: CountAmount | null = null;
 	#pendingDraftConfirmation: PendingDraftConfirmation | null = null;
+	#priorUserInterruptionPending = false;
 	#lifecycleInterruption: Promise<void> = Promise.resolve();
 	#closed = false;
 	#closePromise: Promise<void> | null = null;
@@ -913,13 +963,22 @@ export class ConversationOrchestrator {
 		}
 	}
 
-	async interrupt(generationId: string): Promise<OrchestratorEvent> {
-		if (this.#pendingDraftConfirmation?.generationId === generationId) {
+	async interrupt(
+		generationId: string,
+		reason: PlaybackInterruptionReason = "barge_in",
+	): Promise<OrchestratorEvent> {
+		if (
+			reason !== "playback_error" &&
+			this.#pendingDraftConfirmation?.generationId === generationId
+		) {
 			this.#pendingDraftConfirmation = null;
 		}
 		const active = this.#generations.current();
 		if (!active || active.generationId !== generationId) {
 			return { type: "ignored", generationId, source: "generation" };
+		}
+		if (reason === "barge_in" || reason === "new_generation") {
+			this.#priorUserInterruptionPending = true;
 		}
 		await this.#invalidateActiveWork("interrupted");
 		return { type: "assistant.interrupted", generationId };
@@ -951,6 +1010,10 @@ export class ConversationOrchestrator {
 		this.#activeCandidateMeetingSlots.clear();
 		this.#pendingDynamicEvents.clear();
 		this.#pendingDynamicResponses.clear();
+		this.#deliveryStyleByGeneration.clear();
+		this.#priorInterruptionByGeneration.clear();
+		this.#priorUserInterruptionPending = false;
+		this.#deliveryStyleCooldown.clear();
 		this.#deferredDomainEvents.length = 0;
 		this.#threadId = undefined;
 		this.#tools.clear();
@@ -970,6 +1033,14 @@ export class ConversationOrchestrator {
 		knownFacts: KnownFacts;
 		source: "voice_transcript" | "typed_message";
 	}): AsyncGenerator<OrchestratorEvent> {
+		// This function is entered only for a server-accepted final visitor turn.
+		// Consume trusted interruption state exactly once, without touching durable
+		// conversation, draft, or booking state.
+		this.#priorInterruptionByGeneration.set(
+			input.generationId,
+			this.#priorUserInterruptionPending,
+		);
+		this.#priorUserInterruptionPending = false;
 		const pendingConfirmation = this.#pendingDraftConfirmation;
 		this.#pendingDraftConfirmation = null;
 		if (pendingConfirmation) {
@@ -1203,7 +1274,9 @@ export class ConversationOrchestrator {
 			this.#chunkerOptions,
 			streamingApprovedContacts,
 		);
+		const modelControls = new StreamingModelControlSanitizer();
 		const heldActionSpeech: string[] = [];
+		let modelSpeechPipeline: SpeechPipeline | undefined;
 		let suppressModelSpeech = false;
 		let toolSettledThisTurn = false;
 		let brainFailure: Extract<BrainDelta, { type: "error" }> | undefined;
@@ -1373,99 +1446,74 @@ export class ConversationOrchestrator {
 			this.#threadId ??= await this.#brain.createThread(this.conversationId);
 			if (!this.#generations.accept(input.generationId, input.turnId)) return;
 
-			// Exactly one BrainPort.runTurn call per accepted final transcript.
-			for await (const delta of this.#brain.runTurn(context, active.signal)) {
-				if (!this.#acceptBrainDelta(input, delta)) {
-					yield {
-						type: "ignored",
-						generationId: delta.generationId,
-						source: "brain",
-					};
-					continue;
-				}
-
-				if (delta.type === "speech.delta") {
-					this.#metrics?.markFirstLlmDelta(input.turnId);
-				}
-
-				for (const event of this.#takeDynamicEvents(input.generationId)) {
-					yield event;
-				}
-				for (const dynamicResponse of this.#takeDynamicResponses(
-					input.generationId,
-				)) {
-					let terminalResponsePermit = dynamicResponse.terminalResponsePermit;
-					const rendered = yield* this.#renderToolResponse(
-						input,
-						dynamicResponse.text,
-						terminalResponsePermit,
-					);
-					if (rendered.visibleText) visible.push(rendered.visibleText);
-					audioProduced ||= rendered.audioProduced;
-					suppressModelSpeech ||= dynamicResponse.suppressModelSpeech;
-					if (!terminalResponsePermit) {
-						if (!this.#generations.accept(input.generationId, input.turnId))
-							return;
-						if (this.#state.stage === "BOOKED") {
-							this.apply({ type: "booking_confirmation_delivered" });
-							if (!this.#state.qualificationEnabled) {
-								this.apply({ type: "complete" });
-								terminalResponsePermit = {
-									generationId: input.generationId,
-									turnId: input.turnId,
-								};
-							}
+			// Exactly one BrainPort.runTurn call per accepted final transcript. Keep
+			// one iterator read racing the ordered pipeline head so ready audio can
+			// publish without serializing Luna on provider synthesis.
+			const brainDeltas = this.#brain
+				.runTurn(context, active.signal)
+				[Symbol.asyncIterator]();
+			let nextBrainDelta = brainDeltas.next();
+			try {
+				for (;;) {
+					let next: IteratorResult<BrainDelta>;
+					const activeSpeechPipeline = modelSpeechPipeline;
+					const speechHead = activeSpeechPipeline?.pending[0];
+					if (speechHead && !activeSpeechPipeline.finalized) {
+						const ready = await Promise.race([
+							speechHead.promise.then(() => ({ kind: "speech" as const })),
+							nextBrainDelta.then((result) => ({
+								kind: "brain" as const,
+								result,
+							})),
+						]);
+						if (ready.kind === "speech") {
+							yield* this.#drainNextSpeechJob(activeSpeechPipeline);
+							audioProduced ||= activeSpeechPipeline.audioProduced;
+							continue;
 						}
+						next = ready.result;
+					} else {
+						next = await nextBrainDelta;
 					}
-					if (isTerminalStage(this.#state.stage)) {
-						if (!terminalResponsePermit) return;
-						yield* this.#finishTerminalResponse(
-							terminalResponsePermit,
-							visible,
-							audioProduced,
-						);
-						return;
+					if (next.done) break;
+					const delta = next.value;
+					if (!this.#acceptBrainDelta(input, delta)) {
+						yield {
+							type: "ignored",
+							generationId: delta.generationId,
+							source: "brain",
+						};
+						nextBrainDelta = brainDeltas.next();
+						continue;
 					}
-				}
 
-				if (delta.type === "error") {
-					brainFailure = delta;
-					break;
-				}
-				if (delta.type === "turn.completed") {
-					const stageEvent = this.#applyBrainStageProposal(
+					if (delta.type === "speech.delta") {
+						this.#metrics?.markFirstLlmDelta(input.turnId);
+					}
+
+					for (const event of this.#takeDynamicEvents(input.generationId)) {
+						yield event;
+					}
+					for (const dynamicResponse of this.#takeDynamicResponses(
 						input.generationId,
-						toolSettledThisTurn ? undefined : delta.nextStage,
-					);
-					if (stageEvent) yield stageEvent;
-					continue;
-				}
-				if (delta.type === "tool.request") {
-					const outcome = await this.#performTool(
-						input.generationId,
-						input.turnId,
-						delta.tool,
-						context.schedulingContext.candidateMeetingSlots.map(
-							(candidate) => candidate.meetingSlot,
-						) as [MeetingSlot, MeetingSlot],
-					);
-					toolSettledThisTurn = true;
-					for (const event of outcome.events) yield event;
-					chunker.clear();
-					heldActionSpeech.length = 0;
-					suppressModelSpeech ||= outcome.suppressModelSpeech;
-					if (outcome.serverResponse) {
-						let terminalResponsePermit = outcome.terminalResponsePermit;
+					)) {
+						let terminalResponsePermit = dynamicResponse.terminalResponsePermit;
 						const rendered = yield* this.#renderToolResponse(
 							input,
-							outcome.serverResponse,
+							dynamicResponse.text,
 							terminalResponsePermit,
 						);
 						if (rendered.visibleText) visible.push(rendered.visibleText);
 						audioProduced ||= rendered.audioProduced;
+						suppressModelSpeech ||= dynamicResponse.suppressModelSpeech;
 						if (!terminalResponsePermit) {
-							if (!this.#generations.accept(input.generationId, input.turnId))
+							if (!this.#generations.accept(input.generationId, input.turnId)) {
+								this.#cancelSpeechPipeline(
+									modelSpeechPipeline,
+									"stale model speech pipeline",
+								);
 								return;
+							}
 							if (this.#state.stage === "BOOKED") {
 								this.apply({ type: "booking_confirmation_delivered" });
 								if (!this.#state.qualificationEnabled) {
@@ -1478,7 +1526,17 @@ export class ConversationOrchestrator {
 							}
 						}
 						if (isTerminalStage(this.#state.stage)) {
-							if (!terminalResponsePermit) return;
+							if (!terminalResponsePermit) {
+								this.#cancelSpeechPipeline(
+									modelSpeechPipeline,
+									"terminal model speech pipeline",
+								);
+								return;
+							}
+							this.#cancelSpeechPipeline(
+								modelSpeechPipeline,
+								"terminal model speech pipeline",
+							);
 							yield* this.#finishTerminalResponse(
 								terminalResponsePermit,
 								visible,
@@ -1487,19 +1545,109 @@ export class ConversationOrchestrator {
 							return;
 						}
 					}
-					continue;
-				}
-				if (suppressModelSpeech) continue;
-				const ready = chunker.push(delta.text);
-				if (allowedActions(this.#state).length > 0) {
-					heldActionSpeech.push(...ready);
-					continue;
-				}
-				for (const phrase of ready) {
-					const rendered = yield* this.#renderPhrase(input, phrase);
-					if (rendered.visibleText) visible.push(rendered.visibleText);
+
+					if (delta.type === "error") {
+						brainFailure = delta;
+						break;
+					}
+					if (delta.type === "turn.completed") {
+						const stageEvent = this.#applyBrainStageProposal(
+							input.generationId,
+							toolSettledThisTurn ? undefined : delta.nextStage,
+						);
+						if (stageEvent) yield stageEvent;
+						nextBrainDelta = brainDeltas.next();
+						continue;
+					}
+					if (delta.type === "tool.request") {
+						const outcome = await this.#performTool(
+							input.generationId,
+							input.turnId,
+							delta.tool,
+							context.schedulingContext.candidateMeetingSlots.map(
+								(candidate) => candidate.meetingSlot,
+							) as [MeetingSlot, MeetingSlot],
+						);
+						toolSettledThisTurn = true;
+						for (const event of outcome.events) yield event;
+						chunker.clear();
+						modelControls.clear();
+						heldActionSpeech.length = 0;
+						suppressModelSpeech ||= outcome.suppressModelSpeech;
+						if (outcome.serverResponse) {
+							let terminalResponsePermit = outcome.terminalResponsePermit;
+							const rendered = yield* this.#renderToolResponse(
+								input,
+								outcome.serverResponse,
+								terminalResponsePermit,
+							);
+							if (rendered.visibleText) visible.push(rendered.visibleText);
+							audioProduced ||= rendered.audioProduced;
+							if (!terminalResponsePermit) {
+								if (
+									!this.#generations.accept(input.generationId, input.turnId)
+								) {
+									this.#cancelSpeechPipeline(
+										modelSpeechPipeline,
+										"stale model speech pipeline",
+									);
+									return;
+								}
+								if (this.#state.stage === "BOOKED") {
+									this.apply({ type: "booking_confirmation_delivered" });
+									if (!this.#state.qualificationEnabled) {
+										this.apply({ type: "complete" });
+										terminalResponsePermit = {
+											generationId: input.generationId,
+											turnId: input.turnId,
+										};
+									}
+								}
+							}
+							if (isTerminalStage(this.#state.stage)) {
+								this.#cancelSpeechPipeline(
+									modelSpeechPipeline,
+									"terminal model speech pipeline",
+								);
+								if (!terminalResponsePermit) return;
+								yield* this.#finishTerminalResponse(
+									terminalResponsePermit,
+									visible,
+									audioProduced,
+								);
+								return;
+							}
+						}
+						nextBrainDelta = brainDeltas.next();
+						continue;
+					}
+					if (suppressModelSpeech) {
+						nextBrainDelta = brainDeltas.next();
+						continue;
+					}
+					const ready = chunker.push(modelControls.push(delta.text));
+					if (allowedActions(this.#state).length > 0) {
+						heldActionSpeech.push(...ready);
+						nextBrainDelta = brainDeltas.next();
+						continue;
+					}
+					const rendered = yield* this.#renderPhrases(
+						input,
+						ready,
+						{
+							provenance: "model_generated",
+							stage: context.stage,
+							completed: false,
+						},
+						{ pipeline: modelSpeechPipeline, deferDrain: true },
+					);
+					modelSpeechPipeline = rendered.pipeline ?? modelSpeechPipeline;
+					visible.push(...rendered.visibleTexts);
 					audioProduced ||= rendered.audioProduced;
+					nextBrainDelta = brainDeltas.next();
 				}
+			} finally {
+				await brainDeltas.return?.();
 			}
 
 			for (const event of this.#takeDynamicEvents(input.generationId))
@@ -1517,8 +1665,13 @@ export class ConversationOrchestrator {
 				audioProduced ||= rendered.audioProduced;
 				suppressModelSpeech ||= dynamicResponse.suppressModelSpeech;
 				if (!terminalResponsePermit) {
-					if (!this.#generations.accept(input.generationId, input.turnId))
+					if (!this.#generations.accept(input.generationId, input.turnId)) {
+						this.#cancelSpeechPipeline(
+							modelSpeechPipeline,
+							"stale model speech pipeline",
+						);
 						return;
+					}
 					if (this.#state.stage === "BOOKED") {
 						this.apply({ type: "booking_confirmation_delivered" });
 						if (!this.#state.qualificationEnabled) {
@@ -1531,6 +1684,10 @@ export class ConversationOrchestrator {
 					}
 				}
 				if (isTerminalStage(this.#state.stage)) {
+					this.#cancelSpeechPipeline(
+						modelSpeechPipeline,
+						"terminal model speech pipeline",
+					);
 					if (!terminalResponsePermit) return;
 					yield* this.#finishTerminalResponse(
 						terminalResponsePermit,
@@ -1541,11 +1698,20 @@ export class ConversationOrchestrator {
 				}
 			}
 			if (!suppressModelSpeech && !brainFailure) {
-				for (const phrase of [...heldActionSpeech, ...chunker.flush()]) {
-					const rendered = yield* this.#renderPhrase(input, phrase);
-					if (rendered.visibleText) visible.push(rendered.visibleText);
-					audioProduced ||= rendered.audioProduced;
-				}
+				modelControls.flush();
+				const rendered = yield* this.#renderPhrases(
+					input,
+					[...heldActionSpeech, ...chunker.flush()],
+					{
+						provenance: "model_generated",
+						stage: context.stage,
+						completed: true,
+					},
+					{ pipeline: modelSpeechPipeline, deferDrain: true },
+				);
+				modelSpeechPipeline = rendered.pipeline ?? modelSpeechPipeline;
+				visible.push(...rendered.visibleTexts);
+				audioProduced ||= rendered.audioProduced;
 			}
 		} catch {
 			brainFailure = {
@@ -1560,6 +1726,11 @@ export class ConversationOrchestrator {
 					retryable: true,
 				},
 			};
+		}
+
+		if (modelSpeechPipeline) {
+			yield* this.#finalizeSpeechPipeline(modelSpeechPipeline);
+			audioProduced ||= modelSpeechPipeline.audioProduced;
 		}
 
 		if (
@@ -2466,17 +2637,97 @@ export class ConversationOrchestrator {
 		turn: { turnId: string; generationId: string },
 		visibleText: string,
 	): AsyncGenerator<OrchestratorEvent, RenderResult> {
-		const visible = visibleText.replace(/\s+/gu, " ").trim();
-		if (!visible || !this.#generations.accept(turn.generationId, turn.turnId)) {
-			return { visibleText: "", audioProduced: false };
-		}
-		yield {
-			type: "text.delta",
-			generationId: turn.generationId,
-			text: visible,
+		const rendered = yield* this.#renderPhrases(turn, [visibleText]);
+		return {
+			visibleText: rendered.visibleTexts[0] ?? "",
+			audioProduced: rendered.audioProduced,
 		};
-		const audioProduced = yield* this.#renderSpokenPhrase(turn, visible);
-		return { visibleText: visible, audioProduced };
+	}
+
+	async *#renderPhrases(
+		turn: { turnId: string; generationId: string },
+		visibleTexts: readonly string[],
+		presentation?: ModelSpeechPresentation,
+		options: {
+			pipeline?: SpeechPipeline | undefined;
+			deferDrain?: boolean;
+		} = {},
+	): AsyncGenerator<
+		OrchestratorEvent,
+		{
+			visibleTexts: string[];
+			audioProduced: boolean;
+			pipeline?: SpeechPipeline;
+		}
+	> {
+		const visible: string[] = [];
+		if (!this.#generations.accept(turn.generationId, turn.turnId)) {
+			return {
+				visibleTexts: visible,
+				audioProduced: false,
+				...(options.pipeline ? { pipeline: options.pipeline } : {}),
+			};
+		}
+		const approvedContacts: Contact[] = this.#state.booking
+			? this.#state.booking.contacts
+			: (this.#draftStore?.approvedContacts(this.conversationId) ?? []);
+		const entries: Array<{
+			visibleText: string;
+			prepared: ReturnType<typeof prepareSpeech>;
+		}> = [];
+		for (const sourceText of visibleTexts) {
+			const text = sourceText.replace(/\s+/gu, " ").trim();
+			if (!text || !this.#generations.accept(turn.generationId, turn.turnId)) {
+				continue;
+			}
+			visible.push(text);
+			entries.push({
+				visibleText: text,
+				prepared: renderPreparedSpeech(
+					prepareSpeech(text, {
+						contactProcessing: this.#state.contactConsentConfirmed,
+						approvedContacts,
+					}),
+				),
+			});
+		}
+		if (entries.length === 0) {
+			return {
+				visibleTexts: visible,
+				audioProduced: options.pipeline?.audioProduced ?? false,
+				...(options.pipeline ? { pipeline: options.pipeline } : {}),
+			};
+		}
+		const pipeline =
+			options.pipeline ??
+			this.#createSpeechPipeline(
+				turn,
+				this.#selectDeliveryStyle(
+					turn.generationId,
+					entries.map((entry) => entry.prepared),
+					presentation,
+				),
+			);
+		for (const entry of entries) {
+			yield {
+				type: "text.delta",
+				generationId: turn.generationId,
+				text: entry.visibleText,
+			};
+			if (entry.prepared.spokenText) {
+				yield* this.#enqueuePreparedSpeech(
+					pipeline,
+					entry.prepared,
+					entry.visibleText,
+				);
+			}
+		}
+		if (!options.deferDrain) yield* this.#finalizeSpeechPipeline(pipeline);
+		return {
+			visibleTexts: visible,
+			audioProduced: pipeline.audioProduced,
+			pipeline,
+		};
 	}
 
 	async *#renderSpokenPhrase(
@@ -2492,124 +2743,260 @@ export class ConversationOrchestrator {
 			approvedContacts,
 		});
 		if (!prepared.spokenText) return false;
-		if (!this.#tts) {
-			yield {
-				type: "degraded",
-				generationId: turn.generationId,
-				provider: "tts",
-				code: "TTS_UNAVAILABLE",
-				textFallback: visible,
-			};
-			return false;
-		}
-		let audioProduced = false;
-		for (const phrase of chunkPreparedSpeech(prepared, this.#chunkerOptions)) {
-			const produced = yield* this.#synthesizeSpeechSegment(
-				turn,
-				phrase,
-				visible,
-			);
-			if (!produced) return audioProduced;
-			audioProduced = true;
-		}
-		return audioProduced;
+		const rendered = renderPreparedSpeech(prepared);
+		const pipeline = this.#createSpeechPipeline(
+			turn,
+			this.#selectDeliveryStyle(turn.generationId, [rendered]),
+		);
+		yield* this.#enqueuePreparedSpeech(pipeline, rendered, visible);
+		yield* this.#finalizeSpeechPipeline(pipeline);
+		return pipeline.audioProduced;
 	}
 
-	async *#synthesizeSpeechSegment(
+	#selectDeliveryStyle(
+		generationId: string,
+		preparedSpeech: readonly ReturnType<typeof prepareSpeech>[],
+		presentation?: ModelSpeechPresentation,
+	): SpeechDeliveryStyle {
+		const selectedForResponse =
+			this.#deliveryStyleByGeneration.get(generationId);
+		if (selectedForResponse) return selectedForResponse;
+		const providerSafeSpokenText = preparedSpeech
+			.map((prepared) => prepared.spokenText)
+			.filter(Boolean)
+			.join(" ");
+		const classification = presentation?.completed
+			? classifyModelSpeechResponse(presentation.stage, providerSafeSpokenText)
+			: {
+					category: "other" as SpeechResponseCategory,
+					containsExactMeetingFacts: false,
+					responseLength: Array.from(providerSafeSpokenText).length,
+				};
+		const priorTurnInterrupted =
+			this.#priorInterruptionByGeneration.get(generationId) ?? false;
+		this.#priorInterruptionByGeneration.delete(generationId);
+		const style = this.#deliveryStyleCooldown.select({
+			stage: presentation?.stage ?? this.#state.stage,
+			provenance: presentation?.provenance ?? "server_authority",
+			category: classification.category,
+			containsProtectedApprovedContact: preparedSpeech.some(
+				(prepared) => prepared.metadata.forwardedCount > 0,
+			),
+			containsExactMeetingFacts: classification.containsExactMeetingFacts,
+			containsBookingConfirmation: false,
+			containsQualificationFacts: false,
+			priorTurnInterrupted,
+			responseLength: classification.responseLength,
+		});
+		this.#deliveryStyleByGeneration.set(generationId, style);
+		return style;
+	}
+
+	#createSpeechPipeline(
 		turn: { turnId: string; generationId: string },
+		deliveryStyle: SpeechDeliveryStyle,
+	): SpeechPipeline {
+		const controller = new AbortController();
+		const generationSignal = this.#generations.signal(turn.generationId);
+		if (generationSignal.aborted) {
+			controller.abort(generationSignal.reason);
+		} else {
+			generationSignal.addEventListener(
+				"abort",
+				() => controller.abort(generationSignal.reason),
+				{ once: true },
+			);
+		}
+		return {
+			turn,
+			controller,
+			deliveryStyle,
+			pending: [],
+			failed: false,
+			degraded: false,
+			audioProduced: false,
+			finalized: false,
+		};
+	}
+
+	async *#enqueuePreparedSpeech(
+		pipeline: SpeechPipeline,
+		prepared: ReturnType<typeof prepareSpeech>,
+		visibleFallback: string,
+	): AsyncGenerator<OrchestratorEvent> {
+		if (pipeline.failed || pipeline.finalized) return;
+		if (!this.#tts) {
+			pipeline.failed = true;
+			pipeline.degraded = true;
+			yield {
+				type: "degraded",
+				generationId: pipeline.turn.generationId,
+				provider: "tts",
+				code: "TTS_UNAVAILABLE",
+				textFallback: visibleFallback,
+			};
+			return;
+		}
+		const rendered = renderPreparedSpeech(prepared);
+		for (const spoken of chunkPreparedSpeech(rendered, this.#chunkerOptions)) {
+			while (pipeline.pending.length >= 2 && !pipeline.failed) {
+				yield* this.#drainNextSpeechJob(pipeline);
+			}
+			if (pipeline.failed) return;
+			const job = this.#startSpeechJob(pipeline, spoken, visibleFallback);
+			pipeline.pending.push(job);
+			if (job.startFailed) break;
+		}
+	}
+
+	#startSpeechJob(
+		pipeline: SpeechPipeline,
 		spoken: string,
 		visibleFallback: string,
-	): AsyncGenerator<OrchestratorEvent, boolean> {
-		const budget = this.#budgets.reserve(spoken);
-		if (!budget.ok || !this.#tts) {
-			yield {
-				type: "degraded",
-				generationId: turn.generationId,
-				provider: "tts",
-				code: "TTS_UNAVAILABLE",
-				textFallback: visibleFallback,
-			};
-			return false;
-		}
+	): SpeechSynthesisJob {
 		const segmentId = this.#createId();
-		if (!this.#prefetch.tryStart(segmentId)) {
-			yield {
-				type: "degraded",
-				generationId: turn.generationId,
-				provider: "tts",
-				code: "TTS_UNAVAILABLE",
-				textFallback: visibleFallback,
+		if (!this.#tts || !this.#prefetch.tryStart(segmentId)) {
+			return {
+				segmentId,
+				visibleFallback,
+				startFailed: true,
+				promise: Promise.resolve({ kind: "failure" }),
 			};
-			return false;
 		}
-		const ttsStartedAt = this.#metrics?.markTtsRequest();
-		let ttsSettled = false;
-		const settleTts = (outcome: "success" | "failure" | "stale"): void => {
-			if (ttsSettled || ttsStartedAt === undefined) return;
-			ttsSettled = true;
-			this.#metrics?.recordTtsCompletion(ttsStartedAt, outcome);
-		};
-		try {
-			const result = TtsAudioSegmentSchema.parse(
-				await this.#tts.synthesize({
-					conversationId: this.conversationId,
-					turnId: turn.turnId,
-					generationId: turn.generationId,
-					segmentId,
-					text: spoken,
-					signal: this.#generations.signal(turn.generationId),
-				}),
-			);
-			if (
-				!this.#generations.accept(turn.generationId, turn.turnId) ||
-				result.generationId !== turn.generationId ||
-				result.segmentId !== segmentId
-			) {
-				settleTts("stale");
-				yield {
-					type: "ignored",
-					generationId: result.generationId,
-					source: "tts",
-				};
-				return false;
-			}
-			const sequence = this.#generations.nextAudioSeq(turn.generationId);
-			if (sequence === null) {
-				settleTts("stale");
-				return false;
-			}
-			settleTts("success");
-			this.#metrics?.markFirstPlaybackReady(turn.turnId);
-			yield {
-				type: "audio.segment",
-				generationId: result.generationId,
-				segmentId: result.segmentId,
-				sequence,
-				contentType: result.contentType,
-				bytes: result.bytes,
-				final: true,
+		const budget = this.#budgets.reserve(spoken);
+		if (!budget.ok) {
+			this.#prefetch.finish(segmentId);
+			return {
+				segmentId,
+				visibleFallback,
+				startFailed: true,
+				promise: Promise.resolve({ kind: "failure" }),
 			};
-			return true;
-		} catch {
-			const current = this.#generations.accept(turn.generationId, turn.turnId);
-			settleTts(current ? "failure" : "stale");
-			if (current) {
+		}
+
+		const tts = this.#tts;
+		const turn = pipeline.turn;
+		const request = Object.freeze({
+			conversationId: this.conversationId,
+			turnId: turn.turnId,
+			generationId: turn.generationId,
+			segmentId,
+			text: spoken,
+			deliveryStyle: pipeline.deliveryStyle,
+			signal: pipeline.controller.signal,
+		});
+		const ttsStartedAt = this.#metrics?.markTtsRequest();
+		let synthesis: Promise<TtsAudioSegment>;
+		try {
+			synthesis = tts.synthesize(request);
+		} catch (error) {
+			synthesis = Promise.reject(error);
+		}
+		const promise = Promise.resolve(synthesis)
+			.then((rawResult): SpeechSynthesisOutcome => {
+				const result = TtsAudioSegmentSchema.parse(rawResult);
+				if (
+					pipeline.controller.signal.aborted ||
+					!this.#generations.accept(turn.generationId, turn.turnId)
+				) {
+					return { kind: "stale" };
+				}
+				if (
+					result.generationId !== turn.generationId ||
+					result.segmentId !== segmentId
+				) {
+					return { kind: "failure" };
+				}
+				return { kind: "success", result };
+			})
+			.catch(
+				(): SpeechSynthesisOutcome =>
+					pipeline.controller.signal.aborted ||
+					!this.#generations.accept(turn.generationId, turn.turnId)
+						? { kind: "stale" }
+						: { kind: "failure" },
+			)
+			.then((outcome) => {
+				if (ttsStartedAt !== undefined) {
+					this.#metrics?.recordTtsCompletion(ttsStartedAt, outcome.kind);
+				}
+				return outcome;
+			})
+			.finally(() => this.#prefetch.finish(segmentId));
+		return { segmentId, visibleFallback, startFailed: false, promise };
+	}
+
+	async *#drainNextSpeechJob(
+		pipeline: SpeechPipeline,
+	): AsyncGenerator<OrchestratorEvent> {
+		const job = pipeline.pending.shift();
+		if (!job) return;
+		const outcome = await job.promise;
+		if (pipeline.failed) return;
+		if (
+			outcome.kind === "stale" ||
+			!this.#generations.accept(
+				pipeline.turn.generationId,
+				pipeline.turn.turnId,
+			)
+		) {
+			pipeline.failed = true;
+			pipeline.controller.abort("stale TTS pipeline");
+			pipeline.pending.length = 0;
+			return;
+		}
+		if (outcome.kind === "failure") {
+			pipeline.failed = true;
+			pipeline.controller.abort("ordered TTS failure");
+			// Later promises are already rejection-safe and retain their global
+			// coordinator slots until settlement, but no buffered audio is retained
+			// by this ordered publisher after the first failure.
+			pipeline.pending.length = 0;
+			if (!pipeline.degraded) {
+				pipeline.degraded = true;
 				yield {
 					type: "degraded",
-					generationId: turn.generationId,
+					generationId: pipeline.turn.generationId,
 					provider: "tts",
 					code: "TTS_UNAVAILABLE",
-					textFallback: visibleFallback,
+					textFallback: job.visibleFallback,
 				};
 			}
-			return false;
-		} finally {
-			settleTts(
-				this.#generations.accept(turn.generationId, turn.turnId)
-					? "failure"
-					: "stale",
-			);
-			this.#prefetch.finish(segmentId);
+			return;
+		}
+		const sequence = this.#generations.nextAudioSeq(pipeline.turn.generationId);
+		if (sequence === null) return;
+		pipeline.audioProduced = true;
+		this.#metrics?.markFirstPlaybackReady(pipeline.turn.turnId);
+		yield {
+			type: "audio.segment",
+			generationId: outcome.result.generationId,
+			segmentId: outcome.result.segmentId,
+			sequence,
+			contentType: outcome.result.contentType,
+			bytes: outcome.result.bytes,
+			final: true,
+		};
+	}
+
+	#cancelSpeechPipeline(
+		pipeline: SpeechPipeline | undefined,
+		reason: string,
+	): void {
+		if (!pipeline || pipeline.finalized) return;
+		pipeline.finalized = true;
+		pipeline.failed = true;
+		pipeline.controller.abort(reason);
+		pipeline.pending.length = 0;
+	}
+
+	async *#finalizeSpeechPipeline(
+		pipeline: SpeechPipeline,
+	): AsyncGenerator<OrchestratorEvent> {
+		if (pipeline.finalized) return;
+		pipeline.finalized = true;
+		while (pipeline.pending.length > 0 && !pipeline.failed) {
+			yield* this.#drainNextSpeechJob(pipeline);
 		}
 	}
 
@@ -2630,6 +3017,8 @@ export class ConversationOrchestrator {
 		this.#activeCandidateMeetingSlots.delete(permit.generationId);
 		this.#pendingDynamicEvents.delete(permit.generationId);
 		this.#pendingDynamicResponses.delete(permit.generationId);
+		this.#deliveryStyleByGeneration.delete(permit.generationId);
+		this.#priorInterruptionByGeneration.delete(permit.generationId);
 	}
 
 	async *#finishGeneration(
@@ -2647,6 +3036,8 @@ export class ConversationOrchestrator {
 		this.#activeCandidateMeetingSlots.delete(generationId);
 		this.#pendingDynamicEvents.delete(generationId);
 		this.#pendingDynamicResponses.delete(generationId);
+		this.#deliveryStyleByGeneration.delete(generationId);
+		this.#priorInterruptionByGeneration.delete(generationId);
 		this.#generations.finish(generationId);
 	}
 
@@ -2683,6 +3074,8 @@ export class ConversationOrchestrator {
 		this.#activeCandidateMeetingSlots.delete(active.generationId);
 		this.#pendingDynamicEvents.delete(active.generationId);
 		this.#pendingDynamicResponses.delete(active.generationId);
+		this.#deliveryStyleByGeneration.delete(active.generationId);
+		this.#priorInterruptionByGeneration.delete(active.generationId);
 		const threadId = this.#threadId;
 		if (!threadId) return Promise.resolve();
 		return this.#brain

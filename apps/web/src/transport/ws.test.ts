@@ -5,9 +5,12 @@ import {
 	BINARY_AUDIO_FRAME_KIND,
 	decodeBinaryAudioFrame,
 	encodeBinaryAudioFrame,
+	LOCAL_REACTION_CAPABILITY_VERSION,
+	LOCAL_REACTION_CLIP_IDS,
 } from "@botamin/contracts";
 import {
 	createDeterministicMp3Fixture,
+	createDeterministicTtsWavFixture,
 	createDeterministicWavFixture,
 	parseMonoPcm16Wav,
 } from "../../../../packages/test-fixtures/src";
@@ -124,6 +127,17 @@ function sessionReady(seq = 1, resumeToken = "resume-token-0001") {
 	};
 }
 
+function protocolOffer(seq = 1) {
+	return {
+		v: 1,
+		conversationId,
+		seq,
+		at,
+		type: "session.protocol.offer",
+		payload: { version: 2 },
+	};
+}
+
 function transcriptFinal(seq: number) {
 	return {
 		v: 1,
@@ -135,7 +149,12 @@ function transcriptFinal(seq: number) {
 	};
 }
 
-function audioSegment(seq: number, binarySequence: number, byteLength: number) {
+function audioSegment(
+	seq: number,
+	binarySequence: number,
+	byteLength: number,
+	contentType: "audio/mpeg" | "audio/wav" = "audio/mpeg",
+) {
 	return {
 		v: 1,
 		conversationId,
@@ -149,7 +168,7 @@ function audioSegment(seq: number, binarySequence: number, byteLength: number) {
 					? segmentId
 					: `01J${String(binarySequence + 5).padStart(23, "0")}`,
 			sequence: binarySequence,
-			contentType: "audio/mpeg",
+			contentType,
 			byteLength,
 			final: true,
 		},
@@ -168,7 +187,7 @@ describe("voice WebSocket transport", () => {
 		const events: string[] = [];
 		const transport = new VoiceTransport({
 			conversationId,
-			url: "/ws/v1/conversations/test",
+			url: "/ws/v1/conversations/test?voiceProtocol=2",
 			createWebSocket: () => socket,
 			now: () => new Date(at),
 			onEvent: (event) => events.push(event.type),
@@ -177,9 +196,10 @@ describe("voice WebSocket transport", () => {
 		socket.open();
 
 		const hello = sentJson(socket)[0];
-		expect(hello).toMatchObject({
+		expect(hello).toEqual({
 			v: 1,
 			conversationId,
+			at,
 			type: "client.hello",
 			payload: {
 				resumeToken: null,
@@ -191,6 +211,16 @@ describe("voice WebSocket transport", () => {
 				},
 			},
 		});
+		expect(
+			transport.playbackSegmentReleased({
+				generationId,
+				segmentId,
+				sequence: 0,
+				contentType: "audio/mpeg",
+				byteLength: 417,
+				final: true,
+			}),
+		).toBe(false);
 		expect(transport.commit()).toBe(false);
 
 		socket.serverJson(sessionReady());
@@ -224,6 +254,96 @@ describe("voice WebSocket transport", () => {
 		expect(transport.beginUtterance()).toBe(true);
 		expect(transport.sendPcmFrame(pcm)).toBe(true);
 		expect(transport.commit()).toBe(true);
+	});
+
+	test("advertises and delivers only the negotiated strict reaction allowlist", () => {
+		const socket = new FakeSocket();
+		const events: string[] = [];
+		const errors: string[] = [];
+		const transport = new VoiceTransport({
+			conversationId,
+			url: "ws://local?voiceProtocol=2",
+			createWebSocket: () => socket,
+			now: () => new Date(at),
+			localReactions: {
+				version: LOCAL_REACTION_CAPABILITY_VERSION,
+				clipIds: ["neutral-good"],
+			},
+			onEvent: (event) => events.push(event.type),
+			onProtocolError: (error) => errors.push(error.message),
+		});
+		transport.connect();
+		socket.open();
+		expect(sentJson(socket)[0]).toMatchObject({
+			type: "client.hello",
+			payload: {
+				resumeToken: null,
+				audio: { encoding: "pcm16le" },
+			},
+		});
+		expect(sentJson(socket)[0]).not.toHaveProperty("payload.capabilities");
+		expect(sentJson(socket)[0]).not.toHaveProperty("payload.playback");
+		socket.serverJson(protocolOffer());
+		expect(sentJson(socket)[1]).toMatchObject({
+			type: "client.protocol.accept",
+			payload: {
+				version: 2,
+				capabilities: {
+					localReactions: {
+						version: LOCAL_REACTION_CAPABILITY_VERSION,
+						clipIds: ["neutral-good"],
+					},
+				},
+				playback: {
+					maxBufferedSegments: 4,
+					maxBufferedBytes: 20_000_000,
+					maxSegmentBytes: 5_000_000,
+				},
+			},
+		});
+		socket.serverJson(sessionReady());
+		socket.serverJson({
+			v: 1,
+			conversationId,
+			seq: 2,
+			at,
+			type: "assistant.reaction.request",
+			payload: { turnId, generationId, clipId: "neutral-good", delayMs: 350 },
+		});
+		expect(events).toEqual(["session.ready", "assistant.reaction.request"]);
+
+		socket.serverJson({
+			v: 1,
+			conversationId,
+			seq: 3,
+			at,
+			type: "assistant.reaction.request",
+			payload: {
+				turnId,
+				generationId,
+				clipId: LOCAL_REACTION_CLIP_IDS[1],
+				delayMs: 350,
+			},
+		});
+		socket.serverJson({
+			v: 1,
+			conversationId,
+			seq: 4,
+			at,
+			type: "assistant.reaction.request",
+			payload: {
+				turnId,
+				generationId,
+				clipId: "neutral-good",
+				delayMs: 350,
+				url: "https://attacker.invalid/reaction.mp3",
+			},
+		});
+		expect(events).toEqual(["session.ready", "assistant.reaction.request"]);
+		expect(errors).toEqual([
+			"Unsupported local reaction request",
+			"Invalid server WebSocket event",
+		]);
 	});
 
 	test("sequences bounded typed turns and suppresses duplicates until final or rejection", () => {
@@ -409,7 +529,7 @@ describe("voice WebSocket transport", () => {
 		).toBe(true);
 	});
 
-	test("pairs complete MP3 metadata with exactly the next shared binary frame", () => {
+	test("pairs complete MP3 and WAV metadata with exactly their next binary frames", () => {
 		const socket = new FakeSocket();
 		const received: Array<{ sequence: number; bytes: Uint8Array }> = [];
 		const errors: string[] = [];
@@ -436,15 +556,29 @@ describe("voice WebSocket transport", () => {
 		);
 		expect(received).toEqual([{ sequence: 42, bytes: mp3 }]);
 
-		socket.serverJson(audioSegment(3, 43, mp3.byteLength));
+		const wav = createDeterministicTtsWavFixture();
+		socket.serverJson(audioSegment(3, 43, wav.byteLength, "audio/wav"));
+		socket.serverBinary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverWavSegment,
+				sequence: 43,
+				payload: wav,
+			}),
+		);
+		expect(received).toEqual([
+			{ sequence: 42, bytes: mp3 },
+			{ sequence: 43, bytes: wav },
+		]);
+
+		socket.serverJson(audioSegment(4, 44, mp3.byteLength));
 		socket.serverBinary(
 			encodeBinaryAudioFrame({
 				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
-				sequence: 44,
+				sequence: 45,
 				payload: mp3,
 			}),
 		);
-		expect(received).toHaveLength(1);
+		expect(received).toHaveLength(2);
 		expect(errors.at(-1)).toContain("sequence does not match");
 	});
 
@@ -482,7 +616,9 @@ describe("voice WebSocket transport", () => {
 			true,
 		);
 		expect(
-			errors.some((message) => message.includes("server MP3 frame kind")),
+			errors.some((message) =>
+				message.includes("does not match its server frame kind"),
+			),
 		).toBe(true);
 		expect(errors.at(-1)).toBe("Malformed WebSocket JSON event");
 	});
@@ -715,12 +851,12 @@ describe("voice WebSocket transport", () => {
 			onAudio: (metadata) => received.push(metadata.sequence),
 			onProtocolError: (error) => errors.push(error.message),
 		});
-		const mp3 = createDeterministicMp3Fixture();
-		const metadata = audioSegment(2, 42, mp3.byteLength);
+		const wav = createDeterministicTtsWavFixture();
+		const metadata = audioSegment(2, 42, wav.byteLength, "audio/wav");
 		const binary = encodeBinaryAudioFrame({
-			kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+			kind: BINARY_AUDIO_FRAME_KIND.serverWavSegment,
 			sequence: 42,
-			payload: mp3,
+			payload: wav,
 		});
 
 		transport.connect();
@@ -749,12 +885,13 @@ describe("voice WebSocket transport", () => {
 		expect(errors).toEqual([]);
 	});
 
-	test("hands three one-shot WS segments to bounded playback without dropping one", async () => {
+	test("hands four one-shot WS segments to bounded playback without dropping one", async () => {
 		const socket = new FakeSocket();
 		const sources: FakePlaybackSource[] = [];
 		const decodedSequences: number[] = [];
 		const started: number[] = [];
-		const accepted: Array<Promise<boolean>> = [];
+		const accepted: Array<ReturnType<PhrasePlaybackQueue<number>["enqueue"]>> =
+			[];
 		const playbackApis: AudioPlaybackApis<number> = {
 			decodeAudioData: async (bytes) => {
 				decodedSequences.push(bytes.byteLength);
@@ -765,6 +902,9 @@ describe("voice WebSocket transport", () => {
 				sources.push(source);
 				return source;
 			},
+			resume: async () => undefined,
+			currentTime: () => 0,
+			duration: () => 1,
 		};
 		const playback = new PhrasePlaybackQueue(playbackApis, {
 			onStarted: (value) => started.push(value.sequence),
@@ -787,6 +927,7 @@ describe("voice WebSocket transport", () => {
 			[2, 10],
 			[3, 11],
 			[4, 12],
+			[5, 13],
 		] as const) {
 			socket.serverJson(
 				audioSegment(eventSequence, audioSequence, mp3.byteLength),
@@ -800,18 +941,20 @@ describe("voice WebSocket transport", () => {
 			);
 		}
 
-		expect(accepted).toHaveLength(3);
+		expect(accepted).toHaveLength(4);
 		await Promise.all(accepted.slice(0, 2));
 		expect(playback.bufferedSegmentCount).toBe(2);
-		expect(playback.pendingHandoffCount).toBe(1);
+		expect(playback.pendingHandoffCount).toBe(2);
 		expect(decodedSequences).toHaveLength(2);
 
 		sources[0]?.finish();
-		expect(await accepted[2]).toBe(true);
+		expect(await accepted[2]).toEqual({ status: "accepted" });
 		sources[1]?.finish();
+		expect(await accepted[3]).toEqual({ status: "accepted" });
 		sources[2]?.finish();
-		expect(started).toEqual([10, 11, 12]);
-		expect(decodedSequences).toHaveLength(3);
+		sources[3]?.finish();
+		expect(started).toEqual([10]);
+		expect(decodedSequences).toHaveLength(4);
 		expect(playback.bufferedSegmentCount).toBe(0);
 	});
 

@@ -20,17 +20,25 @@ import {
 	BookingSnapshotSchema,
 	BookingToolExecutionSchema,
 	BrainTurnInputSchema,
+	CanonicalTtsWavBytesSchema,
 	ClientWsEventSchema,
 	ContactSchema,
 	CreateBookingInputSchema,
 	CreateConversationRequestSchema,
+	CreateConversationResponseSchema,
 	decodeBinaryAudioFrame,
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
+	encodeCanonicalTtsWav,
 	isCompleteMp3File,
+	LOCAL_REACTION_CAPABILITY_VERSION,
+	LOCAL_REACTION_CLIP_IDS,
 	MeetingSlotSchema,
 	MpegAudioBytesSchema,
 	PersistedQualificationPatchSchema,
+	PLAYBACK_FLOW_MAX_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENTS,
 	QualificationPatchSchema,
 	ServerWsEventSchema,
 	STT_CONTRACT_MAX_AUDIO_BYTES,
@@ -40,6 +48,7 @@ import {
 	TtsAudioSegmentSchema,
 	TtsHealthSchema,
 	TtsSynthesisRequestDataSchema,
+	VOICE_WS_PROTOCOL_VERSION,
 } from "../src";
 
 const conversationId = "01J00000000000000000000000";
@@ -63,6 +72,56 @@ function createStructurallyValidMp3Frame(): Uint8Array {
 	const bytes = new Uint8Array(96);
 	bytes.set([0xff, 0xf3, 0x44, 0xc4]);
 	return bytes;
+}
+
+function withId3v2Tag(
+	majorVersion: 3 | 4,
+	options: { flags?: number; footer?: boolean; paddingBytes?: number } = {},
+): Uint8Array {
+	const flags = options.flags ?? (options.footer ? 0x10 : 0);
+	const padding = new Uint8Array(options.paddingBytes ?? 0);
+	const header = Uint8Array.from([
+		0x49,
+		0x44,
+		0x33,
+		majorVersion,
+		0,
+		flags,
+		0,
+		0,
+		0,
+		padding.byteLength,
+	]);
+	const footer = options.footer
+		? Uint8Array.from([
+				0x33,
+				0x44,
+				0x49,
+				majorVersion,
+				0,
+				flags,
+				0,
+				0,
+				0,
+				padding.byteLength,
+			])
+		: new Uint8Array();
+	return Uint8Array.from([
+		...header,
+		...padding,
+		...footer,
+		...createStructurallyValidMp3Frame(),
+	]);
+}
+
+function mutateByte(
+	bytes: Uint8Array,
+	offset: number,
+	value: number,
+): Uint8Array {
+	const mutated = bytes.slice();
+	mutated[offset] = value;
+	return mutated;
 }
 
 const bookingSnapshot = {
@@ -104,6 +163,44 @@ describe("shared contracts", () => {
 				consent: { ...request.consent, voiceProcessing: false },
 			}).success,
 		).toBe(false);
+	});
+
+	test("allows only legacy or low-cardinality v2 conversation WebSocket paths", () => {
+		const response = {
+			conversationId,
+			wsUrl: `/ws/v1/conversations/${conversationId}?voiceProtocol=2`,
+			clientToken: "c".repeat(43),
+			expiresAt: "2026-07-30T21:22:00.000Z",
+			clientConfig: {
+				inputSampleRate: 16_000,
+				inputEncoding: "pcm16le",
+				chunkMs: 100,
+				maxUtteranceMs: 60_000,
+				maxPcmBytes: 1_920_000,
+				outputContentType: "audio/mpeg",
+				outputMode: "complete-phrase-segments",
+			},
+		};
+		expect(CreateConversationResponseSchema.safeParse(response).success).toBe(
+			true,
+		);
+		expect(
+			CreateConversationResponseSchema.safeParse({
+				...response,
+				wsUrl: `/ws/v1/conversations/${conversationId}`,
+			}).success,
+		).toBe(true);
+		for (const wsUrl of [
+			`/ws/v1/conversations/${foreignConversationId}?voiceProtocol=2`,
+			`/ws/v1/conversations/${conversationId}?voiceProtocol=3`,
+			`/ws/v1/conversations/${conversationId}?voiceProtocol=2&visitor=private`,
+			`https://attacker.invalid/ws/v1/conversations/${conversationId}`,
+		]) {
+			expect(
+				CreateConversationResponseSchema.safeParse({ ...response, wsUrl })
+					.success,
+			).toBe(false);
+		}
 	});
 
 	test("accepts bounded international phone contacts without unsafe separators", () => {
@@ -558,6 +655,53 @@ describe("shared contracts", () => {
 		});
 
 		expect(hello.type).toBe("client.hello");
+		if (hello.type !== "client.hello") throw new Error("hello mismatch");
+		expect(Object.keys(hello.payload).sort()).toEqual(["audio", "resumeToken"]);
+		const protocolAccept = ClientWsEventSchema.parse({
+			v: 1,
+			type: "client.protocol.accept",
+			conversationId,
+			at,
+			payload: {
+				version: VOICE_WS_PROTOCOL_VERSION,
+				capabilities: { localReactions: null },
+				playback: {
+					maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS,
+					maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
+					maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+				},
+			},
+		});
+		expect(protocolAccept.type).toBe("client.protocol.accept");
+		if (protocolAccept.type !== "client.protocol.accept") {
+			throw new Error("protocol accept mismatch");
+		}
+		expect(
+			ClientWsEventSchema.safeParse({
+				...protocolAccept,
+				payload: {
+					...protocolAccept.payload,
+					playback: {
+						...protocolAccept.payload.playback,
+						maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS - 1,
+					},
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			ClientWsEventSchema.safeParse({
+				v: 1,
+				type: "playback.segment.released",
+				conversationId,
+				at,
+				payload: {
+					generationId: eventId,
+					segmentId: bookingId,
+					sequence: 0,
+					byteLength: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+				},
+			}).success,
+		).toBe(true);
 		expect(created.type).toBe("booking.created");
 		expect(
 			ServerWsEventSchema.safeParse({
@@ -572,6 +716,120 @@ describe("shared contracts", () => {
 				},
 			}).success,
 		).toBe(true);
+	});
+
+	test("keeps origin/main hello exact and negotiates strict v2 capabilities separately", () => {
+		const legacyHello = {
+			v: 1,
+			type: "client.hello",
+			conversationId,
+			at,
+			payload: {
+				resumeToken: "resume-token-0000000000000000",
+				audio: {
+					encoding: "pcm16le",
+					sampleRate: 16_000,
+					channels: 1,
+					chunkMs: 100,
+				},
+			},
+		};
+		expect(ClientWsEventSchema.safeParse(legacyHello).success).toBe(true);
+		expect(
+			ClientWsEventSchema.safeParse({
+				...legacyHello,
+				payload: {
+					...legacyHello.payload,
+					capabilities: {
+						localReactions: {
+							version: LOCAL_REACTION_CAPABILITY_VERSION,
+							clipIds: [...LOCAL_REACTION_CLIP_IDS],
+						},
+					},
+				},
+			}).success,
+		).toBe(false);
+		const protocolAccept = {
+			v: 1,
+			type: "client.protocol.accept",
+			conversationId,
+			at,
+			payload: {
+				version: VOICE_WS_PROTOCOL_VERSION,
+				capabilities: {
+					localReactions: {
+						version: LOCAL_REACTION_CAPABILITY_VERSION,
+						clipIds: [...LOCAL_REACTION_CLIP_IDS],
+					},
+				},
+				playback: {
+					maxBufferedSegments: PLAYBACK_FLOW_MAX_SEGMENTS,
+					maxBufferedBytes: PLAYBACK_FLOW_MAX_BYTES,
+					maxSegmentBytes: PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+				},
+			},
+		};
+		expect(ClientWsEventSchema.safeParse(protocolAccept).success).toBe(true);
+		for (const localReactions of [
+			{ version: 2, clipIds: [LOCAL_REACTION_CLIP_IDS[0]] },
+			{ version: 1, clipIds: [] },
+			{ version: 1, clipIds: ["visitor-supplied"] },
+			{
+				version: 1,
+				clipIds: [LOCAL_REACTION_CLIP_IDS[0], LOCAL_REACTION_CLIP_IDS[0]],
+			},
+			{
+				version: 1,
+				clipIds: [LOCAL_REACTION_CLIP_IDS[0]],
+				url: "https://attacker.invalid/reaction.mp3",
+			},
+		]) {
+			expect(
+				ClientWsEventSchema.safeParse({
+					...protocolAccept,
+					payload: {
+						...protocolAccept.payload,
+						capabilities: { localReactions },
+					},
+				}).success,
+			).toBe(false);
+		}
+	});
+
+	test("carries only bounded allowlisted reaction request fields", () => {
+		const request = {
+			v: 1,
+			type: "assistant.reaction.request",
+			conversationId,
+			seq: 3,
+			at,
+			payload: {
+				turnId: "01J00000000000000000000003",
+				generationId: "01J00000000000000000000004",
+				clipId: LOCAL_REACTION_CLIP_IDS[0],
+				delayMs: 350,
+			},
+		};
+		const parsed = ServerWsEventSchema.parse(request);
+		expect(parsed.type).toBe("assistant.reaction.request");
+		expect(Object.keys(parsed.payload).sort()).toEqual([
+			"clipId",
+			"delayMs",
+			"generationId",
+			"turnId",
+		]);
+		for (const payload of [
+			{ ...request.payload, clipId: "arbitrary-id" },
+			{ ...request.payload, delayMs: 299 },
+			{ ...request.payload, delayMs: 501 },
+			{ ...request.payload, text: "visitor copy" },
+			{ ...request.payload, path: "/private/reaction.mp3" },
+			{ ...request.payload, url: "https://attacker.invalid/a.mp3" },
+		]) {
+			expect(
+				ServerWsEventSchema.safeParse({ ...request, payload }).success,
+			).toBe(false);
+		}
 	});
 
 	test("freezes atomic STT request data and its TypeScript-only AbortSignal boundary", async () => {
@@ -745,6 +1003,7 @@ describe("shared contracts", () => {
 			generationId: "01J00000000000000000000004",
 			segmentId: "01J00000000000000000000005",
 			text: "Готово.",
+			deliveryStyle: "curious" as const,
 		};
 		const request = {
 			...data,
@@ -762,6 +1021,8 @@ describe("shared contracts", () => {
 			{ ...data, generationId: "not-an-id" },
 			{ ...data, segmentId: "not-an-id" },
 			{ ...data, text: "" },
+			{ ...data, deliveryStyle: "whisper" },
+			{ ...data, provider: { instructions: "whisper" } },
 		]) {
 			expect(TtsSynthesisRequestDataSchema.safeParse(invalid).success).toBe(
 				false,
@@ -771,8 +1032,15 @@ describe("shared contracts", () => {
 
 	test("shares strict whole-file MP3 validation across provider and transport boundaries", () => {
 		const complete = createStructurallyValidMp3Frame();
-		expect(isCompleteMp3File(complete)).toBe(true);
-		expect(MpegAudioBytesSchema.safeParse(complete).success).toBe(true);
+		for (const valid of [
+			complete,
+			withId3v2Tag(3, { paddingBytes: 4 }),
+			withId3v2Tag(4, { paddingBytes: 4 }),
+			withId3v2Tag(4, { footer: true }),
+		]) {
+			expect(isCompleteMp3File(valid)).toBe(true);
+			expect(MpegAudioBytesSchema.safeParse(valid).success).toBe(true);
+		}
 		for (const invalid of [
 			new Uint8Array([0xff]),
 			new TextEncoder().encode("not-an-mp3"),
@@ -785,7 +1053,49 @@ describe("shared contracts", () => {
 		}
 	});
 
-	test("validates complete non-empty MP3 TTS segments", () => {
+	test("rejects reserved ID3 versions, revisions, flags, and invalid v2.4 footers", () => {
+		const id3v23 = withId3v2Tag(3);
+		const id3v24 = withId3v2Tag(4);
+		const id3v24Footer = withId3v2Tag(4, { footer: true });
+		for (const invalid of [
+			...([0, 1, 2, 5, 0xff] as const).map((version) =>
+				mutateByte(id3v23, 3, version),
+			),
+			mutateByte(id3v23, 4, 0xff),
+			mutateByte(id3v24, 4, 0xff),
+			mutateByte(id3v23, 5, 0x10),
+			mutateByte(id3v23, 5, 0x01),
+			mutateByte(id3v24, 5, 0x08),
+			mutateByte(id3v24, 5, 0x01),
+			mutateByte(id3v24, 5, 0x10),
+			mutateByte(id3v24Footer, 5, 0),
+			mutateByte(id3v24Footer, 10, 0x49),
+			mutateByte(id3v24Footer, 13, 3),
+			mutateByte(id3v24Footer, 14, 1),
+			mutateByte(id3v24Footer, 15, 0),
+			mutateByte(id3v24Footer, 19, 1),
+		]) {
+			expect(isCompleteMp3File(invalid)).toBe(false);
+			expect(MpegAudioBytesSchema.safeParse(invalid).success).toBe(false);
+		}
+	});
+
+	test("rejects reserved MPEG Layer III header mutations", () => {
+		const complete = createStructurallyValidMp3Frame();
+		for (const invalid of [
+			mutateByte(complete, 1, ((complete[1] ?? 0) & 0xe7) | 0x08),
+			mutateByte(complete, 1, (complete[1] ?? 0) & 0xf9),
+			mutateByte(complete, 2, (complete[2] ?? 0) & 0x0f),
+			mutateByte(complete, 2, ((complete[2] ?? 0) & 0x0f) | 0xf0),
+			mutateByte(complete, 2, ((complete[2] ?? 0) & 0xf3) | 0x0c),
+			mutateByte(complete, 3, ((complete[3] ?? 0) & 0xfc) | 0x02),
+		]) {
+			expect(isCompleteMp3File(invalid)).toBe(false);
+			expect(MpegAudioBytesSchema.safeParse(invalid).success).toBe(false);
+		}
+	});
+
+	test("validates discriminated complete MP3 and canonical WAV TTS segments", () => {
 		const segment = {
 			generationId: "01J00000000000000000000004",
 			segmentId: "01J00000000000000000000005",
@@ -795,6 +1105,15 @@ describe("shared contracts", () => {
 			final: true,
 		};
 		expect(TtsAudioSegmentSchema.safeParse(segment).success).toBe(true);
+		const wavSegment = {
+			...segment,
+			contentType: "audio/wav",
+			bytes: encodeCanonicalTtsWav(new Uint8Array([0, 0, 1, 0])),
+		};
+		expect(TtsAudioSegmentSchema.safeParse(wavSegment).success).toBe(true);
+		expect(CanonicalTtsWavBytesSchema.safeParse(wavSegment.bytes).success).toBe(
+			true,
+		);
 		for (const invalid of [
 			{ ...segment, generationId: "generation" },
 			{ ...segment, segmentId: "segment" },
@@ -803,6 +1122,9 @@ describe("shared contracts", () => {
 			{ ...segment, bytes: new TextEncoder().encode("not-mp3") },
 			{ ...segment, bytes: "mp3" },
 			{ ...segment, contentType: "audio/wav" },
+			{ ...wavSegment, contentType: "audio/mpeg" },
+			{ ...wavSegment, bytes: new Uint8Array([0, 0, 1, 0]) },
+			{ ...segment, contentType: "audio/pcm" },
 			{ ...segment, final: false },
 			{ ...segment, encoding: "pcm16le" },
 		]) {
@@ -815,7 +1137,7 @@ describe("shared contracts", () => {
 		]);
 	});
 
-	test("freezes MP3 output client configuration and rejects PCM output", () => {
+	test("advertises complete MP3 or WAV output and rejects raw PCM output", () => {
 		const config = {
 			inputSampleRate: 16_000,
 			inputEncoding: "pcm16le",
@@ -826,8 +1148,14 @@ describe("shared contracts", () => {
 			outputMode: "complete-phrase-segments",
 		};
 		expect(AudioClientConfigSchema.safeParse(config).success).toBe(true);
+		expect(
+			AudioClientConfigSchema.safeParse({
+				...config,
+				outputContentType: "audio/wav",
+			}).success,
+		).toBe(true);
 		for (const invalid of [
-			{ ...config, outputContentType: "audio/wav" },
+			{ ...config, outputContentType: "audio/pcm" },
 			{ ...config, outputMode: "streaming-chunks" },
 			{ ...config, inputSampleRate: 24_000 },
 			{ ...config, maxUtteranceMs: 60_001, maxPcmBytes: 1_920_034 },
@@ -855,14 +1183,24 @@ describe("shared contracts", () => {
 			},
 		};
 		expect(AudioSegmentEventSchema.safeParse(metadata).success).toBe(true);
+		expect(
+			AudioSegmentEventSchema.safeParse({
+				...metadata,
+				payload: { ...metadata.payload, contentType: "audio/wav" },
+			}).success,
+		).toBe(true);
 		for (const payload of [
 			{ ...metadata.payload, generationId: "generation" },
 			{ ...metadata.payload, segmentId: "segment" },
 			{ ...metadata.payload, sequence: -1 },
 			{ ...metadata.payload, sequence: 0.5 },
 			{ ...metadata.payload, sequence: Number.MAX_SAFE_INTEGER + 1 },
-			{ ...metadata.payload, contentType: "audio/wav" },
+			{ ...metadata.payload, contentType: "audio/pcm" },
 			{ ...metadata.payload, byteLength: 0 },
+			{
+				...metadata.payload,
+				byteLength: PLAYBACK_FLOW_MAX_SEGMENT_BYTES + 1,
+			},
 			{ ...metadata.payload, final: false },
 			{ ...metadata.payload, audioSeq: 0 },
 			{ ...metadata.payload, encoding: "pcm16le" },
@@ -927,8 +1265,14 @@ describe("shared contracts", () => {
 			byteLength: mp3.byteLength,
 			final: true,
 		};
-		const encode = (kind: 1 | 2, sequence: number, payload = mp3) =>
+		const encode = (kind: 1 | 2 | 3, sequence: number, payload = mp3) =>
 			encodeBinaryAudioFrame({ kind, sequence, payload });
+		const wav = encodeCanonicalTtsWav(new Uint8Array([0, 0, 1, 0]));
+		const wavMetadata = {
+			...metadata,
+			contentType: "audio/wav",
+			byteLength: wav.byteLength,
+		};
 
 		for (const invalid of [
 			{
@@ -949,6 +1293,18 @@ describe("shared contracts", () => {
 					BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
 					7,
 					mp3.slice(0, -1),
+				),
+			},
+			{
+				metadata: wavMetadata,
+				rawFrame: encode(BINARY_AUDIO_FRAME_KIND.serverMp3Segment, 7, wav),
+			},
+			{
+				metadata: wavMetadata,
+				rawFrame: encode(
+					BINARY_AUDIO_FRAME_KIND.serverWavSegment,
+					7,
+					new Uint8Array([0, 0, 1, 0]),
 				),
 			},
 			{ metadata, bytes: mp3 },
@@ -984,6 +1340,7 @@ describe("shared contracts", () => {
 		expect(BINARY_AUDIO_FRAME_KIND).toEqual({
 			clientPcm16: 0x01,
 			serverMp3Segment: 0x02,
+			serverWavSegment: 0x03,
 		});
 		expect(() =>
 			encodeBinaryAudioFrame({

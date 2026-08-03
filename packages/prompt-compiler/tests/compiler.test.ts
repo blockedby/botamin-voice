@@ -21,8 +21,10 @@ import {
 	ATTRIBUTED_REVENUE_CLAIM_LINES,
 	BOOKING_ORDER_SENTENCE,
 	compilePromptBundle,
+	FORBIDDEN_NATURAL_DIALOGUE_GUIDANCE,
 	FORBIDDEN_POLICY_PHRASES,
 	MAX_FILE_BYTES,
+	NATURAL_DIALOGUE_EXAMPLES,
 	PROMPT_ORDER,
 	REQUIRED_POLICY_SENTENCES,
 	SYNCHRONIZED_DIALOG_POLICY_RULES,
@@ -354,6 +356,99 @@ test("forbids stale qualification-permission wording in active and starter promp
 			/forbidden qualification-permission wording/i,
 		);
 	}
+});
+
+test("rejects stale robotic and unsafe dialogue guidance in active and starter prompts", async () => {
+	const promptPaths = PROMPT_ORDER.filter((path) =>
+		path.startsWith("prompts/"),
+	);
+	for (const relativePath of promptPaths) {
+		for (const prefix of ["", "starter"]) {
+			const source = (
+				await readFile(join(sourceRoot, prefix, relativePath), "utf8")
+			).toLocaleLowerCase("ru-RU");
+			for (const phrase of FORBIDDEN_NATURAL_DIALOGUE_GUIDANCE) {
+				assert.ok(
+					!source.includes(phrase),
+					`${join(prefix, relativePath)} contains forbidden dialogue guidance: ${phrase}`,
+				);
+			}
+		}
+	}
+
+	for (const phrase of FORBIDDEN_NATURAL_DIALOGUE_GUIDANCE) {
+		const fixture = await fixtureRoot((relativePath, source) =>
+			relativePath === "prompts/system.md"
+				? `${source.toString("utf8")}\n${phrase}\n`
+				: source,
+		);
+		await assert.rejects(
+			compilePromptBundle({
+				sourceRoot: fixture,
+				runtimeDir: await runtimeDirectory(),
+			}),
+			/forbidden robotic or unsafe dialogue guidance/i,
+		);
+	}
+});
+
+test("keeps bounded natural alternatives state-aware, concise, and synchronized", async () => {
+	assert.deepEqual(
+		NATURAL_DIALOGUE_EXAMPLES.map((example) => example.name),
+		[
+			"brief discovery",
+			"objection",
+			"server-supplied scheduling",
+			"exact booking confirmation",
+			"missing-only qualification",
+		],
+	);
+
+	for (const example of NATURAL_DIALOGUE_EXAMPLES) {
+		const active = await readFile(join(sourceRoot, example.activePath), "utf8");
+		const starter = await readFile(
+			join(sourceRoot, "starter", example.starterPath),
+			"utf8",
+		);
+		assert.ok(active.includes(example.sourceSentence), example.name);
+		assert.ok(starter.includes(example.sourceSentence), example.name);
+		assert.doesNotMatch(
+			example.spokenText,
+			/^(?:Понял|Понимаю|Зафиксировано)\b/u,
+		);
+		assert.doesNotMatch(
+			example.spokenText,
+			/(?:https?:\/\/|[`#*_{}[\]<>]|create_booking|append_booking_qualification|allowedActions)/u,
+		);
+		assert.ok(
+			(example.spokenText.match(/\?/gu) ?? []).length <= 1,
+			`${example.name} asks more than one question`,
+		);
+		assert.ok(
+			(example.spokenText.match(/[.!?]/gu) ?? []).length <= 2,
+			`${example.name} exceeds two spoken sentences`,
+		);
+	}
+
+	const scheduling = NATURAL_DIALOGUE_EXAMPLES.find(
+		(example) => example.name === "server-supplied scheduling",
+	);
+	assert.match(scheduling?.spokenText ?? "", /завтра в одиннадцать по Москве/u);
+	assert.match(
+		scheduling?.spokenText ?? "",
+		/послезавтра в три часа по Москве/u,
+	);
+	const confirmation = NATURAL_DIALOGUE_EXAMPLES.find(
+		(example) => example.name === "exact booking confirmation",
+	);
+	assert.match(
+		confirmation?.spokenText ?? "",
+		/послезавтра в три часа по Москве/u,
+	);
+	assert.match(
+		confirmation?.spokenText ?? "",
+		/внешнего календарного события и приглашения нет/u,
+	);
 });
 
 test("requires proactive cadence, direct missing-only qualification, supplied-slot, contact, and concise-speech rules", async () => {

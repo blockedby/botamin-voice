@@ -118,7 +118,8 @@ function providerFakes(calls: ProviderCalls) {
 		},
 		health: async () => "ready",
 	};
-	const tts: TtsPort = {
+	const tts: TtsPort & { readonly outputContentType: "audio/mpeg" } = {
+		outputContentType: "audio/mpeg",
 		synthesize: async () => {
 			calls.tts += 1;
 			throw new Error("not used");

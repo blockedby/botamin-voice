@@ -37,6 +37,7 @@ describe("validated runtime configuration", () => {
 			maxAudioBytes: 2_000_000,
 		});
 		expect(config.voice.tts.responseFormat).toBe("mp3");
+		expect(config.voice.tts.outputContentType).toBe("audio/mpeg");
 		expect(config.transcriptRetentionDays).toBe(30);
 		expect(config.orphanRecovery).toEqual({
 			batchSize: 25,
@@ -46,6 +47,26 @@ describe("validated runtime configuration", () => {
 		expect(config.maxPendingBrainTurns).toBe(6);
 		expect(config.admission.trustedProxyHops).toBe(0);
 		expect(config.notifier).toEqual({ kind: "console" });
+	});
+
+	test("admits only the complete opt-in Gemini readiness profile", () => {
+		const geminiEnv = {
+			...validEnv,
+			OPENROUTER_TTS_PROFILE: "gemini_3_1_pcm",
+			OPENROUTER_TTS_MODEL: "google/gemini-3.1-flash-tts-preview",
+			OPENROUTER_TTS_VOICE: "Kore",
+			OPENROUTER_TTS_RESPONSE_FORMAT: "pcm",
+		};
+		expect(createRuntimeConfig(geminiEnv).voice.tts).toMatchObject({
+			profile: "gemini_3_1_pcm",
+			outputContentType: "audio/wav",
+			model: "google/gemini-3.1-flash-tts-preview",
+			voice: "Kore",
+			responseFormat: "pcm",
+		});
+		expect(() =>
+			createRuntimeConfig({ ...geminiEnv, OPENROUTER_TTS_VOICE: "kore" }),
+		).toThrow();
 	});
 
 	test("rejects dynamic tools because production has no injected awaited executor", () => {

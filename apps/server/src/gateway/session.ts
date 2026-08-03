@@ -7,15 +7,20 @@ import {
 	type BookingFormDetails,
 	type BookingRevisionConfirmation,
 	ClientHelloEventSchema,
+	ClientProtocolAcceptEventSchema,
 	ClientWsEventSchema,
 	decodeBinaryAudioFrame,
 	deriveInternalVirtualMeetingProjection,
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
 	type KnownFacts,
+	LOCAL_REACTION_DELAY_MS,
+	type LocalReactionClipId,
 	type SafeErrorCode,
 	type ServerWsEvent,
 	ServerWsEventSchema,
+	VOICE_WS_PROTOCOL_VERSION,
+	type VoiceWsProtocolVersion,
 } from "@botamin/contracts";
 import {
 	BookingDraftError,
@@ -26,6 +31,7 @@ import type {
 	ConversationOrchestrator,
 	OrchestratorEvent,
 } from "../orchestrator/orchestrator";
+import { selectLocalReaction } from "../orchestrator/reaction";
 import {
 	PcmUtteranceAssembler,
 	PcmUtteranceError,
@@ -35,6 +41,7 @@ import {
 export function createAudioClientConfig(
 	maxUtteranceMs: number,
 	maxAudioBytes: number,
+	outputContentType: AudioClientConfig["outputContentType"],
 ): AudioClientConfig {
 	const durationPcmBytes = Math.floor(maxUtteranceMs * 32);
 	const audioPcmBytes = Math.max(0, maxAudioBytes - WAV_HEADER_BYTES);
@@ -46,12 +53,10 @@ export function createAudioClientConfig(
 		chunkMs: 100,
 		maxUtteranceMs,
 		maxPcmBytes,
-		outputContentType: "audio/mpeg",
+		outputContentType,
 		outputMode: "complete-phrase-segments",
 	};
 }
-
-const CLIENT_CONFIG = Object.freeze(createAudioClientConfig(60_000, 2_000_000));
 
 export interface GatewaySocket {
 	send(data: string | Uint8Array): void;
@@ -86,6 +91,7 @@ export interface GatewaySessionOptions {
 	brainModel: string;
 	maxUtteranceMs: number;
 	maxAudioBytes: number;
+	outputContentType: AudioClientConfig["outputContentType"];
 	maxFrameBytes: number;
 	maxJsonBytes: number;
 	maxHistoryEvents: number;
@@ -118,6 +124,23 @@ type HistoryRecord =
 			binary: Uint8Array;
 			bytes: number;
 	  };
+
+interface PlaybackFlowState {
+	readonly maxSegments: number;
+	readonly maxBytes: number;
+	readonly maxSegmentBytes: number;
+	availableSegments: number;
+	availableBytes: number;
+	readonly outstanding: Map<
+		string,
+		{ generationId: string; sequence: number; byteLength: number }
+	>;
+}
+
+interface PlaybackReservation {
+	readonly flow: PlaybackFlowState;
+	readonly socket: GatewaySocket;
+}
 
 /** One bounded conversation transport/session, independently testable from Bun. */
 export class GatewaySession {
@@ -154,8 +177,14 @@ export class GatewaySession {
 	#historyBytes = 0;
 	#activeSocket: GatewaySocket | null = null;
 	#pendingSocket: GatewaySocket | null = null;
+	#pendingProtocolVersion: VoiceWsProtocolVersion | null = null;
+	#pendingHelloVerified = false;
+	#pendingSocketEpoch = 0;
+	#pendingResumeTokenEpoch: number | null = null;
+	#resumeTokenEpoch = 0;
 	#helloTimer: ReturnType<typeof setTimeout> | null = null;
 	#helloAccepted = false;
+	#localReactionClipIds = new Set<LocalReactionClipId>();
 	#initialClientToken: string | null;
 	#resumeTokenHash: Uint8Array;
 	#stopped = false;
@@ -165,6 +194,9 @@ export class GatewaySession {
 	#bookingCommandPending = false;
 	#messageQueue: Promise<void> = Promise.resolve();
 	#pendingMessages = 0;
+	#playbackFlow: PlaybackFlowState | null = null;
+	readonly #playbackFlowWaiters = new Set<() => void>();
+	readonly #cancelledPlaybackGenerations = new Set<string>();
 	readonly #activeProcesses = new Set<Promise<void>>();
 	readonly #queuedTurnControllers = new Map<string, AbortController>();
 	readonly #turnsById = new Map<
@@ -176,6 +208,8 @@ export class GatewaySession {
 			assistantText: string;
 			stateBefore: string;
 			stateAfter: string;
+			reactionSent: boolean;
+			reactionSuppressed: boolean;
 		}
 	>();
 	readonly #turnIdsByGeneration = new Map<string, string>();
@@ -207,6 +241,7 @@ export class GatewaySession {
 		this.#clientConfig = createAudioClientConfig(
 			options.maxUtteranceMs,
 			options.maxAudioBytes,
+			options.outputContentType,
 		);
 		this.#assemblerLimits = {
 			maxUtteranceMs: options.maxUtteranceMs,
@@ -242,7 +277,10 @@ export class GatewaySession {
 		return this.#history.length;
 	}
 
-	attach(socket: GatewaySocket): void {
+	attach(
+		socket: GatewaySocket,
+		protocolVersion: VoiceWsProtocolVersion | null,
+	): void {
 		if (this.#stopped || this.isExpired()) {
 			socket.close(1008, "session unavailable");
 			return;
@@ -252,10 +290,14 @@ export class GatewaySession {
 		this.#clearPendingHello();
 		previous?.close(1008, "new connection candidate");
 		this.#pendingSocket = socket;
+		this.#pendingProtocolVersion = protocolVersion;
+		this.#pendingHelloVerified = false;
 		this.#helloTimer = setTimeout(() => {
 			if (this.#pendingSocket !== socket) return;
-			this.#pendingSocket = null;
-			this.#helloTimer = null;
+			if (this.#pendingHelloVerified) {
+				this.#sendDirectSafeError(socket, "BRAIN_NOT_READY", true);
+			}
+			this.#clearPendingHello();
 			socket.close(1008, "client hello timeout");
 		}, this.#clientHelloTimeoutMs);
 		this.#helloTimer.unref?.();
@@ -328,9 +370,11 @@ export class GatewaySession {
 			return;
 		}
 		if (socket !== this.#activeSocket || this.#stopped) return;
+		this.#fenceCurrentPlaybackGeneration();
 		this.#activeSocket = null;
 		this.#assembler?.clear();
 		this.#assembler = null;
+		this.#resetPlaybackFlow();
 		this.#trackProcess(this.#orchestrator.disconnect());
 		try {
 			this.#persistence.stopConversation(this.conversationId, "disconnected");
@@ -344,6 +388,7 @@ export class GatewaySession {
 		this.#stopped = true;
 		this.#assembler?.clear();
 		this.#assembler = null;
+		this.#resetPlaybackFlow();
 		for (const controller of this.#queuedTurnControllers.values()) {
 			controller.abort("session stopped");
 		}
@@ -385,29 +430,107 @@ export class GatewaySession {
 				this.#closeWithError(socket, "INVALID_EVENT", false);
 				return;
 			}
-			const hello = ClientHelloEventSchema.safeParse(value);
-			if (!hello.success || hello.data.conversationId !== this.conversationId) {
+			if (!this.#pendingHelloVerified) {
+				const hello = ClientHelloEventSchema.safeParse(value);
+				if (
+					!hello.success ||
+					hello.data.conversationId !== this.conversationId
+				) {
+					this.#closeWithError(socket, "INVALID_EVENT", false);
+					return;
+				}
+				if (!this.#resumeTokenMatches(hello.data.payload.resumeToken)) {
+					this.#closeWithError(socket, "SESSION_EXPIRED", false);
+					return;
+				}
+				if (this.#pendingProtocolVersion !== VOICE_WS_PROTOCOL_VERSION) {
+					this.#sendDirectSafeError(socket, "BRAIN_NOT_READY", true);
+					this.#clearPendingHello();
+					socket.close(1008, "protocol upgrade required");
+					return;
+				}
+				this.#pendingHelloVerified = true;
+				this.#pendingResumeTokenEpoch = this.#resumeTokenEpoch;
+				this.#sendDirectEvent(socket, "session.protocol.offer", {
+					version: VOICE_WS_PROTOCOL_VERSION,
+				});
+				return;
+			}
+
+			const accepted = ClientProtocolAcceptEventSchema.safeParse(value);
+			if (
+				!accepted.success ||
+				accepted.data.conversationId !== this.conversationId ||
+				this.#pendingProtocolVersion !== VOICE_WS_PROTOCOL_VERSION
+			) {
 				this.#closeWithError(socket, "INVALID_EVENT", false);
 				return;
 			}
-			if (!this.#acceptResumeToken(hello.data.payload.resumeToken)) {
-				this.#closeWithError(socket, "SESSION_EXPIRED", false);
+			const candidateSocketEpoch = this.#pendingSocketEpoch;
+			const candidateResumeTokenEpoch = this.#pendingResumeTokenEpoch;
+			const candidateLocalReactionClipIds = new Set(
+				accepted.data.payload.capabilities.localReactions?.clipIds ?? [],
+			);
+			const candidatePlaybackFlow = this.#createPlaybackFlow(
+				accepted.data.payload.playback,
+			);
+			if (
+				!this.#pendingCandidateMatches(
+					socket,
+					candidateSocketEpoch,
+					candidateResumeTokenEpoch,
+				)
+			) {
 				return;
 			}
 			await this.#ensureDraft();
+			if (
+				!this.#pendingCandidateMatches(
+					socket,
+					candidateSocketEpoch,
+					candidateResumeTokenEpoch,
+				)
+			) {
+				return;
+			}
 			let booking = null;
 			try {
 				booking = await this.#orchestrator.reconcileDurableBooking();
 			} catch {
-				this.#closeWithError(socket, "INTERNAL_ERROR", false);
+				if (
+					this.#pendingCandidateMatches(
+						socket,
+						candidateSocketEpoch,
+						candidateResumeTokenEpoch,
+					)
+				) {
+					this.#closeWithError(socket, "INTERNAL_ERROR", false);
+				}
+				return;
+			}
+			if (
+				!this.#pendingCandidateMatches(
+					socket,
+					candidateSocketEpoch,
+					candidateResumeTokenEpoch,
+				)
+			) {
 				return;
 			}
 			const draft = this.#draftStore
 				? this.#draftStore.browserDraft(this.conversationId)
 				: null;
 			const previous = this.#activeSocket;
-			this.#clearPendingHello();
+			const previousFlow = this.#playbackFlow;
+			this.#fenceCurrentPlaybackGeneration(previousFlow);
+			// Ownership and all negotiated transport state move in one synchronous
+			// step. Only after that may old-flow waiters observe the replacement.
 			this.#activeSocket = socket;
+			this.#playbackFlow = candidatePlaybackFlow;
+			this.#localReactionClipIds = candidateLocalReactionClipIds;
+			this.#helloAccepted = true;
+			this.#clearPendingHello();
+			this.#wakePlaybackFlow();
 			if (previous && previous !== socket) {
 				previous.close(1000, "session resumed elsewhere");
 			}
@@ -420,7 +543,11 @@ export class GatewaySession {
 				this.conversationId,
 				this.#orchestrator.state.stage,
 			);
-			for (const record of this.#history) this.#sendRecord(socket, record);
+			// Reconnect always cancels local playback. Replay durable JSON state/text,
+			// never stale binary audio that could bypass the fresh flow window.
+			for (const record of this.#history) {
+				if (!("binary" in record)) this.#sendRecord(socket, record);
+			}
 			const token = this.#rotateResumeToken();
 			this.#sendEvent(
 				"session.ready",
@@ -449,7 +576,8 @@ export class GatewaySession {
 		}
 		switch (parsed.data.type) {
 			case "client.hello":
-				// Duplicate hello on an already-bound socket is a protocol error.
+			case "client.protocol.accept":
+				// Handshake events on an already-bound socket are protocol errors.
 				this.#closeWithError(socket, "INVALID_EVENT", false);
 				break;
 			case "audio.commit":
@@ -464,13 +592,20 @@ export class GatewaySession {
 				);
 				break;
 			case "playback.interrupted": {
+				this.#cancelPlaybackGeneration(parsed.data.payload.generationId);
 				const event = await this.#orchestrator.interrupt(
 					parsed.data.payload.generationId,
+					parsed.data.payload.reason,
 				);
-				if (event.type === "assistant.interrupted") this.#mapEvent(event);
+				if (event.type === "assistant.interrupted") await this.#mapEvent(event);
 				break;
 			}
 			case "playback.started":
+				break;
+			case "playback.segment.released":
+				if (!this.#releasePlaybackSegment(parsed.data.payload)) {
+					this.#closeWithError(socket, "INVALID_EVENT", false);
+				}
 				break;
 			case "client.ping":
 				this.#sendEvent("server.pong", {
@@ -667,11 +802,12 @@ export class GatewaySession {
 		this.#expectedClientSequence += 1;
 		if (!this.#assembler) {
 			if (this.processing && this.#currentGenerationId) {
+				this.#cancelPlaybackGeneration(this.#currentGenerationId);
 				const interrupted = await this.#orchestrator.interrupt(
 					this.#currentGenerationId,
 				);
 				if (interrupted.type === "assistant.interrupted") {
-					this.#mapEvent(interrupted);
+					await this.#mapEvent(interrupted);
 				}
 			}
 			this.#assembler = new PcmUtteranceAssembler(this.#assemblerLimits);
@@ -830,6 +966,8 @@ export class GatewaySession {
 			assistantText: "",
 			stateBefore: this.#orchestrator.state.stage,
 			stateAfter: this.#orchestrator.state.stage,
+			reactionSent: false,
+			reactionSuppressed: false,
 		});
 		this.#turnIdsByGeneration.set(generationId, input.turnId);
 		try {
@@ -921,6 +1059,7 @@ export class GatewaySession {
 				});
 				break;
 			case "booking.committed": {
+				this.#suppressReaction(event.generationId);
 				const booking = await this.#bookings.findByConversationId(
 					this.conversationId,
 				);
@@ -938,6 +1077,7 @@ export class GatewaySession {
 				break;
 			}
 			case "booking.updated": {
+				this.#suppressReaction(event.generationId);
 				const booking = await this.#bookings.findByConversationId(
 					this.conversationId,
 				);
@@ -960,6 +1100,7 @@ export class GatewaySession {
 					generationId: event.generationId,
 					text: event.text,
 				});
+				this.#maybeSendReaction(event.generationId, event.text);
 				break;
 			case "text.done": {
 				const turnId = this.#turnIdsByGeneration.get(event.generationId);
@@ -972,12 +1113,14 @@ export class GatewaySession {
 				break;
 			}
 			case "audio.segment":
-				this.#publishAudioSegment(event);
+				await this.#publishAudioSegment(event);
 				break;
 			case "audio.done":
-				this.#sendEvent("assistant.audio.done", {
-					generationId: event.generationId,
-				});
+				if (!this.#cancelledPlaybackGenerations.has(event.generationId)) {
+					this.#sendEvent("assistant.audio.done", {
+						generationId: event.generationId,
+					});
+				}
 				break;
 			case "assistant.interrupted":
 				this.#sendEvent("assistant.interrupted", {
@@ -985,6 +1128,7 @@ export class GatewaySession {
 				});
 				break;
 			case "degraded":
+				this.#suppressReaction(event.generationId);
 				this.#sendSafeError(event.code, event.code !== "TTS_UNAVAILABLE");
 				break;
 			case "tool.result":
@@ -993,22 +1137,218 @@ export class GatewaySession {
 		}
 	}
 
-	#publishAudioSegment(
+	#maybeSendReaction(generationId: string, assistantText: string): void {
+		const turnId = this.#turnIdsByGeneration.get(generationId);
+		const turn = turnId ? this.#turnsById.get(turnId) : undefined;
+		if (
+			!turn ||
+			turn.reactionSent ||
+			turn.reactionSuppressed ||
+			this.#localReactionClipIds.size === 0
+		) {
+			return;
+		}
+		const clipId = selectLocalReaction({
+			turnId: turn.id,
+			generationId,
+			stage: this.#orchestrator.state.stage,
+			userText: turn.userText,
+			assistantText,
+			supportedClipIds: this.#localReactionClipIds,
+		});
+		if (!clipId) {
+			turn.reactionSuppressed = true;
+			return;
+		}
+		turn.reactionSent = true;
+		this.#sendEvent(
+			"assistant.reaction.request",
+			{
+				turnId: turn.id,
+				generationId,
+				clipId,
+				delayMs: LOCAL_REACTION_DELAY_MS,
+			},
+			false,
+		);
+	}
+
+	#suppressReaction(generationId: string): void {
+		const turnId = this.#turnIdsByGeneration.get(generationId);
+		const turn = turnId ? this.#turnsById.get(turnId) : undefined;
+		if (turn && !turn.reactionSent) turn.reactionSuppressed = true;
+	}
+
+	#createPlaybackFlow(config: {
+		maxBufferedSegments: number;
+		maxBufferedBytes: number;
+		maxSegmentBytes: number;
+	}): PlaybackFlowState {
+		return {
+			maxSegments: config.maxBufferedSegments,
+			maxBytes: config.maxBufferedBytes,
+			maxSegmentBytes: config.maxSegmentBytes,
+			availableSegments: config.maxBufferedSegments,
+			availableBytes: config.maxBufferedBytes,
+			outstanding: new Map(),
+		};
+	}
+
+	async #reservePlaybackSegment(
+		generationId: string,
+		segmentId: string,
+		sequence: number,
+		byteLength: number,
+	): Promise<PlaybackReservation | null> {
+		const flow = this.#playbackFlow;
+		const socket = this.#activeSocket;
+		if (!flow || !socket) return null;
+		while (!this.#stopped) {
+			if (
+				this.#playbackFlow !== flow ||
+				this.#activeSocket !== socket ||
+				this.#cancelledPlaybackGenerations.has(generationId) ||
+				byteLength <= 0 ||
+				byteLength > flow.maxSegmentBytes ||
+				flow.outstanding.has(segmentId)
+			) {
+				return null;
+			}
+			if (flow.availableSegments > 0 && flow.availableBytes >= byteLength) {
+				flow.availableSegments -= 1;
+				flow.availableBytes -= byteLength;
+				flow.outstanding.set(segmentId, {
+					generationId,
+					sequence,
+					byteLength,
+				});
+				return { flow, socket };
+			}
+			await new Promise<void>((resolve) => {
+				this.#playbackFlowWaiters.add(resolve);
+			});
+		}
+		return null;
+	}
+
+	#releasePlaybackSegment(released: {
+		generationId: string;
+		segmentId: string;
+		sequence: number;
+		byteLength: number;
+	}): boolean {
+		const flow = this.#playbackFlow;
+		const outstanding = flow?.outstanding.get(released.segmentId);
+		if (
+			!flow ||
+			!outstanding ||
+			outstanding.generationId !== released.generationId ||
+			outstanding.sequence !== released.sequence ||
+			outstanding.byteLength !== released.byteLength
+		) {
+			return false;
+		}
+		flow.outstanding.delete(released.segmentId);
+		flow.availableSegments = Math.min(
+			flow.maxSegments,
+			flow.availableSegments + 1,
+		);
+		flow.availableBytes = Math.min(
+			flow.maxBytes,
+			flow.availableBytes + released.byteLength,
+		);
+		this.#wakePlaybackFlow();
+		return true;
+	}
+
+	#rememberCancelledPlaybackGeneration(generationId: string): void {
+		this.#cancelledPlaybackGenerations.add(generationId);
+		while (this.#cancelledPlaybackGenerations.size > 256) {
+			const oldest = this.#cancelledPlaybackGenerations.values().next().value;
+			if (!oldest) break;
+			this.#cancelledPlaybackGenerations.delete(oldest);
+		}
+	}
+
+	#fenceCurrentPlaybackGeneration(flow = this.#playbackFlow): void {
+		if (this.#currentGenerationId) {
+			this.#rememberCancelledPlaybackGeneration(this.#currentGenerationId);
+			this.#suppressReaction(this.#currentGenerationId);
+		}
+		if (!flow) return;
+		for (const outstanding of flow.outstanding.values()) {
+			this.#rememberCancelledPlaybackGeneration(outstanding.generationId);
+		}
+	}
+
+	#cancelPlaybackGeneration(generationId: string): void {
+		this.#rememberCancelledPlaybackGeneration(generationId);
+		const flow = this.#playbackFlow;
+		if (flow) {
+			for (const [segmentId, outstanding] of flow.outstanding) {
+				if (outstanding.generationId !== generationId) continue;
+				flow.outstanding.delete(segmentId);
+				flow.availableSegments = Math.min(
+					flow.maxSegments,
+					flow.availableSegments + 1,
+				);
+				flow.availableBytes = Math.min(
+					flow.maxBytes,
+					flow.availableBytes + outstanding.byteLength,
+				);
+			}
+		}
+		this.#wakePlaybackFlow();
+	}
+
+	#resetPlaybackFlow(): void {
+		this.#playbackFlow = null;
+		this.#wakePlaybackFlow();
+	}
+
+	#wakePlaybackFlow(): void {
+		const waiters = [...this.#playbackFlowWaiters];
+		this.#playbackFlowWaiters.clear();
+		for (const wake of waiters) wake();
+	}
+
+	async #publishAudioSegment(
 		event: Extract<OrchestratorEvent, { type: "audio.segment" }>,
-	): void {
+	): Promise<void> {
+		if (event.contentType !== this.#clientConfig.outputContentType) {
+			this.#sendSafeError("TTS_UNAVAILABLE", true);
+			return;
+		}
 		if (this.#stopped) return;
+		const reservation = await this.#reservePlaybackSegment(
+			event.generationId,
+			event.segmentId,
+			event.sequence,
+			event.bytes.byteLength,
+		);
+		if (
+			!reservation ||
+			this.#playbackFlow !== reservation.flow ||
+			this.#activeSocket !== reservation.socket ||
+			this.#cancelledPlaybackGenerations.has(event.generationId)
+		) {
+			return;
+		}
 		const metadata = this.#createEvent("audio.segment", {
 			generationId: event.generationId,
 			segmentId: event.segmentId,
 			sequence: event.sequence,
-			contentType: "audio/mpeg",
+			contentType: event.contentType,
 			byteLength: event.bytes.byteLength,
 			final: true,
 		});
 		if (metadata.type !== "audio.segment") return;
 		const json = JSON.stringify(metadata);
 		const binary = encodeBinaryAudioFrame({
-			kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+			kind:
+				event.contentType === "audio/mpeg"
+					? BINARY_AUDIO_FRAME_KIND.serverMp3Segment
+					: BINARY_AUDIO_FRAME_KIND.serverWavSegment,
 			sequence: event.sequence,
 			payload: event.bytes,
 		});
@@ -1019,7 +1359,7 @@ export class GatewaySession {
 			bytes: new TextEncoder().encode(json).byteLength + binary.byteLength,
 		};
 		this.#remember(record);
-		if (this.#activeSocket) this.#sendRecord(this.#activeSocket, record);
+		this.#sendRecord(reservation.socket, record);
 	}
 
 	#sendSafeError(code: SafeErrorCode, retryable: boolean): void {
@@ -1041,9 +1381,11 @@ export class GatewaySession {
 		if (wasPending) this.#clearPendingHello();
 		socket?.close(1008, "protocol policy");
 		if (wasActive) {
+			this.#fenceCurrentPlaybackGeneration();
 			this.#activeSocket = null;
 			this.#assembler?.clear();
 			this.#assembler = null;
+			this.#resetPlaybackFlow();
 			this.#trackProcess(this.#orchestrator.disconnect());
 			try {
 				this.#persistence.stopConversation(this.conversationId, "disconnected");
@@ -1097,33 +1439,86 @@ export class GatewaySession {
 	}
 
 	#sendRecord(socket: GatewaySocket, record: HistoryRecord): void {
+		if (
+			record.event.type === "assistant.reaction.request" &&
+			!this.#localReactionClipIds.has(record.event.payload.clipId)
+		) {
+			return;
+		}
 		try {
 			socket.send(record.json);
 			if ("binary" in record) socket.send(record.binary);
 		} catch {
-			if (socket === this.#activeSocket) this.#activeSocket = null;
+			if (socket === this.#activeSocket) {
+				this.#fenceCurrentPlaybackGeneration();
+				this.#activeSocket = null;
+				this.#resetPlaybackFlow();
+			}
 		}
+	}
+
+	#sendDirectEvent(
+		socket: GatewaySocket,
+		type: ServerWsEvent["type"],
+		payload: unknown,
+	): void {
+		try {
+			socket.send(JSON.stringify(this.#createEvent(type, payload)));
+		} catch {
+			// The pending socket remains unbound and owns no session state.
+		}
+	}
+
+	#sendDirectSafeError(
+		socket: GatewaySocket,
+		code: SafeErrorCode,
+		retryable: boolean,
+	): void {
+		this.#sendDirectEvent(socket, "error", {
+			code,
+			message: safeMessage(code),
+			retryable,
+		});
+	}
+
+	#pendingCandidateMatches(
+		socket: GatewaySocket,
+		socketEpoch: number,
+		resumeTokenEpoch: number | null,
+	): boolean {
+		return (
+			this.#pendingSocket === socket &&
+			this.#pendingSocketEpoch === socketEpoch &&
+			this.#pendingHelloVerified &&
+			resumeTokenEpoch !== null &&
+			this.#pendingResumeTokenEpoch === resumeTokenEpoch &&
+			this.#resumeTokenEpoch === resumeTokenEpoch
+		);
 	}
 
 	#clearPendingHello(): void {
 		if (this.#helloTimer) clearTimeout(this.#helloTimer);
 		this.#helloTimer = null;
 		this.#pendingSocket = null;
+		this.#pendingProtocolVersion = null;
+		this.#pendingHelloVerified = false;
+		this.#pendingResumeTokenEpoch = null;
+		this.#pendingSocketEpoch += 1;
 	}
 
-	#acceptResumeToken(token: string | null): boolean {
+	#resumeTokenMatches(token: string | null): boolean {
 		if (!token) return false;
 		const candidate = createHash("sha256").update(token).digest();
-		const accepted =
+		return (
 			candidate.byteLength === this.#resumeTokenHash.byteLength &&
-			timingSafeEqual(candidate, this.#resumeTokenHash);
-		if (accepted && !this.#helloAccepted) this.#helloAccepted = true;
-		return accepted;
+			timingSafeEqual(candidate, this.#resumeTokenHash)
+		);
 	}
 
 	#rotateResumeToken(): string {
 		const token = randomBytes(32).toString("base64url");
 		this.#resumeTokenHash = createHash("sha256").update(token).digest();
+		this.#resumeTokenEpoch += 1;
 		return token;
 	}
 
@@ -1211,5 +1606,3 @@ function safeMessage(code: SafeErrorCode): string {
 			return "Запрос не удалось обработать безопасно.";
 	}
 }
-
-export { CLIENT_CONFIG };

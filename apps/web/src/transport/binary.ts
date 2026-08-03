@@ -25,7 +25,7 @@ export function encodeClientPcmFrame(
 	});
 }
 
-/** Validate adjacent metadata/frame identity and return an isolated MP3 copy. */
+/** Validate adjacent metadata/frame identity and return isolated audio bytes. */
 export function decodeAndPairServerSegment(
 	metadata: AudioSegmentMetadata,
 	rawFrame: Uint8Array,

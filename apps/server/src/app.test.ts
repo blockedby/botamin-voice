@@ -15,7 +15,11 @@ const conversationId = "01J00000000000000000000000";
 const origin = "http://localhost:5173";
 
 function runtime(
-	options: { ready?: boolean; capacity?: boolean } = {},
+	options: {
+		ready?: boolean;
+		capacity?: boolean;
+		outputContentType?: "audio/mpeg" | "audio/wav";
+	} = {},
 ): ServerRuntime & { stopped: string[] } {
 	const sessions = new Map<string, RuntimeGatewaySession>();
 	const stopped: string[] = [];
@@ -24,6 +28,7 @@ function runtime(
 			appOrigin: origin,
 			voice: {
 				stt: { maxUtteranceMs: 60_000, maxAudioBytes: 2_000_000 },
+				tts: { outputContentType: options.outputContentType ?? "audio/mpeg" },
 			},
 			limits: {
 				httpBodyBytes: 8_192,
@@ -147,7 +152,9 @@ describe("production server REST contracts", () => {
 			await response.json(),
 		);
 		expect(created.conversationId).toBe(conversationId);
-		expect(created.wsUrl).toBe(`/ws/v1/conversations/${conversationId}`);
+		expect(created.wsUrl).toBe(
+			`/ws/v1/conversations/${conversationId}?voiceProtocol=2`,
+		);
 		expect(created.clientToken).toHaveLength(43);
 		expect(created.clientConfig).toEqual({
 			inputSampleRate: 16_000,
@@ -160,6 +167,21 @@ describe("production server REST contracts", () => {
 		});
 		expect(created.clientConfig.maxPcmBytes + 44).toBe(1_920_044);
 		expect(JSON.stringify(created)).not.toContain("OPENROUTER");
+	});
+
+	test("advertises the validated Gemini WAV output in REST configuration", async () => {
+		const response = await createServerApp(
+			runtime({ outputContentType: "audio/wav" }),
+		).request("/api/v1/conversations", {
+			method: "POST",
+			headers: { "content-type": "application/json", origin },
+			body: JSON.stringify(validRequest),
+		});
+		expect(response.status).toBe(201);
+		const created = CreateConversationResponseSchema.parse(
+			await response.json(),
+		);
+		expect(created.clientConfig.outputContentType).toBe("audio/wav");
 	});
 
 	test("rate-limits valid conversation creates per direct source", async () => {

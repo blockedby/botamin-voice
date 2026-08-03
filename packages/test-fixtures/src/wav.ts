@@ -1,3 +1,9 @@
+import {
+	CANONICAL_TTS_WAV_FORMAT,
+	CanonicalTtsWavBytesSchema,
+	encodeCanonicalTtsWav,
+} from "@botamin/contracts";
+
 export const MONO_PCM16_16_KHZ_WAV_PROPERTIES = Object.freeze({
 	contentType: "audio/wav" as const,
 	audioFormat: 1 as const,
@@ -193,4 +199,59 @@ export function createInvalidWavFixtures(): Readonly<{
 
 export function createMalformedWavFixture(): Uint8Array {
 	return createInvalidWavFixtures().truncated;
+}
+
+export const DETERMINISTIC_TTS_WAV_FIXTURE_PROPERTIES = Object.freeze({
+	durationMs: 100 as const,
+	sampleCount: 2_400 as const,
+	dataByteLength: 4_800 as const,
+	byteLength: 4_844 as const,
+});
+
+/** Synthetic little-endian PCM16 samples for the canonical 24 kHz TTS WAV. */
+export function createDeterministicTtsPcm16Fixture(): Uint8Array<ArrayBuffer> {
+	const pcm16 = new Uint8Array(
+		DETERMINISTIC_TTS_WAV_FIXTURE_PROPERTIES.dataByteLength,
+	);
+	const view = new DataView(pcm16.buffer);
+	view.setInt16(0, 1_200, true);
+	view.setInt16(1_200 * 2, -1_200, true);
+	return pcm16;
+}
+
+/** Return an isolated synthetic canonical complete 24 kHz TTS WAV. */
+export function createDeterministicTtsWavFixture(): Uint8Array<ArrayBuffer> {
+	const fixture = encodeCanonicalTtsWav(createDeterministicTtsPcm16Fixture());
+	return CanonicalTtsWavBytesSchema.parse(fixture).slice();
+}
+
+/** Raw PCM that must never be accepted as complete TTS audio. */
+export function createRawTtsPcm16Fixture(): Uint8Array<ArrayBuffer> {
+	return createDeterministicTtsPcm16Fixture();
+}
+
+/** Canonical TTS WAV variants with malformed/trailing container data. */
+export function createInvalidTtsWavFixtures(): Readonly<{
+	truncated: Uint8Array;
+	wrongRate: Uint8Array;
+	wrongChannels: Uint8Array;
+	wrongBitDepth: Uint8Array;
+	trailing: Uint8Array;
+}> {
+	const valid = createDeterministicTtsWavFixture();
+	const wrongRate = valid.slice();
+	new DataView(wrongRate.buffer).setUint32(24, 16_000, true);
+	const wrongChannels = valid.slice();
+	new DataView(wrongChannels.buffer).setUint16(22, 2, true);
+	const wrongBitDepth = valid.slice();
+	new DataView(wrongBitDepth.buffer).setUint16(34, 24, true);
+	const trailing = new Uint8Array(valid.byteLength + 2);
+	trailing.set(valid);
+	return Object.freeze({
+		truncated: valid.slice(0, CANONICAL_TTS_WAV_FORMAT.headerBytes + 1),
+		wrongRate,
+		wrongChannels,
+		wrongBitDepth,
+		trailing,
+	});
 }

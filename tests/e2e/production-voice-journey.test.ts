@@ -37,6 +37,7 @@ import type {
 	BrainTurnInput,
 	CreateBookingInput,
 	MeetingSlot,
+	SttPort,
 	TtsPort,
 } from "../../packages/contracts/src";
 import {
@@ -82,6 +83,7 @@ type TimelineLabel =
 interface TimelineEntry {
 	label: TimelineLabel;
 	at: number;
+	generationId?: string;
 }
 
 function chatResult(text: string): Record<string, unknown> {
@@ -177,48 +179,93 @@ class VerifyingPlayback implements PlaybackAdapter {
 	bufferedSegmentCount = 0;
 	readonly received: Uint8Array[] = [];
 	readonly staleGenerations = new Set<string>();
+	private started = false;
+	private sealed = false;
+	private readonly buffered: Parameters<PlaybackAdapter["enqueue"]>[0][] = [];
 
 	constructor(
 		private readonly options: PlaybackFactoryOptions,
 		private readonly timeline: TimelineEntry[],
 	) {}
 
+	async resume(): Promise<void> {}
+
 	beginGeneration(generationId: string): void {
 		if (this.staleGenerations.has(generationId)) return;
+		if (this.activeGenerationId !== generationId) {
+			this.bufferedSegmentCount = 0;
+			this.buffered.length = 0;
+			this.started = false;
+			this.sealed = false;
+		}
 		this.activeGenerationId = generationId;
 	}
 
 	async enqueue(segment: Parameters<PlaybackAdapter["enqueue"]>[0]) {
 		if (
 			this.activeGenerationId !== segment.generationId ||
-			this.staleGenerations.has(segment.generationId)
+			this.staleGenerations.has(segment.generationId) ||
+			this.sealed
 		) {
-			return false;
+			return {
+				status: "rejected" as const,
+				reason: "stale" as const,
+				error: new Error("Audio segment is stale"),
+			};
 		}
-		this.bufferedSegmentCount = 1;
+		this.bufferedSegmentCount += 1;
+		this.buffered.push({ ...segment, bytes: segment.bytes.slice() });
 		this.received.push(segment.bytes.slice());
 		this.timeline.push({
 			label: "audio.segment.client-paired",
 			at: performance.now(),
+			generationId: segment.generationId,
 		});
-		this.timeline.push({ label: "playback.started", at: performance.now() });
-		this.options.onStarted(segment);
-		// Model real playback long enough for the already-buffered text/audio-done
-		// events to arrive before the queue reports idle.
-		await Bun.sleep(100);
-		if (this.activeGenerationId !== segment.generationId) return false;
+		if (!this.started) {
+			this.started = true;
+			this.timeline.push({
+				label: "playback.started",
+				at: performance.now(),
+				generationId: segment.generationId,
+			});
+			this.options.onStarted(segment);
+		}
+		return { status: "accepted" as const };
+	}
+
+	sealGeneration(generationId: string): boolean {
+		if (this.activeGenerationId !== generationId) return false;
+		this.sealed = true;
+		// The fixture deterministically drives the real queue's seal/end boundary:
+		// every scheduled phrase ends in order only after the server seals it.
+		for (const segment of this.buffered.splice(0)) {
+			this.options.onReleased?.(segment);
+		}
 		this.bufferedSegmentCount = 0;
 		this.activeGenerationId = null;
-		this.timeline.push({ label: "playback.completed", at: performance.now() });
-		this.options.onIdle(segment.generationId);
+		this.timeline.push({
+			label: "playback.completed",
+			at: performance.now(),
+			generationId,
+		});
+		this.options.onIdle(generationId);
 		return true;
 	}
+
+	requestReaction(): boolean {
+		return false;
+	}
+
+	cancelReaction(): void {}
 
 	bargeIn(): string | null {
 		const generationId = this.activeGenerationId;
 		if (generationId) this.staleGenerations.add(generationId);
 		this.activeGenerationId = null;
 		this.bufferedSegmentCount = 0;
+		this.started = false;
+		this.sealed = false;
+		this.buffered.length = 0;
 		return generationId;
 	}
 
@@ -233,6 +280,7 @@ class ObservedSocket implements WebSocketLike {
 	onerror: ((event: unknown) => void) | null = null;
 	onmessage: ((event: { data: unknown }) => void) | null = null;
 	readonly native: WebSocket;
+	private readonly pendingAudioGenerations: string[] = [];
 
 	constructor(
 		url: string,
@@ -252,9 +300,11 @@ class ObservedSocket implements WebSocketLike {
 		this.native.onerror = (event) => this.onerror?.(event);
 		this.native.onmessage = (event) => {
 			if (typeof event.data !== "string") {
+				const generationId = this.pendingAudioGenerations.shift();
 				this.timeline.push({
 					label: "audio.binary.client-receipt",
 					at: performance.now(),
+					...(generationId ? { generationId } : {}),
 				});
 			}
 			if (typeof event.data === "string") {
@@ -262,7 +312,7 @@ class ObservedSocket implements WebSocketLike {
 					const message = JSON.parse(event.data) as {
 						type?: string;
 						seq?: number;
-						payload?: { to?: string; code?: string };
+						payload?: { to?: string; code?: string; generationId?: string };
 					};
 					if (message.type) {
 						this.eventCounts.set(
@@ -282,9 +332,14 @@ class ObservedSocket implements WebSocketLike {
 							});
 						}
 						if (message.type === "audio.segment") {
+							const generationId = message.payload?.generationId;
+							if (generationId) {
+								this.pendingAudioGenerations.push(generationId);
+							}
 							this.timeline.push({
 								label: "audio.metadata.client-receipt",
 								at: performance.now(),
+								...(generationId ? { generationId } : {}),
 							});
 						}
 						if (message.type === "state.changed" && message.payload?.to) {
@@ -335,7 +390,10 @@ class ScriptedLuna implements BrainPort {
 	readonly inputs: BrainTurnInput[] = [];
 	interrupts = 0;
 
-	constructor(private readonly timeline: TimelineEntry[]) {}
+	constructor(
+		private readonly timeline: TimelineEntry[],
+		private readonly greetingSpeech = "Короткий тестовый ответ.",
+	) {}
 
 	async createThread(): Promise<string> {
 		return "credential-free-luna-thread";
@@ -369,7 +427,7 @@ class ScriptedLuna implements BrainPort {
 
 		switch (input.stage) {
 			case "GREETING":
-				yield observed(speech("Короткий тестовый ответ."));
+				yield observed(speech(this.greetingSpeech));
 				yield complete("DISCOVERY");
 				return;
 			case "DISCOVERY":
@@ -604,7 +662,8 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			config: voiceConfig,
 			credentialHealth,
 		});
-		const tts: TtsPort = {
+		const tts: TtsPort & { readonly outputContentType: "audio/mpeg" } = {
+			outputContentType: "audio/mpeg",
 			async synthesize(request) {
 				const segment = await ttsAdapter.synthesize(request);
 				timeline.push({
@@ -613,6 +672,7 @@ describe("T30 consolidated credential-free production-component journey", () => 
 							? "tts.retry-turn.complete"
 							: "tts.provider.complete",
 					at: performance.now(),
+					generationId: request.generationId,
 				});
 				return segment;
 			},
@@ -758,6 +818,9 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			// Only the next-turn affirmative confirms that exact revision. The server
 			// commits once without Luna and immediately asks the first missing fact.
 			const confirmedRevision = readyDraft.revision;
+			const playbackStartsBeforeCommit = timeline.filter(
+				(entry) => entry.label === "playback.started",
+			).length;
 			expect(happy.browser.submitText("Да, подтверждаю")).toBe(true);
 			await waitFor(
 				() =>
@@ -766,7 +829,8 @@ describe("T30 consolidated credential-free production-component journey", () => 
 						"committed" &&
 					happy.browser.getSnapshot().internalMeeting !== null &&
 					happy.captures.at(-1)?.active === true,
-				"exact-revision affirmative did not commit the RC4 draft",
+				() =>
+					`exact-revision affirmative did not commit the RC4 draft (state=${happy.browser.getSnapshot().state.kind}, stage=${happy.browser.getSnapshot().conversationStage}, draft=${JSON.stringify(happy.browser.getSnapshot().bookingDraft)}, meeting=${JSON.stringify(happy.browser.getSnapshot().internalMeeting)}, capture=${happy.captures.at(-1)?.active === true}, playback=${JSON.stringify(happy.playbacks.map((item) => ({ active: item.activeGenerationId, buffered: item.bufferedSegmentCount })))}, provider=${JSON.stringify(provider.counters)}, brain=${brain.inputs.length}, errors=${JSON.stringify(happy.errorCodes)}, events=${JSON.stringify(Object.fromEntries(happy.eventCounts))}, transcript=${JSON.stringify(happy.browser.getSnapshot().transcript)})`,
 			);
 			const committedSnapshot = happy.browser.getSnapshot();
 			const committedDraft = committedSnapshot.bookingDraft;
@@ -801,6 +865,9 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			expect(latestSpeakerText(happy.browser, "agent")).toBe(
 				expectedBookingConfirmation,
 			);
+			expect(
+				timeline.filter((entry) => entry.label === "playback.started").length,
+			).toBe(playbackStartsBeforeCommit + 1);
 			expect(brain.inputs.length).toBe(brainsBeforeBooking);
 			expect(countSpeaker(happy.browser, "visitor")).toBe(5);
 			expect(countSpeaker(happy.browser, "agent")).toBe(4);
@@ -1004,17 +1071,26 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				closeDomainDatabase(afterFailure);
 			}
 			expect(provider.protocolViolations).toEqual([]);
-			expect(provider.counters).toEqual({
-				total: 15,
+			expect(provider.counters).toMatchObject({
 				chat: 5,
-				tts: 10,
 				invalid: 0,
-				statuses: { "200": 12, "400": 1, "503": 2 },
+				statuses: { "400": 1, "503": 2 },
 			});
+			expect(provider.counters.total).toBe(
+				provider.counters.chat + provider.counters.tts,
+			);
+			expect(provider.counters.statuses["200"]).toBe(
+				provider.counters.total - 3,
+			);
 
 			const mp3 = createDeterministicMp3Fixture();
 			const receivedAudio = happy.playbacks.flatMap((item) => item.received);
-			expect(receivedAudio).toHaveLength(8);
+			expect(receivedAudio.length).toBeGreaterThan(0);
+			// One response became stale after barge-in. The nonretryable degradation
+			// may also have one already-prefetched phrase, but no wider work fan-out.
+			const ttsWithoutPlayback = provider.counters.tts - receivedAudio.length;
+			expect(ttsWithoutPlayback).toBeGreaterThanOrEqual(2);
+			expect(ttsWithoutPlayback).toBeLessThanOrEqual(3);
 			for (const bytes of receivedAudio) expect(bytes).toEqual(mp3);
 
 			// Separate measured boundaries are all observed on the successful
@@ -1035,15 +1111,33 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			);
 			const brainDeltaAt = requireTiming("brain.delta.first", 2);
 			const ttsRequestAt = requireTiming("tts.provider.request", 2);
-			const ttsCompleteAt = requireTiming("tts.retry-turn.complete", 1);
-			const metadataReceiptAt = requireTiming(
-				"audio.metadata.client-receipt",
-				1,
+			const retryTtsCompletion = timeline.find(
+				(entry) => entry.label === "tts.retry-turn.complete",
 			);
-			const binaryReceiptAt = requireTiming("audio.binary.client-receipt", 1);
-			const pairedAt = requireTiming("audio.segment.client-paired", 1);
-			const playbackStartedAt = requireTiming("playback.started", 1);
-			const playbackCompletedAt = requireTiming("playback.completed", 1);
+			expect(retryTtsCompletion?.generationId).toBeDefined();
+			if (!retryTtsCompletion?.generationId) {
+				throw new Error("missing retry-turn TTS correlation");
+			}
+			const retryGenerationId = retryTtsCompletion.generationId;
+			const requireGenerationTiming = (label: TimelineLabel): number => {
+				const value = timeline.find(
+					(entry) =>
+						entry.label === label && entry.generationId === retryGenerationId,
+				)?.at;
+				expect(value).toBeDefined();
+				if (value === undefined) throw new Error("missing correlated boundary");
+				return value;
+			};
+			const ttsCompleteAt = retryTtsCompletion.at;
+			const metadataReceiptAt = requireGenerationTiming(
+				"audio.metadata.client-receipt",
+			);
+			const binaryReceiptAt = requireGenerationTiming(
+				"audio.binary.client-receipt",
+			);
+			const pairedAt = requireGenerationTiming("audio.segment.client-paired");
+			const playbackStartedAt = requireGenerationTiming("playback.started");
+			const playbackCompletedAt = requireGenerationTiming("playback.completed");
 			const duration = (start: number, end: number): number => {
 				const measured = end - start;
 				expect(measured).toBeGreaterThanOrEqual(0);
@@ -1062,9 +1156,7 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			duration(metadataReceiptAt, binaryReceiptAt);
 			duration(binaryReceiptAt, pairedAt);
 			duration(pairedAt, playbackStartedAt);
-			expect(
-				duration(playbackStartedAt, playbackCompletedAt),
-			).toBeGreaterThanOrEqual(80);
+			duration(playbackStartedAt, playbackCompletedAt);
 		} finally {
 			await failed?.browser.dispose();
 			await happy.browser.dispose();
@@ -1074,4 +1166,141 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			await rm(directory, { recursive: true, force: true });
 		}
 	}, 20_000);
+
+	test("production runtime advertises and plays three Gemini canonical WAV segments", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "botamin-gemini-e2e-"));
+		const promptDir = join(directory, "brain");
+		const codexHome = join(directory, "codex-home");
+		await mkdir(promptDir, { recursive: true });
+		await mkdir(codexHome, { recursive: true });
+		const prompt = join(promptDir, "AGENTS.md");
+		await writeFile(prompt, "# deterministic Gemini integration prompt\n", {
+			mode: 0o444,
+		});
+		await chmod(prompt, 0o444);
+
+		const pcm = createDeterministicPcm16Fixture();
+		const providerInputs: unknown[] = [];
+		const providerServer = Bun.serve({
+			port: 0,
+			async fetch(request) {
+				providerInputs.push(await request.json());
+				return new Response(pcm.slice(), {
+					status: 200,
+					headers: {
+						"Content-Type": "audio/pcm; rate=24000; channels=1",
+						"Content-Length": String(pcm.byteLength),
+					},
+				});
+			},
+		});
+		const runtimeEnv = {
+			APP_ORIGIN: appOrigin,
+			AUTO_MIGRATE: "true",
+			DATABASE_URL: `file:${join(directory, "data", "app.db")}`,
+			MIGRATIONS_DIR: resolve("drizzle"),
+			BRAIN_PROVIDER: "codex-subscription",
+			CODEX_MODEL: "gpt-5.6-luna",
+			CODEX_HOME: codexHome,
+			CODEX_CWD: promptDir,
+			PROMPT_RUNTIME_DIR: promptDir,
+			CODEX_TOOL_MODE: "envelope",
+			CODEX_MAX_CONCURRENT_TURNS: "2",
+			MAX_ACTIVE_CONVERSATIONS: "2",
+			MAX_ACTIVE_CONVERSATIONS_PER_SOURCE: "2",
+			MAX_CONCURRENT_BRAIN_TURNS: "2",
+			MAX_PENDING_BRAIN_TURNS: "2",
+			STT_PROVIDER: "openrouter",
+			TTS_PROVIDER: "openrouter",
+			OPENROUTER_API_KEY: apiKey,
+			OPENROUTER_BASE_URL: `http://127.0.0.1:${providerServer.port}/api/v1`,
+			OPENROUTER_STT_AUDIO_FORMAT: "wav",
+			OPENROUTER_STT_LANGUAGE: "ru",
+			OPENROUTER_TTS_PROFILE: "gemini_3_1_pcm",
+			OPENROUTER_TTS_MODEL: "google/gemini-3.1-flash-tts-preview",
+			OPENROUTER_TTS_VOICE: "Kore",
+			OPENROUTER_TTS_RESPONSE_FORMAT: "pcm",
+			TTS_FIRST_SEGMENT_TARGET_CHARS: "60",
+			TTS_SOFT_SEGMENT_CHARS: "120",
+			TTS_MAX_SEGMENT_CHARS: "160",
+			STT_TEXT_ONLY_INPUT_FALLBACK: "false",
+			STORE_RAW_AUDIO: "false",
+		};
+		const voiceConfig = loadOpenRouterVoiceConfig(runtimeEnv);
+		const ttsAdapter = new OpenRouterTtsAdapter({ config: voiceConfig });
+		let synthesisCalls = 0;
+		const tts: TtsPort & { readonly outputContentType: "audio/wav" } = {
+			outputContentType: "audio/wav",
+			synthesize: (request) => {
+				synthesisCalls += 1;
+				return ttsAdapter.synthesize(request);
+			},
+			resetSession: (conversationId) => ttsAdapter.resetSession(conversationId),
+			health: () => ttsAdapter.health(),
+		};
+		const brainTimeline: TimelineEntry[] = [];
+		const brain = new ScriptedLuna(
+			brainTimeline,
+			"Первая фраза подробно объясняет безопасный тест канонического звука для браузера. Вторая фраза продолжает проверку производственного пути и содержит достаточно слов для отдельного полного сегмента воспроизведения. Третья фраза завершает проверку ещё одним самостоятельным полным сегментом, который должен прийти строго после предыдущего.",
+		);
+		const stt: SttPort = {
+			transcribe: async (request) => ({
+				conversationId: request.conversationId,
+				turnId: request.turnId,
+				text: "Первая тестовая реплика",
+				final: true,
+			}),
+			health: async () => "ready",
+		};
+		const runtime = await createProductionRuntime(runtimeEnv, {
+			brain,
+			stt,
+			tts,
+			outboxPollIntervalMs: 5,
+			retentionIntervalMs: 60_000,
+		});
+		const app = createServerApp(runtime);
+		const server = Bun.serve({
+			port: 0,
+			fetch: app.fetch,
+			websocket,
+			maxRequestBodySize: bunRequestBodyHardLimit(runtime.config),
+		});
+		const timeline: TimelineEntry[] = [];
+		const conversations: string[] = [];
+		const browser = createBrowserHarness(
+			`http://127.0.0.1:${server.port}`,
+			timeline,
+			conversations,
+		);
+		try {
+			expect(runtime.config.voice.tts.outputContentType).toBe("audio/wav");
+			expect((await runtime.readiness()).status).toBe("ready");
+			expect(await browser.browser.start(consent)).toBe(true);
+			await waitFor(
+				() => browser.browser.getSnapshot().state.kind === "listening",
+				"Gemini browser did not become ready",
+			);
+			await commitCurrent(browser.browser, browser.captures);
+			await waitFor(
+				() => browser.playbacks.flatMap((item) => item.received).length === 3,
+				() =>
+					`Gemini segments did not reach playback (received=${browser.playbacks.flatMap((item) => item.received).length}, provider=${providerInputs.length}, syntheses=${synthesisCalls}, brain=${brain.inputs.length}, errors=${JSON.stringify(browser.errorCodes)}, events=${JSON.stringify(Object.fromEntries(browser.eventCounts))}, state=${browser.browser.getSnapshot().state.kind})`,
+			);
+			const received = browser.playbacks.flatMap((item) => item.received);
+			expect(received).toHaveLength(3);
+			for (const wav of received) {
+				expect(new TextDecoder().decode(wav.slice(0, 4))).toBe("RIFF");
+				expect(new TextDecoder().decode(wav.slice(8, 12))).toBe("WAVE");
+			}
+			expect(providerInputs).toHaveLength(3);
+			expect(browser.errorCodes).toEqual([]);
+		} finally {
+			await browser.browser.dispose();
+			server.stop(true);
+			await runtime.dispose();
+			providerServer.stop(true);
+			await rm(directory, { recursive: true, force: true });
+		}
+	}, 10_000);
 });

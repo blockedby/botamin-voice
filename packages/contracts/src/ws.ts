@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+	CanonicalTtsWavBytesSchema,
+	COMPLETE_AUDIO_SEGMENT_MAX_BYTES,
+} from "./audio";
+import {
 	ContractVersionSchema,
 	EntityIdSchema,
 	MpegAudioBytesSchema,
@@ -17,6 +21,11 @@ import {
 	BrowserBookingDraftSchema,
 	InternalVirtualMeetingProjectionSchema,
 } from "./rc4";
+import {
+	LocalReactionCapabilitySchema,
+	LocalReactionClipIdSchema,
+	LocalReactionDelayMsSchema,
+} from "./reactions";
 import { AudioClientConfigSchema } from "./rest";
 
 /** Binary-frame sequences are unsigned integers exactly representable by JS. */
@@ -58,7 +67,49 @@ const BookingClientEventBaseShape = {
 	conversationId: z.never().optional(),
 };
 
-export const ClientHelloEventSchema = z
+export const VOICE_WS_PROTOCOL_QUERY_PARAM = "voiceProtocol" as const;
+export const VOICE_WS_PROTOCOL_V2_QUERY_VALUE = "2" as const;
+export const VOICE_WS_PROTOCOL_VERSION = 2 as const;
+export type VoiceWsProtocolVersion = typeof VOICE_WS_PROTOCOL_VERSION;
+
+export const PLAYBACK_FLOW_MAX_SEGMENTS = 4;
+export const PLAYBACK_FLOW_MAX_BYTES = 20_000_000;
+export const PLAYBACK_FLOW_MAX_SEGMENT_BYTES = COMPLETE_AUDIO_SEGMENT_MAX_BYTES;
+
+export const PlaybackFlowControlSchema = z
+	.object({
+		maxBufferedSegments: z
+			.number()
+			.int()
+			.min(1)
+			.max(PLAYBACK_FLOW_MAX_SEGMENTS),
+		maxBufferedBytes: z
+			.number()
+			.int()
+			.min(PLAYBACK_FLOW_MAX_SEGMENT_BYTES)
+			.max(PLAYBACK_FLOW_MAX_BYTES),
+		maxSegmentBytes: z
+			.number()
+			.int()
+			.min(1)
+			.max(PLAYBACK_FLOW_MAX_SEGMENT_BYTES),
+	})
+	.strict()
+	.refine(
+		(value) => value.maxSegmentBytes <= value.maxBufferedBytes,
+		"A playback segment must fit in the advertised byte window",
+	);
+
+export const NegotiatedPlaybackFlowControlSchema = z
+	.object({
+		maxBufferedSegments: z.literal(PLAYBACK_FLOW_MAX_SEGMENTS),
+		maxBufferedBytes: z.literal(PLAYBACK_FLOW_MAX_BYTES),
+		maxSegmentBytes: z.literal(PLAYBACK_FLOW_MAX_SEGMENT_BYTES),
+	})
+	.strict();
+
+/** Exact origin/main hello: safe to send before either peer proves v2. */
+export const LegacyClientHelloEventSchema = z
 	.object({
 		...ClientEventBaseShape,
 		type: z.literal("client.hello"),
@@ -66,6 +117,27 @@ export const ClientHelloEventSchema = z
 			.object({
 				resumeToken: z.string().min(16).max(512).nullable(),
 				audio: InputAudioConfigSchema,
+			})
+			.strict(),
+	})
+	.strict();
+
+export const ClientHelloEventSchema = LegacyClientHelloEventSchema;
+
+/** Sent only after a trusted upgrade query and a valid legacy-shaped hello. */
+export const ClientProtocolAcceptEventSchema = z
+	.object({
+		...ClientEventBaseShape,
+		type: z.literal("client.protocol.accept"),
+		payload: z
+			.object({
+				version: z.literal(VOICE_WS_PROTOCOL_VERSION),
+				capabilities: z
+					.object({
+						localReactions: LocalReactionCapabilitySchema.nullable(),
+					})
+					.strict(),
+				playback: NegotiatedPlaybackFlowControlSchema,
 			})
 			.strict(),
 	})
@@ -120,6 +192,25 @@ export const PlaybackInterruptedEventSchema = z
 					"new_generation",
 					"playback_error",
 				]),
+			})
+			.strict(),
+	})
+	.strict();
+
+export const PlaybackSegmentReleasedEventSchema = z
+	.object({
+		...ClientEventBaseShape,
+		type: z.literal("playback.segment.released"),
+		payload: z
+			.object({
+				generationId: EntityIdSchema,
+				segmentId: EntityIdSchema,
+				sequence: BinaryAudioFrameSequenceSchema,
+				byteLength: z
+					.number()
+					.int()
+					.positive()
+					.max(PLAYBACK_FLOW_MAX_SEGMENT_BYTES),
 			})
 			.strict(),
 	})
@@ -181,10 +272,12 @@ export const BookingConflictResolveEventSchema = z
 
 export const ClientWsEventSchema = z.discriminatedUnion("type", [
 	ClientHelloEventSchema,
+	ClientProtocolAcceptEventSchema,
 	AudioCommitEventSchema,
 	VisitorTextSubmitEventSchema,
 	PlaybackStartedEventSchema,
 	PlaybackInterruptedEventSchema,
+	PlaybackSegmentReleasedEventSchema,
 	SessionStopEventSchema,
 	ClientPingEventSchema,
 	BookingFormSubmitEventSchema,
@@ -198,6 +291,16 @@ const ServerEventBaseShape = {
 	seq: z.number().int().positive(),
 	at: Rfc3339UtcSchema,
 };
+
+export const SessionProtocolOfferEventSchema = z
+	.object({
+		...ServerEventBaseShape,
+		type: z.literal("session.protocol.offer"),
+		payload: z
+			.object({ version: z.literal(VOICE_WS_PROTOCOL_VERSION) })
+			.strict(),
+	})
+	.strict();
 
 export const SessionReadyEventSchema = z
 	.object({
@@ -249,6 +352,21 @@ const AssistantGenerationPayloadSchema = z
 	})
 	.strict();
 
+export const AssistantReactionRequestEventSchema = z
+	.object({
+		...ServerEventBaseShape,
+		type: z.literal("assistant.reaction.request"),
+		payload: z
+			.object({
+				turnId: EntityIdSchema,
+				generationId: EntityIdSchema,
+				clipId: LocalReactionClipIdSchema,
+				delayMs: LocalReactionDelayMsSchema,
+			})
+			.strict(),
+	})
+	.strict();
+
 export const AssistantTextDeltaEventSchema = z
 	.object({
 		...ServerEventBaseShape,
@@ -275,18 +393,34 @@ export const AssistantTextDoneEventSchema = z
 	})
 	.strict();
 
-export const AudioSegmentMetadataSchema = z
+const AudioSegmentMetadataBaseShape = {
+	generationId: EntityIdSchema,
+	segmentId: EntityIdSchema,
+	sequence: BinaryAudioFrameSequenceSchema,
+	byteLength: z.number().int().positive().max(PLAYBACK_FLOW_MAX_SEGMENT_BYTES),
+	final: z.literal(true),
+};
+
+export const Mp3AudioSegmentMetadataSchema = z
 	.object({
-		generationId: EntityIdSchema,
-		segmentId: EntityIdSchema,
-		sequence: BinaryAudioFrameSequenceSchema,
+		...AudioSegmentMetadataBaseShape,
 		contentType: z.literal("audio/mpeg"),
-		byteLength: z.number().int().positive(),
-		final: z.literal(true),
 	})
 	.strict();
 
-/** Metadata for the one complete binary MP3 payload that follows atomically. */
+export const WavAudioSegmentMetadataSchema = z
+	.object({
+		...AudioSegmentMetadataBaseShape,
+		contentType: z.literal("audio/wav"),
+	})
+	.strict();
+
+export const AudioSegmentMetadataSchema = z.discriminatedUnion("contentType", [
+	Mp3AudioSegmentMetadataSchema,
+	WavAudioSegmentMetadataSchema,
+]);
+
+/** Metadata for the one complete binary MP3 or canonical WAV payload next. */
 export const AudioSegmentEventSchema = z
 	.object({
 		...ServerEventBaseShape,
@@ -414,9 +548,11 @@ export const ServerPongEventSchema = z
 	.strict();
 
 export const ServerWsEventSchema = z.discriminatedUnion("type", [
+	SessionProtocolOfferEventSchema,
 	SessionReadyEventSchema,
 	StateChangedEventSchema,
 	TranscriptFinalEventSchema,
+	AssistantReactionRequestEventSchema,
 	AssistantTextDeltaEventSchema,
 	AssistantTextDoneEventSchema,
 	AudioSegmentEventSchema,
@@ -444,6 +580,7 @@ export const WsJsonEventSchema = z.union([
 export const BINARY_AUDIO_FRAME_KIND = Object.freeze({
 	clientPcm16: 0x01,
 	serverMp3Segment: 0x02,
+	serverWavSegment: 0x03,
 } as const);
 export const BINARY_AUDIO_FRAME_KIND_OFFSET = 0 as const;
 export const BINARY_AUDIO_FRAME_SEQUENCE_OFFSET = 1 as const;
@@ -464,7 +601,8 @@ export interface BinaryAudioFrame {
 function isBinaryAudioFrameKind(value: number): value is BinaryAudioFrameKind {
 	return (
 		value === BINARY_AUDIO_FRAME_KIND.clientPcm16 ||
-		value === BINARY_AUDIO_FRAME_KIND.serverMp3Segment
+		value === BINARY_AUDIO_FRAME_KIND.serverMp3Segment ||
+		value === BINARY_AUDIO_FRAME_KIND.serverWavSegment
 	);
 }
 
@@ -547,21 +685,34 @@ export const ClientBinaryAudioFrameMetadataSchema = z
 	})
 	.strict();
 
-export const ServerBinaryAudioFrameMetadataSchema = z
-	.object({
-		direction: z.literal("server"),
-		...AudioSegmentMetadataSchema.shape,
-	})
-	.strict();
-
-export const BinaryAudioFrameMetadataSchema = z.discriminatedUnion(
-	"direction",
-	[ClientBinaryAudioFrameMetadataSchema, ServerBinaryAudioFrameMetadataSchema],
+export const ServerBinaryAudioFrameMetadataSchema = z.discriminatedUnion(
+	"contentType",
+	[
+		z
+			.object({
+				direction: z.literal("server"),
+				...AudioSegmentMetadataBaseShape,
+				contentType: z.literal("audio/mpeg"),
+			})
+			.strict(),
+		z
+			.object({
+				direction: z.literal("server"),
+				...AudioSegmentMetadataBaseShape,
+				contentType: z.literal("audio/wav"),
+			})
+			.strict(),
+	],
 );
 
+export const BinaryAudioFrameMetadataSchema = z.union([
+	ClientBinaryAudioFrameMetadataSchema,
+	ServerBinaryAudioFrameMetadataSchema,
+]);
+
 /**
- * Validates the adjacent JSON metadata and canonical raw binary frame as one
- * coherent server MP3 segment. metadata.byteLength counts payload bytes only.
+ * Validates adjacent JSON metadata and its canonical raw binary frame as one
+ * coherent complete segment. metadata.byteLength counts payload bytes only.
  */
 export const AtomicServerAudioSegmentFrameSchema = z
 	.object({
@@ -583,10 +734,14 @@ export const AtomicServerAudioSegmentFrameSchema = z
 			return;
 		}
 
-		if (decoded.kind !== BINARY_AUDIO_FRAME_KIND.serverMp3Segment) {
+		const expectedKind =
+			atomicFrame.metadata.contentType === "audio/mpeg"
+				? BINARY_AUDIO_FRAME_KIND.serverMp3Segment
+				: BINARY_AUDIO_FRAME_KIND.serverWavSegment;
+		if (decoded.kind !== expectedKind) {
 			context.addIssue({
 				code: "custom",
-				message: "audio.segment must be paired with a server MP3 frame kind",
+				message: `audio.segment ${atomicFrame.metadata.contentType} metadata does not match its server frame kind`,
 				path: ["rawFrame", BINARY_AUDIO_FRAME_KIND_OFFSET],
 			});
 		}
@@ -601,15 +756,18 @@ export const AtomicServerAudioSegmentFrameSchema = z
 			context.addIssue({
 				code: "custom",
 				message:
-					"Binary MP3 payload length does not match audio.segment metadata",
+					"Binary audio payload length does not match audio.segment metadata",
 				path: ["rawFrame"],
 			});
 		}
-		const mp3Result = MpegAudioBytesSchema.safeParse(decoded.payload);
-		if (!mp3Result.success) {
+		const payloadResult =
+			atomicFrame.metadata.contentType === "audio/mpeg"
+				? MpegAudioBytesSchema.safeParse(decoded.payload)
+				: CanonicalTtsWavBytesSchema.safeParse(decoded.payload);
+		if (!payloadResult.success) {
 			context.addIssue({
 				code: "custom",
-				message: "Binary audio.segment payload is not structurally valid MP3",
+				message: `Binary audio.segment payload is not valid ${atomicFrame.metadata.contentType}`,
 				path: ["rawFrame", BINARY_AUDIO_FRAME_PAYLOAD_OFFSET],
 			});
 		}

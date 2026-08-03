@@ -9,6 +9,14 @@ import {
 	type InternalVirtualMeetingProjection,
 } from "@botamin/contracts";
 import { createDeterministicMp3Fixture } from "../../../../packages/test-fixtures/src";
+import {
+	type AudioPlaybackApis,
+	type CompletePlaybackSegment,
+	type LocalReactionRequest,
+	PhrasePlaybackQueue,
+	type PlaybackEnqueueOutcome,
+	type PlaybackSourceLike,
+} from "../audio/playback";
 import type { VoiceUiState } from "../components/voiceTypes";
 import {
 	createBrowserBookingDraft,
@@ -46,6 +54,7 @@ class FakeSocket implements WebSocketLike {
 	onmessage: ((event: { data: unknown }) => void) | null = null;
 	readonly sent: Array<string | Uint8Array> = [];
 	closed = false;
+	protocolOffered = false;
 
 	send(data: string | Uint8Array): void {
 		if (this.readyState !== 1) throw new Error("socket closed");
@@ -67,6 +76,31 @@ class FakeSocket implements WebSocketLike {
 		this.onerror?.(new Error("network failure"));
 	}
 	server(value: unknown): void {
+		if (
+			value !== null &&
+			typeof value === "object" &&
+			"type" in value &&
+			value.type === "session.ready" &&
+			!this.protocolOffered
+		) {
+			this.protocolOffered = true;
+			const ready = value as unknown as {
+				v: number;
+				conversationId: string;
+				seq: number;
+				at: string;
+			};
+			this.onmessage?.({
+				data: JSON.stringify({
+					v: ready.v,
+					conversationId: ready.conversationId,
+					seq: ready.seq,
+					at: ready.at,
+					type: "session.protocol.offer",
+					payload: { version: 2 },
+				}),
+			});
+		}
 		this.onmessage?.({ data: JSON.stringify(value) });
 	}
 	binary(value: Uint8Array): void {
@@ -138,29 +172,83 @@ class FakePlayback implements PlaybackAdapter {
 	generation: string | null = null;
 	bargeInCalls = 0;
 	disposeCalls = 0;
+	resumeCalls = 0;
 	bufferedSegmentCount = 0;
+	sealed = false;
+	started = false;
+	muted = false;
+	cancelReactionCalls = 0;
+	readonly reactions: LocalReactionRequest[] = [];
 	readonly enqueued: number[] = [];
+	readonly segments: CompletePlaybackSegment[] = [];
 
-	constructor(readonly options: PlaybackFactoryOptions) {}
+	constructor(
+		readonly options: PlaybackFactoryOptions,
+		private readonly resumeError?: Error,
+		private readonly enqueueOutcome: PlaybackEnqueueOutcome = {
+			status: "accepted",
+		},
+		private readonly enqueueGate?: Promise<void>,
+		private readonly effects?: string[],
+	) {}
+	async resume(): Promise<void> {
+		this.resumeCalls += 1;
+		this.effects?.push("playback.resume");
+		if (this.resumeError) throw this.resumeError;
+	}
 	beginGeneration(generationIdValue: string): void {
+		if (this.generation !== generationIdValue) {
+			this.started = false;
+			this.sealed = false;
+		}
 		this.generation = generationIdValue;
 	}
-	async enqueue(segment: { sequence: number }): Promise<boolean> {
+	async enqueue(segment: CompletePlaybackSegment) {
 		this.enqueued.push(segment.sequence);
+		this.segments.push(segment);
+		await this.enqueueGate;
+		if (this.enqueueOutcome.status === "rejected") {
+			return this.enqueueOutcome;
+		}
 		this.bufferedSegmentCount += 1;
+		if (!this.started) {
+			this.started = true;
+			this.options.onStarted(segment);
+		}
+		return this.enqueueOutcome;
+	}
+	sealGeneration(generationIdValue: string): boolean {
+		if (this.generation !== generationIdValue) return false;
+		this.sealed = true;
+		if (this.bufferedSegmentCount === 0) this.options.onIdle(generationIdValue);
 		return true;
+	}
+	requestReaction(request: LocalReactionRequest): boolean {
+		this.reactions.push(request);
+		return true;
+	}
+	cancelReaction(): void {
+		this.cancelReactionCalls += 1;
 	}
 	bargeIn(): string | null {
 		this.bargeInCalls += 1;
+		this.cancelReaction();
 		const generation = this.generation;
 		this.generation = null;
 		this.bufferedSegmentCount = 0;
+		this.segments.length = 0;
 		return generation;
+	}
+	setMuted(muted: boolean): void {
+		if (this.muted === muted) return;
+		this.muted = muted;
+		if (muted) this.bargeIn();
 	}
 	async dispose(): Promise<void> {
 		this.disposeCalls += 1;
 		this.generation = null;
 		this.bufferedSegmentCount = 0;
+		this.segments.length = 0;
 	}
 	get activeGenerationId(): string | null {
 		return this.generation;
@@ -168,9 +256,11 @@ class FakePlayback implements PlaybackAdapter {
 	idle(): void {
 		if (!this.generation) return;
 		const generation = this.generation;
-		this.generation = null;
 		this.bufferedSegmentCount = 0;
-		this.options.onIdle(generation);
+		for (const segment of this.segments.splice(0)) {
+			this.options.onReleased?.(segment);
+		}
+		if (this.sealed) this.options.onIdle(generation);
 	}
 }
 
@@ -264,6 +354,14 @@ function flush(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function deferred<T>() {
+	let resolve: (value: T) => void = () => undefined;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
+
 function harness(
 	options: {
 		fetch?: FetchLike;
@@ -272,6 +370,10 @@ function harness(
 		firstCaptureStopGate?: Promise<void>;
 		firstCaptureFinishGate?: Promise<void>;
 		createSocketError?: Error;
+		playbackResumeError?: Error;
+		playbackEnqueueOutcome?: PlaybackEnqueueOutcome;
+		playbackEnqueueGate?: Promise<void>;
+		createPlayback?: (options: PlaybackFactoryOptions) => PlaybackAdapter;
 		requestIds?: string[];
 	} = {},
 ) {
@@ -308,7 +410,14 @@ function harness(
 			return capture;
 		},
 		createPlayback: (playbackOptions) => {
-			const playback = new FakePlayback(playbackOptions);
+			if (options.createPlayback)
+				return options.createPlayback(playbackOptions);
+			const playback = new FakePlayback(
+				playbackOptions,
+				options.playbackResumeError,
+				options.playbackEnqueueOutcome,
+				options.playbackEnqueueGate,
+			);
 			playbacks.push(playback);
 			return playback;
 		},
@@ -363,9 +472,10 @@ describe("production browser voice integration", () => {
 		expect(value.requests).toHaveLength(0);
 		expect(value.sockets).toHaveLength(0);
 		expect(value.captures).toHaveLength(0);
+		expect(value.playbacks).toHaveLength(0);
 	});
 
-	test("acquires microphone before REST/WS and gates frames until session.ready", async () => {
+	test("synchronously resumes output before permission/network awaits and gates capture until ready", async () => {
 		let allowPermission: () => void = () => undefined;
 		const permissionGate = new Promise<void>((resolve) => {
 			allowPermission = resolve;
@@ -373,6 +483,8 @@ describe("production browser voice integration", () => {
 		const value = harness({ firstCaptureGate: permissionGate });
 		const starting = value.session.start(consent);
 
+		expect(value.playbacks).toHaveLength(1);
+		expect(value.playbacks[0]?.resumeCalls).toBe(1);
 		expect(value.captures).toHaveLength(1);
 		expect(value.captures[0]?.prepareCalls).toBe(1);
 		expect(value.requests).toHaveLength(0);
@@ -439,7 +551,9 @@ describe("production browser voice integration", () => {
 		});
 		expect(value.requests).toHaveLength(0);
 		expect(value.sockets).toHaveLength(0);
-		expect(value.playbacks).toHaveLength(0);
+		expect(value.playbacks).toHaveLength(1);
+		expect(value.playbacks[0]?.resumeCalls).toBe(1);
+		expect(value.playbacks[0]?.disposeCalls).toBe(1);
 		expect(value.captures).toHaveLength(1);
 		expect(value.captures[0]?.active).toBe(false);
 		expect(value.captures[0]?.stopCalls).toBeGreaterThan(0);
@@ -489,7 +603,10 @@ describe("production browser voice integration", () => {
 			durationMs: 0,
 			maxUtteranceMs: 60_000,
 		});
-		expect(sentJson(value.socket)[0]).toMatchObject({
+		expect(sentJson(value.socket)[0]).toEqual({
+			v: 1,
+			conversationId,
+			at,
 			type: "client.hello",
 			payload: {
 				resumeToken: "initial-client-token-00000000000000000000",
@@ -498,6 +615,26 @@ describe("production browser voice integration", () => {
 					sampleRate: 16_000,
 					channels: 1,
 					chunkMs: 100,
+				},
+			},
+		});
+		expect(sentJson(value.socket)[1]).toMatchObject({
+			type: "client.protocol.accept",
+			payload: {
+				version: 2,
+				capabilities: {
+					localReactions: {
+						version: 1,
+						clipIds: expect.arrayContaining([
+							"neutral-good",
+							"clarification-meaning",
+						]),
+					},
+				},
+				playback: {
+					maxBufferedSegments: 4,
+					maxBufferedBytes: 20_000_000,
+					maxSegmentBytes: 5_000_000,
 				},
 			},
 		});
@@ -1272,6 +1409,709 @@ describe("production browser voice integration", () => {
 		]);
 	});
 
+	test("keeps reactions decorative, deduplicated, and preempted by dynamic metadata", async () => {
+		const value = await readySession();
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Финальная реплика" }),
+		);
+		value.socket.server(
+			event("assistant.text.delta", 3, {
+				generationId,
+				text: "Динамический ответ",
+			}),
+		);
+		const beforeReaction = value.session.getSnapshot();
+		const playback = value.playbacks[0] as FakePlayback;
+		const cancelCalls = playback.cancelReactionCalls;
+		value.socket.server(
+			event("assistant.reaction.request", 4, {
+				turnId,
+				generationId: "01J00000000000000000000098",
+				clipId: "neutral-good",
+				delayMs: 350,
+			}),
+		);
+		value.socket.server(
+			event("assistant.reaction.request", 5, {
+				turnId,
+				generationId,
+				clipId: "neutral-good",
+				delayMs: 350,
+			}),
+		);
+		value.socket.server(
+			event("assistant.reaction.request", 6, {
+				turnId,
+				generationId,
+				clipId: "neutral-accepted",
+				delayMs: 350,
+			}),
+		);
+		expect(playback.reactions).toEqual([
+			{ turnId, generationId, clipId: "neutral-good", delayMs: 350 },
+		]);
+		expect(value.session.getSnapshot()).toBe(beforeReaction);
+		expect(value.session.getSnapshot()).toMatchObject({
+			state: { kind: "processing" },
+			transcript: [
+				{ id: turnId, speaker: "visitor", text: "Финальная реплика" },
+			],
+		});
+		expect(playback.cancelReactionCalls).toBe(cancelCalls);
+		expect(
+			sentJson(value.socket).some((item) => item.type === "playback.started"),
+		).toBe(false);
+
+		const mp3 = createDeterministicMp3Fixture();
+		value.socket.server(
+			event("audio.segment", 7, {
+				generationId,
+				segmentId,
+				sequence: 0,
+				contentType: "audio/mpeg",
+				byteLength: mp3.byteLength,
+				final: true,
+			}),
+		);
+		expect(playback.cancelReactionCalls).toBe(cancelCalls + 1);
+		expect(value.session.getSnapshot().state.kind).not.toBe("speaking");
+	});
+
+	test("plays four fast WS segments in order before the first ends without text-only degradation", async () => {
+		class OrderedSource implements PlaybackSourceLike {
+			onended: (() => void) | null = null;
+			readonly starts: number[] = [];
+			stopped = false;
+			start(when: number): void {
+				this.starts.push(when);
+			}
+			stop(): void {
+				this.stopped = true;
+			}
+			finish(): void {
+				this.onended?.();
+			}
+		}
+		const sources: OrderedSource[] = [];
+		let decoded = 0;
+		const apis: AudioPlaybackApis<number> = {
+			decodeAudioData: async () => decoded++,
+			createSource: () => {
+				const source = new OrderedSource();
+				sources.push(source);
+				return source;
+			},
+			resume: async () => undefined,
+			currentTime: () => 0,
+			duration: () => 1,
+		};
+		const queues: PhrasePlaybackQueue<number>[] = [];
+		const value = await readySession(
+			harness({
+				createPlayback: (options) => {
+					const playback = new PhrasePlaybackQueue(apis, options);
+					queues.push(playback);
+					return playback;
+				},
+			}),
+		);
+		const queue = queues[0];
+		if (!queue) throw new Error("playback queue missing");
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Подтвердите бронь" }),
+		);
+		value.socket.server(
+			event("assistant.text.delta", 3, {
+				generationId,
+				text: "Подтверждение бронирования.",
+			}),
+		);
+		const mp3 = createDeterministicMp3Fixture();
+		for (let sequence = 0; sequence < 4; sequence += 1) {
+			value.socket.server(
+				event("audio.segment", 4 + sequence, {
+					generationId,
+					segmentId: `01J${String(sequence + 5).padStart(23, "0")}`,
+					sequence,
+					contentType: "audio/mpeg",
+					byteLength: mp3.byteLength,
+					final: true,
+				}),
+			);
+			value.socket.binary(
+				encodeBinaryAudioFrame({
+					kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+					sequence,
+					payload: mp3,
+				}),
+			);
+		}
+		await flush();
+		expect(queue?.bufferedSegmentCount).toBe(2);
+		expect(queue?.pendingRawSegmentCount).toBe(2);
+		expect(sources).toHaveLength(2);
+		expect(value.session.getSnapshot().state.kind).toBe("speaking");
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.interrupted",
+			),
+		).toHaveLength(0);
+
+		value.socket.server(
+			event("assistant.text.done", 8, {
+				generationId,
+				fullText: "Подтверждение бронирования.",
+			}),
+		);
+		value.socket.server(event("assistant.audio.done", 9, { generationId }));
+		for (let index = 0; index < 4; index += 1) {
+			sources[index]?.finish();
+			await flush();
+		}
+		expect(sources.flatMap((source) => source.starts)).toEqual([0, 1, 2, 3]);
+		expect(queue?.bufferedSegmentCount).toBe(0);
+		expect(queue?.pendingRawSegmentCount).toBe(0);
+		expect(value.session.getSnapshot().state.kind).toBe("listening");
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.segment.released",
+			),
+		).toHaveLength(4);
+	});
+
+	test("mute cancels reaction plus active, scheduled, and raw speech without resurrection or forged release", async () => {
+		class TrackedSource implements PlaybackSourceLike {
+			onended: (() => void) | null = null;
+			readonly starts: number[] = [];
+			stopped = false;
+			start(when: number): void {
+				this.starts.push(when);
+			}
+			stop(): void {
+				this.stopped = true;
+			}
+		}
+		const sources: TrackedSource[] = [];
+		let decoded = 0;
+		let runReaction: (() => void) | null = null;
+		const apis: AudioPlaybackApis<number> = {
+			decodeAudioData: async () => decoded++,
+			createSource: () => {
+				const source = new TrackedSource();
+				sources.push(source);
+				return source;
+			},
+			resume: async () => undefined,
+			currentTime: () => 0,
+			duration: () => 1,
+		};
+		const queues: PhrasePlaybackQueue<number>[] = [];
+		const fixture = createDeterministicMp3Fixture();
+		const value = await readySession(
+			harness({
+				createPlayback: (options) => {
+					const playback = new PhrasePlaybackQueue(apis, options, {
+						scheduler: {
+							schedule: (callback) => {
+								runReaction = callback;
+								return callback;
+							},
+							cancel: (handle) => {
+								if (runReaction === handle) runReaction = null;
+							},
+						},
+						fetch: async () => ({
+							ok: true,
+							status: 200,
+							headers: { get: () => String(fixture.byteLength) },
+							arrayBuffer: async () => fixture.slice().buffer,
+						}),
+					});
+					queues.push(playback);
+					return playback;
+				},
+			}),
+		);
+		const queue = queues[0];
+		if (!queue) throw new Error("playback queue missing");
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Остановите звук" }),
+		);
+		value.socket.server(
+			event("assistant.text.delta", 3, {
+				generationId,
+				text: "Ответ с очередью.",
+			}),
+		);
+		value.socket.server(
+			event("assistant.reaction.request", 4, {
+				turnId,
+				generationId,
+				clipId: "neutral-good",
+				delayMs: 350,
+			}),
+		);
+		const startReaction = runReaction as (() => void) | null;
+		if (!startReaction) throw new Error("reaction was not scheduled");
+		startReaction();
+		await flush();
+		expect(sources).toHaveLength(1);
+		expect(sources[0]?.stopped).toBe(false);
+
+		for (let sequence = 0; sequence < 4; sequence += 1) {
+			value.socket.server(
+				event("audio.segment", 5 + sequence, {
+					generationId,
+					segmentId: `01J${String(sequence + 5).padStart(23, "0")}`,
+					sequence,
+					contentType: "audio/mpeg",
+					byteLength: fixture.byteLength,
+					final: true,
+				}),
+			);
+			value.socket.binary(
+				encodeBinaryAudioFrame({
+					kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+					sequence,
+					payload: fixture,
+				}),
+			);
+		}
+		await flush();
+		expect(sources[0]?.stopped).toBe(true);
+		expect(queue.bufferedSegmentCount).toBe(2);
+		expect(queue.pendingRawSegmentCount).toBe(2);
+		expect(queue.bufferedRawBytes).toBe(fixture.byteLength * 4);
+		const canceledEnds = sources.slice(1).map((source) => source.onended);
+
+		value.session.toggleMute();
+		expect(value.session.getSnapshot().muted).toBe(true);
+		expect(sources.slice(1).map((source) => source.stopped)).toEqual([
+			true,
+			true,
+		]);
+		expect(queue.activeGenerationId).toBeNull();
+		expect(queue.bufferedSegmentCount).toBe(0);
+		expect(queue.pendingRawSegmentCount).toBe(0);
+		expect(queue.bufferedRawBytes).toBe(0);
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.interrupted",
+			),
+		).toEqual([
+			expect.objectContaining({
+				payload: { generationId, reason: "user_stop" },
+			}),
+		]);
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.segment.released",
+			),
+		).toHaveLength(0);
+		for (const canceledEnd of canceledEnds) canceledEnd?.();
+
+		value.session.toggleMute();
+		value.socket.server(
+			event("audio.segment", 9, {
+				generationId,
+				segmentId: "01J00000000000000000000019",
+				sequence: 4,
+				contentType: "audio/mpeg",
+				byteLength: fixture.byteLength,
+				final: true,
+			}),
+		);
+		value.socket.binary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+				sequence: 4,
+				payload: fixture,
+			}),
+		);
+		await flush();
+		expect(value.session.getSnapshot().muted).toBe(false);
+		expect(sources).toHaveLength(3);
+		expect(queue.activeGenerationId).toBeNull();
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.interrupted",
+			),
+		).toHaveLength(1);
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.segment.released",
+			),
+		).toHaveLength(0);
+	});
+
+	test("enters speaking and sends playback.started only when the first source starts", async () => {
+		const value = await readySession();
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Проверка запуска" }),
+		);
+		value.socket.server(
+			event("assistant.text.done", 3, {
+				generationId,
+				fullText: "Первый и второй сегмент.",
+			}),
+		);
+		const mp3 = createDeterministicMp3Fixture();
+		value.socket.server(
+			event("audio.segment", 4, {
+				generationId,
+				segmentId,
+				sequence: 0,
+				contentType: "audio/mpeg",
+				byteLength: mp3.byteLength,
+				final: true,
+			}),
+		);
+		expect(value.session.getSnapshot().state.kind).not.toBe("speaking");
+		expect(
+			sentJson(value.socket).filter((item) => item.type === "playback.started"),
+		).toHaveLength(0);
+		value.socket.binary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+				sequence: 0,
+				payload: mp3,
+			}),
+		);
+		await flush();
+		expect(value.session.getSnapshot().state.kind).toBe("speaking");
+
+		value.socket.server(
+			event("audio.segment", 5, {
+				generationId,
+				segmentId: "01J00000000000000000000015",
+				sequence: 1,
+				contentType: "audio/mpeg",
+				byteLength: mp3.byteLength,
+				final: true,
+			}),
+		);
+		value.socket.binary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+				sequence: 1,
+				payload: mp3,
+			}),
+		);
+		await flush();
+		expect(
+			sentJson(value.socket).filter((item) => item.type === "playback.started"),
+		).toHaveLength(1);
+	});
+
+	test("does not complete a drained generation until assistant.audio.done seals it", async () => {
+		const value = await readySession();
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Дождитесь конца" }),
+		);
+		value.socket.server(
+			event("assistant.text.done", 3, {
+				generationId,
+				fullText: "Текст уже завершён.",
+			}),
+		);
+		const mp3 = createDeterministicMp3Fixture();
+		value.socket.server(
+			event("audio.segment", 4, {
+				generationId,
+				segmentId,
+				sequence: 0,
+				contentType: "audio/mpeg",
+				byteLength: mp3.byteLength,
+				final: true,
+			}),
+		);
+		value.socket.binary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+				sequence: 0,
+				payload: mp3,
+			}),
+		);
+		await flush();
+		value.playbacks[0]?.idle();
+		await flush();
+		expect(value.captures).toHaveLength(1);
+		expect(value.session.getSnapshot().state.kind).toBe("speaking");
+
+		value.socket.server(event("assistant.audio.done", 5, { generationId }));
+		await flush();
+		expect(value.captures).toHaveLength(2);
+		expect(value.session.getSnapshot().state.kind).toBe("listening");
+	});
+
+	test("preserves an early audio seal and rejects a segment arriving after it", async () => {
+		const value = await readySession();
+		const states: string[] = [];
+		value.session.subscribe(() =>
+			states.push(value.session.getSnapshot().state.kind),
+		);
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Гонка seal" }),
+		);
+		value.socket.server(
+			event("assistant.text.delta", 3, {
+				generationId,
+				text: "Текст",
+			}),
+		);
+		value.socket.server(event("assistant.audio.done", 4, { generationId }));
+		const mp3 = createDeterministicMp3Fixture();
+		value.socket.server(
+			event("audio.segment", 5, {
+				generationId,
+				segmentId,
+				sequence: 0,
+				contentType: "audio/mpeg",
+				byteLength: mp3.byteLength,
+				final: true,
+			}),
+		);
+		value.socket.binary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+				sequence: 0,
+				payload: mp3,
+			}),
+		);
+		await flush();
+		value.socket.server(
+			event("assistant.text.done", 6, {
+				generationId,
+				fullText: "Текст после гонки остаётся доступен.",
+			}),
+		);
+		await flush();
+
+		expect(states).toContain("audio-error");
+		expect(
+			sentJson(value.socket).filter((item) => item.type === "playback.started"),
+		).toHaveLength(0);
+		expect(value.session.getSnapshot().transcript.at(-1)?.text).toBe(
+			"Текст после гонки остаётся доступен.",
+		);
+	});
+
+	test("surfaces typed playback overflow and preserves completed text", async () => {
+		const value = await readySession(
+			harness({
+				playbackEnqueueOutcome: {
+					status: "rejected",
+					reason: "overflow",
+					error: new Error("queue full"),
+				},
+			}),
+		);
+		const projectedStates: string[] = [];
+		value.session.subscribe(() => {
+			projectedStates.push(value.session.getSnapshot().state.kind);
+		});
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Покажите текст" }),
+		);
+		value.socket.server(
+			event("assistant.text.done", 3, {
+				generationId,
+				fullText: "Текст остаётся видимым при ошибке аудио.",
+			}),
+		);
+		const mp3 = createDeterministicMp3Fixture();
+		value.socket.server(
+			event("audio.segment", 4, {
+				generationId,
+				segmentId,
+				sequence: 0,
+				contentType: "audio/mpeg",
+				byteLength: mp3.byteLength,
+				final: true,
+			}),
+		);
+		value.socket.binary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+				sequence: 0,
+				payload: mp3,
+			}),
+		);
+		await flush();
+
+		expect(projectedStates).toContain("audio-error");
+		expect(value.session.getSnapshot().transcript.at(-1)?.text).toBe(
+			"Текст остаётся видимым при ошибке аудио.",
+		);
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.interrupted",
+			),
+		).toHaveLength(1);
+	});
+
+	test("reconnect synchronously cancels local audio but keeps the output context and text", async () => {
+		const value = await readySession();
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Связь" }),
+		);
+		value.socket.server(
+			event("assistant.text.done", 3, {
+				generationId,
+				fullText: "Этот текст долговечен.",
+			}),
+		);
+		const mp3 = createDeterministicMp3Fixture();
+		value.socket.server(
+			event("audio.segment", 4, {
+				generationId,
+				segmentId,
+				sequence: 0,
+				contentType: "audio/mpeg",
+				byteLength: mp3.byteLength,
+				final: true,
+			}),
+		);
+		value.socket.binary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+				sequence: 0,
+				payload: mp3,
+			}),
+		);
+		await flush();
+
+		value.socket.disconnect();
+		expect(value.playbacks[0]?.bargeInCalls).toBe(1);
+		expect(value.playbacks[0]?.disposeCalls).toBe(0);
+		expect(value.session.getSnapshot().state.kind).toBe("reconnecting");
+		expect(value.session.getSnapshot().transcript.at(-1)?.text).toBe(
+			"Этот текст долговечен.",
+		);
+		value.session.reconnect();
+		const resumed = value.sockets[1] as FakeSocket;
+		resumed.open();
+		resumed.server(sessionReady(5, "resume-token-gapless"));
+		await flush();
+		expect(value.playbacks).toHaveLength(1);
+		expect(value.playbacks[0]?.disposeCalls).toBe(0);
+		expect(value.session.getSnapshot().state.kind).toBe("listening");
+	});
+
+	test("fences a late enqueue failure after reconnect cancellation", async () => {
+		const gate = deferred<void>();
+		const value = await readySession(
+			harness({
+				playbackEnqueueGate: gate.promise,
+				playbackEnqueueOutcome: {
+					status: "rejected",
+					reason: "decode-error",
+					error: new Error("late decoder failure"),
+				},
+			}),
+		);
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Поздний результат" }),
+		);
+		value.socket.server(
+			event("assistant.text.done", 3, {
+				generationId,
+				fullText: "Текст сохранён.",
+			}),
+		);
+		const mp3 = createDeterministicMp3Fixture();
+		value.socket.server(
+			event("audio.segment", 4, {
+				generationId,
+				segmentId,
+				sequence: 0,
+				contentType: "audio/mpeg",
+				byteLength: mp3.byteLength,
+				final: true,
+			}),
+		);
+		value.socket.binary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+				sequence: 0,
+				payload: mp3,
+			}),
+		);
+		value.socket.disconnect();
+		gate.resolve();
+		await flush();
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.interrupted",
+			),
+		).toHaveLength(0);
+		expect(value.session.getSnapshot().state.kind).toBe("reconnecting");
+	});
+
+	test("falls back to text-only when Safari-style output resume rejects", async () => {
+		const value = await readySession(
+			harness({ playbackResumeError: new Error("gesture rejected") }),
+		);
+		expect(value.playbacks[0]?.resumeCalls).toBe(1);
+		expect(value.playbacks[0]?.disposeCalls).toBe(1);
+		const states: string[] = [];
+		value.session.subscribe(() =>
+			states.push(value.session.getSnapshot().state.kind),
+		);
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Safari" }),
+		);
+		value.socket.server(
+			event("assistant.text.done", 3, {
+				generationId,
+				fullText: "Ответ доступен текстом.",
+			}),
+		);
+		const mp3 = createDeterministicMp3Fixture();
+		value.socket.server(
+			event("audio.segment", 4, {
+				generationId,
+				segmentId,
+				sequence: 0,
+				contentType: "audio/mpeg",
+				byteLength: mp3.byteLength,
+				final: true,
+			}),
+		);
+		value.socket.binary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+				sequence: 0,
+				payload: mp3,
+			}),
+		);
+		await flush();
+		expect(states).toContain("audio-error");
+		expect(value.session.getSnapshot().transcript.at(-1)?.text).toBe(
+			"Ответ доступен текстом.",
+		);
+	});
+
 	test("mute, barge-in, and stop execute real local/network cleanup", async () => {
 		const value = await readySession();
 		value.session.toggleMute();
@@ -1310,7 +2150,7 @@ describe("production browser voice integration", () => {
 		await flush();
 		expect(value.session.getSnapshot().state.kind).toBe("speaking");
 		value.session.interrupt();
-		expect(value.playbacks[0]?.bargeInCalls).toBe(1);
+		expect(value.playbacks[0]?.bargeInCalls).toBe(2);
 		expect(
 			sentJson(value.socket).some(
 				(item) => item.type === "playback.interrupted",
@@ -1886,7 +2726,9 @@ describe("production browser voice integration", () => {
 		expect(failed.sockets).toHaveLength(0);
 		expect(failed.captures[0]?.active).toBe(false);
 		expect(failed.captures[0]?.stopCalls).toBeGreaterThan(0);
-		expect(failed.playbacks).toHaveLength(0);
+		expect(failed.playbacks).toHaveLength(1);
+		expect(failed.playbacks[0]?.resumeCalls).toBe(1);
+		expect(failed.playbacks[0]?.disposeCalls).toBe(1);
 		const visible = JSON.stringify(failed.session.getSnapshot());
 		expect(visible).toContain('"kind":"error"');
 		expect(visible).not.toContain("OpenRouter");
@@ -1939,7 +2781,7 @@ describe("production browser voice integration", () => {
 				"/ws/v1/conversations/test",
 				"https://botamin.test/page",
 			),
-		).toBe("wss://botamin.test/ws/v1/conversations/test");
+		).toBe("wss://botamin.test/ws/v1/conversations/test?voiceProtocol=2");
 		expect(() =>
 			resolveSameOriginWebSocketUrl(
 				"https://elsewhere.test/ws",

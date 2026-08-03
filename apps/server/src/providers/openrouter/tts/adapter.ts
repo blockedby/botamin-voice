@@ -1,7 +1,9 @@
 import {
+	encodeCanonicalTtsWav,
 	MpegAudioBytesSchema,
 	type TtsAudioSegment,
 	TtsAudioSegmentSchema,
+	type TtsDeliveryStyle,
 	type TtsHealth,
 	type TtsPort,
 	type TtsSynthesisRequest,
@@ -39,13 +41,19 @@ const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 524, 529]);
 const MAX_OBSOLETE_GENERATIONS = 10_000;
 const MAX_TRACKED_SESSIONS = 256;
 const MAX_TRACKED_TURNS = 4_096;
+const GEMINI_DELIVERY_TAGS = Object.freeze({
+	neutral: "",
+	curious: "[curious]",
+	serious: "[serious]",
+	excited: "[excited]",
+} satisfies Record<TtsDeliveryStyle, string>);
 
 export interface OpenRouterTtsTelemetryEvent {
 	provider: "openrouter";
 	operation: "tts";
 	model: string;
 	voice: string;
-	format: "mp3";
+	format: "mp3" | "pcm";
 	characters: number;
 	attempt: number;
 	retry: boolean;
@@ -178,7 +186,9 @@ export class OpenRouterTtsAdapter implements TtsPort {
 			);
 		}
 		const characters = countCharacters(request.text);
-		this.#assertBudget(request, characters);
+		const providerInput = this.#prepareProviderInput(request);
+		const billedCharacters = countCharacters(providerInput);
+		this.#assertBudget(request, billedCharacters);
 		const segmentKey = `${request.conversationId}:${request.generationId}:${request.segmentId}`;
 		if (this.#activeSegments.has(segmentKey)) {
 			throw new OpenRouterTtsError("TTS_INVALID_REQUEST", false, false);
@@ -212,8 +222,12 @@ export class OpenRouterTtsAdapter implements TtsPort {
 			if (this.#circuit.state !== circuitBeforeAcquire) {
 				this.#emitCircuitState();
 			}
-			this.#reserveBudget(request, characters);
-			const result = await this.#synthesizeWithRetry(request, characters);
+			this.#reserveBudget(request, billedCharacters);
+			const result = await this.#synthesizeWithRetry(
+				request,
+				providerInput,
+				characters,
+			);
 			this.#credentialHealth.recordSuccess();
 			this.#circuit.recordSuccess();
 			this.#emitCircuitState();
@@ -245,6 +259,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 
 	async #synthesizeWithRetry(
 		request: TtsSynthesisRequest,
+		providerInput: string,
 		characters: number,
 	): Promise<TtsAudioSegment> {
 		const timed = createTotalTimeoutSignal(
@@ -261,6 +276,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				try {
 					return await this.#requestAttempt(
 						request,
+						providerInput,
 						characters,
 						attempt,
 						timed.signal,
@@ -297,6 +313,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 
 	async #requestAttempt(
 		request: TtsSynthesisRequest,
+		providerInput: string,
 		characters: number,
 		attempt: number,
 		signal: AbortSignal,
@@ -318,7 +335,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 					body: JSON.stringify({
 						model: this.#config.tts.model,
 						voice: this.#config.tts.voice,
-						input: request.text,
+						input: providerInput,
 						response_format: this.#config.tts.responseFormat,
 						...(this.#config.tts.speed === undefined
 							? {}
@@ -339,7 +356,11 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				);
 			}
 			const contentType = response.headers.get("Content-Type") ?? "";
-			if (!/^audio\/mpeg(?:\s*;|\s*$)/i.test(contentType)) {
+			const validContentType =
+				this.#config.tts.profile === "xai_mp3"
+					? /^audio\/mpeg(?:\s*;|\s*$)/i.test(contentType)
+					: isCanonicalPcmContentType(contentType);
+			if (!validContentType) {
 				await discardBoundedErrorBody(response, signal);
 				throw new OpenRouterTtsError(
 					"TTS_INVALID_RESPONSE",
@@ -347,19 +368,47 @@ export class OpenRouterTtsAdapter implements TtsPort {
 					this.#config.tts.textOnlyFallback,
 				);
 			}
+			const declaredLength = readDeclaredContentLength(
+				response,
+				this.#config.tts.maxResponseBytes,
+				this.#config.tts.textOnlyFallback,
+			);
 			const bytes = await readBoundedResponseBytes(
 				response,
 				this.#config.tts.maxResponseBytes,
 				signal,
 			);
 			responseBytes = bytes.byteLength;
-			const parsed = MpegAudioBytesSchema.safeParse(bytes);
-			if (!parsed.success || !isCompleteMp3File(bytes)) {
+			if (declaredLength !== undefined && declaredLength !== bytes.byteLength) {
 				throw new OpenRouterTtsError(
 					"TTS_INVALID_RESPONSE",
 					false,
 					this.#config.tts.textOnlyFallback,
 				);
+			}
+			let outputBytes: Uint8Array;
+			let outputContentType: "audio/mpeg" | "audio/wav";
+			if (this.#config.tts.profile === "xai_mp3") {
+				const parsed = MpegAudioBytesSchema.safeParse(bytes);
+				if (!parsed.success || !isCompleteMp3File(bytes)) {
+					throw new OpenRouterTtsError(
+						"TTS_INVALID_RESPONSE",
+						false,
+						this.#config.tts.textOnlyFallback,
+					);
+				}
+				outputBytes = parsed.data;
+				outputContentType = "audio/mpeg";
+			} else {
+				if (bytes.byteLength === 0 || bytes.byteLength % 2 !== 0) {
+					throw new OpenRouterTtsError(
+						"TTS_INVALID_RESPONSE",
+						false,
+						this.#config.tts.textOnlyFallback,
+					);
+				}
+				outputBytes = encodeCanonicalTtsWav(bytes);
+				outputContentType = "audio/wav";
 			}
 			this.#ensureCurrent(request, signal);
 			outcome = "success";
@@ -369,8 +418,8 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				...(providerRequestId === undefined
 					? {}
 					: { providerGenerationId: providerRequestId }),
-				contentType: "audio/mpeg",
-				bytes: parsed.data,
+				contentType: outputContentType,
+				bytes: outputBytes,
 				final: true,
 			});
 		} finally {
@@ -380,7 +429,7 @@ export class OpenRouterTtsAdapter implements TtsPort {
 				operation: "tts",
 				model: this.#config.tts.model,
 				voice: this.#config.tts.voice,
-				format: "mp3",
+				format: this.#config.tts.responseFormat,
 				characters,
 				attempt,
 				retry: attempt > 1,
@@ -420,18 +469,24 @@ export class OpenRouterTtsAdapter implements TtsPort {
 
 	#validateRequestData(request: TtsSynthesisRequest): void {
 		try {
-			TtsSynthesisRequestDataSchema.parse({
-				conversationId: request.conversationId,
-				turnId: request.turnId,
-				generationId: request.generationId,
-				segmentId: request.segmentId,
-				text: request.text,
-			});
+			const { signal, ...data } = request;
+			TtsSynthesisRequestDataSchema.parse(data);
 			if (!(request.signal instanceof AbortSignal)) throw new Error("signal");
 			if (request.text.trim().length === 0) throw new Error("text");
 		} catch {
 			throw new OpenRouterTtsError("TTS_INVALID_REQUEST", false, false);
 		}
+	}
+
+	#prepareProviderInput(request: TtsSynthesisRequest): string {
+		if (this.#config.tts.profile === "xai_mp3") return request.text;
+		// The caller's privacy sanitizer has already produced request.text. Reject
+		// brackets here so user/model text cannot smuggle an inline Gemini tag.
+		if (request.text.includes("[") || request.text.includes("]")) {
+			throw new OpenRouterTtsError("TTS_INVALID_REQUEST", false, false);
+		}
+		const tag = GEMINI_DELIVERY_TAGS[request.deliveryStyle ?? "neutral"];
+		return tag === "" ? request.text : `${tag} ${request.text}`;
 	}
 
 	#assertBudget(request: TtsSynthesisRequest, characters: number): void {
@@ -610,4 +665,42 @@ function isCancellation(error: unknown): boolean {
 
 function countCharacters(value: string): number {
 	return Array.from(value).length;
+}
+
+/** Accept only OpenRouter raw PCM with compatible optional MIME parameters. */
+function isCanonicalPcmContentType(value: string): boolean {
+	const parts = value.split(";");
+	if (parts.shift()?.trim().toLowerCase() !== "audio/pcm") return false;
+	const seen = new Set<string>();
+	for (const rawPart of parts) {
+		const match = /^(rate|channels)\s*=\s*(\d+)$/i.exec(rawPart.trim());
+		if (match === null) return false;
+		const name = match[1]?.toLowerCase();
+		const parameter = match[2];
+		if (name === undefined || parameter === undefined || seen.has(name)) {
+			return false;
+		}
+		seen.add(name);
+		if (name === "rate" && parameter !== "24000") return false;
+		if (name === "channels" && parameter !== "1") return false;
+	}
+	return true;
+}
+
+function readDeclaredContentLength(
+	response: Response,
+	maximumBytes: number,
+	fallback: boolean,
+): number | undefined {
+	const raw = response.headers.get("Content-Length");
+	if (raw === null) return undefined;
+	if (!/^(?:0|[1-9]\d*)$/.test(raw)) {
+		throw new OpenRouterTtsError("TTS_INVALID_RESPONSE", false, fallback);
+	}
+	const length = Number(raw);
+	if (!Number.isSafeInteger(length)) {
+		throw new OpenRouterTtsError("TTS_INVALID_RESPONSE", false, fallback);
+	}
+	if (length > maximumBytes) throw new OpenRouterResponseLimitError();
+	return length;
 }

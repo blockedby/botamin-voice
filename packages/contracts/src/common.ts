@@ -44,7 +44,18 @@ function ascii(bytes: Uint8Array, offset: number, value: string): boolean {
 function id3v2End(bytes: Uint8Array): number | null {
 	if (!ascii(bytes, 0, "ID3")) return 0;
 	if (bytes.byteLength < 10) return null;
-	const flags = bytes[5] ?? 0;
+	const majorVersion = bytes[3];
+	const revision = bytes[4];
+	const flags = bytes[5];
+	if (
+		(majorVersion !== 3 && majorVersion !== 4) ||
+		revision === undefined ||
+		revision === 0xff ||
+		flags === undefined ||
+		(majorVersion === 3 ? (flags & 0x1f) !== 0 : (flags & 0x0f) !== 0)
+	) {
+		return null;
+	}
 	const sizeBytes = [bytes[6], bytes[7], bytes[8], bytes[9]];
 	if (
 		sizeBytes.some(
@@ -61,8 +72,22 @@ function id3v2End(bytes: Uint8Array): number | null {
 		number,
 	];
 	const size = (((((size6 << 7) | size7) << 7) | size8) << 7) | size9;
-	const end = 10 + size + ((flags & 0x10) === 0 ? 0 : 10);
-	return end <= bytes.byteLength ? end : null;
+	const footerOffset = 10 + size;
+	if ((flags & 0x10) === 0) {
+		return footerOffset <= bytes.byteLength ? footerOffset : null;
+	}
+	const end = footerOffset + 10;
+	if (
+		majorVersion !== 4 ||
+		end > bytes.byteLength ||
+		!ascii(bytes, footerOffset, "3DI")
+	) {
+		return null;
+	}
+	for (let index = 3; index < 10; index += 1) {
+		if (bytes[footerOffset + index] !== bytes[index]) return null;
+	}
+	return end;
 }
 
 function mpegLayer3FrameLength(
@@ -72,7 +97,13 @@ function mpegLayer3FrameLength(
 	const byte0 = bytes[offset];
 	const byte1 = bytes[offset + 1];
 	const byte2 = bytes[offset + 2];
-	if (byte0 === undefined || byte1 === undefined || byte2 === undefined) {
+	const byte3 = bytes[offset + 3];
+	if (
+		byte0 === undefined ||
+		byte1 === undefined ||
+		byte2 === undefined ||
+		byte3 === undefined
+	) {
 		return null;
 	}
 	if (byte0 !== 0xff || (byte1 & 0xe0) !== 0xe0) return null;
@@ -85,7 +116,8 @@ function mpegLayer3FrameLength(
 		layerBits !== 0x01 ||
 		bitrateIndex === 0 ||
 		bitrateIndex === 0x0f ||
-		sampleRateIndex === 0x03
+		sampleRateIndex === 0x03 ||
+		(byte3 & 0x03) === 0x02
 	) {
 		return null;
 	}

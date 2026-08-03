@@ -6,6 +6,7 @@ import {
 	BookingToolExecutionSchema,
 	type BrainDelta,
 	type BrainTurnInput,
+	CanonicalTtsWavBytesSchema,
 	type CreateBookingInput,
 	decodeBinaryAudioFrame,
 	EntityIdSchema,
@@ -31,7 +32,10 @@ import {
 	createMalformedMp3Fixture,
 } from "./mp3";
 import {
+	createDeterministicTtsPcm16Fixture,
+	createDeterministicTtsWavFixture,
 	createDeterministicWavFixture,
+	DETERMINISTIC_TTS_WAV_FIXTURE_PROPERTIES,
 	DETERMINISTIC_WAV_FIXTURE_PROPERTIES,
 	encodeMonoPcm16Wav,
 	MONO_PCM16_16_KHZ_WAV_PROPERTIES,
@@ -357,6 +361,23 @@ describe("fake full turn", () => {
 		expect(secondFixture).toEqual(fixture);
 		secondFixture.fill(0);
 		expect(createDeterministicWavFixture()).toEqual(fixture);
+	});
+
+	test("returns synthetic canonical complete mono PCM16 24 kHz TTS WAV", () => {
+		const pcm = createDeterministicTtsPcm16Fixture();
+		const wav = createDeterministicTtsWavFixture();
+		const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
+		expect(DETERMINISTIC_TTS_WAV_FIXTURE_PROPERTIES).toEqual({
+			durationMs: 100,
+			sampleCount: 2_400,
+			dataByteLength: 4_800,
+			byteLength: 4_844,
+		});
+		expect(view.getUint32(24, true)).toBe(24_000);
+		expect(view.getUint16(22, true)).toBe(1);
+		expect(view.getUint16(34, true)).toBe(16);
+		expect(wav.subarray(44)).toEqual(pcm);
+		expect(CanonicalTtsWavBytesSchema.safeParse(wav).success).toBe(true);
 	});
 
 	test("strictly rejects malformed PCM and non-canonical WAV fixtures", () => {

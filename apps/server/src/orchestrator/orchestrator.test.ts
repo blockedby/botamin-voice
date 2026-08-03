@@ -37,7 +37,11 @@ import {
 	ConversationOrchestrator,
 	type OrchestratorEvent,
 } from "./orchestrator";
-import { prepareSpeech, type SpeechChunkerOptions } from "./speech";
+import {
+	prepareSpeech,
+	type SpeechBudgetOptions,
+	type SpeechChunkerOptions,
+} from "./speech";
 import {
 	type ConversationState,
 	createInitialConversationState,
@@ -46,8 +50,12 @@ import {
 const conversationId = "01J00000000000000000000000";
 const turn1 = "01J00000000000000000000010";
 const turn2 = "01J00000000000000000000011";
+const turn3 = "01J00000000000000000000012";
+const turn4 = "01J00000000000000000000013";
 const generation1 = "01J00000000000000000000020";
 const generation2 = "01J00000000000000000000021";
+const generation3 = "01J00000000000000000000022";
+const generation4 = "01J00000000000000000000023";
 const promptVersion = "a".repeat(64);
 const audio = new Uint8Array([82, 73, 70, 70]);
 const facts = {
@@ -140,6 +148,30 @@ function speechScript(
 	];
 }
 
+function splitPhraseScript(
+	text: string,
+	turnId = turn1,
+	generationId = generation1,
+): BrainDelta[] {
+	const boundary = text.indexOf(". ") + 1;
+	if (boundary <= 0) throw new Error("expected two complete test phrases");
+	return [
+		{
+			type: "speech.delta",
+			turnId,
+			generationId,
+			text: text.slice(0, boundary),
+		},
+		{
+			type: "speech.delta",
+			turnId,
+			generationId,
+			text: text.slice(boundary),
+		},
+		{ type: "turn.completed", turnId, generationId },
+	];
+}
+
 async function collect(
 	iterable: AsyncIterable<OrchestratorEvent>,
 ): Promise<OrchestratorEvent[]> {
@@ -161,6 +193,7 @@ function fixture(
 		initialState?: ConversationState;
 		now?: () => Date;
 		speechChunker?: SpeechChunkerOptions;
+		speechBudgets?: SpeechBudgetOptions;
 	} = {},
 ) {
 	const stt = options.stt ?? new FakeStt({ text: "Да, сохраните данные" });
@@ -177,6 +210,7 @@ function fixture(
 		initialState: options.initialState ?? collectionState(),
 		...(options.now ? { now: options.now } : {}),
 		...(options.speechChunker ? { speechChunker: options.speechChunker } : {}),
+		...(options.speechBudgets ? { speechBudgets: options.speechBudgets } : {}),
 	});
 	return { orchestrator, stt, brain, bookings, tts };
 }
@@ -210,6 +244,52 @@ class RetryTts implements TtsPort {
 	async health(): Promise<TtsHealth> {
 		return "ready";
 	}
+}
+
+class ControlledTts implements TtsPort {
+	readonly inputs: TtsSynthesisRequest[] = [];
+	readonly #settlers: Array<{
+		resolve: (segment: TtsAudioSegment) => void;
+		reject: (error: Error) => void;
+	}> = [];
+
+	async synthesize(request: TtsSynthesisRequest): Promise<TtsAudioSegment> {
+		this.inputs.push(request);
+		return new Promise<TtsAudioSegment>((resolve, reject) => {
+			this.#settlers.push({ resolve, reject });
+		});
+	}
+
+	succeed(index: number): void {
+		const request = this.inputs[index];
+		if (!request) throw new Error(`missing controlled TTS request ${index}`);
+		this.#settlers[index]?.resolve({
+			generationId: request.generationId,
+			segmentId: request.segmentId,
+			contentType: "audio/mpeg",
+			bytes: Uint8Array.from(createDeterministicMp3Fixture()),
+			final: true,
+		});
+	}
+
+	fail(index: number): void {
+		this.#settlers[index]?.reject(new Error("private controlled TTS failure"));
+	}
+
+	async health(): Promise<TtsHealth> {
+		return "ready";
+	}
+}
+
+async function waitForTtsInputs(
+	tts: { inputs: readonly TtsSynthesisRequest[] },
+	count: number,
+): Promise<void> {
+	for (let attempt = 0; attempt < 1_000; attempt += 1) {
+		if (tts.inputs.length >= count) return;
+		await Promise.resolve();
+	}
+	throw new Error(`timed out waiting for ${count} TTS inputs`);
 }
 
 describe("atomic transcript intake", () => {
@@ -1277,6 +1357,7 @@ describe("booking and tool timeline", () => {
 		expect(tts.inputs[0]).toMatchObject({
 			turnId: turn1,
 			generationId: generation1,
+			deliveryStyle: "neutral",
 		});
 	});
 
@@ -1737,6 +1818,227 @@ describe("booking and tool timeline", () => {
 	});
 });
 
+describe("trusted speech delivery style integration", () => {
+	const typedTurn = (
+		orchestrator: ConversationOrchestrator,
+		turnId: string,
+		generationId: string,
+		text = "Продолжим",
+	) =>
+		orchestrator.acceptTextSubmit({
+			turnId,
+			generationId,
+			text,
+			knownFacts: facts,
+		});
+
+	test("adds one server-owned style to every eligible model request", async () => {
+		for (const scenario of [
+			{
+				stage: "DISCOVERY" as const,
+				text: "Какой результат для вашей команды сейчас важнее?",
+				expected: "curious",
+			},
+			{
+				stage: "OBJECTION" as const,
+				text: "Риск снижается проверкой результата до основного запуска.",
+				expected: "serious",
+			},
+			{
+				stage: "VALUE" as const,
+				text: "Так команда быстрее отвечает на входящие обращения.",
+				expected: "excited",
+			},
+			{
+				stage: "BOOKING_OFFER" as const,
+				text: "Хотите перейти к короткому следующему шагу?",
+				expected: "excited",
+			},
+		] as const) {
+			const tts = new FakeTts();
+			const { orchestrator } = fixture({
+				brain: new FakeBrain(speechScript(scenario.text)),
+				tts,
+				initialState: {
+					...createInitialConversationState(),
+					stage: scenario.stage,
+				},
+			});
+			await collect(typedTurn(orchestrator, turn1, generation1));
+			expect(tts.inputs.length).toBeGreaterThan(0);
+			expect(
+				tts.inputs.every(
+					(request) => request.deliveryStyle === scenario.expected,
+				),
+				`${scenario.stage}/${scenario.text}`,
+			).toBe(true);
+			for (const request of tts.inputs) {
+				expect(Object.keys(request).sort()).toEqual([
+					"conversationId",
+					"deliveryStyle",
+					"generationId",
+					"segmentId",
+					"signal",
+					"text",
+					"turnId",
+				]);
+			}
+		}
+	});
+
+	test("strips model tags before visible text and a server-selected provider style", async () => {
+		const modelText = "[serious] Так команда быстрее отвечает на обращения.";
+		const visible = "Так команда быстрее отвечает на обращения.";
+		const tts = new FakeTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain(speechScript(modelText)),
+			tts,
+			initialState: valueState(),
+		});
+		const events = await collect(typedTurn(orchestrator, turn1, generation1));
+		const done = events.find((event) => event.type === "text.done");
+		expect(done?.type === "text.done" ? done.text : "").toBe(visible);
+		expect(tts.inputs.length).toBeGreaterThan(0);
+		expect(
+			tts.inputs.every((request) => request.deliveryStyle === "excited"),
+		).toBe(true);
+		expect(tts.inputs.map((request) => request.text).join(" ")).not.toMatch(
+			/\[|\]|serious/iu,
+		);
+	});
+
+	test("forces exact meeting facts and protected approved contacts neutral", async () => {
+		const datedTts = new FakeTts();
+		const dated = fixture({
+			brain: new FakeBrain(
+				speechScript("Покажу результат на встрече 12.08 в 10:30 по Москве."),
+			),
+			tts: datedTts,
+			initialState: valueState(),
+		});
+		await collect(typedTurn(dated.orchestrator, turn1, generation1));
+		expect(datedTts.inputs.length).toBeGreaterThan(0);
+		expect(
+			datedTts.inputs.every((request) => request.deliveryStyle === "neutral"),
+		).toBe(true);
+
+		const bookings = new FakeBookingService();
+		await bookings.createBooking(bookingInput);
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const contactTts = new FakeTts();
+		const contact = fixture({
+			bookings,
+			brain: new FakeBrain(
+				speechScript(`Напишите на ${booking.contacts[0]?.value}.`),
+			),
+			tts: contactTts,
+			initialState: {
+				...valueState(),
+				booking,
+				contactConsentConfirmed: true,
+			},
+		});
+		await collect(typedTurn(contact.orchestrator, turn1, generation1));
+		expect(contactTts.inputs.length).toBeGreaterThan(0);
+		expect(
+			contactTts.inputs.every((request) => request.deliveryStyle === "neutral"),
+		).toBe(true);
+	});
+
+	test("keeps the selected style stable across cooldown, prefetch, and turns", async () => {
+		const tts = new FakeTts();
+		const text = "Так команда быстрее отвечает на входящие обращения.";
+		const brain = new FakeBrain(
+			speechScript(text, turn1, generation1),
+			speechScript(text, turn2, generation2),
+			speechScript(text, turn3, generation3),
+			speechScript(text, turn4, generation4),
+		);
+		const { orchestrator } = fixture({
+			brain,
+			tts,
+			initialState: valueState(),
+		});
+		for (const [turnId, generationId] of [
+			[turn1, generation1],
+			[turn2, generation2],
+			[turn3, generation3],
+			[turn4, generation4],
+		] as const) {
+			await collect(typedTurn(orchestrator, turnId, generationId));
+		}
+		expect(tts.inputs.map((request) => request.deliveryStyle)).toEqual([
+			"excited",
+			"neutral",
+			"neutral",
+			"excited",
+		]);
+	});
+
+	test("consumes only trusted barge-in and new-generation interruption on the next accepted turn", async () => {
+		for (const reason of ["barge_in", "new_generation"] as const) {
+			const tts = new ControlledTts();
+			const text = "Риск снижается проверкой результата до запуска.";
+			const brain = new FakeBrain(
+				speechScript(text, turn1, generation1),
+				speechScript(text, turn2, generation2),
+				speechScript(text, turn3, generation3),
+			);
+			const { orchestrator } = fixture({
+				brain,
+				tts,
+				initialState: { ...valueState(), stage: "OBJECTION" },
+			});
+
+			const first = collect(typedTurn(orchestrator, turn1, generation1));
+			await waitForTtsInputs(tts, 1);
+			expect(tts.inputs[0]?.deliveryStyle).toBe("serious");
+			await orchestrator.interrupt(generation1, reason);
+			tts.succeed(0);
+			await first;
+
+			const second = collect(typedTurn(orchestrator, turn2, generation2));
+			await waitForTtsInputs(tts, 2);
+			expect(tts.inputs[1]?.deliveryStyle).toBe("neutral");
+			tts.succeed(1);
+			await second;
+
+			const third = collect(typedTurn(orchestrator, turn3, generation3));
+			await waitForTtsInputs(tts, 3);
+			expect(tts.inputs[2]?.deliveryStyle).toBe("serious");
+			tts.succeed(2);
+			await third;
+			expect(orchestrator.state.stage).toBe("OBJECTION");
+		}
+	});
+
+	test("playback errors do not count as user interruption", async () => {
+		const tts = new ControlledTts();
+		const text = "Риск снижается проверкой результата до запуска.";
+		const brain = new FakeBrain(
+			speechScript(text, turn1, generation1),
+			speechScript(text, turn2, generation2),
+		);
+		const { orchestrator } = fixture({
+			brain,
+			tts,
+			initialState: { ...valueState(), stage: "OBJECTION" },
+		});
+		const first = collect(typedTurn(orchestrator, turn1, generation1));
+		await waitForTtsInputs(tts, 1);
+		await orchestrator.interrupt(generation1, "playback_error");
+		tts.succeed(0);
+		await first;
+
+		const second = collect(typedTurn(orchestrator, turn2, generation2));
+		await waitForTtsInputs(tts, 2);
+		expect(tts.inputs[1]?.deliveryStyle).toBe("serious");
+		tts.succeed(1);
+		await second;
+	});
+});
+
 describe("speech, TTS degradation, and generation fencing", () => {
 	test("PII remains visible but sanitized bounded text alone enters TTS", async () => {
 		const visible =
@@ -2185,7 +2487,7 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		expect(spoken).not.toMatch(/999|123\/45/u);
 	});
 
-	test("complete nested JSON envelope stays visible but no nested PII reaches TTS", async () => {
+	test("strips square-bracket JSON content from visible text and keeps the envelope out of TTS", async () => {
 		const envelope = JSON.stringify({
 			metadata: {
 				company: "Секретная Компания",
@@ -2213,7 +2515,13 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		expect(done?.type === "text.done" ? done.text : "").toContain(
 			"Секретная Компания",
 		);
-		expect(JSON.stringify(events)).toContain("private@example.com");
+		const deliveredText = events
+			.filter(
+				(event) => event.type === "text.delta" || event.type === "text.done",
+			)
+			.map((event) => event.text)
+			.join(" ");
+		expect(deliveredText).not.toMatch(/\[|\]|private@example\.com|999/iu);
 		expect(tts.inputs).toHaveLength(0);
 		expect(events.some((event) => event.type === "audio.segment")).toBe(false);
 	});
@@ -2222,7 +2530,7 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		const failing = new FailingTts();
 		const { orchestrator, brain, bookings } = fixture({ tts: failing });
 		const events = await collect(orchestrator.acceptAudioCommit(commit()));
-		expect(failing.inputs).toHaveLength(1);
+		expect(failing.inputs).toHaveLength(2);
 		expect((brain as FakeBrain).turns).toHaveLength(1);
 		expect(bookings.domainEvents).toHaveLength(1);
 		expect(orchestrator.state.booking?.status).toBe("booked");
@@ -2253,6 +2561,238 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			final: true,
 			contentType: "audio/mpeg",
 		});
+	});
+
+	test("strips split model controls from incremental text, durable projection, and TTS", async () => {
+		const first =
+			"Обычный русский текст полностью сохраняется без служебной разметки.";
+		const second = "Вторая полезная фраза тоже остаётся видимой.";
+		const brain = new FakeBrain([
+			{
+				type: "speech.delta",
+				turnId: turn1,
+				generationId: generation1,
+				text: "[ex",
+			},
+			{
+				type: "speech.delta",
+				turnId: turn1,
+				generationId: generation1,
+				text: `cited] ${first} [lau`,
+			},
+			{
+				type: "speech.delta",
+				turnId: turn1,
+				generationId: generation1,
+				text: `ghs] ${second}`,
+			},
+			{ type: "turn.completed", turnId: turn1, generationId: generation1 },
+		]);
+		const tts = new FakeTts();
+		const { orchestrator } = fixture({
+			brain,
+			tts,
+			initialState: valueState(),
+		});
+		const events = await collect(orchestrator.acceptAudioCommit(commit()));
+		const incremental = events
+			.filter((event) => event.type === "text.delta")
+			.map((event) => event.text);
+		const durable = events.find((event) => event.type === "text.done");
+		const expected = `${first} ${second}`;
+
+		expect(incremental).toEqual([first, second]);
+		expect(incremental.join(" ")).toBe(expected);
+		expect(durable?.type === "text.done" ? durable.text : "").toBe(expected);
+		expect(tts.inputs.map((request) => request.text).join(" ")).toBe(expected);
+		expect(
+			[...incremental, durable?.type === "text.done" ? durable.text : ""].join(
+				" ",
+			),
+		).not.toMatch(/\[|\]|excited|laughs|whispers/iu);
+		expect(tts.inputs.map((request) => request.text).join(" ")).not.toMatch(
+			/\[|\]|excited|laughs|whispers/iu,
+		);
+	});
+
+	test("prefetch spans separate brain deltas, keeps two pending, and publishes in source order", async () => {
+		const first =
+			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг.";
+		const second =
+			"Второй полезный ответ уточняет детали и завершает объяснение.";
+		const source = `${first} ${second}`;
+		const tts = new ControlledTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain([
+				{
+					type: "speech.delta",
+					turnId: turn1,
+					generationId: generation1,
+					text: first,
+				},
+				{
+					type: "speech.delta",
+					turnId: turn1,
+					generationId: generation1,
+					text: ` ${second}`,
+				},
+				{ type: "turn.completed", turnId: turn1, generationId: generation1 },
+			]),
+			tts,
+			initialState: valueState(),
+		});
+		const events: OrchestratorEvent[] = [];
+		const run = (async () => {
+			for await (const event of orchestrator.acceptAudioCommit(commit())) {
+				events.push(event);
+			}
+		})();
+
+		await waitForTtsInputs(tts, 2);
+		expect(tts.inputs).toHaveLength(2);
+		expect(tts.inputs.every((request) => Object.isFrozen(request))).toBe(true);
+		// Streaming starts before the complete response is known, so the policy
+		// fails neutral and keeps that one selection across the prefetch window.
+		expect(tts.inputs.map((request) => request.deliveryStyle)).toEqual([
+			"neutral",
+			"neutral",
+		]);
+		tts.succeed(1);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(events.some((event) => event.type === "audio.segment")).toBe(false);
+		tts.succeed(0);
+		await run;
+
+		const audio = events.filter((event) => event.type === "audio.segment");
+		expect(audio.map((event) => event.segmentId)).toEqual(
+			tts.inputs.map((request) => request.segmentId),
+		);
+		expect(audio.map((event) => event.sequence)).toEqual([0, 1]);
+		expect(new Set(tts.inputs.map((request) => request.segmentId)).size).toBe(
+			2,
+		);
+		expect(tts.inputs.map((request) => request.text).join(" ")).toBe(source);
+	});
+
+	test("an ordered first-segment failure aborts and suppresses successful prefetched audio", async () => {
+		const source =
+			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
+		const tts = new ControlledTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain(splitPhraseScript(source)),
+			tts,
+			initialState: valueState(),
+		});
+		const events: OrchestratorEvent[] = [];
+		const run = (async () => {
+			for await (const event of orchestrator.acceptAudioCommit(commit())) {
+				events.push(event);
+			}
+		})();
+		await waitForTtsInputs(tts, 2);
+		tts.fail(0);
+		await run;
+
+		expect(tts.inputs[1]?.signal.aborted).toBe(true);
+		expect(events.filter((event) => event.type === "audio.segment")).toEqual(
+			[],
+		);
+		expect(events.filter((event) => event.type === "degraded")).toHaveLength(1);
+		tts.succeed(1);
+		await Promise.resolve();
+		expect(events.filter((event) => event.type === "audio.segment")).toEqual(
+			[],
+		);
+	});
+
+	test("an ordered second-segment failure keeps only the first audio event", async () => {
+		const source =
+			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
+		const tts = new ControlledTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain(splitPhraseScript(source)),
+			tts,
+			initialState: valueState(),
+		});
+		const events: OrchestratorEvent[] = [];
+		const run = (async () => {
+			for await (const event of orchestrator.acceptAudioCommit(commit())) {
+				events.push(event);
+			}
+		})();
+		await waitForTtsInputs(tts, 2);
+		tts.fail(1);
+		tts.succeed(0);
+		await run;
+
+		const audioIndex = events.findIndex(
+			(event) => event.type === "audio.segment",
+		);
+		const degradedIndex = events.findIndex(
+			(event) => event.type === "degraded",
+		);
+		expect(audioIndex).toBeGreaterThanOrEqual(0);
+		expect(degradedIndex).toBeGreaterThan(audioIndex);
+		expect(
+			events.filter((event) => event.type === "audio.segment"),
+		).toHaveLength(1);
+		expect(events.filter((event) => event.type === "degraded")).toHaveLength(1);
+	});
+
+	test("barge-in aborts both prefetched requests and suppresses every late result", async () => {
+		const source =
+			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
+		const tts = new ControlledTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain(splitPhraseScript(source)),
+			tts,
+			initialState: valueState(),
+		});
+		const events: OrchestratorEvent[] = [];
+		const run = (async () => {
+			for await (const event of orchestrator.acceptAudioCommit(commit())) {
+				events.push(event);
+			}
+		})();
+		await waitForTtsInputs(tts, 2);
+		await orchestrator.interrupt(generation1);
+		expect(tts.inputs.every((request) => request.signal.aborted)).toBe(true);
+		tts.succeed(1);
+		tts.succeed(0);
+		await run;
+		expect(events.some((event) => event.type === "audio.segment")).toBe(false);
+		expectNoTerminalCompletion(events);
+	});
+
+	test("prefetched provider-owned retries retain text and IDs while budgets charge once", async () => {
+		const source =
+			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
+		const tts = new RetryTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain(splitPhraseScript(source)),
+			tts,
+			initialState: valueState(),
+			speechBudgets: {
+				maxCharsPerSegment: 100,
+				maxCharsPerTurn: 145,
+				maxCharsPerSession: 300,
+			},
+		});
+		const events = await collect(orchestrator.acceptAudioCommit(commit()));
+		expect(tts.inputs.map((request) => request.text).join(" ")).toBe(source);
+		expect(tts.inputs).toHaveLength(2);
+		expect(
+			tts.inputs.every((request) => request.deliveryStyle === "neutral"),
+		).toBe(true);
+		expect(tts.attempts).toBe(4);
+		expect(new Set(tts.inputs.map((request) => request.segmentId)).size).toBe(
+			2,
+		);
+		expect(
+			events.filter((event) => event.type === "audio.segment"),
+		).toHaveLength(2);
+		expect(events.some((event) => event.type === "degraded")).toBe(false);
 	});
 
 	test("barge-in aborts generation and suppresses late Luna text", async () => {

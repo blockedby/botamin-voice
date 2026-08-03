@@ -1136,7 +1136,7 @@ describe("typed and spoken server-owned draft completion", () => {
 		});
 	});
 
-	test("refusal, interruption, and reconnect clear pending confirmation without committing", async () => {
+	test("only retained-text playback errors preserve pending confirmation across refusal, interruption, and reconnect", async () => {
 		const refusal = setup({});
 		const refusalDraft = refusal.draftStore.load(refusal.conversationId);
 		if (!refusalDraft) throw new Error("draft missing");
@@ -1149,6 +1149,31 @@ describe("typed and spoken server-owned draft completion", () => {
 		expect(
 			refusal.database.select({ value: count() }).from(bookings).get()?.value,
 		).toBe(0);
+
+		const playbackFailed = setup({});
+		const playbackFailedDraft = playbackFailed.draftStore.load(
+			playbackFailed.conversationId,
+		);
+		if (!playbackFailedDraft) throw new Error("draft missing");
+		preloadReadyFacts(
+			playbackFailed,
+			playbackFailedDraft.candidates[0].candidateId,
+		);
+		const retained = await collect(typed(playbackFailed.orchestrator, "да"));
+		const retainedGeneration = retained.find(
+			(event) => event.type === "text.delta",
+		)?.generationId;
+		if (!retainedGeneration) throw new Error("confirmation generation missing");
+		await playbackFailed.orchestrator.interrupt(
+			retainedGeneration,
+			"playback_error",
+		);
+		const afterPlaybackFailure = await collect(
+			typed(playbackFailed.orchestrator, "да"),
+		);
+		expect(
+			afterPlaybackFailure.some((event) => event.type === "booking.committed"),
+		).toBe(true);
 
 		const interrupted = setup({});
 		const interruptedDraft = interrupted.draftStore.load(

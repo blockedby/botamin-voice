@@ -4,14 +4,14 @@
 
 ![Deployment](../diagrams/05-deployment.svg)
 
-Candidate `0.5.0-local-rc.4` is recommended but untagged for one trusted local machine at `http://localhost:5173`. RC3 evidence is preserved separately and is not RC4 proof. A target VPS, DNS, public TLS/WSS, target-host provider live booking, and WebKit full journey are external gates and are not implied by local readiness.
+Candidate `0.5.0-local-rc.4` is recommended but untagged for one trusted local machine at `http://localhost:5173`. A target VPS, DNS, public TLS/WSS, target-host provider live booking, full Chromium voice journey, and WebKit full journey are external gates and are not implied by local readiness.
 
 Один `docker-compose.yml`, ровно два application-path сервиса рекомендуются:
 
 1. `app` — Bun server, React static, Codex app-server child process, SQLite access и native HTTPS `fetch` к OpenRouter.
 2. `caddy` — TLS termination и WebSocket reverse proxy.
 
-Отдельного voice runtime/container нет. OpenRouter вызывается напрямую из `app` по HTTPS для atomic STT chat completions и complete-segment TTS; один runtime-only key авторизует оба.
+Отдельного voice runtime/container нет. OpenRouter вызывается напрямую из `app` по HTTPS для atomic STT chat completions и complete-segment TTS; один runtime-only key авторизует оба. Default TTS remains exact xAI/eve/MP3. Gemini 3.1 Flash TTS Preview is a complete four-env paid opt-in profile; it has a case-sensitive release snapshot, fails closed, and never triggers automatic model/voice choice or xAI fallback.
 
 Persistent volumes:
 
@@ -98,7 +98,8 @@ That optional command performs `thread/start`, verifies `instructionSources`, ru
 - ограничение размера JSON и audio frames;
 - no provider secrets;
 - CSP и secure headers;
-- mic permission только после user gesture.
+- mic permission only after consent gesture; output `AudioContext` is created/resumed synchronously inside that gesture before mic/network awaits;
+- same-origin static greeting/reaction assets can be fetched without provider access; reaction capability is allowlisted and has no transcript/state/provider effect.
 
 ### Codex boundary
 
@@ -117,7 +118,7 @@ That optional command performs `thread/start`, verifies `instructionSources`, ru
 - PII redaction в общих логах;
 - contact values are stored in the durable draft/booking and exposed to the browser only in stage-gated projections; TTS receives only an exact server-approved contact when contact-processing consent is active, otherwise it is redacted;
 - `.env`, единственный OpenRouter key, webhook secret, Codex auth, WAV/base64 audio и transcript PII не попадают в logs;
-- browser bundle и events не содержат OpenRouter key или direct provider URL;
+- browser bundle/events contain no OpenRouter key, direct provider URL, raw TTS PCM, or Gemini style tag; OpenRouter PCM is wrapped server-side as canonical complete WAV;
 - DB volume и backup с ограниченными permissions;
 - privacy/consent copy перед микрофоном;
 - implemented conversation deletion transaction removes booking, context, turns, idempotency, related outbox entries, and conversation; existing redacted append-only domain events remain and a count-only `privacy.deleted` event is appended;
@@ -151,9 +152,9 @@ PII не включается в generic logs.
 - audio input bytes/duration;
 - `audio.commit` → OpenRouter final transcript latency, WAV duration/bytes, status/retry/stale-turn counts;
 - brain queue time, first delta, completion;
-- OpenRouter TTS request/completion latency, status, bounded bytes and character usage;
-- final transcript → playback первой complete MP3 phrase;
-- interrupted/stale segment count, circuit state, budget rejection и text-only degradation;
+- OpenRouter TTS request/completion latency, profile format, bounded bytes and character usage;
+- final transcript → playback первой complete MP3/canonical-WAV phrase;
+- prefetch settlement, playback credit/release, interrupted/stale segment count, circuit state, budget rejection and text-only degradation;
 - booking create/update success/error;
 - notifier outbox lag;
 - provider error/rate-limit counts;
@@ -171,7 +172,7 @@ P0 держит bounded process-local aggregates и отдаёт safe JSON че�
 | prompts | no | checksum/parse |
 | Codex process | no | handshake/model/auth |
 | OpenRouter STT | no | shared key, model/format/language and utterance/request bounds; no provider-session claim or paid call on every check |
-| OpenRouter TTS | no | same shared key, model/voice/format schema, queue/circuit state; no paid call on every check |
+| OpenRouter TTS | no | same shared key; exact xAI MP3 or complete opt-in Gemini PCM profile, case-sensitive snapshot voice, queue/circuit state; no paid call, fallback, or model selection |
 | capacity | no | STT request, brain and TTS queues below thresholds |
 | notifier | no | outbox worker running; external outage не блокирует booking |
 
@@ -211,7 +212,7 @@ STT_MAX_UTTERANCE_MS
 STT_MAX_AUDIO_BYTES
 STT_TOTAL_TIMEOUT_MS
 TTS_MAX_CONCURRENCY
-TTS_PREFETCH_SEGMENTS
+TTS_PREFETCH_SEGMENTS  # 1 = current request plus one prefetch
 TTS_MAX_CHARS_PER_TURN
 TTS_MAX_CHARS_PER_SESSION
 SESSION_MAX_MINUTES
@@ -233,7 +234,7 @@ Source key берётся из direct peer address. Forwarded IP игнорир�
 | OpenRouter STT `429`/retryable `5xx` | at most one pure transcription retry; abort/stale result cannot invoke brain/tools |
 | OpenRouter TTS `401/402/404` | no retry; safe text-only output mode/circuit, keep text and booking |
 | OpenRouter TTS `429`/retryable `5xx` | at most one synthesis-only retry, then text-only/circuit policy |
-| TTS timeout, budget or invalid audio | drop audio segment, keep visible text and tool effects; never repeat Luna/tools |
+| TTS timeout, budget, invalid MP3/PCM/WAV, or profile mismatch | drop audio segment, keep visible plain text and tool effects; never repeat Luna/tools or auto-fallback |
 | DB locked/error | не подтверждать booking до commit |
 | notifier down | outbox retry; booking считается созданной |
 | client disconnect before booking | conversation `disconnected` |
@@ -267,7 +268,7 @@ docker compose stop app
 
 ### OpenRouter deploy smoke
 
-Paid external smokes are manual-only, explicit opt-in, and excluded from default CI. Local owner commands and the target-VPS forms are documented separately in [`11-local-release-handoff.md`](11-local-release-handoff.md) and [`../infra/README.md`](../infra/README.md). STT requires one non-empty final transcript from bounded WAV input and emits only safe aggregate evidence; TTS requires `2xx`, compatible `audio/mpeg`, and non-empty bytes. Neither is called by health checks or ordinary deployment.
+Paid external smokes are manual-only, explicit opt-in, and excluded from default CI. Local owner commands and target-VPS forms are in [`11-local-release-handoff.md`](11-local-release-handoff.md) and [`../infra/README.md`](../infra/README.md). STT requires one non-empty final transcript from bounded WAV input; TTS requires `2xx`, profile-compatible complete MP3 or server-wrapped canonical WAV, and safe aggregate output. Neither is called by health checks or ordinary deployment. The observed Gemini smoke is transport evidence only and makes no voice-quality claim.
 
 ### Inspect last booking events
 

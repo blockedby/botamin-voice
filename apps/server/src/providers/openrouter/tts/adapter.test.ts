@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { TtsSynthesisRequest } from "@botamin/contracts";
+import {
+	CANONICAL_TTS_WAV_FORMAT,
+	CanonicalTtsWavBytesSchema,
+	type TtsSynthesisRequest,
+} from "@botamin/contracts";
 import {
 	createDeterministicMp3Fixture,
 	createMalformedMp3Fixture,
 } from "../../../../../../packages/test-fixtures/src/mp3";
+import { createDeterministicTtsPcm16Fixture } from "../../../../../../packages/test-fixtures/src/wav";
 import { ObservabilityMetrics } from "../../../observability";
 import {
+	GEMINI_3_1_TTS_MODEL,
 	loadOpenRouterVoiceConfig,
 	type OpenRouterVoiceConfig,
 } from "../stt/config";
@@ -38,6 +44,20 @@ function config(
 	return { ...loaded, ...root, tts: { ...loaded.tts, ...tts } };
 }
 
+function geminiConfig(
+	tts: Partial<OpenRouterVoiceConfig["tts"]> = {},
+): OpenRouterVoiceConfig {
+	const loaded = loadOpenRouterVoiceConfig({
+		OPENROUTER_API_KEY: TEST_KEY,
+		OPENROUTER_TTS_PROFILE: "gemini_3_1_pcm",
+		OPENROUTER_TTS_MODEL: GEMINI_3_1_TTS_MODEL,
+		OPENROUTER_TTS_VOICE: "Kore",
+		OPENROUTER_TTS_RESPONSE_FORMAT: "pcm",
+		TTS_RETRY_BASE_MS: "0",
+	});
+	return { ...loaded, tts: { ...loaded.tts, ...tts } };
+}
+
 function request(
 	overrides: Partial<TtsSynthesisRequest> = {},
 ): TtsSynthesisRequest {
@@ -59,6 +79,16 @@ function mp3Response(
 	const headers = new Headers(init.headers);
 	if (!headers.has("Content-Type")) headers.set("Content-Type", "audio/mpeg");
 	if (!headers.has("x-request-id")) headers.set("x-request-id", "req_tts_1");
+	return new Response(Uint8Array.from(bytes).buffer, { ...init, headers });
+}
+
+function pcmResponse(
+	bytes = createDeterministicTtsPcm16Fixture(),
+	init: ResponseInit = {},
+): Response {
+	const headers = new Headers(init.headers);
+	if (!headers.has("Content-Type")) headers.set("Content-Type", "audio/pcm");
+	if (!headers.has("x-request-id")) headers.set("x-request-id", "req_pcm_1");
 	return new Response(Uint8Array.from(bytes).buffer, { ...init, headers });
 }
 
@@ -152,19 +182,95 @@ describe("OpenRouterTtsAdapter protocol", () => {
 		expect(body.speed).toBeUndefined();
 	});
 
-	test("sends configured model, voice, format and optional speed", async () => {
+	test("keeps xAI exact MP3 body and ignores the server-owned delivery style", async () => {
 		const calls: Array<{ url: string; init: RequestInit }> = [];
 		const adapter = new OpenRouterTtsAdapter({
-			config: config({ model: "vendor/voice", voice: "voice_1", speed: 1.1 }),
+			config: config({ speed: 1.1 }),
 			fetch: queuedFetch([mp3Response()], calls),
 		});
-		await adapter.synthesize(request());
-		expect(JSON.parse(String(calls[0]?.init.body))).toMatchObject({
-			model: "vendor/voice",
-			voice: "voice_1",
+		await adapter.synthesize(request({ deliveryStyle: "excited" }));
+		expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+			model: "x-ai/grok-voice-tts-1.0",
+			voice: "eve",
+			input: "Здравствуйте!",
 			response_format: "mp3",
 			speed: 1.1,
 		});
+	});
+
+	test("maps only fixed Gemini styles after sanitized text and wraps raw PCM as canonical WAV", async () => {
+		for (const [deliveryStyle, expectedInput] of [
+			[undefined, "Здравствуйте!"],
+			["neutral", "Здравствуйте!"],
+			["curious", "[curious] Здравствуйте!"],
+			["serious", "[serious] Здравствуйте!"],
+			["excited", "[excited] Здравствуйте!"],
+		] as const) {
+			const calls: Array<{ url: string; init: RequestInit }> = [];
+			const pcm = createDeterministicTtsPcm16Fixture();
+			const adapter = new OpenRouterTtsAdapter({
+				config: geminiConfig(),
+				fetch: queuedFetch(
+					[
+						pcmResponse(pcm, {
+							headers: {
+								"Content-Type": "audio/pcm; rate=24000; channels=1",
+							},
+						}),
+					],
+					calls,
+				),
+			});
+			const result = await adapter.synthesize(
+				request({
+					...(deliveryStyle === undefined ? {} : { deliveryStyle }),
+				}),
+			);
+			const body = JSON.parse(String(calls[0]?.init.body));
+			expect(calls[0]?.url).toEndWith("/audio/speech");
+			expect(body).toEqual({
+				model: GEMINI_3_1_TTS_MODEL,
+				voice: "Kore",
+				input: expectedInput,
+				response_format: "pcm",
+			});
+			expect(result).toMatchObject({
+				generationId: GENERATION_ID,
+				segmentId: SEGMENT_ID,
+				contentType: "audio/wav",
+				final: true,
+			});
+			expect(CanonicalTtsWavBytesSchema.safeParse(result.bytes).success).toBe(
+				true,
+			);
+			expect(
+				Array.from(result.bytes.slice(CANONICAL_TTS_WAV_FORMAT.headerBytes)),
+			).toEqual(Array.from(pcm));
+		}
+	});
+
+	test("rejects free-form controls and literal Gemini tag bypasses before fetch", async () => {
+		let fetches = 0;
+		const adapter = new OpenRouterTtsAdapter({
+			config: geminiConfig(),
+			fetch: async () => {
+				fetches += 1;
+				return pcmResponse();
+			},
+		});
+		for (const invalid of [
+			request({ text: "[whispers] секрет" }),
+			request({ text: "литерал [model-tag]" }),
+			{ ...request(), deliveryStyle: "whisper" },
+			{ ...request(), provider: { instructions: "whisper" } },
+			{ ...request(), rawTag: "[excited]" },
+		]) {
+			const error = await captureError(
+				adapter.synthesize(invalid as TtsSynthesisRequest),
+			);
+			expect(error.code).toBe("TTS_INVALID_REQUEST");
+		}
+		expect(fetches).toBe(0);
 	});
 
 	test("telemetry excludes spoken text, PII, key and audio", async () => {
@@ -193,6 +299,42 @@ describe("OpenRouterTtsAdapter protocol", () => {
 		expect(snapshot).not.toContain(GENERATION_ID);
 		expect(snapshot).not.toContain(SEGMENT_ID);
 		expect(snapshot).not.toContain("req_tts_1");
+	});
+
+	test("Gemini telemetry contains safe aggregates but no text, style, tag, IDs or audio", async () => {
+		const events: OpenRouterTtsTelemetryEvent[] = [];
+		const pcm = createDeterministicTtsPcm16Fixture();
+		const adapter = new OpenRouterTtsAdapter({
+			config: geminiConfig(),
+			fetch: queuedFetch([pcmResponse(pcm)]),
+			telemetry: (event) => events.push(event),
+		});
+		await adapter.synthesize(
+			request({ text: "Иван, звоните +79990001122", deliveryStyle: "excited" }),
+		);
+		const snapshot = JSON.stringify(events);
+		expect(events[0]).toMatchObject({
+			model: GEMINI_3_1_TTS_MODEL,
+			voice: "Kore",
+			format: "pcm",
+			status: 200,
+			bytes: pcm.byteLength,
+		});
+		for (const forbidden of [
+			TEST_KEY,
+			"Иван",
+			"79990001122",
+			"excited",
+			"[excited]",
+			CONVERSATION_ID,
+			TURN_ID,
+			GENERATION_ID,
+			SEGMENT_ID,
+			"req_pcm_1",
+			Buffer.from(pcm).toString("base64"),
+		]) {
+			expect(snapshot).not.toContain(forbidden);
+		}
 	});
 });
 
@@ -236,6 +378,92 @@ describe("OpenRouterTtsAdapter response and HTTP failures", () => {
 			expect(error.code).toBe(item.code);
 			expect(error.degradeToText).toBe(true);
 		}
+	});
+
+	test("rejects malformed, incompatible, truncated and oversized raw PCM", async () => {
+		const pcm = createDeterministicTtsPcm16Fixture();
+		const cases: Array<{
+			response: Response;
+			config?: Partial<OpenRouterVoiceConfig["tts"]>;
+			code: OpenRouterTtsErrorCode;
+		}> = [
+			{
+				response: Response.json({ error: "not audio" }),
+				code: "TTS_INVALID_RESPONSE",
+			},
+			{
+				response: pcmResponse(pcm, {
+					headers: { "Content-Type": "audio/mpeg" },
+				}),
+				code: "TTS_INVALID_RESPONSE",
+			},
+			...[
+				"audio/pcm; rate=48000",
+				"audio/pcm; channels=2",
+				"audio/pcm; rate=24000; rate=24000",
+				'audio/pcm; rate="24000"',
+				"audio/pcm; bits=16",
+				"audio/pcm;",
+			].map((contentType) => ({
+				response: pcmResponse(pcm, {
+					headers: { "Content-Type": contentType },
+				}),
+				code: "TTS_INVALID_RESPONSE" as const,
+			})),
+			{
+				response: pcmResponse(new Uint8Array()),
+				code: "TTS_INVALID_RESPONSE",
+			},
+			{
+				response: pcmResponse(pcm.slice(0, 3)),
+				code: "TTS_INVALID_RESPONSE",
+			},
+			{
+				response: pcmResponse(pcm.slice(0, 4), {
+					headers: { "Content-Length": "6" },
+				}),
+				code: "TTS_INVALID_RESPONSE",
+			},
+			{
+				response: pcmResponse(pcm.slice(0, 4), {
+					headers: { "Content-Length": "4, 4" },
+				}),
+				code: "TTS_INVALID_RESPONSE",
+			},
+			{
+				response: pcmResponse(pcm.slice(0, 6)),
+				config: { maxResponseBytes: 4 },
+				code: "TTS_RESPONSE_TOO_LARGE",
+			},
+		];
+		for (const item of cases) {
+			const adapter = new OpenRouterTtsAdapter({
+				config: geminiConfig(item.config),
+				fetch: queuedFetch([item.response]),
+			});
+			const error = await captureError(adapter.synthesize(request()));
+			expect(error.code).toBe(item.code);
+			expect(error.degradeToText).toBe(true);
+		}
+	});
+
+	test("retries Gemini once with byte-identical style and sanitized text body", async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = [];
+		const adapter = new OpenRouterTtsAdapter({
+			config: geminiConfig(),
+			fetch: queuedFetch(
+				[new Response("retry", { status: 503 }), pcmResponse()],
+				calls,
+			),
+		});
+		await adapter.synthesize(
+			request({ text: "Повтор неизменен", deliveryStyle: "serious" }),
+		);
+		expect(calls).toHaveLength(2);
+		expect(calls[0]?.init.body).toBe(calls[1]?.init.body);
+		expect(JSON.parse(String(calls[1]?.init.body)).input).toBe(
+			"[serious] Повтор неизменен",
+		);
 	});
 
 	test("maps non-retryable provider statuses and never forwards provider bodies as audio", async () => {
@@ -312,6 +540,22 @@ describe("OpenRouterTtsAdapter response and HTTP failures", () => {
 });
 
 describe("OpenRouterTtsAdapter lifecycle, budgets and readiness", () => {
+	test("bounds Gemini provider input after fixed tag insertion", async () => {
+		let fetches = 0;
+		const adapter = new OpenRouterTtsAdapter({
+			config: geminiConfig({ maxCharsPerSegment: 13 }),
+			fetch: async () => {
+				fetches += 1;
+				return pcmResponse();
+			},
+		});
+		const error = await captureError(
+			adapter.synthesize(request({ text: "test", deliveryStyle: "excited" })),
+		);
+		expect(error.code).toBe("TTS_BUDGET_EXCEEDED");
+		expect(fetches).toBe(0);
+	});
+
 	test("enforces connect/total timeout and does not retry timeout failures", async () => {
 		let connectCalls = 0;
 		const connectAdapter = new OpenRouterTtsAdapter({

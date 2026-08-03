@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CanonicalTtsWavBytesSchema } from "./audio";
 import {
 	EntityIdSchema,
 	MpegAudioBytesSchema,
@@ -369,6 +370,14 @@ export const SttHealthSchema = z.enum(["ready", "degraded", "unavailable"]);
  * Zod: it is a live Web Platform cancellation capability, not JSON data, and
  * cannot be serialized or reconstructed reliably at a REST/WS boundary.
  */
+/** Optional low-cardinality delivery intent selected only by trusted server code. */
+export const TtsDeliveryStyleSchema = z.enum([
+	"neutral",
+	"curious",
+	"serious",
+	"excited",
+]);
+
 export const TtsSynthesisRequestDataSchema = z
 	.object({
 		conversationId: EntityIdSchema,
@@ -376,19 +385,38 @@ export const TtsSynthesisRequestDataSchema = z
 		generationId: EntityIdSchema,
 		segmentId: EntityIdSchema,
 		text: z.string().min(1).max(20_000),
+		deliveryStyle: TtsDeliveryStyleSchema.optional(),
 	})
 	.strict();
 
-export const TtsAudioSegmentSchema = z
+const TtsAudioSegmentBaseShape = {
+	generationId: EntityIdSchema,
+	segmentId: EntityIdSchema,
+	providerGenerationId: z.string().min(1).max(512).optional(),
+	final: z.literal(true),
+};
+
+export const TtsMp3AudioSegmentSchema = z
 	.object({
-		generationId: EntityIdSchema,
-		segmentId: EntityIdSchema,
-		providerGenerationId: z.string().min(1).max(512).optional(),
+		...TtsAudioSegmentBaseShape,
 		contentType: z.literal("audio/mpeg"),
 		bytes: MpegAudioBytesSchema,
-		final: z.literal(true),
 	})
 	.strict();
+
+export const TtsWavAudioSegmentSchema = z
+	.object({
+		...TtsAudioSegmentBaseShape,
+		contentType: z.literal("audio/wav"),
+		bytes: CanonicalTtsWavBytesSchema,
+	})
+	.strict();
+
+/** One complete, final MP3 or canonical 24 kHz PCM16 WAV segment. */
+export const TtsAudioSegmentSchema = z.discriminatedUnion("contentType", [
+	TtsMp3AudioSegmentSchema,
+	TtsWavAudioSegmentSchema,
+]);
 
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type BrainToolMode = z.infer<typeof BrainToolModeSchema>;
@@ -417,6 +445,7 @@ export type TtsHealth = z.infer<typeof TtsHealthSchema>;
 export type TtsSynthesisRequestData = z.infer<
 	typeof TtsSynthesisRequestDataSchema
 >;
+export type TtsDeliveryStyle = z.infer<typeof TtsDeliveryStyleSchema>;
 /** TypeScript-only request boundary: validated data plus live cancellation. */
 export type TtsSynthesisRequest = TtsSynthesisRequestData & {
 	signal: AbortSignal;

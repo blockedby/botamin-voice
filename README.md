@@ -2,7 +2,7 @@
 
 > **Correction 004 (authoritative, read first):** [`corrections/CORRECTION-004_OPENROUTER_VOICE_ONLY.md`](corrections/CORRECTION-004_OPENROUTER_VOICE_ONLY.md)
 >
-> Then read [`CURRENT_DECISIONS.md`](CURRENT_DECISIONS.md) and [`AGENT_START_HERE.md`](AGENT_START_HERE.md).
+> Then read [`CURRENT_DECISIONS.md`](CURRENT_DECISIONS.md).
 
 **Spec version:** `0.5-demo`
 
@@ -14,13 +14,30 @@
 
 Botamin is a full-stack landing page with a browser voice AI seller. On page entry it immediately makes one playback attempt for the committed, product-owned same-origin `/assets/botamin-proactive-greeting.mp3`. This static greeting path creates no conversation, REST call, WebSocket, microphone request, provider call, or session before both consents. If autoplay is blocked or media loading fails, the UI shows `Включить приветствие`; starting a real session stops and releases the greeting.
 
-After consent, the browser sends bounded PCM16 chunks to the backend; after `audio.commit`, the gateway creates one validated WAV for an atomic OpenRouter STT request. A secure provider-neutral `visitor.text.submit` path also accepts a final typed turn and sends it through the same transcript, Luna, policy, tool, and persistence flow as speech. One final transcript goes to Codex app-server with `gpt-5.6-luna`; OpenRouter TTS returns complete MP3 phrase segments. Each voice utterance is capped at 60 seconds and the atomic WAV request at 2,000,000 bytes. The active circular countdown is derived from accepted 16 kHz PCM16 samples and the stricter server-advertised duration/byte ceiling, not a wall-clock timer.
+After consent, the browser sends bounded PCM16 chunks to the backend; after `audio.commit`, the gateway creates one validated WAV for an atomic OpenRouter STT request. A secure provider-neutral `visitor.text.submit` path accepts a final typed turn through the same transcript, Luna, policy, tool, and persistence flow. One final transcript goes to Codex app-server with `gpt-5.6-luna`; OpenRouter TTS returns complete provider-neutral phrase segments. Each utterance is capped at 60 seconds and the atomic STT WAV at 2,000,000 bytes. The circular countdown is derived from accepted 16 kHz PCM16 samples and the stricter server-advertised duration/byte ceiling, not wall time.
 
 The backend always supplies exactly two structured internal 20-minute `Europe/Moscow` candidates with a concrete date and time. With no preference the pair defaults to one morning and one evening option. A bounded Russian parser applies typed or spoken morning/day/second-half/evening preferences, rejections, and supported concrete Moscow date/time requests; the server returns either the exact permitted start plus one alternative or the nearest two internal starts. Every option is a non-today weekday start on the 20-minute grid from 09:00 through 17:00 Moscow time. These are two current internal alternatives—not all global availability—and already committed internal starts are excluded without querying or creating a real calendar/CRM event or invitation.
 
 RC4 persists one versioned `conversation_contexts.draft_json` object per conversation. It contains the fact registry, provenance, bounded conflicts, exactly two candidate identities, selection, readiness, exact-revision confirmation, commit state, and booking identity. Spoken turns, typed turns, and the structured in-chat form update the same server-owned draft; stale revisions and conflicting facts fail closed until explicitly resolved. When name, company, working email, phone or Telegram, and one current candidate are accepted, the visitor confirms the exact revision and the server automatically commits one internal virtual meeting. Only the resulting durable booking can publish the final server-projected meeting widget.
 
 After truthful confirmation of that internal meeting, optional qualification starts directly—there is no separate permission question. The server asks only the first missing field: monthly lead/contact volume first when both are absent, otherwise only the missing `salesManagerCount` or volume field, and nothing when both are already known. Both answers in one turn complete it; refusal with no answer is `skipped`, refusal after one answer remains `partial`, and the meeting remains scheduled. TTS redacts contacts by default; the only exception is an exact server-approved contact from accepted durable draft facts or the committed booking when contact-processing consent is active.
+
+## Natural voice and TTS profiles
+
+The default remains OpenRouter `x-ai/grok-voice-tts-1.0` / `eve` / complete MP3 (`OPENROUTER_TTS_PROFILE=xai_mp3`) unless the environment profile is deliberately changed. Natural delivery improvements shared by both profiles are concise conversational speech prompts, two ordered in-flight synthesis requests (current + one prefetch), provider-neutral MP3/WAV rendering, gapless Web Audio scheduling, and a four-segment/20 MB credit window with at most two decoded segments. The output `AudioContext` is created/resumed in the consent gesture.
+
+A sixteen-clip same-origin reaction corpus is committed. Runtime may play at most one policy-eligible clip after a 350 ms delay, only after capability negotiation; the current fail-closed policy exposes only the non-claiming `neutral-moment` clip. Progress, validation, scheduling, booking, and acceptance clips remain runtime-unreachable until a future explicit trusted operation signal exists. Reactions do not alter transcript, state, provider selection, or business effects and make zero runtime provider calls. Regenerating the corpus is an explicit paid administrator opt-in. This does not change the separately allowed static same-origin proactive greeting, and no conversation/provider behavior occurs before both consents.
+
+Gemini is an explicit Preview profile, not a default or fallback:
+
+```dotenv
+OPENROUTER_TTS_PROFILE=gemini_3_1_pcm
+OPENROUTER_TTS_MODEL=google/gemini-3.1-flash-tts-preview
+OPENROUTER_TTS_VOICE=Kore
+OPENROUTER_TTS_RESPONSE_FORMAT=pcm
+```
+
+All four values must change together; voice names are case-sensitive. OpenRouter PCM is validated and wrapped server-side as one canonical complete `audio/wav` segment, so the browser never receives raw PCM. Server-owned delivery styles are the fixed `neutral`, `curious`, `serious`, and `excited` enum; sensitive or authoritative facts always use neutral, and the visible transcript remains plain text without style tags. The Gemini catalog is dynamic, there is no automatic model/voice selection or xAI fallback, and rollback is the four-value xAI profile in `.env.example`.
 
 ## Local-first start
 
@@ -76,7 +93,7 @@ Never use `docker compose down -v` on a host with bookings or Codex auth. Restor
 5. Raw audio is not retained by default.
 6. The UI and agent distinguish the scheduled internal virtual meeting from an external calendar event or invitation.
 7. OpenRouter is the only STT/TTS gateway; Codex subscription + GPT-5.6 Luna is the brain.
-8. Phrase-level STT adds accepted end-of-turn latency; local synthetic timings are not a hosting benchmark.
+8. Phrase-level STT adds accepted end-of-turn latency; local synthetic timings and the isolated Gemini smoke are not quality or hosting benchmarks.
 9. Typed and spoken final turns have the same semantic authority; neither exposes provider or tool controls.
 10. A booking uses exactly one of the two current server-supplied, concretely dated internal Moscow slots; stale revisions and non-candidate slots are rejected.
 11. The pre-consent proactive greeting is one static same-origin MP3 attempt and cannot create a session or invoke microphone/provider capabilities.
@@ -95,8 +112,7 @@ Never use `docker compose down -v` on a host with bookings or Codex auth. Restor
 | `docs/08-testing-and-acceptance.md` | tests and local/later release gates |
 | `docs/09-agent-task-plan.md` | task dependencies and T40 status |
 | `docs/11-local-release-handoff.md` | local RC runbook, checklist, limitations, rollback |
-| `evidence/T30-observed-local-voice-smoke-2026-07-31.md` | redacted owner-observed real local provider path |
-| `VALIDATION.md` | current evidence and explicit unobserved boundaries |
-| `FULL_SPEC.md` / `technical-spec.html` | deterministic generated specification |
+| `evidence/T30-observed-local-voice-smoke-2026-07-31.md` | historical redacted owner-observed local provider path |
+| `FULL_SPEC.md` / `technical-spec.html` | generated specification; not updated by this docs-only change |
 
 The unavailable Notion source remains a known research limitation; see the detailed scope and research documents before changing product claims.

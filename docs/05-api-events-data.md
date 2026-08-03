@@ -8,10 +8,10 @@
 - Все события содержат `conversationId`, а booking events также `bookingId`.
 - Версия контракта передаётся как `v: 1`.
 - Ошибки providers не пробрасываются клиенту напрямую.
-- Binary WebSocket frames несут client PCM16 input или один полный server MP3 phrase payload; arbitrary provider network chunks никогда не публикуются как playable audio.
+- Binary WebSocket frames несут client PCM16 input или один полный provider-neutral server MP3/canonical-WAV phrase payload; raw provider PCM/network chunks никогда не публикуются как playable audio.
 - Tool handlers не доступны как публичные HTTP endpoints.
 - Proactive greeting не является API/session contract: page entry делает один same-origin GET/playback static MP3, без conversation REST/WS/mic/provider/session до обоих consents. Blocked/error fallback — `Включить приветствие`; session start прекращает static playback.
-- Committed proactive MP3 содержит только fixed product copy без visitor data. Его может заменить только explicit admin opt-in OpenRouter generation script; visitor runtime его не синтезирует.
+- Committed proactive greeting и 16 reaction MP3s — same-origin static product assets without visitor data. Their generation is explicit paid admin opt-in; visitor runtime never synthesizes them, and reactions have no transcript/state/provider/business effect.
 
 ## 2. REST endpoints
 
@@ -72,7 +72,7 @@ Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`. Application 
 - наличие auth и модели Luna в `model/list`;
 - ровно один `OPENROUTER_API_KEY` для обоих voice paths;
 - при `STT_PROVIDER=openrouter`: schema-valid audio-input model/`wav`/language, utterance byte/time limits и request timeout/retry limits; readiness не утверждает наличие provider streaming session;
-- при `TTS_PROVIDER=openrouter`: schema-valid model/voice/`mp3`, доступность queue/circuit state и разрешённый text-only output startup policy;
+- при `TTS_PROVIDER=openrouter`: one exact schema-valid profile (`xai_mp3` → xAI/eve/MP3 by default, or complete opt-in `gemini_3_1_pcm` → Preview model/case-sensitive snapshot voice/PCM), queue/circuit state and text-only startup policy; readiness makes no paid call and selects no fallback;
 - prompt bundle checksum;
 - запущенный persisted notification-outbox worker (provider delivery failure itself remains retryable and does not make booking uncommitted);
 - возможность принять новую conversation по active/queued concurrency guards.
@@ -98,6 +98,17 @@ Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`. Application 
       "sampleRate": 16000,
       "channels": 1,
       "chunkMs": 100
+    },
+    "capabilities": {
+      "localReactions": {
+        "version": 1,
+        "clipIds": ["neutral-good", "neutral-accepted"]
+      }
+    },
+    "playback": {
+      "maxBufferedSegments": 4,
+      "maxBufferedBytes": 20000000,
+      "maxSegmentBytes": 5000000
     }
   }
 }
@@ -132,18 +143,22 @@ Server:
 
 | Event | Payload | Назначение |
 |---|---|---|
-| `client.hello` | audio config, resume token | handshake |
+| `client.hello` | legacy-shaped audio config + resume token only | strict first handshake, compatible with exact `origin/main` |
+| `client.protocol.accept` | version 2, exact reaction capability or null, literal four-segment/20 MB playback window | accepts only a preceding trusted v2 server offer |
 | `audio.commit` | `{}` | закрыть bounded utterance и создать ровно один atomic final-transcription request |
 | `visitor.text.submit` | `{ sequence, text }` | one final typed turn; same durable fact path as spoken transcript |
 | `booking.form.submit` | `{ requestId, baseRevision, details, selectedCandidateId? }` | structured patch/current candidate against exact draft revision |
 | `booking.conflict.resolve` | `{ requestId, baseRevision, field, conflictOptionId }` | explicitly accept one current conflict option |
 | `booking.draft.confirm` | `{ requestId, revision }` | confirm exact ready revision and trigger automatic internal meeting commit |
 | `playback.started` | `generationId` | метрика |
+| `playback.segment.released` | `{ generationId, segmentId, sequence, byteLength }` | exact release acknowledgment returns one segment/byte credit |
 | `playback.interrupted` | `generationId`, reason | barge-in |
 | `session.stop` | reason | корректное завершение |
 | `client.ping` | timestamp | keepalive |
 
-Первый `client.hello` обязан предъявить одноразовый `clientToken` из REST response; `session.ready` сразу заменяет его новым resume token. На session допускается один pending hello-кандидат с коротким deadline и один bound socket. Reconnect заменяет bound socket только после полной проверки hello/token; неподтверждённый кандидат его не вытесняет.
+Первый `client.hello` обязан предъявить одноразовый `clientToken` из REST response and remains strict legacy-shaped: v2 capability fields are not injected into it. The same-origin REST URL contains only the low-cardinality `?voiceProtocol=2` signal. A new server then emits `session.protocol.offer`; only an exact `client.protocol.accept` enables reactions and ACK-dependent credits, after which `session.ready` replaces the token. Exact `origin/main` ignores the query and emits `session.ready` directly, so the new browser stays in legacy mode and sends no unknown v2 event. An old browser reaching the new server has no trusted v2 query and is rejected with a bounded legacy-valid error/policy close before readiness, token rotation, or turn consumption; a reload obtains the co-deployed browser while durable booking state remains intact. Unknown, duplicate, or additional query fields and mismatched accept values fail closed.
+
+На session допускается один pending hello-кандидат с коротким deadline и один bound socket. Reconnect заменяет bound socket only after complete hello/token/protocol validation; an unconfirmed candidate does not displace it.
 
 После handshake PCM16 audio идёт binary frames без base64. Gateway/utterance assembler ограничивает accumulated input максимумом 60,000 ms и так, чтобы atomic WAV не превысил 2,000,000 bytes; при 16 kHz mono PCM16 default duration ceiling строже и даёт `maxPcmBytes=1,920,000`. После `audio.commit` gateway кодирует ровно один validated WAV и передаёт его atomic `SttPort`; только OpenRouter adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks не означают streaming transport до provider.
 
@@ -155,12 +170,14 @@ The booking form is not encoded as visitor text in RC4. It sends strict revision
 
 | Event | Payload |
 |---|---|
-| `session.ready` | state/config |
+| `session.protocol.offer` | `{ version: 2 }`; emitted only for a trusted exact v2 upgrade query after valid legacy-shaped hello |
+| `session.ready` | state/config; means negotiation is complete (v2) or exact old-server legacy fallback selected |
 | `state.changed` | from/to/reason; voice UI uses listening/processing states |
 | `transcript.final` | turnId/text; единственное STT text event после atomic provider result |
-| `assistant.text.delta` | generationId/text |
-| `assistant.text.done` | generationId/fullText |
-| `audio.segment` | generationId, segmentId, sequence, `contentType=audio/mpeg`, byteLength, `final=true`; immediately followed by one complete binary MP3 payload |
+| `assistant.reaction.request` | turnId, generationId, allowlisted clipId, `delayMs=350`; decoration only, no text/state/provider effect |
+| `assistant.text.delta` | generationId/plain text |
+| `assistant.text.done` | generationId/plain fullText; style tags never appear here |
+| `audio.segment` | generationId, segmentId, sequence, `contentType=audio/mpeg|audio/wav`, byteLength, `final=true`; immediately followed by one complete matching binary payload |
 | `assistant.audio.done` | generationId |
 | `assistant.interrupted` | generationId |
 | `booking.draft.updated` | request correlation + browser-safe revisioned projection without provenance/evidence |
@@ -174,25 +191,27 @@ The booking form is not encoded as visitor text in RC4. It sends strict revision
 
 ### Binary framing
 
-Client microphone frames remain PCM16LE and are accumulated only within configured utterance duration/byte bounds until `audio.commit`. UI duration/countdown is sample-derived: `durationMs = acceptedPcmBytes / (16000 × 2) × 1000`, а effective ceiling — минимум `maxUtteranceMs` и duration, выведенной из `maxPcmBytes`; circular timer не зависит от wall-clock ticks. Server audio is an atomic phrase-level MP3 payload associated with the preceding `audio.segment` metadata event:
+Client microphone frames remain PCM16LE and are accumulated only within configured utterance duration/byte bounds until `audio.commit`. UI duration/countdown is sample-derived: `durationMs = acceptedPcmBytes / (16000 × 2) × 1000`, а effective ceiling — минимум `maxUtteranceMs` и duration, выведенной из `maxPcmBytes`; circular timer не зависит от wall-clock ticks. Server audio is one complete phrase-level payload associated with the preceding `audio.segment` metadata event:
 
 ```text
-byte 0:     kind (0x01 client PCM16LE, 0x02 server MP3 segment)
+byte 0:     kind (0x01 client PCM16LE, 0x02 server MP3, 0x03 server canonical WAV)
 bytes 1-8: unsigned sequence, big-endian/network byte order
-bytes 9+:  payload (raw PCM16LE or one complete MP3 file)
+bytes 9+:  payload (raw mic PCM16LE, one complete MP3, or one complete canonical WAV)
 ```
 
-Sequence is a nonnegative JavaScript safe integer (`0..Number.MAX_SAFE_INTEGER`). For `audio.segment`, metadata `byteLength` counts only the MP3 payload at bytes 9+, excluding the 9-byte frame header. The server metadata sequence and raw frame sequence must match, and kind must be `0x02`.
+Sequence is a nonnegative JavaScript safe integer (`0..Number.MAX_SAFE_INTEGER`). Metadata `byteLength` counts payload bytes only. Sequence, byte length, and kind must match adjacent metadata; `audio/mpeg` requires `0x02`, `audio/wav` requires `0x03`. Provider PCM is wrapped and validated server-side before this boundary.
 
-The implementation may use a referenced binary payload instead of adjacency if it preserves the same identity, ordering, canonical frame layout and payload-size contract. It must never expose partial `response.body` chunks as independent MP3 files.
+The implementation may use a referenced binary payload instead of adjacency if identity, ordering, canonical frame layout, and payload-size contract are preserved. Partial provider `response.body` chunks and raw TTS PCM are never browser audio.
 
 ### Ordering
 
 - `seq` монотонно растёт для JSON events в одной conversation.
 - один accepted `audio.commit` создаёт не более одного active STT request и одного `transcript.final`; duplicate commits и stale results подавляются.
-- audio segments имеют `generationId`, unique `segmentId` и monotonic `sequence`.
-- client decodes/plays complete segments in order and ignores segments from an interrupted or obsolete generation.
-- одновременно допустимы максимум один playing и один prefetched segment.
+- audio segments имеют `generationId`, unique `segmentId` и monotonic `sequence`; server may synthesize current + one prefetch but publishes only in source order.
+- client validates/decodes/plays complete MP3/WAV in order and ignores interrupted/obsolete generations.
+- v2 credit flow is enabled only after exact offer/accept negotiation and is at most four segments / 20 MB / 5 MB each; browser has at most two decoding/decoded/scheduled slots plus at most two raw slots and returns credit only after exact release. Missing negotiation never receives silent default credits.
+- gapless playback schedules prefetched audio at the current segment's end time rather than from an `ended` callback.
+- one reaction per eligible turn is capability/stage/privacy gated, delayed 350 ms, same-origin only, and cancelled before dynamic audio or on mute/barge-in/staleness.
 - booking events записываются в DB до отправки клиенту.
 
 ## 4. Provider-neutral voice contracts
@@ -233,6 +252,7 @@ export type TtsSynthesisRequest = {
   generationId: string;
   segmentId: string;
   text: string;
+  deliveryStyle?: "neutral" | "curious" | "serious" | "excited";
   signal: AbortSignal;
 };
 
@@ -240,7 +260,7 @@ export type TtsAudioSegment = {
   generationId: string;
   segmentId: string;
   providerGenerationId?: string;
-  contentType: "audio/mpeg";
+  contentType: "audio/mpeg" | "audio/wav";
   bytes: Uint8Array;
   final: true;
 };
@@ -251,7 +271,9 @@ export interface TtsPort {
 }
 ```
 
-The adapter validates `2xx`, compatible `audio/mpeg`, non-empty bounded bytes and current `generationId` before returning. OpenRouter types and response objects do not cross `TtsPort`.
+The adapter validates `2xx`, profile-compatible bytes and current `generationId`. The default xAI profile returns complete `audio/mpeg`; the opt-in Gemini Preview profile accepts raw provider PCM only server-side and wraps it as one canonical complete mono 24 kHz PCM16LE `audio/wav`. The exact four-env profile and case-sensitive 30-voice release snapshot are in [`../CURRENT_DECISIONS.md`](../CURRENT_DECISIONS.md). Profile mismatch fails closed: no automatic model/voice selection or xAI fallback.
+
+`deliveryStyle` is trusted server metadata only. Fixed values are neutral/curious/serious/excited; sensitive facts always select neutral, Gemini tags are inserted only inside the adapter, and style never appears in the plain transcript or durable state. OpenRouter types, raw PCM, tags, and response objects do not cross `TtsPort`.
 
 ### OpenRouter STT failure mapping
 

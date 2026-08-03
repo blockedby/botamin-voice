@@ -1,128 +1,339 @@
 import {
 	type AudioSegmentMetadata,
+	CanonicalTtsWavBytesSchema,
+	LOCAL_REACTION_DELAY_MAX_MS,
+	LOCAL_REACTION_DELAY_MIN_MS,
+	type LocalReactionClipId,
 	MpegAudioBytesSchema,
+	PLAYBACK_FLOW_MAX_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENT_BYTES,
+	PLAYBACK_FLOW_MAX_SEGMENTS,
 } from "@botamin/contracts";
+import {
+	REACTION_CLIP_MANIFEST,
+	type ReactionClipManifestEntry,
+} from "./reactionClipManifest";
 
 export interface PlaybackSourceLike {
 	onended: (() => void) | null;
-	start(): void;
+	start(when: number): void;
 	stop(): void;
 }
 
 export interface AudioPlaybackApis<TDecoded = unknown> {
 	decodeAudioData(bytes: ArrayBuffer): Promise<TDecoded>;
 	createSource(buffer: TDecoded): PlaybackSourceLike;
+	resume(): Promise<void>;
+	currentTime(): number;
+	duration(buffer: TDecoded): number;
 	close?(): Promise<void>;
 }
 
-export interface CompletePlaybackSegment extends AudioSegmentMetadata {
+export type CompletePlaybackSegment = AudioSegmentMetadata & {
 	bytes: Uint8Array;
+};
+
+export interface LocalReactionRequest {
+	turnId: string;
+	generationId: string;
+	clipId: LocalReactionClipId;
+	delayMs: number;
 }
 
-interface DecodedSlot<TDecoded> {
+export interface ReactionFetchResponseLike {
+	readonly ok: boolean;
+	readonly status: number;
+	readonly headers?: { get(name: string): string | null };
+	readonly body?: {
+		getReader(): {
+			read(): Promise<
+				{ done: true; value?: undefined } | { done: false; value: Uint8Array }
+			>;
+			cancel?(): Promise<void>;
+		};
+	} | null;
+	arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+export type ReactionFetchLike = (
+	input: string,
+	init: RequestInit,
+) => Promise<ReactionFetchResponseLike>;
+
+export interface PlaybackScheduler {
+	schedule(callback: () => void, delayMs: number): unknown;
+	cancel(handle: unknown): void;
+}
+
+export interface LocalReactionPlaybackOptions {
+	fetch: ReactionFetchLike;
+	scheduler?: PlaybackScheduler;
+	createAbortController?: () => AbortController;
+}
+
+export type PlaybackEnqueueRejection =
+	| "stale"
+	| "invalid"
+	| "overflow"
+	| "decode-error"
+	| "playback-error";
+
+export type PlaybackEnqueueOutcome =
+	| { status: "accepted" }
+	| {
+			status: "rejected";
+			reason: PlaybackEnqueueRejection;
+			error: Error;
+	  };
+
+type QueueSlot<TDecoded> =
+	| DecodingSlot
+	| DecodedSlot<TDecoded>
+	| ScheduledSlot<TDecoded>;
+
+interface SlotBase {
 	segment: CompletePlaybackSegment;
+	epoch: number;
+	resolve: (outcome: PlaybackEnqueueOutcome) => void;
+}
+
+interface DecodingSlot extends SlotBase {
+	phase: "decoding";
+}
+
+interface DecodedSlot<TDecoded> extends SlotBase {
+	phase: "decoded";
 	decoded: TDecoded;
 }
 
-interface PlayingSlot<TDecoded> extends DecodedSlot<TDecoded> {
+interface ScheduledSlot<TDecoded> extends SlotBase {
+	phase: "scheduled";
+	decoded: TDecoded;
 	source: PlaybackSourceLike;
+	startTime: number;
+	endTime: number;
 }
 
-interface HandoffSlot {
+interface RawSlot {
 	segment: CompletePlaybackSegment;
 	epoch: number;
-	resolve(accepted: boolean): void;
+	resolve: (outcome: PlaybackEnqueueOutcome) => void;
 }
 
+const ACCEPTED = { status: "accepted" } as const;
+const REACTION_CLIPS = new Map<LocalReactionClipId, ReactionClipManifestEntry>(
+	REACTION_CLIP_MANIFEST.map((clip) => [clip.id, clip]),
+);
+const browserPlaybackScheduler: PlaybackScheduler = {
+	schedule: (callback, delayMs) => setTimeout(callback, delayMs),
+	cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
 /**
- * Ordered complete-MP3 player. Capacity is strictly one playing/starting slot,
- * one decoded/decoding prefetch slot, and one raw awaitable transport handoff;
- * further input is rejected instead of growing the decoded queue.
+ * Ordered complete MP3/canonical-WAV player with a four-segment/20MB window:
+ * two decode/source slots and two validated raw slots. The server receives one
+ * credit only after a source ends, so longer valid turns stream through this
+ * bounded window without widening decoded memory.
  */
 export class PhrasePlaybackQueue<TDecoded = unknown> {
 	private generationId: string | null = null;
 	private lastAcceptedSequence: number | null = null;
-	private playing: PlayingSlot<TDecoded> | null = null;
-	private starting: CompletePlaybackSegment | null = null;
-	private prefetched: DecodedSlot<TDecoded> | null = null;
-	private prefetching: CompletePlaybackSegment | null = null;
-	private handoff: HandoffSlot | null = null;
+	private current: QueueSlot<TDecoded> | null = null;
+	private prefetch: QueueSlot<TDecoded> | null = null;
+	private readonly raw: RawSlot[] = [];
+	private retainedRawBytes = 0;
 	private epoch = 0;
 	private muted = false;
+	private sealed = false;
+	private started = false;
+	private idleNotified = false;
+	private reactionEpoch = 0;
+	private reactionTimer: unknown = null;
+	private reactionAbortController: AbortController | null = null;
+	private reactionSource: PlaybackSourceLike | null = null;
+	private reactionGenerationId: string | null = null;
+	private readonly seenReactionTurns = new Set<string>();
+	private readonly reactionScheduler: PlaybackScheduler;
 
 	constructor(
 		private readonly apis: AudioPlaybackApis<TDecoded>,
 		private readonly callbacks: {
 			onStarted?(segment: CompletePlaybackSegment): void;
+			onReleased?(segment: CompletePlaybackSegment): void;
 			onIdle?(generationId: string): void;
-			onError?(error: Error, segment: CompletePlaybackSegment): void;
+			onError?(
+				error: Error,
+				segment: CompletePlaybackSegment,
+				reason: Exclude<PlaybackEnqueueRejection, "stale">,
+			): void;
 		} = {},
-	) {}
+		private readonly reactionOptions?: LocalReactionPlaybackOptions,
+	) {
+		this.reactionScheduler =
+			reactionOptions?.scheduler ?? browserPlaybackScheduler;
+	}
+
+	resume(): Promise<void> {
+		return this.apis.resume();
+	}
 
 	beginGeneration(generationId: string): void {
+		this.cancelReaction();
+		if (this.muted) {
+			this.clearSlots();
+			this.generationId = null;
+			this.lastAcceptedSequence = null;
+			this.sealed = false;
+			this.started = false;
+			this.idleNotified = false;
+			return;
+		}
 		if (generationId === this.generationId) return;
 		this.clearSlots();
 		this.generationId = generationId;
 		this.lastAcceptedSequence = null;
+		this.sealed = false;
+		this.started = false;
+		this.idleNotified = false;
 	}
 
-	async enqueue(segment: CompletePlaybackSegment): Promise<boolean> {
+	enqueue(segment: CompletePlaybackSegment): Promise<PlaybackEnqueueOutcome> {
+		this.cancelReaction();
 		if (
 			this.muted ||
 			this.generationId === null ||
-			segment.generationId !== this.generationId ||
-			segment.contentType !== "audio/mpeg" ||
-			segment.final !== true ||
-			!Number.isSafeInteger(segment.sequence) ||
-			segment.sequence < 0 ||
-			segment.byteLength !== segment.bytes.byteLength
+			segment.generationId !== this.generationId
 		) {
-			return false;
+			return Promise.resolve(rejected("stale", "Audio segment is stale"));
 		}
-		if (!MpegAudioBytesSchema.safeParse(segment.bytes).success) {
-			this.fail(new Error("Complete audio segment is not valid MP3"), segment);
-			return false;
+		if (!this.isValid(segment) || this.sealed) {
+			return Promise.resolve(
+				this.fail(
+					"invalid",
+					new Error("Complete audio segment is invalid"),
+					segment,
+				),
+			);
 		}
 		if (
 			this.lastAcceptedSequence !== null &&
 			segment.sequence <= this.lastAcceptedSequence
 		) {
-			return false;
+			return Promise.resolve(
+				this.fail(
+					"invalid",
+					new Error("Audio segment sequence is not monotonic"),
+					segment,
+				),
+			);
 		}
-
-		const playingOccupied = this.playing !== null || this.starting !== null;
-		const prefetchOccupied =
-			this.prefetched !== null || this.prefetching !== null;
-		if (playingOccupied && prefetchOccupied && this.handoff !== null) {
-			return false;
+		if (
+			this.totalSegmentCount >= PLAYBACK_FLOW_MAX_SEGMENTS ||
+			this.retainedRawBytes + segment.byteLength > PLAYBACK_FLOW_MAX_BYTES
+		) {
+			return Promise.resolve(
+				this.fail(
+					"overflow",
+					new Error("Audio playback flow window exceeded"),
+					segment,
+				),
+			);
 		}
 
 		const isolated: CompletePlaybackSegment = {
 			...segment,
 			bytes: segment.bytes.slice(),
 		};
-		this.lastAcceptedSequence = segment.sequence;
+		this.lastAcceptedSequence = isolated.sequence;
+		this.retainedRawBytes += isolated.byteLength;
 		const epoch = this.epoch;
+		return new Promise<PlaybackEnqueueOutcome>((resolve) => {
+			if (this.current && this.prefetch) {
+				this.raw.push({ segment: isolated, epoch, resolve });
+				return;
+			}
+			this.reserveDecode(isolated, epoch, resolve);
+		});
+	}
 
-		if (playingOccupied && prefetchOccupied) {
-			return new Promise<boolean>((resolve) => {
-				this.handoff = { segment: isolated, epoch, resolve };
-			});
+	sealGeneration(generationId: string): boolean {
+		if (generationId !== this.generationId) return false;
+		this.sealed = true;
+		this.maybeIdle();
+		return true;
+	}
+
+	requestReaction(request: LocalReactionRequest): boolean {
+		const clip = REACTION_CLIPS.get(request.clipId);
+		if (
+			!this.reactionOptions ||
+			this.muted ||
+			this.seenReactionTurns.has(request.turnId) ||
+			!clip ||
+			request.delayMs < LOCAL_REACTION_DELAY_MIN_MS ||
+			request.delayMs > LOCAL_REACTION_DELAY_MAX_MS ||
+			!Number.isInteger(request.delayMs)
+		) {
+			return false;
 		}
-		if (!playingOccupied) {
-			this.starting = isolated;
-		} else {
-			this.prefetching = isolated;
+		if (this.generationId !== null) {
+			if (
+				!this.sealed ||
+				!this.idleNotified ||
+				this.current !== null ||
+				this.prefetch !== null ||
+				this.raw.length > 0
+			) {
+				return false;
+			}
+			this.generationId = null;
+			this.lastAcceptedSequence = null;
+			this.sealed = false;
+			this.started = false;
+			this.idleNotified = false;
 		}
-		return this.decodeReserved(isolated, epoch);
+		rememberBounded(this.seenReactionTurns, request.turnId);
+		this.cancelReaction();
+		const epoch = this.reactionEpoch;
+		this.reactionGenerationId = request.generationId;
+		this.reactionTimer = this.reactionScheduler.schedule(() => {
+			if (epoch !== this.reactionEpoch) return;
+			this.reactionTimer = null;
+			void this.startReaction(clip, request.generationId, epoch);
+		}, request.delayMs);
+		return true;
+	}
+
+	/** Synchronously fences timers/fetch/decode and stops a started decoration. */
+	cancelReaction(): void {
+		this.reactionEpoch += 1;
+		if (this.reactionTimer !== null) {
+			this.reactionScheduler.cancel(this.reactionTimer);
+			this.reactionTimer = null;
+		}
+		this.reactionAbortController?.abort("reaction cancelled");
+		this.reactionAbortController = null;
+		const source = this.reactionSource;
+		this.reactionSource = null;
+		this.reactionGenerationId = null;
+		if (source) {
+			source.onended = null;
+			try {
+				source.stop();
+			} catch {
+				// It may have ended between the fence and synchronous stop.
+			}
+		}
 	}
 
 	/** Immediate local barge-in: stop, clear, and make the generation stale. */
 	bargeIn(): string | null {
+		this.cancelReaction();
 		const interrupted = this.generationId;
 		this.clearSlots();
 		this.generationId = null;
 		this.lastAcceptedSequence = null;
+		this.sealed = false;
 		return interrupted;
 	}
 
@@ -142,157 +353,420 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 	}
 
 	get bufferedSegmentCount(): number {
-		return (
-			(this.playing || this.starting ? 1 : 0) +
-			(this.prefetched || this.prefetching ? 1 : 0)
-		);
+		return (this.current ? 1 : 0) + (this.prefetch ? 1 : 0);
 	}
 
-	/** Raw transport handoff is separate from the two decoded/decoding slots. */
+	get pendingRawSegmentCount(): number {
+		return this.raw.length;
+	}
+
+	/** Compatibility name for callers that observed the former one-slot handoff. */
 	get pendingHandoffCount(): number {
-		return this.handoff === null ? 0 : 1;
+		return this.pendingRawSegmentCount;
 	}
 
-	private async decode(segment: CompletePlaybackSegment): Promise<TDecoded> {
-		const exactBytes = segment.bytes.slice();
-		return this.apis.decodeAudioData(exactBytes.buffer);
+	get bufferedRawBytes(): number {
+		return this.retainedRawBytes;
 	}
 
-	private async decodeReserved(
+	private get totalSegmentCount(): number {
+		return this.bufferedSegmentCount + this.raw.length;
+	}
+
+	get activeReactionGenerationId(): string | null {
+		return this.reactionGenerationId;
+	}
+
+	private async startReaction(
+		clip: ReactionClipManifestEntry,
+		generationId: string,
+		epoch: number,
+	): Promise<void> {
+		const options = this.reactionOptions;
+		if (
+			!options ||
+			epoch !== this.reactionEpoch ||
+			this.reactionGenerationId !== generationId ||
+			this.generationId !== null ||
+			this.muted
+		) {
+			return;
+		}
+		const abortController =
+			options.createAbortController?.() ?? new AbortController();
+		this.reactionAbortController = abortController;
+		try {
+			const response = await options.fetch(clip.path, {
+				method: "GET",
+				credentials: "same-origin",
+				mode: "same-origin",
+				redirect: "error",
+				cache: "force-cache",
+				signal: abortController.signal,
+			});
+			if (!response.ok) return;
+			const bytes = await readBoundedReactionBytes(
+				response,
+				clip.maxBytes,
+				abortController,
+			);
+			if (
+				epoch !== this.reactionEpoch ||
+				this.reactionGenerationId !== generationId ||
+				this.generationId !== null ||
+				this.muted ||
+				!MpegAudioBytesSchema.safeParse(bytes).success
+			) {
+				return;
+			}
+			const decoded = await this.apis.decodeAudioData(bytes.buffer);
+			if (
+				epoch !== this.reactionEpoch ||
+				this.reactionGenerationId !== generationId ||
+				this.generationId !== null ||
+				this.muted
+			) {
+				return;
+			}
+			const duration = this.apis.duration(decoded);
+			if (
+				!Number.isFinite(duration) ||
+				duration <= 0 ||
+				duration * 1_000 > clip.maxDurationMs
+			) {
+				return;
+			}
+			const source = this.apis.createSource(decoded);
+			if (
+				epoch !== this.reactionEpoch ||
+				this.reactionGenerationId !== generationId ||
+				this.generationId !== null ||
+				this.muted
+			) {
+				try {
+					source.stop();
+				} catch {
+					// The source was never started.
+				}
+				return;
+			}
+			this.reactionSource = source;
+			source.onended = () => {
+				if (epoch !== this.reactionEpoch || this.reactionSource !== source)
+					return;
+				this.reactionSource = null;
+				this.reactionGenerationId = null;
+			};
+			source.start(Math.max(this.apis.currentTime(), 0));
+		} catch {
+			// Decorative playback failure never affects dynamic text or audio.
+			if (epoch === this.reactionEpoch) this.cancelReaction();
+		} finally {
+			if (this.reactionAbortController === abortController) {
+				this.reactionAbortController = null;
+			}
+			if (epoch === this.reactionEpoch && this.reactionSource === null) {
+				this.reactionGenerationId = null;
+			}
+		}
+	}
+
+	private isValid(segment: CompletePlaybackSegment): boolean {
+		if (
+			segment.final !== true ||
+			!Number.isSafeInteger(segment.sequence) ||
+			segment.sequence < 0 ||
+			segment.byteLength !== segment.bytes.byteLength ||
+			segment.byteLength > PLAYBACK_FLOW_MAX_SEGMENT_BYTES
+		) {
+			return false;
+		}
+		return segment.contentType === "audio/mpeg"
+			? MpegAudioBytesSchema.safeParse(segment.bytes).success
+			: CanonicalTtsWavBytesSchema.safeParse(segment.bytes).success;
+	}
+
+	private reserveDecode(
 		segment: CompletePlaybackSegment,
 		epoch: number,
-	): Promise<boolean> {
+		resolve: (outcome: PlaybackEnqueueOutcome) => void,
+	): void {
+		const slot: DecodingSlot = {
+			phase: "decoding",
+			segment,
+			epoch,
+			resolve,
+		};
+		if (!this.current) this.current = slot;
+		else this.prefetch = slot;
+		void this.decode(slot);
+	}
+
+	private async decode(slot: DecodingSlot): Promise<void> {
 		try {
-			const decoded = await this.decode(segment);
-			if (!this.isCurrent(segment, epoch)) return false;
-
-			if (this.starting === segment) {
-				this.starting = null;
-				const started = this.startPlaying({ segment, decoded }, epoch);
-				if (started) this.drainHandoff();
-				return started;
+			const exactBytes = slot.segment.bytes.slice();
+			const decoded = await this.apis.decodeAudioData(exactBytes.buffer);
+			if (!this.isCurrentSlot(slot)) {
+				slot.resolve(
+					rejected("stale", "Audio decode completed after cancellation"),
+				);
+				return;
 			}
-			if (this.prefetching !== segment) return false;
-
-			this.prefetching = null;
-			if (this.playing === null && this.starting === null) {
-				const started = this.startPlaying({ segment, decoded }, epoch);
-				if (started) this.drainHandoff();
-				return started;
-			}
-			this.prefetched = { segment, decoded };
-			return true;
+			const decodedSlot: DecodedSlot<TDecoded> = {
+				...slot,
+				phase: "decoded",
+				decoded,
+			};
+			if (this.current === slot) this.current = decodedSlot;
+			else this.prefetch = decodedSlot;
+			this.scheduleReady();
 		} catch (error) {
-			if (
-				this.isCurrent(segment, epoch) &&
-				(this.starting === segment || this.prefetching === segment)
-			) {
-				this.fail(toError(error), segment);
+			if (!this.isCurrentSlot(slot)) {
+				slot.resolve(
+					rejected("stale", "Audio decode failed after cancellation"),
+				);
+				return;
 			}
-			return false;
+			const failure = toError(error, "Audio decode failed");
+			slot.resolve(rejected("decode-error", failure));
+			this.removeSlot(slot);
+			this.fail("decode-error", failure, slot.segment);
 		}
 	}
 
-	private startPlaying(slot: DecodedSlot<TDecoded>, epoch: number): boolean {
-		if (!this.isCurrent(slot.segment, epoch)) return false;
-		try {
-			const source = this.apis.createSource(slot.decoded);
-			const playing: PlayingSlot<TDecoded> = { ...slot, source };
-			this.playing = playing;
-			source.onended = () => this.handleEnded(playing, epoch);
-			source.start();
-			this.callbacks.onStarted?.(slot.segment);
-			return true;
-		} catch (error) {
-			this.fail(toError(error), slot.segment);
-			return false;
+	private scheduleReady(): void {
+		if (this.current?.phase === "decoded") {
+			if (!this.schedule(this.current, Math.max(this.apis.currentTime(), 0))) {
+				return;
+			}
 		}
-	}
-
-	private handleEnded(slot: PlayingSlot<TDecoded>, epoch: number): void {
-		if (this.playing !== slot) return;
-		this.playing = null;
-		if (!this.isCurrent(slot.segment, epoch)) return;
-
-		if (this.prefetched) {
-			const next = this.prefetched;
-			this.prefetched = null;
-			if (!this.startPlaying(next, epoch)) return;
-		} else if (this.prefetching) {
-			// Reserve the newly empty playing slot for the earlier pending decode.
-			this.starting = this.prefetching;
-			this.prefetching = null;
-		}
-		this.drainHandoff();
 		if (
-			this.playing === null &&
-			this.starting === null &&
-			this.prefetched === null &&
-			this.prefetching === null &&
-			this.handoff === null &&
-			this.generationId
+			this.current?.phase === "scheduled" &&
+			this.prefetch?.phase === "decoded"
 		) {
-			this.callbacks.onIdle?.(this.generationId);
+			this.schedule(
+				this.prefetch,
+				Math.max(this.current.endTime, this.apis.currentTime()),
+			);
 		}
 	}
 
-	private drainHandoff(): void {
-		const handoff = this.handoff;
-		if (!handoff || handoff.epoch !== this.epoch) return;
-		const playingOccupied = this.playing !== null || this.starting !== null;
-		const prefetchOccupied =
-			this.prefetched !== null || this.prefetching !== null;
-		if (playingOccupied && prefetchOccupied) return;
+	private schedule(slot: DecodedSlot<TDecoded>, startTime: number): boolean {
+		if (!this.isCurrentSlot(slot)) {
+			slot.resolve(rejected("stale", "Audio scheduling was cancelled"));
+			return false;
+		}
+		let source: PlaybackSourceLike | null = null;
+		try {
+			const duration = this.apis.duration(slot.decoded);
+			if (!Number.isFinite(duration) || duration <= 0) {
+				throw new Error("Decoded audio duration is invalid");
+			}
+			source = this.apis.createSource(slot.decoded);
+			const scheduled: ScheduledSlot<TDecoded> = {
+				...slot,
+				phase: "scheduled",
+				source,
+				startTime,
+				endTime: startTime + duration,
+			};
+			if (this.current === slot) this.current = scheduled;
+			else this.prefetch = scheduled;
+			source.onended = () => this.handleEnded(scheduled);
+			source.start(startTime);
+			slot.resolve(ACCEPTED);
+			if (!this.started) {
+				this.started = true;
+				this.callbacks.onStarted?.(slot.segment);
+			}
+			return true;
+		} catch (error) {
+			if (source) {
+				source.onended = null;
+				try {
+					source.stop();
+				} catch {
+					// The source may not have reached a startable state.
+				}
+			}
+			const failure = toError(error, "Audio playback failed");
+			slot.resolve(rejected("playback-error", failure));
+			this.removeSlot(slot);
+			this.fail("playback-error", failure, slot.segment);
+			return false;
+		}
+	}
 
-		this.handoff = null;
-		if (!playingOccupied) {
-			this.starting = handoff.segment;
+	private handleEnded(slot: ScheduledSlot<TDecoded>): void {
+		if (!this.isCurrentSlot(slot)) return;
+		if (this.current === slot) {
+			this.current = this.prefetch;
+			this.prefetch = null;
 		} else {
-			this.prefetching = handoff.segment;
+			this.prefetch = null;
 		}
-		void this.decodeReserved(handoff.segment, handoff.epoch).then(
-			handoff.resolve,
+		this.retainedRawBytes = Math.max(
+			0,
+			this.retainedRawBytes - slot.segment.byteLength,
 		);
+		this.callbacks.onReleased?.(slot.segment);
+		this.drainRaw();
+		this.scheduleReady();
+		this.maybeIdle();
 	}
 
-	private isCurrent(segment: CompletePlaybackSegment, epoch: number): boolean {
+	private drainRaw(): void {
+		if (this.current && this.prefetch) return;
+		const next = this.raw.shift();
+		if (!next) return;
+		if (next.epoch !== this.epoch) {
+			next.resolve(rejected("stale", "Audio buffering was cancelled"));
+			this.drainRaw();
+			return;
+		}
+		this.reserveDecode(next.segment, next.epoch, next.resolve);
+	}
+
+	private isCurrentSlot(slot: SlotBase): boolean {
 		return (
-			epoch === this.epoch &&
+			slot.epoch === this.epoch &&
 			!this.muted &&
-			this.generationId === segment.generationId
+			this.generationId === slot.segment.generationId &&
+			(this.current === slot || this.prefetch === slot)
 		);
 	}
 
-	private fail(error: Error, segment: CompletePlaybackSegment): void {
-		this.callbacks.onError?.(error, segment);
+	private removeSlot(slot: SlotBase): void {
+		if (this.current === slot) {
+			this.current = this.prefetch;
+			this.prefetch = null;
+		} else if (this.prefetch === slot) {
+			this.prefetch = null;
+		}
+	}
+
+	private maybeIdle(): void {
+		if (
+			!this.sealed ||
+			this.idleNotified ||
+			this.current ||
+			this.prefetch ||
+			this.raw.length > 0 ||
+			!this.generationId
+		) {
+			return;
+		}
+		this.idleNotified = true;
+		this.callbacks.onIdle?.(this.generationId);
+	}
+
+	private fail(
+		reason: Exclude<PlaybackEnqueueRejection, "stale">,
+		error: Error,
+		segment: CompletePlaybackSegment,
+	): PlaybackEnqueueOutcome {
 		this.clearSlots();
 		this.generationId = null;
 		this.lastAcceptedSequence = null;
+		this.sealed = false;
+		this.callbacks.onError?.(error, segment, reason);
+		return rejected(reason, error);
 	}
 
 	private clearSlots(): void {
 		this.epoch += 1;
-		const source = this.playing?.source;
-		const handoff = this.handoff;
-		this.playing = null;
-		this.starting = null;
-		this.prefetched = null;
-		this.prefetching = null;
-		this.handoff = null;
-		handoff?.resolve(false);
-		if (source) {
-			source.onended = null;
-			try {
-				source.stop();
-			} catch {
-				// A source may already have ended; local cancellation is still complete.
+		const slots = [this.current, this.prefetch];
+		const raw = this.raw.splice(0);
+		this.current = null;
+		this.prefetch = null;
+		this.retainedRawBytes = 0;
+		for (const slot of slots) {
+			if (!slot) continue;
+			if (slot.phase === "scheduled") {
+				slot.source.onended = null;
+				try {
+					slot.source.stop();
+				} catch {
+					// A source may already have ended; cancellation is still complete.
+				}
 			}
+			slot.resolve(rejected("stale", "Audio playback was cancelled"));
+		}
+		for (const slot of raw) {
+			slot.resolve(rejected("stale", "Raw audio buffering was cancelled"));
 		}
 	}
 }
 
-function toError(error: unknown): Error {
-	return error instanceof Error ? error : new Error("Audio playback failed");
+async function readBoundedReactionBytes(
+	response: ReactionFetchResponseLike,
+	maxBytes: number,
+	abortController: AbortController,
+): Promise<Uint8Array<ArrayBuffer>> {
+	const declaredLength = response.headers?.get("content-length");
+	if (declaredLength !== undefined && declaredLength !== null) {
+		const parsed = Number(declaredLength);
+		if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > maxBytes) {
+			throw new Error("Reaction asset length is invalid");
+		}
+	}
+	if (response.body) {
+		const reader = response.body.getReader();
+		const chunks: Uint8Array[] = [];
+		let total = 0;
+		while (true) {
+			const result = await reader.read();
+			if (result.done) break;
+			if (
+				!(result.value instanceof Uint8Array) ||
+				result.value.byteLength === 0
+			) {
+				throw new Error("Reaction asset stream is invalid");
+			}
+			total += result.value.byteLength;
+			if (total > maxBytes) {
+				abortController.abort("reaction asset too large");
+				await reader.cancel?.().catch(() => undefined);
+				throw new Error("Reaction asset is too large");
+			}
+			chunks.push(result.value.slice());
+		}
+		if (total === 0) throw new Error("Reaction asset is empty");
+		const bytes = new Uint8Array(total);
+		let offset = 0;
+		for (const chunk of chunks) {
+			bytes.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		return bytes;
+	}
+	const buffer = await response.arrayBuffer();
+	if (buffer.byteLength === 0 || buffer.byteLength > maxBytes) {
+		throw new Error("Reaction asset length is invalid");
+	}
+	return new Uint8Array(buffer.slice(0));
+}
+
+function rememberBounded(values: Set<string>, value: string): void {
+	values.add(value);
+	if (values.size <= 256) return;
+	const oldest = values.values().next().value;
+	if (oldest !== undefined) values.delete(oldest);
+}
+
+function rejected(
+	reason: PlaybackEnqueueRejection,
+	error: Error | string,
+): PlaybackEnqueueOutcome {
+	return {
+		status: "rejected",
+		reason,
+		error: typeof error === "string" ? new Error(error) : error,
+	};
+}
+
+function toError(error: unknown, fallback: string): Error {
+	return error instanceof Error ? error : new Error(fallback);
 }
 
 export function createBrowserAudioPlaybackApis(): AudioPlaybackApis<AudioBuffer> {
@@ -311,12 +785,15 @@ export function createBrowserAudioPlaybackApis(): AudioPlaybackApis<AudioBuffer>
 			source.connect(context.destination);
 			const wrapper: PlaybackSourceLike = {
 				onended: null,
-				start: () => source.start(),
+				start: (when) => source.start(when),
 				stop: () => source.stop(),
 			};
 			source.onended = () => wrapper.onended?.();
 			return wrapper;
 		},
+		resume: () => context.resume(),
+		currentTime: () => context.currentTime,
+		duration: (buffer) => buffer.duration,
 		close: () => context.close(),
 	};
 }

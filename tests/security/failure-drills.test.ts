@@ -197,6 +197,7 @@ describe("safe provider failure drills", () => {
 				{ type: "turn.completed", turnId, generationId },
 			];
 			let fetches = 0;
+			const attemptsByPhrase = new Map<string, number>();
 			const circuitStates: string[] = [];
 			const providerErrorMarker = `private-provider-body-${status}`;
 			const tts = new OpenRouterTtsAdapter({
@@ -207,8 +208,15 @@ describe("safe provider failure drills", () => {
 					TTS_TEXT_ONLY_FALLBACK: "true",
 				}),
 				circuitTelemetry: (state) => circuitStates.push(state),
-				fetch: async () => {
+				fetch: async (input, init) => {
 					fetches += 1;
+					const body = (await new Request(input, init).json()) as {
+						input: string;
+					};
+					attemptsByPhrase.set(
+						body.input,
+						(attemptsByPhrase.get(body.input) ?? 0) + 1,
+					);
 					return Response.json(
 						{ error: { code: status, message: providerErrorMarker } },
 						{ status },
@@ -252,8 +260,19 @@ describe("safe provider failure drills", () => {
 					)
 					.get()?.value,
 			).toBe(1);
-			expect(fetches).toBe(1);
-			expect(circuitStates).toEqual(["closed", "open"]);
+			// A nonretryable response may arrive after the current phrase and one
+			// prefetched phrase have both started. Neither phrase may be retried.
+			expect(fetches).toBeGreaterThanOrEqual(1);
+			expect(fetches).toBeLessThanOrEqual(2);
+			expect(attemptsByPhrase.size).toBe(fetches);
+			expect(
+				[...attemptsByPhrase.values()].every((attempts) => attempts === 1),
+			).toBe(true);
+			expect(circuitStates[0]).toBe("closed");
+			expect(circuitStates.slice(1)).toHaveLength(fetches);
+			expect(circuitStates.slice(1).every((state) => state === "open")).toBe(
+				true,
+			);
 			expect(await tts.health()).toBe("degraded");
 			const committedIndex = events.findIndex(
 				(event) => event.type === "booking.committed",
@@ -263,6 +282,11 @@ describe("safe provider failure drills", () => {
 			);
 			expect(committedIndex).toBeGreaterThanOrEqual(0);
 			expect(degradedIndex).toBeGreaterThan(committedIndex);
+			expect(
+				events.filter(
+					(event) => event.type === "degraded" && event.provider === "tts",
+				),
+			).toHaveLength(1);
 			expect(JSON.stringify(events)).not.toContain(providerErrorMarker);
 			expect(orchestrator.state.booking?.status).toBe("booked");
 			await orchestrator.close();

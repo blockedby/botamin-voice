@@ -8,6 +8,7 @@ import {
 	CreateConversationResponseSchema,
 	type InternalVirtualMeetingProjection,
 	InternalVirtualMeetingProjectionSchema,
+	LOCAL_REACTION_CAPABILITY_VERSION,
 	type QualificationField,
 	type ServerWsEvent,
 } from "@botamin/contracts";
@@ -19,8 +20,11 @@ import {
 import {
 	type CompletePlaybackSegment,
 	createBrowserAudioPlaybackApis,
+	type LocalReactionRequest,
 	PhrasePlaybackQueue,
+	type PlaybackEnqueueOutcome,
 } from "../audio/playback";
+import { REACTION_CLIP_IDS } from "../audio/reactionClipManifest";
 import type {
 	BookingConflictSelection,
 	BookingFormSubmission,
@@ -79,9 +83,14 @@ export interface CaptureFactoryOptions {
 }
 
 export interface PlaybackAdapter {
+	resume(): Promise<void>;
 	beginGeneration(generationId: string): void;
-	enqueue(segment: CompletePlaybackSegment): Promise<boolean>;
+	enqueue(segment: CompletePlaybackSegment): Promise<PlaybackEnqueueOutcome>;
+	sealGeneration(generationId: string): boolean;
+	requestReaction(request: LocalReactionRequest): boolean;
+	cancelReaction(): void;
 	bargeIn(): string | null;
+	setMuted?(muted: boolean): void;
 	dispose(): Promise<void>;
 	readonly activeGenerationId: string | null;
 	readonly bufferedSegmentCount: number;
@@ -89,6 +98,7 @@ export interface PlaybackAdapter {
 
 export interface PlaybackFactoryOptions {
 	onStarted(segment: CompletePlaybackSegment): void;
+	onReleased?(segment: CompletePlaybackSegment): void;
 	onIdle(generationId: string): void;
 	onError(error: Error, segment: CompletePlaybackSegment): void;
 }
@@ -115,6 +125,11 @@ export interface BrowserVoiceFactories {
 	createAbortController?: () => AbortController;
 	createRequestId?: () => string;
 }
+
+const LOCAL_REACTION_CAPABILITY = {
+	version: LOCAL_REACTION_CAPABILITY_VERSION,
+	clipIds: [...REACTION_CLIP_IDS],
+} as const;
 
 const INITIAL_SNAPSHOT: BrowserVoiceSnapshot = {
 	state: { kind: "idle" },
@@ -149,6 +164,13 @@ export function resolveSameOriginWebSocketUrl(
 	if (resolved.origin !== pageUrl.origin) {
 		throw new Error("Cross-origin WebSocket URL is not allowed");
 	}
+	if (
+		resolved.hash !== "" ||
+		(resolved.search !== "" && resolved.search !== "?voiceProtocol=2")
+	) {
+		throw new Error("Unsupported WebSocket URL fields");
+	}
+	resolved.search = "?voiceProtocol=2";
 	resolved.protocol = pageUrl.protocol === "https:" ? "wss:" : "ws:";
 	return resolved.toString();
 }
@@ -180,6 +202,12 @@ export class BrowserVoiceSession {
 		"none";
 	private qualificationFields: QualificationField[] = [];
 	private readonly completedAssistantGenerations = new Set<string>();
+	private readonly textDoneGenerations = new Set<string>();
+	private readonly audioDoneGenerations = new Set<string>();
+	private readonly playbackStartedGenerations = new Set<string>();
+	private readonly audioFailedGenerations = new Set<string>();
+	private readonly acceptedReactionTurns = new Set<string>();
+	private reactionGenerationId: string | null = null;
 	private consent: VoiceConsent | null = null;
 	private epoch = 0;
 	private starting = false;
@@ -226,6 +254,12 @@ export class BrowserVoiceSession {
 		this.qualificationStatus = "none";
 		this.qualificationFields = [];
 		this.completedAssistantGenerations.clear();
+		this.textDoneGenerations.clear();
+		this.audioDoneGenerations.clear();
+		this.playbackStartedGenerations.clear();
+		this.audioFailedGenerations.clear();
+		this.acceptedReactionTurns.clear();
+		this.reactionGenerationId = null;
 		this.captureArmed = false;
 		this.sessionEstablished = false;
 		this.textOnlyGenerationPending = null;
@@ -250,11 +284,14 @@ export class BrowserVoiceSession {
 		this.controller.setConnecting();
 
 		try {
+			// Safari requires output context creation/resume in the consent gesture's
+			// synchronous call stack, before microphone or network awaits.
+			const playbackReady = this.preparePlayback(epoch);
 			const captureAttempt = ++this.captureAttempt;
 			const capture = this.createCapture(epoch, captureAttempt);
 			this.capture = capture;
 			this.captureStarting = true;
-			await capture.prepare();
+			await Promise.all([playbackReady, capture.prepare()]);
 			if (
 				!this.isCurrent(epoch) ||
 				captureAttempt !== this.captureAttempt ||
@@ -323,7 +360,6 @@ export class BrowserVoiceSession {
 				created.wsUrl,
 				this.factories.baseUrl,
 			);
-			this.preparePlayback();
 			this.transport = new VoiceTransport({
 				conversationId: created.conversationId,
 				url: socketUrl,
@@ -333,10 +369,19 @@ export class BrowserVoiceSession {
 					? { scheduler: this.factories.reconnectScheduler }
 					: {}),
 				...(this.factories.now ? { now: this.factories.now } : {}),
+				localReactions: {
+					version: LOCAL_REACTION_CAPABILITY.version,
+					clipIds: [...LOCAL_REACTION_CAPABILITY.clipIds],
+				},
 				onEvent: (event) => this.receiveEvent(event, epoch),
+				onAudioMetadata: () => {
+					if (!this.isCurrent(epoch)) return;
+					this.playback?.cancelReaction();
+					this.reactionGenerationId = null;
+				},
 				onAudio: (metadata, bytes) => {
 					if (!this.isCurrent(epoch)) return;
-					void this.receiveAudio({ ...metadata, bytes });
+					void this.receiveAudio({ ...metadata, bytes }, epoch);
 				},
 				onStatus: (status) => this.receiveTransportStatus(status, epoch),
 				onProtocolError: () => {
@@ -533,10 +578,38 @@ export class BrowserVoiceSession {
 
 	toggleMute(): void {
 		const muted = !this.snapshot.muted;
+		if (muted) {
+			this.textOnlyGenerationPending = null;
+			this.reactionGenerationId = null;
+			if (this.controller) {
+				this.controller.bargeIn(
+					{
+						stopLocalPlayback: () => this.setPlaybackMuted(true),
+						sendInterruption: (generationId, reason) => {
+							this.transport?.interrupt(generationId, reason);
+						},
+					},
+					"user_stop",
+				);
+			} else {
+				this.setPlaybackMuted(true);
+			}
+		} else {
+			this.setPlaybackMuted(false);
+		}
 		this.capture?.setMuted(muted);
 		this.transport?.setMuted(muted);
 		this.controller?.setMuted(muted);
 		this.setSnapshot({ ...this.snapshot, muted });
+	}
+
+	private setPlaybackMuted(muted: boolean): void {
+		const playback = this.playback;
+		if (playback?.setMuted) {
+			playback.setMuted(muted);
+		} else if (muted) {
+			playback?.bargeIn();
+		}
 	}
 
 	interrupt(): void {
@@ -556,6 +629,8 @@ export class BrowserVoiceSession {
 	reconnect(): void {
 		if (this.disposed || this.terminalFailurePending) return;
 		if (this.transport) {
+			this.playback?.cancelReaction();
+			this.reactionGenerationId = null;
 			this.transport.connect();
 			return;
 		}
@@ -651,28 +726,54 @@ export class BrowserVoiceSession {
 		});
 	}
 
-	private preparePlayback(): void {
+	private preparePlayback(epoch: number): Promise<void> {
 		this.playbackUnavailable = false;
+		let playback: PlaybackAdapter | null = null;
 		try {
-			this.playback = this.factories.createPlayback({
+			playback = this.factories.createPlayback({
 				onStarted: (segment) => {
+					if (
+						!this.isCurrent(epoch) ||
+						this.playback !== playback ||
+						this.playbackStartedGenerations.has(segment.generationId) ||
+						!this.controller?.playbackStarted(segment.generationId)
+					) {
+						return;
+					}
+					rememberBounded(
+						this.playbackStartedGenerations,
+						segment.generationId,
+					);
 					this.transport?.playbackStarted(segment.generationId);
 				},
+				onReleased: (segment) => {
+					if (!this.isCurrent(epoch) || this.playback !== playback) return;
+					this.transport?.playbackSegmentReleased(segment);
+				},
 				onIdle: (generationId) => {
+					if (!this.isCurrent(epoch) || this.playback !== playback) return;
 					if (this.controller?.completePlayback(generationId)) {
-						void this.beginCapture(this.epoch);
+						void this.beginCapture(epoch);
 					}
 				},
 				onError: (_error, segment) => {
-					this.transport?.interrupt(segment.generationId, "playback_error");
-					this.controller?.setAudioError("Звук ответа сейчас недоступен");
-					this.setState(this.activeState("audio-error"));
-					void this.beginCapture(this.epoch);
+					if (!this.isCurrent(epoch) || this.playback !== playback) return;
+					this.recoverAudioGeneration(segment.generationId, epoch);
 				},
 			});
+			this.playback = playback;
+			// Calling resume (not merely awaiting it) must stay in the user gesture.
+			const resumed = playback.resume();
+			return resumed.catch(async () => {
+				if (!this.isCurrent(epoch) || this.playback !== playback) return;
+				this.playback = null;
+				this.playbackUnavailable = true;
+				await playback?.dispose();
+			});
 		} catch {
-			this.playback = null;
+			if (this.playback === playback) this.playback = null;
 			this.playbackUnavailable = true;
+			return playback?.dispose().catch(() => undefined) ?? Promise.resolve();
 		}
 	}
 
@@ -780,6 +881,9 @@ export class BrowserVoiceSession {
 				break;
 			case "reconnecting": {
 				this.textOnlyGenerationPending = null;
+				this.reactionGenerationId = null;
+				this.playback?.bargeIn();
+				this.controller?.cancelLocalPlaybackForReconnect();
 				if (!this.sessionEstablished) {
 					void this.failStartup(epoch);
 					break;
@@ -800,6 +904,9 @@ export class BrowserVoiceSession {
 				break;
 			}
 			case "error":
+				this.reactionGenerationId = null;
+				this.playback?.bargeIn();
+				this.controller?.cancelLocalPlaybackForReconnect();
 				if (!this.sessionEstablished) {
 					void this.failStartup(epoch);
 				} else {
@@ -871,6 +978,8 @@ export class BrowserVoiceSession {
 			}
 			case "transcript.final":
 				if (this.controller.acceptEvent(event)) {
+					this.playback?.cancelReaction();
+					this.reactionGenerationId = null;
 					const acceptedTypedText = this.pendingTypedText;
 					this.pendingTypedText = null;
 					this.appendTranscript({
@@ -890,11 +999,24 @@ export class BrowserVoiceSession {
 					this.setState(this.activeState("thinking"));
 				}
 				break;
+			case "assistant.reaction.request":
+				this.acceptReactionRequest(event);
+				break;
 			case "assistant.text.delta":
+				if (
+					this.reactionGenerationId !== null &&
+					this.reactionGenerationId !== event.payload.generationId
+				) {
+					this.playback?.cancelReaction();
+					this.reactionGenerationId = null;
+				}
 				this.controller.acceptEvent(event);
 				break;
 			case "assistant.text.done": {
 				const accepted = this.controller.acceptEvent(event);
+				if (accepted) {
+					rememberBounded(this.textDoneGenerations, event.payload.generationId);
+				}
 				if (
 					accepted &&
 					event.payload.fullText.length > 0 &&
@@ -910,14 +1032,18 @@ export class BrowserVoiceSession {
 						text: event.payload.fullText,
 					});
 				}
-				const textOnlyGeneration =
+				const completionWasWaiting =
 					this.textOnlyGenerationPending === event.payload.generationId;
-				if (textOnlyGeneration) this.textOnlyGenerationPending = null;
-				if (accepted && textOnlyGeneration) {
-					if (this.controller.completePlayback(event.payload.generationId)) {
+				if (completionWasWaiting) this.textOnlyGenerationPending = null;
+				if (
+					accepted &&
+					completionWasWaiting &&
+					this.controller.completePlayback(event.payload.generationId)
+				) {
+					if (this.audioFailedGenerations.has(event.payload.generationId)) {
 						this.setState(this.activeState("audio-error"));
-						void this.beginCapture(epoch);
 					}
+					void this.beginCapture(epoch);
 				}
 				if (this.terminalFailurePending) {
 					void this.finishTerminalFailure(epoch);
@@ -925,32 +1051,50 @@ export class BrowserVoiceSession {
 				break;
 			}
 			case "audio.segment":
+				// Dynamic speech wins synchronously before binary fetch/decode or start.
+				this.playback?.cancelReaction();
+				this.reactionGenerationId = null;
 				if (this.controller.acceptEvent(event)) {
-					if (this.playbackUnavailable || !this.playback) {
-						this.transport?.interrupt(
-							event.payload.generationId,
-							"playback_error",
+					if (this.snapshot.muted) {
+						this.controller.bargeIn(
+							{
+								stopLocalPlayback: () => this.setPlaybackMuted(true),
+								sendInterruption: (generationId, reason) => {
+									this.transport?.interrupt(generationId, reason);
+								},
+							},
+							"user_stop",
 						);
-						this.controller.completePlayback(event.payload.generationId);
-						this.setState(this.activeState("audio-error"));
-						void this.beginCapture(epoch);
+					} else if (
+						this.audioDoneGenerations.has(event.payload.generationId) ||
+						this.playbackUnavailable ||
+						!this.playback
+					) {
+						this.recoverAudioGeneration(event.payload.generationId, epoch);
 					} else {
 						this.playback.beginGeneration(event.payload.generationId);
 					}
 				}
 				break;
 			case "assistant.audio.done":
-				if (
-					this.playback?.activeGenerationId !== event.payload.generationId ||
-					this.playback.bufferedSegmentCount === 0
-				) {
+				if (!this.controller.acceptEvent(event)) break;
+				rememberBounded(this.audioDoneGenerations, event.payload.generationId);
+				if (this.playback?.activeGenerationId === event.payload.generationId) {
+					this.playback.sealGeneration(event.payload.generationId);
+				} else if (this.textDoneGenerations.has(event.payload.generationId)) {
 					if (this.controller.completePlayback(event.payload.generationId)) {
 						void this.beginCapture(epoch);
 					}
+				} else {
+					this.textOnlyGenerationPending = event.payload.generationId;
 				}
 				break;
 			case "assistant.interrupted":
+				this.reactionGenerationId = null;
 				this.playback?.bargeIn();
+				if (this.textOnlyGenerationPending === event.payload.generationId) {
+					this.textOnlyGenerationPending = null;
+				}
 				if (this.controller.acceptEvent(event)) void this.beginCapture(epoch);
 				break;
 			case "state.changed":
@@ -1001,6 +1145,8 @@ export class BrowserVoiceSession {
 				break;
 			}
 			case "error":
+				this.playback?.cancelReaction();
+				this.reactionGenerationId = null;
 				if (this.pendingTypedText !== null) {
 					this.pendingTypedText = null;
 					this.controller.rejectCommit();
@@ -1015,9 +1161,13 @@ export class BrowserVoiceSession {
 					});
 					void this.beginCapture(epoch);
 				} else if (event.payload.code === "TTS_UNAVAILABLE") {
-					this.textOnlyGenerationPending = this.controller.state.generationId;
-					this.controller.setAudioError("Звук ответа сейчас недоступен");
-					this.setState(this.activeState("audio-error"));
+					const failedGeneration = this.controller.state.generationId;
+					if (failedGeneration) {
+						this.recoverAudioGeneration(failedGeneration, epoch);
+					} else {
+						this.controller.setAudioError("Звук ответа сейчас недоступен");
+						this.setState(this.activeState("audio-error"));
+					}
 				} else if (event.payload.code === "STT_UNAVAILABLE") {
 					this.setState(this.activeState("error"));
 					void this.beginCapture(epoch);
@@ -1028,6 +1178,32 @@ export class BrowserVoiceSession {
 			case "session.capacity_warning":
 			case "server.pong":
 				break;
+		}
+	}
+
+	private acceptReactionRequest(
+		event: Extract<ServerWsEvent, { type: "assistant.reaction.request" }>,
+	): void {
+		const { turnId, generationId, clipId, delayMs } = event.payload;
+		if (
+			this.snapshot.muted ||
+			this.acceptedReactionTurns.has(turnId) ||
+			!REACTION_CLIP_IDS.includes(clipId) ||
+			!this.controller?.acceptReaction(turnId, generationId) ||
+			!this.playback
+		) {
+			return;
+		}
+		rememberBounded(this.acceptedReactionTurns, turnId);
+		if (
+			this.playback.requestReaction({
+				turnId,
+				generationId,
+				clipId,
+				delayMs,
+			})
+		) {
+			this.reactionGenerationId = generationId;
 		}
 	}
 
@@ -1300,14 +1476,52 @@ export class BrowserVoiceSession {
 		]).then(() => undefined);
 	}
 
-	private async receiveAudio(segment: CompletePlaybackSegment): Promise<void> {
+	private async receiveAudio(
+		segment: CompletePlaybackSegment,
+		epoch: number,
+	): Promise<void> {
+		const playback = this.playback;
 		if (
-			!this.playback ||
-			this.playback.activeGenerationId !== segment.generationId
+			!this.isCurrent(epoch) ||
+			!playback ||
+			playback.activeGenerationId !== segment.generationId
 		) {
 			return;
 		}
-		await this.playback.enqueue(segment);
+		const outcome = await playback.enqueue(segment);
+		if (
+			!this.isCurrent(epoch) ||
+			this.playback !== playback ||
+			playback.activeGenerationId !== segment.generationId ||
+			outcome.status === "accepted" ||
+			outcome.reason === "stale"
+		) {
+			return;
+		}
+		this.recoverAudioGeneration(segment.generationId, epoch);
+	}
+
+	private recoverAudioGeneration(generationId: string, epoch: number): void {
+		if (
+			!this.isCurrent(epoch) ||
+			this.audioFailedGenerations.has(generationId)
+		) {
+			return;
+		}
+		rememberBounded(this.audioFailedGenerations, generationId);
+		if (this.playback?.activeGenerationId === generationId) {
+			this.playback.bargeIn();
+		}
+		this.transport?.interrupt(generationId, "playback_error");
+		this.controller?.setAudioError("Звук ответа сейчас недоступен");
+		this.setState(this.activeState("audio-error"));
+		if (this.textDoneGenerations.has(generationId)) {
+			if (this.controller?.completePlayback(generationId)) {
+				void this.beginCapture(epoch);
+			}
+		} else {
+			this.textOnlyGenerationPending = generationId;
+		}
 	}
 
 	private authoritativeStageState(
@@ -1464,6 +1678,7 @@ export class BrowserVoiceSession {
 		this.captureArmed = false;
 		this.sessionEstablished = false;
 		this.textOnlyGenerationPending = null;
+		this.reactionGenerationId = null;
 		this.pendingTypedText = null;
 		this.pendingBookingBaseline = null;
 		this.abortController?.abort();
@@ -1918,6 +2133,8 @@ export function createBrowserVoiceSession(): BrowserVoiceSession {
 				onLimit: options.onLimit,
 			}),
 		createPlayback: (options) =>
-			new PhrasePlaybackQueue(createBrowserAudioPlaybackApis(), options),
+			new PhrasePlaybackQueue(createBrowserAudioPlaybackApis(), options, {
+				fetch: (input, init) => window.fetch(input, init),
+			}),
 	});
 }

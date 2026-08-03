@@ -11,12 +11,16 @@ const conversationId = "01J00000000000000000000000";
 
 test("Bun localhost upgrades the exact conversation WebSocket route", async () => {
 	let attached: GatewaySocket | null = null;
+	let attachedProtocol: number | null = null;
+	let attachCount = 0;
 	const session: RuntimeGatewaySession = {
 		conversationId,
 		expiresAt: new Date("2030-01-01T00:00:00.000Z"),
 		takeClientToken: () => "w".repeat(43),
-		attach: (socket) => {
+		attach: (socket, protocolVersion) => {
 			attached = socket;
+			attachedProtocol = protocolVersion;
+			attachCount += 1;
 		},
 		receive: async (socket, data) => {
 			expect(attached).not.toBeNull();
@@ -76,7 +80,7 @@ test("Bun localhost upgrades the exact conversation WebSocket route", async () =
 	try {
 		const event = await new Promise<unknown>((resolve, reject) => {
 			const ws = new WebSocket(
-				`ws://127.0.0.1:${server.port}/ws/v1/conversations/${conversationId}`,
+				`ws://127.0.0.1:${server.port}/ws/v1/conversations/${conversationId}?voiceProtocol=2`,
 				{ headers: { Origin: origin } } as never,
 			);
 			const timer = setTimeout(
@@ -113,6 +117,20 @@ test("Bun localhost upgrades the exact conversation WebSocket route", async () =
 			};
 		});
 		expect(ServerWsEventSchema.parse(event).type).toBe("session.ready");
+		expect(attachedProtocol as number | null).toBe(2);
+		expect(attachCount).toBe(1);
+		for (const query of [
+			"voiceProtocol=3",
+			"voiceProtocol=2&voiceProtocol=2",
+			"voiceProtocol=2&visitor=private",
+		]) {
+			const rejected = await fetch(
+				`http://127.0.0.1:${server.port}/ws/v1/conversations/${conversationId}?${query}`,
+				{ headers: { Origin: origin } },
+			);
+			expect(rejected.status).toBe(400);
+		}
+		expect(attachCount).toBe(1);
 	} finally {
 		server.stop(true);
 	}

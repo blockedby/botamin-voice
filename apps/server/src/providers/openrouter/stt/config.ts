@@ -1,7 +1,64 @@
+import {
+	CANONICAL_TTS_WAV_FORMAT,
+	COMPLETE_AUDIO_SEGMENT_MAX_BYTES,
+} from "@botamin/contracts";
+
 export const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const DEFAULT_OPENROUTER_STT_MODEL = "openai/gpt-audio-mini";
+export const DEFAULT_OPENROUTER_TTS_PROFILE = "xai_mp3" as const;
 export const DEFAULT_OPENROUTER_TTS_MODEL = "x-ai/grok-voice-tts-1.0";
 export const DEFAULT_OPENROUTER_TTS_VOICE = "eve";
+export const GEMINI_3_1_TTS_MODEL =
+	"google/gemini-3.1-flash-tts-preview" as const;
+
+export type OpenRouterTtsProfile = "xai_mp3" | "gemini_3_1_pcm";
+
+export function outputContentTypeForTtsProfile(
+	profile: OpenRouterTtsProfile,
+): "audio/mpeg" | "audio/wav" {
+	return profile === "xai_mp3" ? "audio/mpeg" : "audio/wav";
+}
+
+/**
+ * Case-sensitive release snapshot verified 2026-08-03 against the 30 voices
+ * advertised for Gemini TTS. The public catalog is dynamic: update this list
+ * deliberately for a later release; configuration must fail instead of choosing
+ * a different voice when the configured value leaves this snapshot.
+ */
+export const GEMINI_3_1_TTS_VOICES = Object.freeze([
+	"Zephyr",
+	"Puck",
+	"Charon",
+	"Kore",
+	"Fenrir",
+	"Leda",
+	"Orus",
+	"Aoede",
+	"Callirrhoe",
+	"Autonoe",
+	"Enceladus",
+	"Iapetus",
+	"Umbriel",
+	"Algieba",
+	"Despina",
+	"Erinome",
+	"Algenib",
+	"Rasalgethi",
+	"Laomedeia",
+	"Achernar",
+	"Alnilam",
+	"Schedar",
+	"Gacrux",
+	"Pulcherrima",
+	"Achird",
+	"Zubenelgenubi",
+	"Vindemiatrix",
+	"Sadachbia",
+	"Sadaltager",
+	"Sulafat",
+] as const);
+
+export type Gemini31TtsVoice = (typeof GEMINI_3_1_TTS_VOICES)[number];
 
 export class OpenRouterVoiceConfigError extends Error {
 	readonly code = "OPENROUTER_VOICE_CONFIG_INVALID" as const;
@@ -34,9 +91,11 @@ export interface OpenRouterVoiceConfig {
 		readonly circuitCooldownMs: number;
 	};
 	readonly tts: {
+		readonly profile: OpenRouterTtsProfile;
+		readonly outputContentType: "audio/mpeg" | "audio/wav";
 		readonly model: string;
 		readonly voice: string;
-		readonly responseFormat: "mp3";
+		readonly responseFormat: "mp3" | "pcm";
 		readonly speed?: number;
 		readonly connectTimeoutMs: number;
 		readonly totalTimeoutMs: number;
@@ -168,6 +227,76 @@ function readSpeed(env: Environment): number | undefined {
 	return value;
 }
 
+function readTtsProfile(env: Environment): OpenRouterTtsProfile {
+	const profile = env.OPENROUTER_TTS_PROFILE ?? DEFAULT_OPENROUTER_TTS_PROFILE;
+	if (profile !== "xai_mp3" && profile !== "gemini_3_1_pcm") {
+		throw new OpenRouterVoiceConfigError("OPENROUTER_TTS_PROFILE");
+	}
+	return profile;
+}
+
+function readTtsProfileConfig(
+	env: Environment,
+): Pick<
+	OpenRouterVoiceConfig["tts"],
+	| "profile"
+	| "outputContentType"
+	| "model"
+	| "voice"
+	| "responseFormat"
+	| "speed"
+	| "maxResponseBytes"
+> {
+	const profile = readTtsProfile(env);
+	const model = env.OPENROUTER_TTS_MODEL ?? DEFAULT_OPENROUTER_TTS_MODEL;
+	const voice = env.OPENROUTER_TTS_VOICE ?? DEFAULT_OPENROUTER_TTS_VOICE;
+	const responseFormat = env.OPENROUTER_TTS_RESPONSE_FORMAT ?? "mp3";
+	const speed = readSpeed(env);
+
+	if (profile === "xai_mp3") {
+		if (model !== DEFAULT_OPENROUTER_TTS_MODEL) {
+			throw new OpenRouterVoiceConfigError("OPENROUTER_TTS_MODEL");
+		}
+		if (voice !== DEFAULT_OPENROUTER_TTS_VOICE) {
+			throw new OpenRouterVoiceConfigError("OPENROUTER_TTS_VOICE");
+		}
+		if (responseFormat !== "mp3") {
+			throw new OpenRouterVoiceConfigError("OPENROUTER_TTS_RESPONSE_FORMAT");
+		}
+		return {
+			profile,
+			outputContentType: outputContentTypeForTtsProfile(profile),
+			model,
+			voice,
+			responseFormat,
+			...(speed === undefined ? {} : { speed }),
+			maxResponseBytes: COMPLETE_AUDIO_SEGMENT_MAX_BYTES,
+		};
+	}
+
+	if (model !== GEMINI_3_1_TTS_MODEL) {
+		throw new OpenRouterVoiceConfigError("OPENROUTER_TTS_MODEL");
+	}
+	if (!(GEMINI_3_1_TTS_VOICES as readonly string[]).includes(voice)) {
+		throw new OpenRouterVoiceConfigError("OPENROUTER_TTS_VOICE");
+	}
+	if (responseFormat !== "pcm") {
+		throw new OpenRouterVoiceConfigError("OPENROUTER_TTS_RESPONSE_FORMAT");
+	}
+	if (speed !== undefined) {
+		throw new OpenRouterVoiceConfigError("OPENROUTER_TTS_SPEED");
+	}
+	return {
+		profile,
+		outputContentType: outputContentTypeForTtsProfile(profile),
+		model,
+		voice,
+		responseFormat,
+		maxResponseBytes:
+			COMPLETE_AUDIO_SEGMENT_MAX_BYTES - CANONICAL_TTS_WAV_FORMAT.headerBytes,
+	};
+}
+
 /**
  * Loads the one shared OpenRouter key and both voice profiles. It does not read
  * files and never includes the key in validation errors.
@@ -229,10 +358,6 @@ export function loadOpenRouterVoiceConfig(
 	if (readBoolean(env, "STT_TEXT_ONLY_INPUT_FALLBACK", false)) {
 		throw new OpenRouterVoiceConfigError("STT_TEXT_ONLY_INPUT_FALLBACK");
 	}
-	const ttsResponseFormat = env.OPENROUTER_TTS_RESPONSE_FORMAT ?? "mp3";
-	if (ttsResponseFormat !== "mp3") {
-		throw new OpenRouterVoiceConfigError("OPENROUTER_TTS_RESPONSE_FORMAT");
-	}
 	const maxUtteranceMs = readInteger(
 		env,
 		"STT_MAX_UTTERANCE_MS",
@@ -254,7 +379,7 @@ export function loadOpenRouterVoiceConfig(
 
 	const httpReferer = readReferer(env);
 	const appTitle = readOptionalHeader(env, "OPENROUTER_APP_TITLE");
-	const speed = readSpeed(env);
+	const ttsProfile = readTtsProfileConfig(env);
 	const maxCharsPerSegment = readInteger(
 		env,
 		"TTS_MAX_CHARS_PER_SEGMENT",
@@ -309,18 +434,7 @@ export function loadOpenRouterVoiceConfig(
 			circuitCooldownMs: 60_000,
 		},
 		tts: {
-			model: readSafeToken(
-				env,
-				"OPENROUTER_TTS_MODEL",
-				DEFAULT_OPENROUTER_TTS_MODEL,
-			),
-			voice: readSafeToken(
-				env,
-				"OPENROUTER_TTS_VOICE",
-				DEFAULT_OPENROUTER_TTS_VOICE,
-			),
-			responseFormat: "mp3",
-			...(speed === undefined ? {} : { speed }),
+			...ttsProfile,
 			connectTimeoutMs: ttsConnectTimeoutMs,
 			totalTimeoutMs: ttsTotalTimeoutMs,
 			maxRetries: readRetryCount(env, "TTS_MAX_RETRIES", 1),
@@ -345,7 +459,6 @@ export function loadOpenRouterVoiceConfig(
 			maxCharsPerTurn,
 			maxCharsPerSession,
 			maxConcurrency: readInteger(env, "TTS_MAX_CONCURRENCY", 2, 1, 20),
-			maxResponseBytes: 5_000_000,
 		},
 	};
 }

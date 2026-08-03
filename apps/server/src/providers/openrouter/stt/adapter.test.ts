@@ -7,6 +7,8 @@ import {
 	type OpenRouterSttTelemetryEvent,
 } from "./adapter";
 import {
+	GEMINI_3_1_TTS_MODEL,
+	GEMINI_3_1_TTS_VOICES,
 	loadOpenRouterVoiceConfig,
 	type OpenRouterVoiceConfig,
 	OpenRouterVoiceConfigError,
@@ -129,8 +131,52 @@ describe("shared OpenRouter voice configuration", () => {
 		expect(loaded.stt.language).toBe("ru");
 		expect(loaded.stt.textOnlyInputFallback).toBe(false);
 		expect(loaded.tts.model).toBe("x-ai/grok-voice-tts-1.0");
+		expect(loaded.tts.profile).toBe("xai_mp3");
 		expect(loaded.tts.voice).toBe("eve");
 		expect(loaded.tts.responseFormat).toBe("mp3");
+	});
+
+	test("accepts the case-sensitive 30-voice Gemini release snapshot without fallback", () => {
+		expect(GEMINI_3_1_TTS_VOICES).toHaveLength(30);
+		expect(new Set(GEMINI_3_1_TTS_VOICES).size).toBe(30);
+		for (const voice of GEMINI_3_1_TTS_VOICES) {
+			const loaded = loadOpenRouterVoiceConfig({
+				OPENROUTER_TTS_PROFILE: "gemini_3_1_pcm",
+				OPENROUTER_TTS_MODEL: GEMINI_3_1_TTS_MODEL,
+				OPENROUTER_TTS_VOICE: voice,
+				OPENROUTER_TTS_RESPONSE_FORMAT: "pcm",
+			});
+			expect(loaded.tts).toMatchObject({
+				profile: "gemini_3_1_pcm",
+				model: GEMINI_3_1_TTS_MODEL,
+				voice,
+				responseFormat: "pcm",
+			});
+		}
+	});
+
+	test("rejects profile mismatches and stale or case-changed Gemini voices", () => {
+		const gemini = {
+			OPENROUTER_TTS_PROFILE: "gemini_3_1_pcm",
+			OPENROUTER_TTS_MODEL: GEMINI_3_1_TTS_MODEL,
+			OPENROUTER_TTS_VOICE: "Kore",
+			OPENROUTER_TTS_RESPONSE_FORMAT: "pcm",
+		};
+		for (const env of [
+			{ OPENROUTER_TTS_PROFILE: "automatic" },
+			{ OPENROUTER_TTS_MODEL: GEMINI_3_1_TTS_MODEL },
+			{ OPENROUTER_TTS_VOICE: "Kore" },
+			{ OPENROUTER_TTS_RESPONSE_FORMAT: "pcm" },
+			{ ...gemini, OPENROUTER_TTS_MODEL: "google/gemini-tts-latest" },
+			{ ...gemini, OPENROUTER_TTS_VOICE: "kore" },
+			{ ...gemini, OPENROUTER_TTS_VOICE: "FutureVoice" },
+			{ ...gemini, OPENROUTER_TTS_RESPONSE_FORMAT: "mp3" },
+			{ ...gemini, OPENROUTER_TTS_SPEED: "1" },
+		]) {
+			expect(() => loadOpenRouterVoiceConfig(env)).toThrow(
+				OpenRouterVoiceConfigError,
+			);
+		}
 	});
 
 	test("rejects unsafe or out-of-contract configuration without echoing values", () => {

@@ -18,6 +18,7 @@ export type {
 } from "./speech-contacts";
 
 const MARKDOWN_LINK = /\[([^\x5d]+)\]\(\s*(?:https?:\/\/|www\.)[^)]+\)/giu;
+const BRACKET_STYLE_TAG = /\[[^\]\r\n]*\]/gu;
 const RAW_URL = /(?:https?:\/\/|www\.)[^\s<>()]*[\p{L}\p{N}/#]/giu;
 const EMAIL =
 	/[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/giu;
@@ -75,6 +76,43 @@ export interface PreparedSpeech {
 export type SpeechBudgetDecision =
 	| { ok: true; turnChars: number; sessionChars: number }
 	| { ok: false; reason: "segment" | "turn" | "session" };
+
+const KNOWN_RUSSIAN_PRONUNCIATIONS = [
+	{ pattern: /(?<![\p{L}\p{N}])CRM(?![\p{L}\p{N}])/giu, spoken: "си-эр-эм" },
+	{ pattern: /(?<![\p{L}\p{N}])ООО(?![\p{L}\p{N}])/gu, spoken: "о-о-о" },
+] as const;
+
+/**
+ * Applies a deliberately small provider-neutral TTS rendering pass. Privacy
+ * and contact authority have already been resolved by prepareSpeech(); the
+ * visible transcript is never passed through this function.
+ *
+ * Protected approved contacts are returned byte-for-byte unchanged. This is
+ * intentionally conservative: punctuation edits around an expanded contact
+ * could otherwise invalidate its atomic offsets.
+ */
+export function renderPreparedSpeech(prepared: PreparedSpeech): PreparedSpeech {
+	if (!prepared.spokenText || prepared.protectedSpans.length > 0)
+		return prepared;
+
+	let spokenText = prepared.spokenText
+		.replace(/[\t\v\f ]+/gu, " ")
+		.replace(/\s+([,.!?;:])/gu, "$1")
+		.replace(/([,!?;:])(?=\p{L})/gu, (punctuation, _capture, offset, source) =>
+			/\p{N}/u.test(source[offset - 1] ?? "") ? punctuation : `${punctuation} `,
+		)
+		.replace(/(?<=\p{L})\.(?=\p{Lu})/gu, ". ")
+		.trim();
+	for (const pronunciation of KNOWN_RUSSIAN_PRONUNCIATIONS) {
+		spokenText = spokenText.replace(
+			pronunciation.pattern,
+			pronunciation.spoken,
+		);
+	}
+	return spokenText === prepared.spokenText
+		? prepared
+		: { ...prepared, spokenText };
+}
 
 interface StructuredJsonRegion {
 	start: number;
@@ -207,13 +245,13 @@ function stripCodeAndEnvelopes(input: string): string {
 	return text;
 }
 
-/**
- * Produces provider-safe spoken text. Callers retain the original model text
- * for the visible transcript; this function is only for TTS input.
- */
+/** Produces provider-safe spoken text for the TTS boundary. */
 export function sanitizeSpeech(input: string): string {
 	let text = stripCodeAndEnvelopes(input.replace(/\r\n?/gu, "\n"));
 	text = text.replace(MARKDOWN_LINK, "$1");
+	// Strip the complete bracketed control, not only its delimiters, so model
+	// or visitor-authored voice tags can never become provider instructions.
+	text = text.replace(BRACKET_STYLE_TAG, " ");
 	text = redactPhoneLikeSpeechCandidates(text);
 	text = text.replace(RAW_URL, " ");
 	text = text.replace(EMAIL, CONTACT_REDACTION);
@@ -238,6 +276,41 @@ export function sanitizeSpeech(input: string): string {
 	text = text.replace(/\s+([,.!?;:])/gu, "$1");
 	text = text.replace(/\s+/gu, " ").trim();
 	return /^[\p{P}\p{S}\s]*$/u.test(text) ? "" : text;
+}
+
+/**
+ * Removes model-authored square-bracket delivery controls before text enters
+ * the visible transcript, durable projection, or speech chunker. A control may
+ * span any number of deltas. Unclosed controls fail closed at end of stream;
+ * ordinary text outside controls is forwarded incrementally without buffering.
+ */
+export class StreamingModelControlSanitizer {
+	#depth = 0;
+
+	push(delta: string): string {
+		let visible = "";
+		for (const character of delta) {
+			if (character === "[") {
+				this.#depth += 1;
+				continue;
+			}
+			if (character === "]") {
+				if (this.#depth > 0) this.#depth -= 1;
+				if (this.#depth === 0) visible += " ";
+				continue;
+			}
+			if (this.#depth === 0) visible += character;
+		}
+		return visible;
+	}
+
+	flush(): void {
+		this.#depth = 0;
+	}
+
+	clear(): void {
+		this.#depth = 0;
+	}
 }
 
 /**

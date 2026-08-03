@@ -37,7 +37,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 | US-001 | Как посетитель, я запускаю разговор одной кнопкой | proactive greeting останавливается; только после двух consents запрашивается mic permission и создаётся session, UI показывает состояние |
 | US-002 | Я говорю естественно по-русски | UI показывает sample-derived circular countdown во время capture, listening/processing, затем ровно один `transcript.final` |
 | US-003 | Я печатаю финальную реплику | stage-gated composer отправляет provider-neutral `visitor.text.submit`; server-accepted typed turn проходит тот же semantic pipeline, что и speech |
-| US-004 | Агент отвечает голосом и текстом | первая полная MP3-фраза может проиграться до завершения ответа Luna; ответ не содержит markdown-мусора |
+| US-004 | Агент отвечает естественным голосом и текстом | две ordered TTS requests могут готовиться параллельно; browser gapless проигрывает полные provider-neutral MP3/WAV segments, а visible transcript остаётся plain text |
 | US-005 | Агент понимает, зачем я пришёл | задаёт не более одного вопроса за раз и максимум два discovery-вопроса до мягкого предложения следующего шага |
 | US-006 | Агент объясняет Botamin на релевантном примере | использует только утверждённые knowledge claims; 10–15 млн ₽/месяц — только атрибутированное сообщение пользовательского брифа, не гарантия |
 | US-007 | Я могу возразить или перебить | проигрывание останавливается, новый turn обрабатывается |
@@ -59,12 +59,17 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-VOICE-005:** при barge-in клиент немедленно останавливает playback и очищает очередь, backend abort-ит OpenRouter fetches текущего `generationId` и по возможности вызывает `turn/interrupt`.
 - **FR-VOICE-006:** reconnect не должен создавать вторую бронь.
 - **FR-VOICE-007:** stop завершает внешние соединения и фиксирует событие.
-- **FR-VOICE-008:** OpenRouter вызывается только backend-ом; browser получает provider-neutral полные `audio/mpeg` phrase segments в sequence order.
+- **FR-VOICE-008:** OpenRouter вызывается только backend-ом; browser получает provider-neutral complete `audio/mpeg` или canonical `audio/wav` phrase segments in sequence order и никогда не получает raw provider PCM.
 - **FR-VOICE-009:** TTS failure сохраняет видимый текст и все уже committed business side effects; synthesis retry не повторяет brain turn или tools.
-- **FR-VOICE-010:** перед TTS удаляются PII, tool envelopes, hidden IDs, Markdown, code fences и raw URLs; hard limit сегмента — configurable, default 240 chars.
+- **FR-VOICE-010:** перед TTS удаляются PII, tool envelopes, hidden IDs, Markdown, code fences, raw URLs и visitor/model-authored style controls; hard limit сегмента — configurable, default 240 chars.
 - **FR-VOICE-011:** STT duration/byte/time/retry guards и TTS per-segment/turn/session/concurrency/response guards ограничивают voice path; retry не запускает Luna/tools повторно.
-- **FR-VOICE-012:** chunked PCM16 описывает только browser-to-gateway transport; provider boundary получает один atomic `audio/wav` request и возвращает один final result.
+- **FR-VOICE-012:** chunked PCM16 описывает только browser-to-gateway transport; provider boundary получает один atomic `audio/wav` STT request и возвращает один final result.
 - **FR-VOICE-013:** circular countdown отображается только при active capture и вычисляется по числу принятых PCM16 samples (`acceptedPcmBytes / 2 / 16000`), ограниченному меньшим из server `maxUtteranceMs` и byte-derived duration; wall-clock drift не является источником значения.
+- **FR-VOICE-014:** server запускает не более двух ordered TTS requests (current + one prefetch), но публикует результаты только в source order; first failure, barge-in и stale generation подавляют более поздний prefetched audio.
+- **FR-VOICE-015:** browser scheduled playback привязывает следующий decoded segment к end time предыдущего. Credit window ограничен четырьмя segments / 20 MB / 5 MB per segment и максимум двумя decoded/source slots; credit возвращается после release.
+- **FR-VOICE-016:** default TTS profile — exact xAI/eve/MP3. Gemini 3.1 Flash TTS Preview включается только полным four-env PCM profile, fails closed on mismatch, server-side wraps PCM as complete canonical mono 24 kHz PCM16 WAV, and has no automatic fallback/model/voice selection.
+- **FR-VOICE-017:** server-owned style enum is `neutral|curious|serious|excited`; sensitive/authoritative facts always use neutral. Provider controls have no transcript, durable-state, or provider-selection effect; visible transcript stays plain.
+- **FR-VOICE-018:** The 16 committed same-origin reaction MP3s require negotiated allowlist capability and may play at most once per eligible turn after 350 ms. Runtime currently exposes only a non-claiming neutral clip; progress/validation/scheduling/booking/acceptance clips fail closed without an explicit trusted server operation signal. Reactions make zero runtime provider calls and cannot affect transcript, state, booking, tools, or provider behavior.
 - **FR-TEXT-001:** `visitor.text.submit` содержит один trimmed final typed turn до 2,000 символов, monotonic sequence и не содержит provider/tool fields.
 - **FR-TEXT-002:** typed turn очищает uncommitted microphone bytes, допускает не более одного pending submit и считается принятым только после server `transcript.final`; rejected retry сохраняет sequence.
 - **FR-TEXT-003:** после final acceptance typed и spoken turns семантически равнозначны: один и тот же Luna context, server state policy, tools, persistence, assistant text и optional TTS.
@@ -81,6 +86,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-BRAIN-008:** reasoning effort задаётся конфигурацией; стартовый профиль Luna использует минимальный уровень, который проходит quality evals.
 - **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, parsed time-of-day/concrete-date-time request и ровно два structured meeting candidates с concrete Moscow date/time labels.
 - **FR-BRAIN-010:** cadence умеренно проактивен: один вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting offer, без повторного давления после ясного отказа.
+- **FR-BRAIN-011:** ordinary spoken reply uses concise natural Russian: usually no more than two short sentences/about twelve seconds, one useful thought, and at most one question; filler acknowledgements and invented progress are forbidden.
 
 ### 4.3 Booking
 
@@ -116,6 +122,8 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-WEB-006:** mobile viewport поддерживается.
 - **FR-WEB-007:** при voice failure пользователю не показываются stack traces/provider details.
 - **FR-WEB-008:** proactive MP3 содержит только фиксированный product copy без visitor data. Его замена выполняется отдельным explicit admin opt-in OpenRouter generation script и commit-ится как static asset; runtime visit не генерирует greeting.
+- **FR-WEB-009:** playback `AudioContext` создаётся/resume-ится в synchronous consent gesture path до mic/network awaits; live WebKit acceptance remains a release gate.
+- **FR-WEB-010:** local reaction corpus generation is a separate explicit paid admin opt-in; committed assets are runtime-static and reaction fetch/decode failure is decoration-only.
 
 ## 5. P1 и P2
 
@@ -193,4 +201,4 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 ## 9. Release sequencing boundary
 
-`0.5.0-local-rc.4` is the recommended, still-untagged local candidate for one trusted owner machine. RC3 evidence is preserved as history, not reused as RC4 proof. Chromium desktop/mobile landing smoke is not a full voice journey. WebKit has a downloaded browser binary but the current host is missing `libicu74`, `libxml2`, and `libflite1`; WebKit full journey therefore remains not run. Target-VPS resources, DNS, public TLS/WSS, and target-host provider live booking are also external gates. The internal virtual meeting remains deliberately different from an external calendar event.
+`0.5.0-local-rc.4` is the recommended, still-untagged local candidate for one trusted owner machine. Chromium desktop/mobile landing smoke is not a full voice journey. Full Chromium and WebKit voice journeys, target-VPS resources, DNS, public TLS/WSS, target-host provider live booking, and target-host latency/load remain external gates. There is no formal voice A/B quality matrix. The isolated Gemini smoke is transport evidence only, never a listening-quality claim. The internal virtual meeting remains deliberately different from an external calendar event.

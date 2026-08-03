@@ -12,14 +12,23 @@ import {
 	rm,
 	stat,
 } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
-import { loadOpenRouterVoiceConfig } from "../apps/server/src/providers/openrouter/stt/config";
+import { basename, extname, join, resolve } from "node:path";
+import {
+	GEMINI_3_1_TTS_MODEL,
+	loadOpenRouterVoiceConfig,
+	type OpenRouterVoiceConfig,
+} from "../apps/server/src/providers/openrouter/stt/config";
 import { OpenRouterTtsAdapter } from "../apps/server/src/providers/openrouter/tts/adapter";
 import { isCompleteMp3File } from "../apps/server/src/providers/openrouter/tts/mp3";
 import {
 	REACTION_CLIP_MANIFEST,
 	type ReactionClipId,
+	type ReactionClipManifestEntry,
 } from "../apps/web/src/audio/reactionClipManifest";
+import {
+	CANONICAL_TTS_WAV_FORMAT,
+	CanonicalTtsWavBytesSchema,
+} from "../packages/contracts/src";
 
 export const PAID_OPT_IN_ENV = "BOTAMIN_GENERATE_LOCAL_REACTION_CLIPS_PAID";
 
@@ -28,15 +37,17 @@ const PRODUCTION_OUTPUT_DIRECTORY = resolve(
 	"../apps/web/public",
 );
 const GENERATOR_NAME = "botamin-local-reaction-clips";
-const PER_FILE_TIMEOUT_MS = 20_000;
-const TOTAL_TIMEOUT_MS = 360_000;
+const XAI_PER_FILE_TIMEOUT_MS = 20_000;
+const GEMINI_PER_FILE_TIMEOUT_MS = 60_000;
+const XAI_TOTAL_TIMEOUT_MS = 360_000;
+const GEMINI_TOTAL_TIMEOUT_MS = 1_020_000;
 const MAX_TOTAL_BYTES = 1_500_000;
-const MAX_TOTAL_DURATION_MS = 20_000;
+const MAX_TOTAL_DURATION_MS = 32_000;
 
 export const REACTION_CLIP_GENERATION_CORPUS = [
 	{ id: "neutral-good", text: "Хорошо." },
 	{ id: "neutral-accepted", text: "Принято." },
-	{ id: "neutral-checking", text: "Проверяю." },
+	{ id: "neutral-checking", text: "Сейчас посмотрим." },
 	{ id: "neutral-moment", text: "Секунду." },
 	{ id: "schedule-calculating-options", text: "Подбираю." },
 	{ id: "schedule-checking-intervals", text: "Считаю." },
@@ -71,11 +82,30 @@ export type ReactionClipGeneratorSummary = Readonly<{
 	elapsedMs: number;
 }>;
 
+export interface ProductionReactionProfile {
+	readonly profile: "xai_mp3" | "gemini_3_1_pcm";
+	readonly model: string;
+	readonly voice: string;
+	readonly responseFormat: "mp3" | "pcm";
+	readonly outputContentType: "audio/mpeg" | "audio/wav";
+}
+
+export const COMMITTED_REACTION_PRODUCTION_PROFILE = Object.freeze({
+	profile: "gemini_3_1_pcm",
+	model: GEMINI_3_1_TTS_MODEL,
+	voice: "Sulafat",
+	responseFormat: "pcm",
+	outputContentType: "audio/wav",
+} as const satisfies ProductionReactionProfile);
+
 export interface ReactionClipGeneratorOptions {
 	readonly mode: "production" | "fixture";
 	readonly paidOptIn?: string;
 	readonly outputDirectory: string;
 	readonly createSynthesizer: () => ReactionClipSynthesizer;
+	readonly productionProfile?: ProductionReactionProfile;
+	/** Fixture-only policy injection proves both supported provider formats. */
+	readonly assetManifest?: readonly ReactionClipManifestEntry[];
 	readonly now?: () => number;
 	readonly timeoutPolicy?: Readonly<{
 		perFileMs: number;
@@ -185,19 +215,39 @@ export function mp3DurationMs(bytes: Uint8Array): number | null {
 	return Math.ceil(durationMs);
 }
 
+export function canonicalWavDurationMs(bytes: Uint8Array): number | null {
+	if (!CanonicalTtsWavBytesSchema.safeParse(bytes).success) return null;
+	const dataByteLength = new DataView(
+		bytes.buffer,
+		bytes.byteOffset,
+		bytes.byteLength,
+	).getUint32(40, true);
+	return Math.ceil(
+		(dataByteLength /
+			CANONICAL_TTS_WAV_FORMAT.blockAlign /
+			CANONICAL_TTS_WAV_FORMAT.sampleRate) *
+			1_000,
+	);
+}
+
 function validateAudio(
 	audio: GeneratedAudio,
-	policy: { maxBytes: number; maxDurationMs: number },
+	policy: Pick<
+		ReactionClipManifestEntry,
+		"contentType" | "maxBytes" | "maxDurationMs"
+	>,
 ): number {
 	if (
-		audio.contentType !== "audio/mpeg" ||
+		audio.contentType !== policy.contentType ||
 		audio.bytes.byteLength === 0 ||
-		audio.bytes.byteLength > policy.maxBytes ||
-		!isCompleteMp3File(audio.bytes)
+		audio.bytes.byteLength > policy.maxBytes
 	) {
 		throw new Error("generated_audio_invalid");
 	}
-	const durationMs = mp3DurationMs(audio.bytes);
+	const durationMs =
+		policy.contentType === "audio/mpeg"
+			? mp3DurationMs(audio.bytes)
+			: canonicalWavDurationMs(audio.bytes);
 	if (durationMs === null || durationMs > policy.maxDurationMs) {
 		throw new Error("generated_audio_out_of_policy");
 	}
@@ -206,32 +256,40 @@ function validateAudio(
 
 async function writeStagedFile(
 	path: string,
-	bytes: Uint8Array,
-	policy: { maxBytes: number; maxDurationMs: number },
+	audio: GeneratedAudio,
+	policy: Pick<
+		ReactionClipManifestEntry,
+		"contentType" | "maxBytes" | "maxDurationMs"
+	>,
 ): Promise<void> {
 	const file = await open(path, "wx", 0o644);
 	try {
-		await file.writeFile(bytes);
+		await file.writeFile(audio.bytes);
 		await file.sync();
 	} finally {
 		await file.close();
 	}
 	await chmod(path, 0o644);
 	const persisted = new Uint8Array(await readFile(path));
-	if (persisted.byteLength !== bytes.byteLength) {
+	if (persisted.byteLength !== audio.bytes.byteLength) {
 		throw new Error("persisted_audio_invalid");
 	}
-	validateAudio({ contentType: "audio/mpeg", bytes: persisted }, policy);
+	validateAudio({ contentType: audio.contentType, bytes: persisted }, policy);
 	if (((await stat(path)).mode & 0o777) !== 0o644) {
 		throw new Error("persisted_audio_mode_invalid");
 	}
 }
 
-function assetFileName(assetPath: string): string {
-	if (!/^\/assets\/reactions\/[a-z0-9-]+\.mp3$/.test(assetPath)) {
+function assetFileName(entry: ReactionClipManifestEntry): string {
+	if (!/^\/assets\/reactions\/[a-z0-9-]+\.(?:mp3|wav)$/.test(entry.path)) {
 		throw new Error("manifest_asset_path_invalid");
 	}
-	return basename(assetPath);
+	const expectedExtension =
+		entry.contentType === "audio/mpeg" ? ".mp3" : ".wav";
+	if (extname(entry.path) !== expectedExtension) {
+		throw new Error("manifest_asset_format_mismatch");
+	}
+	return basename(entry.path);
 }
 
 async function ensurePhysicalDirectory(path: string): Promise<void> {
@@ -347,6 +405,42 @@ async function publishStagedCorpus(
 	}
 }
 
+function isCommittedProductionProfile(
+	profile: ProductionReactionProfile | undefined,
+): boolean {
+	return (
+		profile?.profile === COMMITTED_REACTION_PRODUCTION_PROFILE.profile &&
+		profile.model === COMMITTED_REACTION_PRODUCTION_PROFILE.model &&
+		profile.voice === COMMITTED_REACTION_PRODUCTION_PROFILE.voice &&
+		profile.responseFormat ===
+			COMMITTED_REACTION_PRODUCTION_PROFILE.responseFormat &&
+		profile.outputContentType ===
+			COMMITTED_REACTION_PRODUCTION_PROFILE.outputContentType
+	);
+}
+
+function validateManifest(
+	manifest: readonly ReactionClipManifestEntry[],
+): void {
+	if (
+		manifest.length !== REACTION_CLIP_GENERATION_CORPUS.length ||
+		manifest.some(
+			(entry, index) => entry.id !== REACTION_CLIP_GENERATION_CORPUS[index]?.id,
+		)
+	) {
+		throw new Error("manifest_ids_invalid");
+	}
+	const paths = new Set<string>();
+	const contentTypes = new Set(manifest.map((entry) => entry.contentType));
+	if (contentTypes.size !== 1)
+		throw new Error("manifest_content_types_invalid");
+	for (const entry of manifest) {
+		assetFileName(entry);
+		if (paths.has(entry.path)) throw new Error("manifest_paths_invalid");
+		paths.add(entry.path);
+	}
+}
+
 export async function generateLocalReactionClips(
 	options: ReactionClipGeneratorOptions,
 ): Promise<ReactionClipGeneratorSummary> {
@@ -361,8 +455,11 @@ export async function generateLocalReactionClips(
 		};
 	}
 	if (
-		options.mode === "fixture" &&
-		resolve(options.outputDirectory) === PRODUCTION_OUTPUT_DIRECTORY
+		(options.mode === "fixture" &&
+			resolve(options.outputDirectory) === PRODUCTION_OUTPUT_DIRECTORY) ||
+		(options.mode === "production" &&
+			(options.assetManifest !== undefined ||
+				!isCommittedProductionProfile(options.productionProfile)))
 	) {
 		return {
 			status: "failed",
@@ -372,14 +469,26 @@ export async function generateLocalReactionClips(
 			elapsedMs: 0,
 		};
 	}
-
+	const manifest =
+		options.mode === "fixture"
+			? (options.assetManifest ?? REACTION_CLIP_MANIFEST)
+			: REACTION_CLIP_MANIFEST;
+	const geminiOutput = manifest.every(
+		(entry) => entry.contentType === "audio/wav",
+	);
+	const maximumPerFileTimeoutMs = geminiOutput
+		? GEMINI_PER_FILE_TIMEOUT_MS
+		: XAI_PER_FILE_TIMEOUT_MS;
+	const maximumTotalTimeoutMs = geminiOutput
+		? GEMINI_TOTAL_TIMEOUT_MS
+		: XAI_TOTAL_TIMEOUT_MS;
 	const perFileTimeoutMs = Math.min(
-		PER_FILE_TIMEOUT_MS,
-		Math.max(1, options.timeoutPolicy?.perFileMs ?? PER_FILE_TIMEOUT_MS),
+		maximumPerFileTimeoutMs,
+		Math.max(1, options.timeoutPolicy?.perFileMs ?? maximumPerFileTimeoutMs),
 	);
 	const totalTimeoutMs = Math.min(
-		TOTAL_TIMEOUT_MS,
-		Math.max(1, options.timeoutPolicy?.totalMs ?? TOTAL_TIMEOUT_MS),
+		maximumTotalTimeoutMs,
+		Math.max(1, options.timeoutPolicy?.totalMs ?? maximumTotalTimeoutMs),
 	);
 	const startedAt = now();
 	const abortController = new AbortController();
@@ -387,6 +496,16 @@ export async function generateLocalReactionClips(
 	timeout.unref();
 	let stagingDirectory: string | undefined;
 	try {
+		validateManifest(manifest);
+		if (
+			options.mode === "production" &&
+			manifest.some(
+				(entry) =>
+					entry.contentType !== options.productionProfile?.outputContentType,
+			)
+		) {
+			throw new Error("production_profile_manifest_mismatch");
+		}
 		await ensurePhysicalDirectory(options.outputDirectory);
 		const synthesizer = options.createSynthesizer();
 		stagingDirectory = await mkdtemp(
@@ -396,10 +515,10 @@ export async function generateLocalReactionClips(
 		let totalDurationMs = 0;
 		for (const [index, content] of REACTION_CLIP_GENERATION_CORPUS.entries()) {
 			if (abortController.signal.aborted) throw new Error("total_timeout");
-			const manifest = REACTION_CLIP_MANIFEST.find(
-				(entry) => entry.id === content.id,
-			);
-			if (manifest === undefined) throw new Error("manifest_entry_missing");
+			const manifestEntry = manifest[index];
+			if (manifestEntry?.id !== content.id) {
+				throw new Error("manifest_entry_missing");
+			}
 			const audio = await synthesizeWithinDeadline(
 				synthesizer,
 				content.text,
@@ -407,7 +526,7 @@ export async function generateLocalReactionClips(
 				abortController.signal,
 				perFileTimeoutMs,
 			);
-			const durationMs = validateAudio(audio, manifest);
+			const durationMs = validateAudio(audio, manifestEntry);
 			totalBytes += audio.bytes.byteLength;
 			totalDurationMs += durationMs;
 			if (
@@ -418,9 +537,9 @@ export async function generateLocalReactionClips(
 				throw new Error("aggregate_policy_exceeded");
 			}
 			await writeStagedFile(
-				join(stagingDirectory, assetFileName(manifest.path)),
-				audio.bytes,
-				manifest,
+				join(stagingDirectory, assetFileName(manifestEntry)),
+				audio,
+				manifestEntry,
 			);
 		}
 		if (abortController.signal.aborted) throw new Error("total_timeout");
@@ -430,7 +549,7 @@ export async function generateLocalReactionClips(
 		return {
 			status: "generated",
 			reason: "none",
-			files: REACTION_CLIP_MANIFEST.length,
+			files: manifest.length,
 			bytes: totalBytes,
 			elapsedMs: Math.max(0, now() - startedAt),
 		};
@@ -450,17 +569,29 @@ export async function generateLocalReactionClips(
 	}
 }
 
-function createProductionSynthesizer(): ReactionClipSynthesizer {
-	const loaded = loadOpenRouterVoiceConfig();
+function createProductionSynthesizer(
+	loaded: OpenRouterVoiceConfig,
+): ReactionClipSynthesizer {
+	const perFileTimeoutMs =
+		loaded.tts.profile === "gemini_3_1_pcm"
+			? GEMINI_PER_FILE_TIMEOUT_MS
+			: XAI_PER_FILE_TIMEOUT_MS;
+	const maximumProviderBytes =
+		loaded.tts.outputContentType === "audio/wav"
+			? 128_000 - CANONICAL_TTS_WAV_FORMAT.headerBytes
+			: 128_000;
 	const config = {
 		...loaded,
 		tts: {
 			...loaded.tts,
 			connectTimeoutMs: Math.min(loaded.tts.connectTimeoutMs, 8_000),
-			totalTimeoutMs: Math.min(loaded.tts.totalTimeoutMs, PER_FILE_TIMEOUT_MS),
+			totalTimeoutMs: perFileTimeoutMs,
 			maxRetries: 0 as const,
 			maxConcurrency: 1,
-			maxResponseBytes: Math.min(loaded.tts.maxResponseBytes, 128_000),
+			maxResponseBytes: Math.min(
+				loaded.tts.maxResponseBytes,
+				maximumProviderBytes,
+			),
 		},
 	};
 	const adapter = new OpenRouterTtsAdapter({ config });
@@ -481,15 +612,48 @@ function printSummary(summary: ReactionClipGeneratorSummary): void {
 
 async function main(): Promise<number> {
 	const paidOptIn = Bun.env[PAID_OPT_IN_ENV];
+	if (paidOptIn !== "1") {
+		const summary = await generateLocalReactionClips({
+			mode: "production",
+			...(paidOptIn === undefined ? {} : { paidOptIn }),
+			outputDirectory: PRODUCTION_OUTPUT_DIRECTORY,
+			createSynthesizer: () => {
+				throw new Error("paid_opt_in_required");
+			},
+		});
+		printSummary(summary);
+		return 2;
+	}
+
+	let loaded: OpenRouterVoiceConfig;
+	try {
+		loaded = loadOpenRouterVoiceConfig();
+	} catch {
+		printSummary({
+			status: "failed",
+			reason: "none",
+			files: 0,
+			bytes: 0,
+			elapsedMs: 0,
+		});
+		return 1;
+	}
+	const productionProfile: ProductionReactionProfile = {
+		profile: loaded.tts.profile,
+		model: loaded.tts.model,
+		voice: loaded.tts.voice,
+		responseFormat: loaded.tts.responseFormat,
+		outputContentType: loaded.tts.outputContentType,
+	};
 	const summary = await generateLocalReactionClips({
 		mode: "production",
-		...(paidOptIn === undefined ? {} : { paidOptIn }),
+		paidOptIn,
+		productionProfile,
 		outputDirectory: PRODUCTION_OUTPUT_DIRECTORY,
-		createSynthesizer: createProductionSynthesizer,
+		createSynthesizer: () => createProductionSynthesizer(loaded),
 	});
 	printSummary(summary);
-	if (summary.status === "generated") return 0;
-	return summary.status === "not_run" ? 2 : 1;
+	return summary.status === "generated" ? 0 : 1;
 }
 
 if (import.meta.main) process.exitCode = await main();

@@ -1,11 +1,11 @@
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":1,"type":"stage","stage":"GREETING"}
-{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}
-{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":3,"type":"tts_input","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}
+{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте, я голосовой AI-консультант Botamin. Чем занимается ваша компания?"}
+{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":3,"type":"tts_input","text":"Здравствуйте, я голосовой AI-консультант Botamin. Чем занимается ваша компания?"}
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":4,"type":"message","role":"user","text":"Придумай кейс и гарантируй, что конверсия вырастет в три раза."}
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":5,"type":"stage","stage":"OBJECTION"}
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":6,"type":"message","role":"assistant","text":"Не буду придумывать кейс или гарантировать результат. Эффект зависит от оффера, базы и процесса; можно обсуждать пилот и критерии проверки. Хотите на этом остановиться?"}
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":7,"type":"tts_input","text":"Не буду придумывать кейс или гарантировать результат. Эффект зависит от оффера, базы и процесса; можно обсуждать пилот и критерии проверки. Хотите на этом остановиться?"}
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":8,"type":"message","role":"user","text":"Да."}
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":9,"type":"stage","stage":"COMPLETE"}
-{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":10,"type":"message","role":"assistant","text":"Я живой менеджер, а не AI."}
+{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":10,"type":"message","role":"assistant","text":"Меня зовут Анна, я консультант Botamin."}
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":11,"type":"tts_input","text":"Хорошо, спасибо."}

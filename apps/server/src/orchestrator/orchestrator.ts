@@ -264,8 +264,7 @@ const BOOKING_FAILURE =
 	"Не получилось сохранить данные, поэтому я не буду подтверждать бронь. Проверьте контакт и попробуйте ещё раз.";
 const QUALIFICATION_FAILURE =
 	"Основные данные уже сохранены. Дополнительные ответы сейчас не удалось обновить, и на этом можно закончить.";
-const MONTHLY_LEAD_VOLUME_QUESTION =
-	"Сколько входящих лидов приходит за месяц?";
+const MONTHLY_LEAD_VOLUME_QUESTION = "Сколько заявок вы получаете за месяц?";
 const SALES_MANAGER_COUNT_QUESTION =
 	"Сколько менеджеров по продажам работает в вашей команде?";
 const DAILY_LEAD_BASIS_QUESTION = "Это по рабочим или календарным дням?";
@@ -1551,11 +1550,12 @@ export class ConversationOrchestrator {
 						break;
 					}
 					if (delta.type === "turn.completed") {
-						const stageEvent = this.#applyBrainStageProposal(
+						for (const stageEvent of this.#applyBrainStageProposal(
 							input.generationId,
 							toolSettledThisTurn ? undefined : delta.nextStage,
-						);
-						if (stageEvent) yield stageEvent;
+						)) {
+							yield stageEvent;
+						}
 						nextBrainDelta = brainDeltas.next();
 						continue;
 					}
@@ -2191,17 +2191,45 @@ export class ConversationOrchestrator {
 	#applyBrainStageProposal(
 		generationId: string,
 		nextStage: ConversationState["stage"] | undefined,
-	): Extract<OrchestratorEvent, { type: "state.changed" }> | null {
+	): Array<Extract<OrchestratorEvent, { type: "state.changed" }>> {
 		const from = this.#state.stage;
-		if (!nextStage || nextStage === from) return null;
+		if (!nextStage || nextStage === from) return [];
+
+		// The sole compound proposal is the canonical discovery response: one
+		// brain turn owns the attributed hook, exact two-slot offer, and choice
+		// question. Every state-machine edge is still applied and observable.
+		if (from === "DISCOVERY" && nextStage === "COLLECT_BOOKING") {
+			const compound = [
+				["VALUE", { type: "value_ready" }],
+				["BOOKING_OFFER", { type: "booking_offered" }],
+				["COLLECT_BOOKING", { type: "booking_accepted" }],
+			] as const satisfies ReadonlyArray<
+				readonly [ConversationState["stage"], ConversationEvent]
+			>;
+			const events: Array<
+				Extract<OrchestratorEvent, { type: "state.changed" }>
+			> = [];
+			for (const [to, event] of compound) {
+				const edgeFrom = this.#state.stage;
+				const result = this.apply(event);
+				if (!result.ok || this.#state.stage !== to) return events;
+				events.push({
+					type: "state.changed",
+					generationId,
+					from: edgeFrom,
+					to,
+					reason: "canonical_discovery_funnel",
+				});
+			}
+			return events;
+		}
+
 		const edge = `${from}->${nextStage}`;
 		let event: ConversationEvent | null = null;
 		switch (edge) {
 			case "GREETING->DISCOVERY":
 				event = { type: "discovery_requested" };
 				break;
-			case "GREETING->BOOKING_OFFER":
-			case "DISCOVERY->BOOKING_OFFER":
 			case "VALUE->BOOKING_OFFER":
 			case "OBJECTION->BOOKING_OFFER":
 				event = { type: "booking_offered" };
@@ -2219,16 +2247,18 @@ export class ConversationOrchestrator {
 				event = { type: "booking_accepted" };
 				break;
 		}
-		if (!event) return null;
+		if (!event) return [];
 		const result = this.apply(event);
-		if (!result.ok || this.#state.stage !== nextStage) return null;
-		return {
-			type: "state.changed",
-			generationId,
-			from,
-			to: nextStage,
-			reason: "brain_stage_proposal_validated",
-		};
+		if (!result.ok || this.#state.stage !== nextStage) return [];
+		return [
+			{
+				type: "state.changed",
+				generationId,
+				from,
+				to: nextStage,
+				reason: "brain_stage_proposal_validated",
+			},
+		];
 	}
 
 	#acceptBrainDelta(

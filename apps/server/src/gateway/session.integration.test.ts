@@ -123,6 +123,7 @@ class BlockingStt extends Stt {
 
 class Brain implements BrainPort {
 	runs = 0;
+	readonly inputs: BrainTurnInput[] = [];
 	readonly released: string[] = [];
 	constructor(
 		readonly script: (input: BrainTurnInput) => BrainDelta[] = (input) => [
@@ -144,6 +145,7 @@ class Brain implements BrainPort {
 	}
 	async *runTurn(input: BrainTurnInput): AsyncIterable<BrainDelta> {
 		this.runs += 1;
+		this.inputs.push(input);
 		for (const delta of this.script(input)) yield delta;
 	}
 	async interrupt() {}
@@ -375,6 +377,8 @@ function createHarness(
 	});
 	if (options.collectBooking) {
 		expect(orchestrator.apply({ type: "connected" }).ok).toBe(true);
+		expect(orchestrator.apply({ type: "discovery_requested" }).ok).toBe(true);
+		expect(orchestrator.apply({ type: "value_ready" }).ok).toBe(true);
 		expect(orchestrator.apply({ type: "booking_offered" }).ok).toBe(true);
 		expect(orchestrator.apply({ type: "booking_accepted" }).ok).toBe(true);
 	}
@@ -700,6 +704,10 @@ describe("gateway fake full WebSocket path", () => {
 			{
 				name: "unrelated booking-offer stage",
 				advance(orchestrator: ConversationOrchestrator) {
+					expect(orchestrator.apply({ type: "discovery_requested" }).ok).toBe(
+						true,
+					);
+					expect(orchestrator.apply({ type: "value_ready" }).ok).toBe(true);
 					expect(orchestrator.apply({ type: "booking_offered" }).ok).toBe(true);
 				},
 				visitorText: "Расскажите об архитектуре без подбора времени.",
@@ -951,6 +959,112 @@ describe("gateway fake full WebSocket path", () => {
 						event.type === "error" && event.payload.code === "INVALID_EVENT",
 				),
 		).toBe(true);
+	});
+
+	test("direct meeting intent reaches one canonical hook-and-slots response, then accepts the next selection in collect", async () => {
+		const stt = new Stt();
+		const brain = new Brain((input) => {
+			if (input.stage === "GREETING") {
+				return [
+					{
+						type: "speech.delta",
+						turnId: input.turnId,
+						generationId: input.generationId,
+						text: "Чем занимается ваша компания?",
+					},
+					{
+						type: "turn.completed",
+						turnId: input.turnId,
+						generationId: input.generationId,
+						nextStage: "DISCOVERY",
+					},
+				];
+			}
+			if (input.stage === "DISCOVERY") {
+				const labels = input.schedulingContext.candidateMeetingSlots.map(
+					(candidate) => candidate.displayLabel,
+				);
+				expect(labels).toHaveLength(2);
+				return [
+					{
+						type: "speech.delta",
+						turnId: input.turnId,
+						generationId: input.generationId,
+						text: `По пользовательскому брифу Botamin, в этой отрасли были случаи: компании с AI-агентами увеличивали выручку на 10–15 миллионов рублей ежемесячно; без гарантий. Текущие варианты: ${labels[0]} или ${labels[1]}. Какой выбрать?`,
+					},
+					{
+						type: "turn.completed",
+						turnId: input.turnId,
+						generationId: input.generationId,
+						nextStage: "COLLECT_BOOKING",
+					},
+				];
+			}
+			expect(input.stage).toBe("COLLECT_BOOKING");
+			return [
+				{
+					type: "speech.delta",
+					turnId: input.turnId,
+					generationId: input.generationId,
+					text: "Как вас зовут?",
+				},
+				{
+					type: "turn.completed",
+					turnId: input.turnId,
+					generationId: input.generationId,
+				},
+			];
+		});
+		const harness = createHarness({ stt, brain, tts: null });
+		const socket = new Socket();
+		await connect(harness.session, socket);
+
+		stt.text = "Назначить встречу";
+		await sendUtterance(harness.session, socket, true, 0);
+		expect(harness.orchestrator.state.stage).toBe("DISCOVERY");
+		expect(brain.runs).toBe(1);
+		expect(brain.inputs[0]?.schedulingContext.candidateMeetingSlots).toEqual(
+			[],
+		);
+
+		const beforeDiscovery = socket.events().length;
+		stt.text = "Мы производим промышленное оборудование";
+		await sendUtterance(harness.session, socket, true, 1);
+		expect(harness.orchestrator.state.stage).toBe("COLLECT_BOOKING");
+		const discoveryTurn = brain.runs;
+		expect(discoveryTurn).toBe(2);
+		const discoveryEvents = socket.events().slice(beforeDiscovery);
+		const response = discoveryEvents
+			.filter((event) => event.type === "assistant.text.delta")
+			.map((event) => event.payload.text)
+			.join("");
+		expect(response).toContain("По пользовательскому брифу Botamin");
+		const labels = brain.inputs[1]?.schedulingContext.candidateMeetingSlots.map(
+			(candidate) => candidate.displayLabel,
+		);
+		expect(labels).toHaveLength(2);
+		for (const label of labels ?? []) expect(response).toContain(label);
+		expect(response?.match(/\?/gu)).toHaveLength(1);
+		const stageChanges = discoveryEvents
+			.filter((event) => event.type === "state.changed")
+			.map((event) => [event.payload.from, event.payload.to]);
+		expect(stageChanges).toEqual([
+			["DISCOVERY", "VALUE"],
+			["VALUE", "BOOKING_OFFER"],
+			["BOOKING_OFFER", "COLLECT_BOOKING"],
+		]);
+		expect(response).not.toContain("повторите");
+		expect(response).not.toContain("назначить встречу");
+		expect(response).not.toContain("Понимаю");
+
+		stt.text = "Первый вариант";
+		await sendUtterance(harness.session, socket, true, 2);
+		expect(brain.runs).toBe(3);
+		expect(brain.inputs[2]).toMatchObject({
+			stage: "COLLECT_BOOKING",
+			userText: "Первый вариант",
+		});
+		expect(harness.orchestrator.state.stage).toBe("COLLECT_BOOKING");
 	});
 
 	test("accepts one sequenced typed final through brain without STT or client booking authority", async () => {

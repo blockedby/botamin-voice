@@ -10,20 +10,29 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, resolve } from "node:path";
+import type { ReactionClipManifestEntry } from "../../apps/web/src/audio/reactionClipManifest";
 import {
 	REACTION_CLIP_IDS,
 	REACTION_CLIP_MANIFEST,
 } from "../../apps/web/src/audio/reactionClipManifest";
 import {
+	CANONICAL_TTS_WAV_FORMAT,
+	CanonicalTtsWavBytesSchema,
 	ConversationStageSchema,
 	isCompleteMp3File,
 	LOCAL_REACTION_CLIP_IDS,
 } from "../../packages/contracts/src";
-import { createDeterministicMp3Fixture } from "../../packages/test-fixtures/src";
 import {
+	createDeterministicMp3Fixture,
+	createDeterministicTtsWavFixture,
+} from "../../packages/test-fixtures/src";
+import {
+	COMMITTED_REACTION_PRODUCTION_PROFILE,
+	canonicalWavDurationMs,
 	generateLocalReactionClips,
 	mp3DurationMs,
 	PAID_OPT_IN_ENV,
+	type ProductionReactionProfile,
 	REACTION_CLIP_GENERATION_CORPUS,
 } from "../../scripts/generate-local-reaction-clips";
 
@@ -50,9 +59,8 @@ async function filesOrEmpty(path: string): Promise<string[]> {
 }
 
 describe("local reaction clip manifest and fixed copy", () => {
-	test("allowlists 12-16 unique same-origin MP3s in strict semantic classes", () => {
-		expect(REACTION_CLIP_MANIFEST.length).toBeGreaterThanOrEqual(12);
-		expect(REACTION_CLIP_MANIFEST.length).toBeLessThanOrEqual(16);
+	test("allowlists exactly 16 unique same-origin Sulafat WAVs in strict semantic classes", () => {
+		expect(REACTION_CLIP_MANIFEST).toHaveLength(16);
 		expect(REACTION_CLIP_MANIFEST.map(({ id }) => id)).toEqual([
 			...REACTION_CLIP_IDS,
 		]);
@@ -66,6 +74,7 @@ describe("local reaction clip manifest and fixed copy", () => {
 		for (const clip of REACTION_CLIP_MANIFEST) {
 			expect(Object.keys(clip).sort()).toEqual([
 				"allowedStages",
+				"contentType",
 				"id",
 				"maxBytes",
 				"maxDurationMs",
@@ -73,12 +82,13 @@ describe("local reaction clip manifest and fixed copy", () => {
 				"semanticClass",
 				"triggerIntent",
 			]);
-			expect(clip.path).toBe(`/assets/reactions/${clip.id}.mp3`);
-			expect(clip.path).toMatch(/^\/assets\/reactions\/[a-z0-9-]+\.mp3$/);
+			expect(clip.path).toBe(`/assets/reactions/${clip.id}.wav`);
+			expect(clip.path).toMatch(/^\/assets\/reactions\/[a-z0-9-]+\.wav$/);
+			expect(clip.contentType).toBe("audio/wav");
 			expect(clip.path).not.toMatch(/^(?:https?:)?\/\//);
 			expect(clip.path).not.toMatch(/[?#]|\.\./);
 			expect(clip.triggerIntent).toBe(semanticIntent[clip.semanticClass]);
-			expect(clip.maxDurationMs).toBe(1_250);
+			expect(clip.maxDurationMs).toBe(2_000);
 			expect(clip.maxBytes).toBe(128_000);
 			expect(clip.allowedStages.length).toBeGreaterThan(0);
 			for (const stage of clip.allowedStages) {
@@ -107,6 +117,11 @@ describe("local reaction clip manifest and fixed copy", () => {
 		expect(REACTION_CLIP_GENERATION_CORPUS.map(({ id }) => id)).toEqual([
 			...REACTION_CLIP_IDS,
 		]);
+		expect(
+			REACTION_CLIP_GENERATION_CORPUS.find(
+				({ id }) => id === "neutral-checking",
+			)?.text,
+		).toBe("Сейчас посмотрим.");
 		for (const { text } of REACTION_CLIP_GENERATION_CORPUS) {
 			expect(text).toMatch(/^[А-ЯЁ][А-Яа-яЁё ]+[.!?]$/u);
 			expect(Array.from(text).length).toBeLessThanOrEqual(28);
@@ -160,17 +175,57 @@ describe("local reaction clip generator safety", () => {
 		}
 	});
 
-	test("writes only a complete bounded mode-0644 fixture corpus atomically", async () => {
+	test("fails closed before provider initialization or writes for non-Sulafat production profiles", async () => {
+		const outputDirectory = await mkdtemp(
+			resolve(tmpdir(), "botamin-reaction-profile-gate-"),
+		);
+		const invalidProfiles: ProductionReactionProfile[] = [
+			{
+				profile: "xai_mp3",
+				model: "x-ai/grok-voice-tts-1.0",
+				voice: "eve",
+				responseFormat: "mp3",
+				outputContentType: "audio/mpeg",
+			},
+			{ ...COMMITTED_REACTION_PRODUCTION_PROFILE, voice: "Kore" },
+			{
+				...COMMITTED_REACTION_PRODUCTION_PROFILE,
+				responseFormat: "mp3",
+			},
+		];
+		let providerInitializations = 0;
+		try {
+			for (const productionProfile of invalidProfiles) {
+				const result = await generateLocalReactionClips({
+					mode: "production",
+					paidOptIn: "1",
+					productionProfile,
+					outputDirectory,
+					createSynthesizer: () => {
+						providerInitializations += 1;
+						throw new Error("must not initialize");
+					},
+				});
+				expect(result.status).toBe("failed");
+			}
+			expect(providerInitializations).toBe(0);
+			expect(await filesOrEmpty(outputDirectory)).toEqual([]);
+		} finally {
+			await rm(outputDirectory, { recursive: true, force: true });
+		}
+	});
+
+	test("writes only a complete bounded mode-0644 WAV fixture corpus atomically", async () => {
 		const outputDirectory = await mkdtemp(
 			resolve(tmpdir(), "botamin-reaction-fixture-"),
 		);
-		const fixture = createDeterministicMp3Fixture();
+		const fixture = createDeterministicTtsWavFixture();
 		try {
 			const result = await generateLocalReactionClips({
 				mode: "fixture",
 				outputDirectory,
 				createSynthesizer: () => async () => ({
-					contentType: "audio/mpeg",
+					contentType: "audio/wav",
 					bytes: fixture.slice(),
 				}),
 			});
@@ -190,10 +245,48 @@ describe("local reaction clip generator safety", () => {
 			for (const clip of REACTION_CLIP_MANIFEST) {
 				const path = resolve(outputDirectory, clip.path.slice(1));
 				const bytes = new Uint8Array(await readFile(path));
-				expect(isCompleteMp3File(bytes)).toBe(true);
+				expect(CanonicalTtsWavBytesSchema.safeParse(bytes).success).toBe(true);
 				expect(bytes.byteLength).toBeLessThanOrEqual(clip.maxBytes);
-				expect(mp3DurationMs(bytes)).toBeLessThanOrEqual(clip.maxDurationMs);
+				expect(canonicalWavDurationMs(bytes)).toBeLessThanOrEqual(
+					clip.maxDurationMs,
+				);
 				expect((await stat(path)).mode & 0o777).toBe(0o644);
+			}
+		} finally {
+			await rm(outputDirectory, { recursive: true, force: true });
+		}
+	});
+
+	test("supports xAI MP3 output only when extension and MIME match fixture policy", async () => {
+		const outputDirectory = await mkdtemp(
+			resolve(tmpdir(), "botamin-reaction-mp3-fixture-"),
+		);
+		const fixture = createDeterministicMp3Fixture();
+		const mp3Manifest = REACTION_CLIP_MANIFEST.map(
+			(entry) =>
+				({
+					...entry,
+					path: `/assets/reactions/${entry.id}.mp3`,
+					contentType: "audio/mpeg",
+				}) as ReactionClipManifestEntry,
+		);
+		try {
+			const result = await generateLocalReactionClips({
+				mode: "fixture",
+				outputDirectory,
+				assetManifest: mp3Manifest,
+				createSynthesizer: () => async () => ({
+					contentType: "audio/mpeg",
+					bytes: fixture.slice(),
+				}),
+			});
+			expect(result.status).toBe("generated");
+			for (const clip of mp3Manifest) {
+				const bytes = new Uint8Array(
+					await readFile(resolve(outputDirectory, clip.path.slice(1))),
+				);
+				expect(isCompleteMp3File(bytes)).toBe(true);
+				expect(mp3DurationMs(bytes)).toBeLessThanOrEqual(clip.maxDurationMs);
 			}
 		} finally {
 			await rm(outputDirectory, { recursive: true, force: true });
@@ -235,8 +328,8 @@ describe("local reaction clip generator safety", () => {
 				createSynthesizer: () => {
 					providerInitializations += 1;
 					return async () => ({
-						contentType: "audio/mpeg",
-						bytes: createDeterministicMp3Fixture(),
+						contentType: "audio/wav",
+						bytes: createDeterministicTtsWavFixture(),
 					});
 				},
 			});
@@ -253,6 +346,9 @@ describe("local reaction clip generator safety", () => {
 			resolve(tmpdir(), "botamin-reaction-invalid-"),
 		);
 		let calls = 0;
+		const existingDirectory = resolve(outputDirectory, "assets/reactions");
+		await mkdir(existingDirectory, { recursive: true });
+		await Bun.write(resolve(existingDirectory, "safe-existing.wav"), "safe");
 		try {
 			const result = await generateLocalReactionClips({
 				mode: "fixture",
@@ -260,16 +356,22 @@ describe("local reaction clip generator safety", () => {
 				createSynthesizer: () => async () => {
 					calls += 1;
 					return calls === 3
-						? { contentType: "audio/mpeg", bytes: new Uint8Array([1, 2, 3]) }
+						? { contentType: "audio/wav", bytes: new Uint8Array([1, 2, 3]) }
 						: {
-								contentType: "audio/mpeg",
-								bytes: createDeterministicMp3Fixture(),
+								contentType: "audio/wav",
+								bytes: createDeterministicTtsWavFixture(),
 							};
 				},
 			});
 			expect(result.status).toBe("failed");
 			expect(calls).toBe(3);
-			expect(await filesOrEmpty(outputDirectory)).toEqual([]);
+			expect(await filesOrEmpty(outputDirectory)).toEqual(["assets"]);
+			expect(await filesOrEmpty(existingDirectory)).toEqual([
+				"safe-existing.wav",
+			]);
+			expect(
+				await Bun.file(resolve(existingDirectory, "safe-existing.wav")).text(),
+			).toBe("safe");
 		} finally {
 			await rm(outputDirectory, { recursive: true, force: true });
 		}
@@ -277,14 +379,8 @@ describe("local reaction clip generator safety", () => {
 });
 
 describe("production asset and source separation", () => {
-	test("allows an absent production corpus, but never a partial or invalid one", async () => {
-		const files = (await filesOrEmpty(productionAssets))
-			.filter((file) => file.endsWith(".mp3"))
-			.sort();
-		if (files.length === 0) {
-			expect(files).toEqual([]);
-			return;
-		}
+	test("contains exactly the bounded canonical 24 kHz mono PCM16 WAV corpus without metadata or PII", async () => {
+		const files = (await filesOrEmpty(productionAssets)).sort();
 		expect(files).toEqual(
 			REACTION_CLIP_MANIFEST.map(({ path }) => basename(path)).sort(),
 		);
@@ -293,17 +389,45 @@ describe("production asset and source separation", () => {
 		for (const clip of REACTION_CLIP_MANIFEST) {
 			const path = resolve(projectRoot, "apps/web/public", clip.path.slice(1));
 			const bytes = new Uint8Array(await readFile(path));
-			const durationMs = mp3DurationMs(bytes);
-			expect(isCompleteMp3File(bytes)).toBe(true);
+			const durationMs = canonicalWavDurationMs(bytes);
+			const view = new DataView(
+				bytes.buffer,
+				bytes.byteOffset,
+				bytes.byteLength,
+			);
+			expect(CanonicalTtsWavBytesSchema.safeParse(bytes).success).toBe(true);
+			expect(view.getUint32(16, true)).toBe(16);
+			expect(view.getUint16(20, true)).toBe(1);
+			expect(view.getUint16(22, true)).toBe(CANONICAL_TTS_WAV_FORMAT.channels);
+			expect(view.getUint32(24, true)).toBe(
+				CANONICAL_TTS_WAV_FORMAT.sampleRate,
+			);
+			expect(view.getUint16(34, true)).toBe(
+				CANONICAL_TTS_WAV_FORMAT.bitsPerSample,
+			);
+			expect(view.getUint32(40, true)).toBe(
+				bytes.byteLength - CANONICAL_TTS_WAV_FORMAT.headerBytes,
+			);
 			expect(bytes.byteLength).toBeLessThanOrEqual(clip.maxBytes);
 			expect(durationMs).not.toBeNull();
 			expect(durationMs).toBeLessThanOrEqual(clip.maxDurationMs);
 			expect((await stat(path)).mode & 0o777).toBe(0o644);
+			const binary = Buffer.from(bytes);
+			for (const marker of [
+				"http://",
+				"https://",
+				"mailto:",
+				"телефон",
+				"почта",
+				"Authorization",
+			]) {
+				expect(binary.includes(Buffer.from(marker))).toBe(false);
+			}
 			totalBytes += bytes.byteLength;
 			totalDurationMs += durationMs ?? 0;
 		}
 		expect(totalBytes).toBeLessThanOrEqual(1_500_000);
-		expect(totalDurationMs).toBeLessThanOrEqual(20_000);
+		expect(totalDurationMs).toBeLessThanOrEqual(32_000);
 	});
 
 	test("keeps paid generation copy and backend dependencies out of browser runtime", async () => {
@@ -323,7 +447,16 @@ describe("production asset and source separation", () => {
 			/transcript|userText|generationId|apiKey/i,
 		);
 		expect(generatorSource).toContain("maxRetries: 0 as const");
+		expect(COMMITTED_REACTION_PRODUCTION_PROFILE).toEqual({
+			profile: "gemini_3_1_pcm",
+			model: "google/gemini-3.1-flash-tts-preview",
+			voice: "Sulafat",
+			responseFormat: "pcm",
+			outputContentType: "audio/wav",
+		});
 		expect(generatorSource).not.toMatch(/console\.(?:error|warn|debug)/);
+		expect(generatorSource).not.toMatch(/base64|providerBody|responseBody/i);
+		expect(generatorSource).not.toMatch(/console\.info\([^)]*(?:text|bytes)/s);
 		expect(PAID_OPT_IN_ENV).toBe("BOTAMIN_GENERATE_LOCAL_REACTION_CLIPS_PAID");
 		expect(packageJson.scripts["generate:reaction-clips:paid-opt-in"]).toBe(
 			"bun scripts/generate-local-reaction-clips.ts",

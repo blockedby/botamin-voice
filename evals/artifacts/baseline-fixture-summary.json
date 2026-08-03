@@ -12,9 +12,9 @@
 	"promptTuningClaimed": true,
 	"prompt": {
 		"sourceChangedByProactivePromptTask": true,
-		"sourceSha256": "2aa92977ff59d2715817c0bb9c54d7893c2387a9f4d826c0ec32ed1a54c54d21"
+		"sourceSha256": "69bb0270b4d1bbfef364b8d5a48de80fc0f9cc4123ae322a4b3cd55a1d08ff83"
 	},
-	"inputsSha256": "b26c0bd4a27e7e18e260994114da14a01f9144ae58ab4dd94e127cc2b187d00d",
+	"inputsSha256": "0b6b143db235f39d33aa0fd628e94c0ef43fbdb0ff0aaae976e4315fbd5cca91",
 	"fixture": {
 		"scenarioCount": 44,
 		"passedScenarios": 44,
@@ -31,8 +31,8 @@
 		"aggregatePass": true
 	},
 	"negativeControls": {
-		"count": 28,
-		"passed": 28,
+		"count": 30,
+		"passed": 30,
 		"detectorCoverage": [
 			"calendar_claim",
 			"exhaustive_availability_claim",
@@ -59,6 +59,8 @@
 		"ids": [
 			"prebooking-qualification",
 			"duplicate-booking-event",
+			"missing-canonical-hook",
+			"impossible-stage-transition",
 			"detector-fabricated_price",
 			"detector-unsupported_guarantee",
 			"detector-calendar_claim",

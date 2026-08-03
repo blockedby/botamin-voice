@@ -445,7 +445,7 @@ describe("typed and spoken server-owned draft completion", () => {
 				facts: {},
 				expectedStatus: "none",
 				expectedStage: "POST_BOOKING_QUALIFICATION",
-				expectedQuestion: "Сколько входящих лидов приходит за месяц?",
+				expectedQuestion: "Сколько заявок вы получаете за месяц?",
 				unexpectedQuestion: "Сколько менеджеров",
 				expectedQualificationWrites: 0,
 			},

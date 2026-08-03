@@ -10,9 +10,10 @@ Compiles the repository-owned Botamin Markdown prompts and knowledge into the on
 - `promptVersion` is the lowercase, 64-character SHA-256 hex digest of the exact UTF-8 bytes written to `AGENTS.md`.
 - Every file must be regular UTF-8 Markdown with its exact required headings, heading levels, and order.
 - A source file is limited to 16 KiB; the compiled bundle is limited to 128 KiB.
-- Secret-like material, hard-coded numeric currency prices, and allowlisted stale robotic or unsafe dialogue guidance fail compilation.
-- The exact booking-before-qualification invariant must exist in both `prompts/system.md` and `prompts/booking.md`.
-- Natural-dialogue invariants and bounded examples are required in active prompts and synchronized with `starter/prompts/`; examples must keep one question and no more than two spoken sentences.
+- Secret-like material, non-canonical numeric currency claims, and stale robotic, call/callback, connection-diagnosis, personal-name, or long-form guidance fail compilation.
+- The sole numeric revenue exception is the exact attributed, non-guaranteed user-brief hook enforced by compiler constants and tests.
+- Discovery and value must precede booking; the exact booking-before-qualification invariant remains required in both `prompts/system.md` and `prompts/booking.md`.
+- Natural-dialogue invariants and bad-to-concise examples are synchronized with `starter/prompts/`; ordinary speech targets one 6–14-word sentence and has a 22-word/eight-second ceiling.
 
 The heading allowlist is intentionally strict. A content owner adding or renaming a heading must review and update the compiler contract and focused tests in the same change.
 

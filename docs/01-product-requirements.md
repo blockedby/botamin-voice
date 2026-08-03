@@ -69,7 +69,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-VOICE-015:** browser scheduled playback привязывает следующий decoded segment к end time предыдущего. Credit window ограничен четырьмя segments / 20 MB / 5 MB per segment и максимум двумя decoded/source slots; credit возвращается после release.
 - **FR-VOICE-016:** default TTS profile — exact xAI/eve/MP3. Gemini 3.1 Flash TTS Preview включается только полным four-env PCM profile, fails closed on mismatch, server-side wraps PCM as complete canonical mono 24 kHz PCM16 WAV, and has no automatic fallback/model/voice selection.
 - **FR-VOICE-017:** server-owned style enum is `neutral|curious|serious|excited`; sensitive/authoritative facts always use neutral. Provider controls have no transcript, durable-state, or provider-selection effect; visible transcript stays plain.
-- **FR-VOICE-018:** The 16 committed same-origin reaction MP3s require negotiated allowlist capability and may play at most once per eligible turn after 350 ms. Runtime currently exposes only a non-claiming neutral clip; progress/validation/scheduling/booking/acceptance clips fail closed without an explicit trusted server operation signal. Reactions make zero runtime provider calls and cannot affect transcript, state, booking, tools, or provider behavior.
+- **FR-VOICE-018:** The 16 committed same-origin Sulafat reaction clips are canonical mono PCM16LE 24 kHz WAVs. They require negotiated allowlist capability and may play at most once per fail-closed safe-policy-eligible turn after 350 ms. Runtime currently exposes only a non-claiming neutral clip; claim-bearing progress/validation/scheduling/booking/acceptance clips fail closed without an explicit trusted server operation signal. Reactions make zero runtime provider calls and cannot affect transcript, state, booking, tools, or provider behavior.
 - **FR-TEXT-001:** `visitor.text.submit` содержит один trimmed final typed turn до 2,000 символов, monotonic sequence и не содержит provider/tool fields.
 - **FR-TEXT-002:** typed turn очищает uncommitted microphone bytes, допускает не более одного pending submit и считается принятым только после server `transcript.final`; rejected retry сохраняет sequence.
 - **FR-TEXT-003:** после final acceptance typed и spoken turns семантически равнозначны: один и тот же Luna context, server state policy, tools, persistence, assistant text и optional TTS.
@@ -83,7 +83,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-BRAIN-005:** ответы проходят speech sanitizer перед TTS.
 - **FR-BRAIN-006:** system/product/conversation prompts загружаются из Markdown.
 - **FR-BRAIN-007:** tool mode имеет feature flag: `dynamic` и стабильный fallback `envelope`.
-- **FR-BRAIN-008:** reasoning effort задаётся конфигурацией; стартовый профиль Luna использует минимальный уровень, который проходит quality evals.
+- **FR-BRAIN-008:** reasoning effort зафиксирован exact `low`: отсутствие значения default-ится в `low`, любое иное значение отклоняется до запуска Codex process для standard и priority.
 - **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, parsed time-of-day/concrete-date-time request и ровно два structured meeting candidates с concrete Moscow date/time labels.
 - **FR-BRAIN-010:** cadence умеренно проактивен: один вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting offer, без повторного давления после ясного отказа.
 - **FR-BRAIN-011:** ordinary spoken reply uses concise natural Russian: usually no more than two short sentences/about twelve seconds, one useful thought, and at most one question; filler acknowledgements and invented progress are forbidden.
@@ -121,7 +121,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-WEB-005A:** final meeting widget appears only from `session.ready.internalMeeting` or `internal.meeting.updated` derived from the durable booking; legacy UI state or transcript wording cannot synthesize it.
 - **FR-WEB-006:** mobile viewport поддерживается.
 - **FR-WEB-007:** при voice failure пользователю не показываются stack traces/provider details.
-- **FR-WEB-008:** proactive MP3 содержит только фиксированный product copy без visitor data. Его замена выполняется отдельным explicit admin opt-in OpenRouter generation script и commit-ится как static asset; runtime visit не генерирует greeting.
+- **FR-WEB-008:** proactive canonical WAV содержит только фиксированный product copy без visitor data. Его замена выполняется отдельным explicit admin opt-in OpenRouter generation script с exact Gemini PCM/Sulafat profile и commit-ится как static asset; runtime visit не генерирует greeting.
 - **FR-WEB-009:** playback `AudioContext` создаётся/resume-ится в synchronous consent gesture path до mic/network awaits; live WebKit acceptance remains a release gate.
 - **FR-WEB-010:** local reaction corpus generation is a separate explicit paid admin opt-in; committed assets are runtime-static and reaction fetch/decode failure is decoration-only.
 

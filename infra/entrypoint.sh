@@ -41,6 +41,13 @@ load_secret OPENROUTER_API_KEY /run/secrets/openrouter_api_key
 load_secret WEBHOOK_SIGNING_SECRET /run/secrets/webhook_signing_secret
 load_secret WEBHOOK_URL /run/secrets/webhook_url
 
+CODEX_EFFORT="${CODEX_EFFORT:-low}"
+export CODEX_EFFORT
+if [ "$CODEX_EFFORT" != "low" ]; then
+  log "CODEX_EFFORT must be exactly low"
+  exit 64
+fi
+
 require_uint CODEX_MAX_CONCURRENT_TURNS 1 32
 require_uint MAX_ACTIVE_CONVERSATIONS 1 100
 require_uint MAX_ACTIVE_CONVERSATIONS_PER_SOURCE 1 100
@@ -100,6 +107,13 @@ case "${AUTO_MIGRATE:-}" in
   true|false) ;;
   *)
     log "AUTO_MIGRATE must be true or false"
+    exit 64
+    ;;
+esac
+case "${CODEX_SERVICE_TIER:-}" in
+  ''|priority) ;;
+  *)
+    log "CODEX_SERVICE_TIER must be empty or priority"
     exit 64
     ;;
 esac

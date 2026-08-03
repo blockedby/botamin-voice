@@ -24,6 +24,7 @@ export function App({ createSession = createBrowserVoiceSession }: AppProps) {
 		state: { kind: "idle" },
 		transcript: [],
 		muted: false,
+		audioRecovery: "ready",
 		captureProgress: null,
 		conversationStage: null,
 		textInputAvailable: false,
@@ -55,6 +56,7 @@ export function App({ createSession = createBrowserVoiceSession }: AppProps) {
 				consent,
 				transcript: snapshot.transcript,
 				muted: snapshot.muted,
+				audioRecovery: snapshot.audioRecovery,
 				captureProgress: snapshot.captureProgress,
 				conversationStage: snapshot.conversationStage,
 				textInputAvailable: snapshot.textInputAvailable,
@@ -73,6 +75,7 @@ export function App({ createSession = createBrowserVoiceSession }: AppProps) {
 				onRetryPermission: () => {
 					void session?.retryPermission();
 				},
+				onRecoverAudio: () => session?.recoverAudioPlayback(),
 				onToggleMute: () => session?.toggleMute(),
 				onStop: () => {
 					void session?.stop();

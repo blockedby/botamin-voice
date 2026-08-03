@@ -1,6 +1,6 @@
 {"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":1,"type":"stage","stage":"GREETING"}
-{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}
-{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":3,"type":"tts_input","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Что в первой линии продаж сейчас мешает сильнее всего?"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте, я голосовой AI-консультант Botamin. Чем занимается ваша компания?"}
+{"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":3,"type":"tts_input","text":"Здравствуйте, я голосовой AI-консультант Botamin. Чем занимается ваша компания?"}
 {"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":4,"type":"message","role":"user","text":"Нужна демо по входящим.","semantics":["discovery_context"]}
 {"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":5,"type":"stage","stage":"DISCOVERY"}
 {"schemaVersion":1,"scenarioId":"post-booking-one-answer","sequence":6,"type":"stage","stage":"VALUE"}

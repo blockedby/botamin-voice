@@ -15,9 +15,9 @@
 - session start останавливает static greeting до REST/WS/mic/provider flow;
 - представиться как AI-продавец Botamin;
 - не маскироваться под человека;
-- одна реплика обычно 1–3 коротких предложения;
+- обычная реплика — одно предложение из 6–14 слов, не более 22 слов и примерно 8 секунд; второе короткое предложение только для ответа и вопроса;
 - один вопрос за раз;
-- умеренно проактивно предложить demo/встречу не позднее ответа на второй discovery-вопрос;
+- сначала выяснить отрасль/бизнес, затем дать единственный атрибутированный user-brief hook и только потом предложить 20-минутную экспертную видеовстречу;
 - не повторять уже собранные данные;
 - не спорить с ясным отказом;
 - после двух мягких отказов завершить без давления;
@@ -34,9 +34,9 @@
 
 ### PRE-CONSENT STATIC GREETING
 
-На entry browser немедленно и ровно один раз пытается проиграть committed same-origin `/assets/botamin-proactive-greeting.mp3` с фиксированным product copy. До consent этот controller не имеет conversation REST/WS, microphone, provider или session capabilities. `NotAllowedError`/media error раскрывает только user-action fallback `Включить приветствие`; начало real session останавливает и освобождает MP3.
+На entry browser немедленно и ровно один раз пытается проиграть committed same-origin `/assets/botamin-proactive-greeting.wav` с фиксированным product copy. До consent этот controller не имеет conversation REST/WS, microphone, provider или session capabilities. `NotAllowedError`/media error раскрывает только user-action fallback `Включить приветствие`; начало real session останавливает и освобождает WAV.
 
-Asset не содержит visitor data: администратор отдельно и явно запускает opt-in OpenRouter generation script для фиксированного текста, проверяет MP3 и commit-ит результат. Runtime visitor не инициирует генерацию.
+Asset не содержит visitor data: администратор отдельно и явно запускает opt-in OpenRouter generation script с точным Gemini PCM/Sulafat profile для фиксированного текста, проверяет canonical WAV и commit-ит результат. Runtime visitor не инициирует генерацию.
 
 ### GREETING
 
@@ -44,22 +44,17 @@ Asset не содержит visitor data: администратор отдел�
 
 Пример:
 
-> Здравствуйте! Я голосовой AI-продавец Botamin. Могу за пару минут разобрать, где у вас теряются лиды, и показать подходящий сценарий. Что сейчас важнее: входящие заявки, недозвоны или холодная база?
+> Я голосовой AI-консультант Botamin. Чем занимается ваша компания?
 
 ### DISCOVERY
 
-Найти роль/сценарий и основной bottleneck. Задавать по одному вопросу и не более двух discovery-вопросов до краткого мягкого предложения demo/встречи. Если intent очевиден раньше, переходить к value/offer без анкеты.
+Сначала выяснить отрасль или бизнес одним вопросом. `GREETING` никогда не получает slot context. Первый ответ об отрасли или бизнесе всегда получает одну canonical assistant response: дословный attributed hook, затем ровно два текущих server-owned 20-minute Moscow `displayLabel` и один вопрос выбора — без filler, повторного meeting intent или второго brain call. Brain предлагает `COLLECT_BOOKING`, а server применяет и публикует только эту ordered compound sequence: `DISCOVERY -> VALUE -> BOOKING_OFFER -> COLLECT_BOOKING`.
 
 ### VALUE
 
-Структура:
+В canonical discovery response использовать только этот hook, без другого кейса или числа:
 
-1. пересказать pain одной фразой;
-2. описать релевантный workflow Botamin;
-3. привести один case claim с атрибуцией, если помогает;
-4. проверить интерес.
-
-Число 10–15 млн ₽ в месяц допустимо только в точной атрибуции: это сообщение пользовательского брифа Botamin о прошлых результатах компаний, без независимой проверки, гарантии, прогноза или обещания собеседнику.
+> По пользовательскому брифу Botamin, в этой отрасли были случаи: компании с AI-агентами увеличивали выручку на 10–15 миллионов рублей ежемесячно; без гарантий.
 
 ### OBJECTION
 
@@ -71,13 +66,11 @@ Asset не содержит visitor data: администратор отдел�
 
 ### BOOKING_OFFER
 
-Не говорить «давайте созвонимся» без value bridge.
-
-> Похоже, у вас есть конкретный сценарий для пилота. Могу зафиксировать короткую демонстрацию с коллегой, чтобы он пришёл уже с вариантом процесса. Записать?
+Два текущих 20-minute Moscow candidates в canonical discovery response являются offer; отдельная filler-реплика или повторное согласие не нужны. Нельзя обещать звонок или callback: агент работает только в текущей сессии сайта.
 
 ### COLLECT_BOOKING
 
-После согласия использовать ровно два current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Typed/spoken time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
+Следующий typed/spoken turn сразу принимает выбор одного из двух уже предложенных current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
 
 Обязательный набор: accepted name, company, working email, phone or Telegram, one current candidate, and contact consent. Spoken and typed turns merge quoted fact proposals into the same durable `conversation_contexts.draft_json`. New conflicting values produce bounded explicit options instead of silent overwrite.
 
@@ -195,7 +188,7 @@ Prompt compiler:
 - собирает `/app/runtime-brain/AGENTS.md` — основной instruction source для Codex thread;
 - при необходимости копирует туда только разрешённые read-only knowledge-файлы; исходный repository туда не монтируется;
 - при `thread/start` проверяет, что `instructionSources` содержит ожидаемый `AGENTS.md`;
-- перед каждым `turn/start` одинаково разбирает typed/spoken time-band/concrete requests and adds compact machine-generated context from the durable draft: stage, accepted facts, conflicts, booking snapshot, server-owned Moscow date/day, exactly two concretely dated current candidates, allowed actions, and final user text;
+- перед каждым `turn/start` adds compact machine-generated context: stage, accepted facts, conflicts, booking snapshot, server-owned Moscow date/day, allowed actions, and final user text; exactly two dated candidates are withheld in `GREETING`/`DISCOVERY` and exposed only after completed discovery/value;
 - логирует только version/hash, не весь prompt;
 - поддерживает hot reload только в development: новый prompt version применяется к новым conversations, а активные сохраняют исходную версию.
 

@@ -1,0 +1,15 @@
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":1,"type":"stage","stage":"GREETING"}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте, я голосовой AI-консультант Botamin. Чем занимается ваша компания?"}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":3,"type":"tts_input","text":"Здравствуйте, я голосовой AI-консультант Botamin. Чем занимается ваша компания?"}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":4,"type":"message","role":"user","semantics":["discovery_context"],"text":"Хотим быстрее обрабатывать входящие заявки. Есть подтверждённый эффект?"}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":5,"type":"stage","stage":"DISCOVERY"}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":6,"type":"message","role":"assistant","text":"Для этой задачи подходит автоматизация первой линии."}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":7,"type":"tts_input","text":"Для этой задачи подходит автоматизация первой линии."}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":8,"type":"stage","stage":"VALUE"}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":9,"type":"message","role":"assistant","semantics":["booking_offer"],"text":"Могу предложить короткую видео-встречу, чтобы обсудить проверяемый пилот. Интересно?"}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":10,"type":"tts_input","text":"Могу предложить короткую видео-встречу, чтобы обсудить проверяемый пилот. Интересно?"}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":11,"type":"stage","stage":"BOOKING_OFFER"}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":12,"type":"message","role":"user","text":"Нет, встреча не нужна."}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":13,"type":"stage","stage":"DECLINED"}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":14,"type":"message","role":"assistant","semantics":["clear_refusal"],"text":"Не буду продолжать. Спасибо!"}
+{"schemaVersion":1,"scenarioId":"user-brief-revenue-claim","sequence":15,"type":"tts_input","text":"Не буду продолжать. Спасибо!"}

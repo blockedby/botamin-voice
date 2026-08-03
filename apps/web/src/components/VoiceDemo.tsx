@@ -4,6 +4,7 @@ import { FinalMeetingWidget } from "./FinalMeetingWidget";
 import { ProactiveGreeting, useProactiveGreeting } from "./ProactiveGreeting";
 import { TextChat } from "./TextChat";
 import type {
+	AudioRecoveryUiState,
 	BookingConflictSelection,
 	BookingFormSubmission,
 	FinalTranscriptEntry,
@@ -30,6 +31,7 @@ export interface VoiceDemoActions {
 	onStart: () => void;
 	onCommit: () => void;
 	onRetryPermission: () => void;
+	onRecoverAudio: () => void;
 	onToggleMute: () => void;
 	onStop: () => void;
 	onInterrupt: () => void;
@@ -47,6 +49,7 @@ export interface VoiceDemoProps
 	consent: VoiceConsent;
 	transcript: readonly FinalTranscriptEntry[];
 	muted: boolean;
+	audioRecovery: AudioRecoveryUiState;
 	captureProgress: VoiceCaptureProgress | null;
 }
 
@@ -650,6 +653,17 @@ export function VoiceDemo(props: VoiceDemoProps) {
 			/>
 
 			<div className="voice-actions">
+				{props.audioRecovery === "gesture-required" ? (
+					<ControlButton
+						className="is-emphasized"
+						onClick={props.onRecoverAudio}
+					>
+						<span className="control-icon" aria-hidden="true">
+							▶
+						</span>
+						Восстановить звук
+					</ControlButton>
+				) : null}
 				<StateActions {...stateActions} />
 				{showSessionControls ? (
 					<fieldset className="session-controls">

@@ -10,8 +10,8 @@
 - Ошибки providers не пробрасываются клиенту напрямую.
 - Binary WebSocket frames несут client PCM16 input или один полный provider-neutral server MP3/canonical-WAV phrase payload; raw provider PCM/network chunks никогда не публикуются как playable audio.
 - Tool handlers не доступны как публичные HTTP endpoints.
-- Proactive greeting не является API/session contract: page entry делает один same-origin GET/playback static MP3, без conversation REST/WS/mic/provider/session до обоих consents. Blocked/error fallback — `Включить приветствие`; session start прекращает static playback.
-- Committed proactive greeting и 16 reaction MP3s — same-origin static product assets without visitor data. Their generation is explicit paid admin opt-in; visitor runtime never synthesizes them, and reactions have no transcript/state/provider/business effect.
+- Proactive greeting не является API/session contract: page entry делает один same-origin GET/playback static canonical WAV, без conversation REST/WS/mic/provider/session до обоих consents. Blocked/error fallback — `Включить приветствие`; session start прекращает static playback.
+- The committed Sulafat proactive greeting WAV and 16 Sulafat canonical mono PCM16LE 24 kHz reaction WAVs are same-origin static product assets without visitor data. Their generation is explicit paid admin opt-in; reaction regeneration also requires the exact Gemini PCM/Sulafat production profile. Visitor runtime never synthesizes them, and reactions have no transcript/state/provider/business effect.
 
 ## 2. REST endpoints
 
@@ -69,7 +69,7 @@ Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`. Application 
 
 - DB write/read;
 - Codex app-server handshake;
-- наличие auth и модели Luna в `model/list`;
+- наличие auth и exact Luna/`low` в `model/list`; если запрошен `CODEX_SERVICE_TIER=priority`, exact Luna entry обязан рекламировать service-tier id `priority`, иначе readiness возвращает `CODEX_MODEL_OR_TIER_UNAVAILABLE` (отсутствующее legacy-поле допустимо только для standard service);
 - ровно один `OPENROUTER_API_KEY` для обоих voice paths;
 - при `STT_PROVIDER=openrouter`: schema-valid audio-input model/`wav`/language, utterance byte/time limits и request timeout/retry limits; readiness не утверждает наличие provider streaming session;
 - при `TTS_PROVIDER=openrouter`: one exact schema-valid profile (`xai_mp3` → xAI/eve/MP3 by default, or complete opt-in `gemini_3_1_pcm` → Preview model/case-sensitive snapshot voice/PCM), queue/circuit state and text-only startup policy; readiness makes no paid call and selects no fallback;

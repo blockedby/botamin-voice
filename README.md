@@ -12,9 +12,11 @@
 
 ## What this repository runs
 
-Botamin is a full-stack landing page with a browser voice AI seller. On page entry it immediately makes one playback attempt for the committed, product-owned same-origin `/assets/botamin-proactive-greeting.mp3`. This static greeting path creates no conversation, REST call, WebSocket, microphone request, provider call, or session before both consents. If autoplay is blocked or media loading fails, the UI shows `Включить приветствие`; starting a real session stops and releases the greeting.
+Botamin is a full-stack landing page with a browser voice AI seller. On page entry it immediately makes one playback attempt for the committed, product-owned same-origin `/assets/botamin-proactive-greeting.wav`. This static greeting path creates no conversation, REST call, WebSocket, microphone request, provider call, or session before both consents. If autoplay is blocked or media loading fails, the UI shows `Включить приветствие`; starting a real session stops and releases the greeting.
 
 After consent, the browser sends bounded PCM16 chunks to the backend; after `audio.commit`, the gateway creates one validated WAV for an atomic OpenRouter STT request. A secure provider-neutral `visitor.text.submit` path accepts a final typed turn through the same transcript, Luna, policy, tool, and persistence flow. One final transcript goes to Codex app-server with `gpt-5.6-luna`; OpenRouter TTS returns complete provider-neutral phrase segments. Each utterance is capped at 60 seconds and the atomic STT WAV at 2,000,000 bytes. The circular countdown is derived from accepted 16 kHz PCM16 samples and the stricter server-advertised duration/byte ceiling, not wall time.
+
+Luna remains fixed at reasoning effort `low`, its lowest supported setting; reasoning cannot be disabled. A missing `CODEX_EFFORT` defaults to `low`, while any non-`low` value fails before the Codex process starts for both standard and priority service. `CODEX_SERVICE_TIER` defaults to empty standard service for portability. A local subscription owner may set exact `priority` for the Codex-advertised Fast tier (1.5x speed with increased subscription usage), but this provides no latency SLA. Readiness accepts Luna only when both advertised `id` and `model` equal the configured model; missing or contradictory identity fields fail closed, as does a missing requested tier.
 
 The backend always supplies exactly two structured internal 20-minute `Europe/Moscow` candidates with a concrete date and time. With no preference the pair defaults to one morning and one evening option. A bounded Russian parser applies typed or spoken morning/day/second-half/evening preferences, rejections, and supported concrete Moscow date/time requests; the server returns either the exact permitted start plus one alternative or the nearest two internal starts. Every option is a non-today weekday start on the 20-minute grid from 09:00 through 17:00 Moscow time. These are two current internal alternatives—not all global availability—and already committed internal starts are excluded without querying or creating a real calendar/CRM event or invitation.
 
@@ -26,7 +28,7 @@ After truthful confirmation of that internal meeting, optional qualification sta
 
 The default remains OpenRouter `x-ai/grok-voice-tts-1.0` / `eve` / complete MP3 (`OPENROUTER_TTS_PROFILE=xai_mp3`) unless the environment profile is deliberately changed. Natural delivery improvements shared by both profiles are concise conversational speech prompts, two ordered in-flight synthesis requests (current + one prefetch), provider-neutral MP3/WAV rendering, gapless Web Audio scheduling, and a four-segment/20 MB credit window with at most two decoded segments. The output `AudioContext` is created/resumed in the consent gesture.
 
-A sixteen-clip same-origin reaction corpus is committed. Runtime may play at most one policy-eligible clip after a 350 ms delay, only after capability negotiation; the current fail-closed policy exposes only the non-claiming `neutral-moment` clip. Progress, validation, scheduling, booking, and acceptance clips remain runtime-unreachable until a future explicit trusted operation signal exists. Reactions do not alter transcript, state, provider selection, or business effects and make zero runtime provider calls. Regenerating the corpus is an explicit paid administrator opt-in. This does not change the separately allowed static same-origin proactive greeting, and no conversation/provider behavior occurs before both consents.
+A sixteen-clip same-origin Sulafat corpus is committed as canonical mono PCM16LE 24 kHz WAV. Runtime may play at most one fail-closed policy-eligible clip after a 350 ms delay, only after capability negotiation; the current policy exposes only the non-claiming `neutral-moment` clip. Claim-bearing progress, validation, scheduling, booking, and acceptance clips remain runtime-unreachable until a future explicit trusted server operation signal exists. Reactions do not alter transcript, state, provider selection, or business effects and make zero runtime provider calls. Regenerating this committed corpus requires the exact Gemini PCM/Sulafat production profile plus an explicit paid administrator opt-in. This does not change the separately allowed static same-origin proactive greeting, and no conversation/provider behavior occurs before both consents.
 
 Gemini is an explicit Preview profile, not a default or fallback:
 
@@ -67,6 +69,22 @@ Run the canonical credential-free test suite with `bun run test`; it excludes ig
 
 ## Local operations
 
+### Owner dialogue export
+
+```bash
+# Defaults explicitly to the running Compose app and its /data/app.db named volume.
+bun run dialogues:export
+# Optional, mutually exclusive conversation selectors:
+bun run dialogues:export --limit 10
+bun run dialogues:export --all
+bun run dialogues:export --conversation <ULID-or-UUIDv7>
+
+# Direct access is never inferred from DATABASE_URL. Select it and name an absolute DB.
+bun run dialogues:export --source direct --database /absolute/path/to/app.db
+```
+
+This executable owner command reads a consistent, read-only SQLite snapshot and atomically writes protected Markdown under `.runtime/dialogues/`. Compose is the default even when the repository `.env` defines `DATABASE_URL`; direct access requires `--source direct` plus either `--database` or the dedicated `BOTAMIN_DIALOGUE_EXPORT_DATABASE_URL`. The default conversation selector is latest; `--limit` is `1..100`, while `--all` fails above 100. Output contains only non-persisted structural headings and role-labelled `Вы`/`Botamin` transcript text. Only aggregate status/count/path reaches the terminal—never transcript text. Exports can contain visitor PII, are owner-managed separately from the DB's 30-day transcript retention, and must be deleted separately. See [`docs/12-dialogue-export.md`](docs/12-dialogue-export.md) for exclusions and safeguards.
+
 ```bash
 # Service state
 docker compose ps
@@ -96,7 +114,7 @@ Never use `docker compose down -v` on a host with bookings or Codex auth. Restor
 8. Phrase-level STT adds accepted end-of-turn latency; local synthetic timings and the isolated Gemini smoke are not quality or hosting benchmarks.
 9. Typed and spoken final turns have the same semantic authority; neither exposes provider or tool controls.
 10. A booking uses exactly one of the two current server-supplied, concretely dated internal Moscow slots; stale revisions and non-candidate slots are rejected.
-11. The pre-consent proactive greeting is one static same-origin MP3 attempt and cannot create a session or invoke microphone/provider capabilities.
+11. The pre-consent proactive greeting is one static same-origin canonical-WAV attempt and cannot create a session or invoke microphone/provider capabilities.
 12. The two candidates are current internal alternatives, never a claim of exhaustive global availability; the meeting remains committed across skipped or partial optional qualification.
 13. Browser draft projections exclude provenance/evidence; arbitrary contacts remain redacted from TTS.
 
@@ -112,7 +130,8 @@ Never use `docker compose down -v` on a host with bookings or Codex auth. Restor
 | `docs/08-testing-and-acceptance.md` | tests and local/later release gates |
 | `docs/09-agent-task-plan.md` | task dependencies and T40 status |
 | `docs/11-local-release-handoff.md` | local RC runbook, checklist, limitations, rollback |
+| `docs/12-dialogue-export.md` | manual protected owner transcript export |
 | `evidence/T30-observed-local-voice-smoke-2026-07-31.md` | historical redacted owner-observed local provider path |
-| `FULL_SPEC.md` / `technical-spec.html` | generated specification; not updated by this docs-only change |
+| `FULL_SPEC.md` / `technical-spec.html` | generated views of the authoritative `docs/*.md` source documents |
 
 The unavailable Notion source remains a known research limitation; see the detailed scope and research documents before changing product claims.

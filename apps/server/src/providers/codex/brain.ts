@@ -285,6 +285,7 @@ const SAFE_THREAD_CONFIG = {
 export interface CodexBrainOptions {
 	model: string;
 	effort: string;
+	serviceTier?: "priority";
 	toolMode: BrainToolMode;
 	runtimeCwd: string;
 	turnTimeoutMs: number;
@@ -329,9 +330,15 @@ export class CodexAppServerBrain implements BrainPort {
 	private readonly activeByThread = new Map<string, ActiveTurn>();
 	private readonly providerTurnByExternal = new Map<string, string>();
 	private readonly boundClients = new WeakSet<JsonlRpcClient>();
+	private readonly serviceTier: "priority" | undefined;
 	private runtimeAgentsPath: string | undefined;
 
 	constructor(private readonly options: CodexBrainOptions) {
+		if (options.effort !== "low")
+			throw new Error("Codex reasoning effort must be exactly low");
+		if (options.serviceTier !== undefined && options.serviceTier !== "priority")
+			throw new Error("Codex service tier must be empty or priority");
+		this.serviceTier = options.serviceTier;
 		if (options.toolMode === "dynamic" && !options.executeTool)
 			throw new Error(
 				"Codex dynamic tools require an awaited backend executor",
@@ -490,7 +497,8 @@ export class CodexAppServerBrain implements BrainPort {
 					sandboxPolicy: { type: "readOnly", networkAccess: false },
 					environments: [],
 					model: this.options.model,
-					effort: this.options.effort,
+					effort: "low",
+					...(this.serviceTier ? { serviceTier: this.serviceTier } : {}),
 					...(this.options.toolMode === "envelope"
 						? { outputSchema: BRAIN_ENVELOPE_OUTPUT_SCHEMA }
 						: {}),
@@ -629,23 +637,32 @@ export class CodexAppServerBrain implements BrainPort {
 				);
 				const model = models.data.find(
 					(entry) =>
-						entry.id === this.options.model ||
+						entry.id === this.options.model &&
 						entry.model === this.options.model,
 				);
 				if (model) {
-					found =
+					const effortSupported =
 						!model.supportedReasoningEfforts ||
 						model.supportedReasoningEfforts.some(
-							(entry) => entry.reasoningEffort === this.options.effort,
+							(entry) => entry.reasoningEffort === "low",
 						);
+					const tierSupported =
+						this.serviceTier === undefined ||
+						model.serviceTiers?.some((tier) => tier.id === this.serviceTier) ===
+							true;
+					found = effortSupported && tierSupported;
 					break;
 				}
 				cursor = models.nextCursor;
 				if (!cursor) break;
 			}
-			return found
-				? { status: "healthy" }
-				: { status: "unavailable", code: "CODEX_MODEL_OR_EFFORT_UNAVAILABLE" };
+			if (found) return { status: "healthy" };
+			return {
+				status: "unavailable",
+				code: this.serviceTier
+					? "CODEX_MODEL_OR_TIER_UNAVAILABLE"
+					: "CODEX_MODEL_OR_EFFORT_UNAVAILABLE",
+			};
 		} catch {
 			return { status: "unavailable", code: "CODEX_PREFLIGHT_FAILED" };
 		}
@@ -1044,6 +1061,15 @@ export function createCodexBrainFromEnv(
 		throw new Error("CODEX_HOME must be an absolute path");
 	if (!runtimeCwd || !isAbsolute(runtimeCwd))
 		throw new Error("CODEX_CWD must be an absolute path");
+	const effort = env.CODEX_EFFORT ?? "low";
+	if (effort !== "low") throw new Error("CODEX_EFFORT must be exactly low");
+	const serviceTier = env.CODEX_SERVICE_TIER;
+	if (
+		serviceTier !== undefined &&
+		serviceTier !== "" &&
+		serviceTier !== "priority"
+	)
+		throw new Error("CODEX_SERVICE_TIER must be empty or priority");
 	const requestTimeoutMs = positiveInt(env.CODEX_REQUEST_TIMEOUT_MS, 10_000);
 	const supervisor = new CodexProcessSupervisor({
 		codexBin: env.CODEX_BIN ?? "codex",
@@ -1060,7 +1086,8 @@ export function createCodexBrainFromEnv(
 		throw new Error("CODEX_TOOL_MODE must be dynamic or envelope");
 	return new CodexAppServerBrain({
 		model: env.CODEX_MODEL ?? "gpt-5.6-luna",
-		effort: env.CODEX_EFFORT ?? "low",
+		effort: "low",
+		...(serviceTier === "priority" ? { serviceTier } : {}),
 		toolMode,
 		runtimeCwd,
 		turnTimeoutMs: positiveInt(env.TURN_TIMEOUT_MS, 30_000),

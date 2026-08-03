@@ -45,7 +45,8 @@ export interface RuntimeConfig {
 	readonly brain: {
 		readonly provider: "codex-subscription";
 		readonly model: "gpt-5.6-luna";
-		readonly effort: string;
+		readonly effort: "low";
+		readonly serviceTier?: "priority";
 		readonly toolMode: "envelope";
 		readonly codexHome: string;
 		readonly cwd: string;
@@ -96,10 +97,21 @@ function boolean(env: Environment, name: string, fallback: boolean): boolean {
 	throw new RuntimeConfigError(name);
 }
 
-function exact(env: Environment, name: string, expected: string): string {
+function exact<const Expected extends string>(
+	env: Environment,
+	name: string,
+	expected: Expected,
+): Expected {
 	const value = env[name] ?? expected;
 	if (value !== expected) throw new RuntimeConfigError(name);
-	return value;
+	return expected;
+}
+
+function codexServiceTier(env: Environment): "priority" | undefined {
+	const value = env.CODEX_SERVICE_TIER;
+	if (value === undefined || value === "") return undefined;
+	if (value === "priority") return value;
+	throw new RuntimeConfigError("CODEX_SERVICE_TIER");
 }
 
 function absolutePath(env: Environment, name: string): string {
@@ -171,6 +183,7 @@ function notifierConfig(env: Environment): RuntimeConfig["notifier"] {
 export function createRuntimeConfig(env: Environment = Bun.env): RuntimeConfig {
 	exact(env, "BRAIN_PROVIDER", "codex-subscription");
 	exact(env, "CODEX_MODEL", "gpt-5.6-luna");
+	const serviceTier = codexServiceTier(env);
 	exact(env, "CODEX_TOOL_MODE", "envelope");
 	exact(env, "STT_PROVIDER", "openrouter");
 	exact(env, "TTS_PROVIDER", "openrouter");
@@ -317,7 +330,8 @@ export function createRuntimeConfig(env: Environment = Bun.env): RuntimeConfig {
 		brain: {
 			provider: "codex-subscription",
 			model: "gpt-5.6-luna",
-			effort: env.CODEX_EFFORT?.trim() || "low",
+			effort: exact(env, "CODEX_EFFORT", "low"),
+			...(serviceTier ? { serviceTier } : {}),
 			toolMode: "envelope",
 			codexHome: absolutePath(env, "CODEX_HOME"),
 			cwd: absolutePath(env, "CODEX_CWD"),

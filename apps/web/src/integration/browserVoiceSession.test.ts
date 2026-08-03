@@ -8,7 +8,10 @@ import {
 	encodeBinaryAudioFrame,
 	type InternalVirtualMeetingProjection,
 } from "@botamin/contracts";
-import { createDeterministicMp3Fixture } from "../../../../packages/test-fixtures/src";
+import {
+	createDeterministicMp3Fixture,
+	createDeterministicTtsWavFixture,
+} from "../../../../packages/test-fixtures/src";
 import {
 	type AudioPlaybackApis,
 	type CompletePlaybackSegment,
@@ -44,6 +47,21 @@ const segmentId = "01J00000000000000000000005";
 const bookingId = "01J00000000000000000000006";
 const at = "2026-07-30T20:22:00.000Z";
 const consent = { voiceProcessing: true, contactProcessing: true } as const;
+
+class FakeLifecycleTarget {
+	private readonly listeners = new Map<string, Set<() => void>>();
+	addEventListener(type: string, listener: () => void): void {
+		const listeners = this.listeners.get(type) ?? new Set<() => void>();
+		listeners.add(listener);
+		this.listeners.set(type, listeners);
+	}
+	removeEventListener(type: string, listener: () => void): void {
+		this.listeners.get(type)?.delete(listener);
+	}
+	dispatch(type: string): void {
+		for (const listener of this.listeners.get(type) ?? []) listener();
+	}
+}
 
 class FakeSocket implements WebSocketLike {
 	readyState = 0;
@@ -508,6 +526,23 @@ describe("production browser voice integration", () => {
 		capture.emit(new Uint8Array([1, 0]));
 		expect(socket.sent.some((item) => item instanceof Uint8Array)).toBe(true);
 		await value.session.stop();
+	});
+
+	test("projects a gesture recovery action only after automatic output recovery is blocked", async () => {
+		const value = await readySession();
+		const playback = value.playbacks[0];
+		if (!playback) throw new Error("playback missing");
+		expect(value.session.getSnapshot().audioRecovery).toBe("ready");
+
+		playback.options.onRecoveryStateChange?.("recovering");
+		expect(value.session.getSnapshot().audioRecovery).toBe("ready");
+		playback.options.onRecoveryStateChange?.("gesture-required");
+		expect(value.session.getSnapshot().audioRecovery).toBe("gesture-required");
+
+		value.session.recoverAudioPlayback();
+		expect(playback.resumeCalls).toBe(2);
+		playback.options.onRecoveryStateChange?.("ready");
+		expect(value.session.getSnapshot().audioRecovery).toBe("ready");
 	});
 
 	test("fails closed when session.ready drifts from the REST audio limits", async () => {
@@ -1479,7 +1514,7 @@ describe("production browser voice integration", () => {
 		expect(value.session.getSnapshot().state.kind).not.toBe("speaking");
 	});
 
-	test("plays four fast WS segments in order before the first ends without text-only degradation", async () => {
+	test("keeps a sealed four-segment WS turn queued across background suspension", async () => {
 		class OrderedSource implements PlaybackSourceLike {
 			onended: (() => void) | null = null;
 			readonly starts: number[] = [];
@@ -1495,6 +1530,11 @@ describe("production browser voice integration", () => {
 			}
 		}
 		const sources: OrderedSource[] = [];
+		const context = new FakeLifecycleTarget();
+		const windowTarget = new FakeLifecycleTarget();
+		const documentTarget = new FakeLifecycleTarget();
+		let contextState = "running";
+		let visibilityState = "visible";
 		let decoded = 0;
 		const apis: AudioPlaybackApis<number> = {
 			decodeAudioData: async () => decoded++,
@@ -1503,9 +1543,22 @@ describe("production browser voice integration", () => {
 				sources.push(source);
 				return source;
 			},
-			resume: async () => undefined,
+			resume: async () => {
+				if (visibilityState === "hidden") {
+					throw new Error("background resume forbidden");
+				}
+				contextState = "running";
+				context.dispatch("statechange");
+			},
 			currentTime: () => 0,
 			duration: () => 1,
+			recovery: {
+				context,
+				window: windowTarget,
+				document: documentTarget,
+				getContextState: () => contextState,
+				getVisibilityState: () => visibilityState,
+			},
 		};
 		const queues: PhrasePlaybackQueue<number>[] = [];
 		const value = await readySession(
@@ -1561,6 +1614,13 @@ describe("production browser voice integration", () => {
 			),
 		).toHaveLength(0);
 
+		visibilityState = "hidden";
+		contextState = "suspended";
+		context.dispatch("statechange");
+		documentTarget.dispatch("visibilitychange");
+		documentTarget.dispatch("visibilitychange");
+		windowTarget.dispatch("blur");
+		await flush();
 		value.socket.server(
 			event("assistant.text.done", 8, {
 				generationId,
@@ -1568,6 +1628,18 @@ describe("production browser voice integration", () => {
 			}),
 		);
 		value.socket.server(event("assistant.audio.done", 9, { generationId }));
+		await flush();
+		expect(value.session.getSnapshot().state.kind).toBe("speaking");
+		expect(
+			sentJson(value.socket).filter(
+				(item) => item.type === "playback.segment.released",
+			),
+		).toHaveLength(0);
+
+		visibilityState = "visible";
+		documentTarget.dispatch("visibilitychange");
+		windowTarget.dispatch("focus");
+		await flush();
 		for (let index = 0; index < 4; index += 1) {
 			sources[index]?.finish();
 			await flush();
@@ -1611,6 +1683,7 @@ describe("production browser voice integration", () => {
 		};
 		const queues: PhrasePlaybackQueue<number>[] = [];
 		const fixture = createDeterministicMp3Fixture();
+		const reactionFixture = createDeterministicTtsWavFixture();
 		const value = await readySession(
 			harness({
 				createPlayback: (options) => {
@@ -1627,8 +1700,15 @@ describe("production browser voice integration", () => {
 						fetch: async () => ({
 							ok: true,
 							status: 200,
-							headers: { get: () => String(fixture.byteLength) },
-							arrayBuffer: async () => fixture.slice().buffer,
+							headers: {
+								get: (name: string) =>
+									name.toLowerCase() === "content-length"
+										? String(reactionFixture.byteLength)
+										: name.toLowerCase() === "content-type"
+											? "audio/wav"
+											: null,
+							},
+							arrayBuffer: async () => reactionFixture.slice().buffer,
 						}),
 					});
 					queues.push(playback);

@@ -26,7 +26,15 @@ The deployment wrappers require a nonblank OpenRouter key. Raw unconfigured
 `/dev/null`; a raw start is intentionally degraded and `/health/ready` stays
 unready rather than receiving a hidden credential. `CODEX_TOOL_MODE=envelope`
 is the safe default because environment-only app wiring cannot inject the
-awaited backend executor required by A3 dynamic mode.
+awaited backend executor required by A3 dynamic mode. Codex stays on
+`gpt-5.6-luna` with exact reasoning effort `low`; missing defaults to `low`,
+and every non-`low` value is rejected before the Codex process starts for
+standard and priority. Luna does not support disabled reasoning. Leave
+`CODEX_SERVICE_TIER=` empty for portable standard service, or let the local
+subscription owner set exact `priority`. Pinned Codex CLI 0.146.0 advertises
+priority as Fast/1.5x speed with increased subscription usage; it has no latency
+SLA. Startup and readiness reject unsupported values or an exact Luna catalog
+entry that does not advertise priority.
 
 ```bash
 cp .env.example .env
@@ -44,7 +52,7 @@ docker compose exec -T app bun /app/ops/db.js verify-rc4
 
 That check is PII-safe and verifies SQLite integrity, exact RC4 context columns/FK/check constraints, persisted JSON revision/timestamp consistency, foreign keys, and absence of duplicate fact/evidence/virtual-meeting tables.
 
-The default `.env.example` profile is `xai_mp3` / `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`. Browser playback is provider-neutral and bounded; output `AudioContext` is owned by the consent gesture. The 16 committed same-origin reaction assets make zero runtime provider calls and should not be regenerated during deployment.
+The default `.env.example` profile is `xai_mp3` / `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`. Browser dynamic playback is provider-neutral and bounded; output `AudioContext` is owned by the consent gesture. The 16 committed same-origin reaction assets are Sulafat canonical mono PCM16LE 24 kHz WAVs, make zero runtime provider calls, and should not be regenerated during deployment.
 
 Caddy proxies WebSocket upgrades automatically. `docker compose down` preserves
 all named volumes; never use `down -v` on a host containing real bookings or

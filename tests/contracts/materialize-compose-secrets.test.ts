@@ -249,6 +249,7 @@ describe.skipIf(!composeAvailable)("file-backed Compose rendering", () => {
 		delete environment.OPENROUTER_API_KEY_FILE;
 		delete environment.WEBHOOK_URL_FILE;
 		delete environment.WEBHOOK_SIGNING_SECRET_FILE;
+		delete environment.CODEX_SERVICE_TIER;
 		const child = Bun.spawn(
 			[
 				"docker",
@@ -264,8 +265,10 @@ describe.skipIf(!composeAvailable)("file-backed Compose rendering", () => {
 		const stdout = await new Response(child.stdout).text();
 		expect(await child.exited).toBe(0);
 		const config = JSON.parse(stdout) as {
+			services: { app: { environment: Record<string, string> } };
 			secrets: Record<string, { file: string }>;
 		};
+		expect(config.services.app.environment.CODEX_SERVICE_TIER).toBe("");
 		expect(Object.values(config.secrets).map(({ file }) => file)).toEqual([
 			"/dev/null",
 			"/dev/null",

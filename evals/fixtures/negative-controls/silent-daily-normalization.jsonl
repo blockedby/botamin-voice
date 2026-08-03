@@ -1,6 +1,6 @@
 {"schemaVersion":1,"scenarioId":"rc4-daily-basis-clarification","sequence":1,"type":"stage","stage":"GREETING"}
-{"schemaVersion":1,"scenarioId":"rc4-daily-basis-clarification","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Какой сценарий продаж хотите обсудить?"}
-{"schemaVersion":1,"scenarioId":"rc4-daily-basis-clarification","sequence":3,"type":"tts_input","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Какой сценарий продаж хотите обсудить?"}
+{"schemaVersion":1,"scenarioId":"rc4-daily-basis-clarification","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте, я голосовой AI-консультант Botamin. Чем занимается ваша компания?"}
+{"schemaVersion":1,"scenarioId":"rc4-daily-basis-clarification","sequence":3,"type":"tts_input","text":"Здравствуйте, я голосовой AI-консультант Botamin. Чем занимается ваша компания?"}
 {"schemaVersion":1,"scenarioId":"rc4-daily-basis-clarification","sequence":4,"type":"message","role":"user","text":"Нужно обрабатывать 10 лидов в день.","semantics":["discovery_context"],"inputMode":"spoken"}
 {"schemaVersion":1,"scenarioId":"rc4-daily-basis-clarification","sequence":5,"type":"server_event","name":"facts.snapshot","status":"accepted","revision":1,"payload":{"knownQualificationFields":["monthlyLeadVolume"],"dailyLeadBasisStatus":"unresolved","qualificationValues":{"monthlyLeadVolume":"10_per_day_unresolved"}}}
 {"schemaVersion":1,"scenarioId":"rc4-daily-basis-clarification","sequence":6,"type":"stage","stage":"DISCOVERY"}

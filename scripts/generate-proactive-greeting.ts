@@ -4,16 +4,16 @@ import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { loadOpenRouterVoiceConfig } from "../apps/server/src/providers/openrouter/stt/config";
 import { OpenRouterTtsAdapter } from "../apps/server/src/providers/openrouter/tts/adapter";
-import { isCompleteMp3File } from "../apps/server/src/providers/openrouter/tts/mp3";
 import { PROACTIVE_GREETING_COPY } from "../apps/web/src/components/proactiveGreetingContent";
+import { CanonicalTtsWavBytesSchema } from "../packages/contracts/src";
 
 const OPT_IN_ENV = "BOTAMIN_GENERATE_PROACTIVE_GREETING";
 const OUTPUT_PATH = resolve(
 	import.meta.dir,
-	"../apps/web/public/assets/botamin-proactive-greeting.mp3",
+	"../apps/web/public/assets/botamin-proactive-greeting.wav",
 );
 const MAX_OUTPUT_BYTES = 2_000_000;
-const TOTAL_TIMEOUT_MS = 30_000;
+const TOTAL_TIMEOUT_MS = 60_000;
 
 function print(result: Record<string, unknown>): void {
 	console.info(
@@ -34,6 +34,13 @@ timeout.unref();
 
 try {
 	const loaded = loadOpenRouterVoiceConfig();
+	if (
+		loaded.tts.profile !== "gemini_3_1_pcm" ||
+		loaded.tts.voice !== "Sulafat" ||
+		loaded.tts.responseFormat !== "pcm"
+	) {
+		throw new Error("proactive_greeting_profile_invalid");
+	}
 	const config = {
 		...loaded,
 		tts: {
@@ -54,10 +61,10 @@ try {
 		signal: abortController.signal,
 	});
 	if (
-		result.contentType !== "audio/mpeg" ||
+		result.contentType !== "audio/wav" ||
 		result.bytes.byteLength === 0 ||
 		result.bytes.byteLength > MAX_OUTPUT_BYTES ||
-		!isCompleteMp3File(result.bytes)
+		!CanonicalTtsWavBytesSchema.safeParse(result.bytes).success
 	) {
 		throw new Error("generated_audio_invalid");
 	}
@@ -73,14 +80,14 @@ try {
 	const persisted = new Uint8Array(await readFile(temporaryPath));
 	if (
 		persisted.byteLength !== result.bytes.byteLength ||
-		!isCompleteMp3File(persisted)
+		!CanonicalTtsWavBytesSchema.safeParse(persisted).success
 	) {
 		throw new Error("persisted_audio_invalid");
 	}
 	await rename(temporaryPath, OUTPUT_PATH);
 	print({
 		status: "generated",
-		format: "mp3",
+		format: "wav",
 		bytes: persisted.byteLength,
 		elapsedMs: Date.now() - startedAt,
 		output: relative(resolve(import.meta.dir, ".."), OUTPUT_PATH),

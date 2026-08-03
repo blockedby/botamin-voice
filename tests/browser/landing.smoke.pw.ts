@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures";
 
-const greetingPath = "/assets/botamin-proactive-greeting.mp3";
+const greetingPath = "/assets/botamin-proactive-greeting.wav";
 
 test("production landing is same-origin, responsive, and consent-gated", async ({
 	browserHarness,

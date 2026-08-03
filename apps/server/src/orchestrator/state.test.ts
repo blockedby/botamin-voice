@@ -57,6 +57,22 @@ describe("conversation transition policy", () => {
 		expect(new Set(keys).size).toBe(keys.length);
 	});
 
+	test("meeting intent cannot bypass discovery and value", () => {
+		expect(
+			transition(stateAt("GREETING"), { type: "booking_offered" }),
+		).toMatchObject({ ok: false, code: "INVALID_TRANSITION" });
+		expect(
+			transition(stateAt("DISCOVERY"), { type: "booking_offered" }),
+		).toMatchObject({ ok: false, code: "INVALID_TRANSITION" });
+
+		let state = apply(stateAt("GREETING"), { type: "discovery_requested" });
+		state = apply(state, { type: "value_ready" });
+		expect(transition(state, { type: "booking_offered" })).toMatchObject({
+			ok: true,
+			state: { stage: "BOOKING_OFFER" },
+		});
+	});
+
 	test("the full stage/event matrix is deterministic and returns a typed result", () => {
 		const events: ConversationEvent[] = [
 			{ type: "start" },

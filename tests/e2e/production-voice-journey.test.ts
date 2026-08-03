@@ -432,6 +432,14 @@ class ScriptedLuna implements BrainPort {
 				return;
 			case "DISCOVERY":
 				yield observed(speech(retryTurnSpeech));
+				yield complete("VALUE");
+				return;
+			case "VALUE":
+				yield observed(
+					speech(
+						"По пользовательскому брифу в этой отрасли есть кейсы роста выручки на 10–15 миллионов рублей в месяц с ИИ-агентами.",
+					),
+				);
 				yield complete("BOOKING_OFFER");
 				return;
 			case "BOOKING_OFFER":
@@ -591,11 +599,13 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				{ status: 503, retryAfter: "0" },
 				{ jsonBody: chatResult("Нужна автоматизация обращений") },
 				{ jsonBody: chatResult("Да, расскажите о записи") },
+				{ jsonBody: chatResult("Покажите варианты встречи") },
 				{ status: 400 },
 			],
 			ttsBehaviors: [
 				{ waitFor: staleTtsGate },
 				{ responseChunkBytes: 97 },
+				{},
 				{},
 				{ status: 503 },
 				{},
@@ -748,7 +758,17 @@ describe("T30 consolidated credential-free production-component journey", () => 
 					countSpeaker(happy.browser, "visitor") === 3 &&
 					countSpeaker(happy.browser, "agent") === 2 &&
 					happy.captures.at(-1)?.active === true,
-				"booking-offer turn did not finish",
+				"value turn did not finish",
+			);
+
+			await commitCurrent(happy.browser, happy.captures);
+			await waitFor(
+				() =>
+					countSpeaker(happy.browser, "visitor") === 4 &&
+					countSpeaker(happy.browser, "agent") === 3 &&
+					happy.captures.at(-1)?.active === true,
+				() =>
+					`booking-offer turn did not finish (state=${happy.browser.getSnapshot().state.kind}, visitor=${countSpeaker(happy.browser, "visitor")}, agent=${countSpeaker(happy.browser, "agent")}, tts=${provider.counters.tts}, brain=${brain.inputs.length}, capture=${happy.captures.at(-1)?.active === true}, stages=${JSON.stringify(happy.stages)})`,
 			);
 
 			// RC4 accepts the visitor's exact current draft facts and selection, then
@@ -861,7 +881,7 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				externalCalendarEventCreated: false,
 				externalInviteSent: false,
 			});
-			const expectedBookingConfirmation = `Внутренняя виртуальная встреча создана на ${moscowSlotText(selectedCandidate.meetingSlot)} для ${syntheticBooking.name}, компания ${syntheticBooking.company}. Контакты: почта ${syntheticBooking.workEmail}, Телеграм ${syntheticBooking.telegram}. Внешнее календарное событие и приглашение не создавались. Сколько входящих лидов приходит за месяц?`;
+			const expectedBookingConfirmation = `Внутренняя виртуальная встреча создана на ${moscowSlotText(selectedCandidate.meetingSlot)} для ${syntheticBooking.name}, компания ${syntheticBooking.company}. Контакты: почта ${syntheticBooking.workEmail}, Телеграм ${syntheticBooking.telegram}. Внешнее календарное событие и приглашение не создавались. Сколько заявок вы получаете за месяц?`;
 			expect(latestSpeakerText(happy.browser, "agent")).toBe(
 				expectedBookingConfirmation,
 			);
@@ -869,8 +889,8 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				timeline.filter((entry) => entry.label === "playback.started").length,
 			).toBe(playbackStartsBeforeCommit + 1);
 			expect(brain.inputs.length).toBe(brainsBeforeBooking);
-			expect(countSpeaker(happy.browser, "visitor")).toBe(5);
-			expect(countSpeaker(happy.browser, "agent")).toBe(4);
+			expect(countSpeaker(happy.browser, "visitor")).toBe(6);
+			expect(countSpeaker(happy.browser, "agent")).toBe(5);
 
 			// Force a real WebSocket reconnect after the durable booking.
 			const transcriptsBeforeReconnect = committedSnapshot.transcript.length;
@@ -928,9 +948,9 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			expect(happy.eventSequences.get("booking.created")?.size).toBe(1);
 			expect(happy.eventCounts.get("booking.updated")).toBe(2);
 			expect(happy.eventSequences.get("booking.updated")?.size).toBe(2);
-			expect(countSpeaker(happy.browser, "visitor")).toBe(7);
-			expect(brain.inputs).toHaveLength(3);
-			expect(provider.counters.chat).toBe(4);
+			expect(countSpeaker(happy.browser, "visitor")).toBe(8);
+			expect(brain.inputs).toHaveLength(4);
+			expect(provider.counters.chat).toBe(5);
 			expect(happy.stages).toEqual(
 				expect.arrayContaining([
 					"DISCOVERY",
@@ -1072,7 +1092,7 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			}
 			expect(provider.protocolViolations).toEqual([]);
 			expect(provider.counters).toMatchObject({
-				chat: 5,
+				chat: 6,
 				invalid: 0,
 				statuses: { "400": 1, "503": 2 },
 			});

@@ -243,6 +243,7 @@ export async function createProductionRuntime(
 		CODEX_CWD: config.brain.cwd,
 		CODEX_MODEL: config.brain.model,
 		CODEX_EFFORT: config.brain.effort,
+		CODEX_SERVICE_TIER: config.brain.serviceTier ?? "",
 		CODEX_TOOL_MODE: config.brain.toolMode,
 		TURN_TIMEOUT_MS: String(config.turnTimeoutMs),
 	};

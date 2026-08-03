@@ -1,6 +1,6 @@
 {"schemaVersion":1,"scenarioId":"rc4-both-known-no-question","sequence":1,"type":"stage","stage":"GREETING"}
-{"schemaVersion":1,"scenarioId":"rc4-both-known-no-question","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Какой сценарий продаж хотите обсудить?"}
-{"schemaVersion":1,"scenarioId":"rc4-both-known-no-question","sequence":3,"type":"tts_input","text":"Здравствуйте! Я голосовой AI-продавец Botamin. Какой сценарий продаж хотите обсудить?"}
+{"schemaVersion":1,"scenarioId":"rc4-both-known-no-question","sequence":2,"type":"message","role":"assistant","text":"Здравствуйте, я голосовой AI-консультант Botamin. Чем занимается ваша компания?"}
+{"schemaVersion":1,"scenarioId":"rc4-both-known-no-question","sequence":3,"type":"tts_input","text":"Здравствуйте, я голосовой AI-консультант Botamin. Чем занимается ваша компания?"}
 {"schemaVersion":1,"scenarioId":"rc4-both-known-no-question","sequence":4,"type":"message","role":"user","text":"Ранее я говорил: у нас около 10 менеджеров. Нужна встреча по входящим.","semantics":["discovery_context"],"inputMode":"spoken"}
 {"schemaVersion":1,"scenarioId":"rc4-both-known-no-question","sequence":5,"type":"server_event","name":"facts.snapshot","status":"accepted","revision":1,"payload":{"knownQualificationFields":["monthlyLeadVolume","salesManagerCount"],"dailyLeadBasisStatus":"not_applicable","qualificationValues":{"salesManagerCount":10,"monthlyLeadVolume":"attested_monthly"}}}
 {"schemaVersion":1,"scenarioId":"rc4-both-known-no-question","sequence":6,"type":"stage","stage":"DISCOVERY"}

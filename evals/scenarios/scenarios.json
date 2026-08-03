@@ -41,7 +41,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "accepted"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -74,7 +74,7 @@
 			"tags": ["happy", "outbound", "cold-base", "booking"],
 			"language": "ru",
 			"direction": "outbound",
-			"description": "Компания хочет первичную обработку холодной базы и выход на ЛПР.",
+			"description": "Компания описывает outbound; после отрасли агент использует единственный user-brief hook.",
 			"expected": {
 				"requiredStageOrder": [
 					"GREETING",
@@ -99,7 +99,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": ["maintrassy-qualified-15"],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -157,7 +157,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -190,7 +190,7 @@
 			"tags": ["inbound", "missed-contact", "no-booking"],
 			"language": "ru",
 			"direction": "inbound",
-			"description": "Пользователь изучает follow-up, но не принимает booking.",
+			"description": "После отрасли используется единственный user-brief hook; встреча не создаётся.",
 			"expected": {
 				"requiredStageOrder": ["GREETING", "DISCOVERY", "VALUE", "COMPLETE"],
 				"finalStages": ["COMPLETE"],
@@ -203,18 +203,18 @@
 					"maxCreateCalls": 0,
 					"qualification": "none"
 				},
-				"allowedCaseClaimIds": ["rollprof-interest-13"],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			}
 		},
 		{
 			"id": "inbound-junk-leads-case",
-			"title": "Нецелевые входящие с допустимым кейсом",
+			"title": "Нецелевые входящие и канонический hook",
 			"tags": ["inbound", "qualification", "case-claim", "booking-refused"],
 			"language": "ru",
 			"direction": "inbound",
-			"description": "Проверяет строго атрибутированный числовой case claim без переноса результата.",
+			"description": "Проверяет атрибутированный user-brief hook без переноса результата.",
 			"expected": {
 				"requiredStageOrder": ["GREETING", "DISCOVERY", "VALUE", "COMPLETE"],
 				"finalStages": ["COMPLETE"],
@@ -227,18 +227,18 @@
 					"maxCreateCalls": 0,
 					"qualification": "none"
 				},
-				"allowedCaseClaimIds": ["building-supplies-1000-31"],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			}
 		},
 		{
 			"id": "avito-fast-response-case",
-			"title": "Скорость ответа на Авито",
+			"title": "Скорость первого ответа",
 			"tags": ["inbound", "case-claim", "avito", "booking-refused"],
 			"language": "ru",
 			"direction": "inbound",
-			"description": "Реалистичный пример скорости ответа с полным источником и без переноса результата кейса.",
+			"description": "Проверяет тот же канонический отраслевой hook без отдельного числового кейса.",
 			"expected": {
 				"requiredStageOrder": ["GREETING", "DISCOVERY", "VALUE", "COMPLETE"],
 				"finalStages": ["COMPLETE"],
@@ -251,7 +251,7 @@
 					"maxCreateCalls": 0,
 					"qualification": "none"
 				},
-				"allowedCaseClaimIds": ["avito-conversion-10-45"],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			}
@@ -262,7 +262,7 @@
 			"tags": ["case-claim", "cadence", "booking-refused", "named-source"],
 			"language": "ru",
 			"direction": "inbound",
-			"description": "Проверяет точную атрибуцию роста выручки из пользовательского брифа без гарантии, прогноза или переноса.",
+			"description": "Проверяет единственный допустимый числовой hook без гарантии.",
 			"expected": {
 				"requiredStageOrder": [
 					"GREETING",
@@ -324,7 +324,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -382,7 +382,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -536,7 +536,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -598,6 +598,7 @@
 				"requiredStageOrder": [
 					"GREETING",
 					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"DECLINED"
 				],
@@ -618,7 +619,7 @@
 					"maxCreateCalls": 0,
 					"qualification": "none"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			}
@@ -729,6 +730,8 @@
 			"expected": {
 				"requiredStageOrder": [
 					"GREETING",
+					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"COMPLETE"
@@ -748,7 +751,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -785,6 +788,8 @@
 			"expected": {
 				"requiredStageOrder": [
 					"GREETING",
+					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"COMPLETE"
@@ -804,7 +809,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -862,7 +867,7 @@
 					"maxCreateCalls": 2,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -924,7 +929,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [
 					"transport:disconnected",
 					"transport:reconnected"
@@ -1009,7 +1014,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1076,7 +1081,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "accepted"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1206,7 +1211,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": ["provider:tts:unavailable"],
 				"ttsMode": "outage"
 			},
@@ -1264,7 +1269,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": ["provider:notifier:unavailable"],
 				"ttsMode": "required"
 			},
@@ -1322,7 +1327,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1355,10 +1360,12 @@
 			"tags": ["happy", "booking", "direct-intent", "phone"],
 			"language": "ru",
 			"direction": "inbound",
-			"description": "Прямой intent не заставляет проводить discovery-анкету до booking.",
+			"description": "Прямой запрос сохраняется, но сначала сервер требует discovery и value, затем предлагает встречу.",
 			"expected": {
 				"requiredStageOrder": [
 					"GREETING",
+					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"COMPLETE"
@@ -1378,7 +1385,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1449,6 +1456,7 @@
 				"requiredStageOrder": [
 					"GREETING",
 					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"POST_BOOKING_QUALIFICATION",
@@ -1487,7 +1495,7 @@
 					"expectedQuestionOrder": ["monthlyLeadVolume"],
 					"refusalOutcome": "none"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1532,6 +1540,7 @@
 				"requiredStageOrder": [
 					"GREETING",
 					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"POST_BOOKING_QUALIFICATION",
@@ -1570,7 +1579,7 @@
 					"expectedQuestionOrder": ["salesManagerCount"],
 					"refusalOutcome": "none"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1615,6 +1624,7 @@
 				"requiredStageOrder": [
 					"GREETING",
 					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"COMPLETE"
@@ -1644,7 +1654,7 @@
 					"expectedQuestionOrder": [],
 					"refusalOutcome": "none"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1689,6 +1699,7 @@
 				"requiredStageOrder": [
 					"GREETING",
 					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"POST_BOOKING_QUALIFICATION",
@@ -1729,7 +1740,7 @@
 					"expectedQuestionOrder": ["monthlyLeadVolume", "salesManagerCount"],
 					"refusalOutcome": "none"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1775,6 +1786,7 @@
 				"requiredStageOrder": [
 					"GREETING",
 					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"POST_BOOKING_QUALIFICATION",
@@ -1810,7 +1822,7 @@
 					"expectedQuestionOrder": ["monthlyLeadVolume"],
 					"refusalOutcome": "partial_preserved"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1855,6 +1867,7 @@
 				"requiredStageOrder": [
 					"GREETING",
 					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"POST_BOOKING_QUALIFICATION",
@@ -1895,7 +1908,7 @@
 					"expectedQuestionOrder": ["dailyLeadBasis", "salesManagerCount"],
 					"refusalOutcome": "none"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1941,6 +1954,7 @@
 				"requiredStageOrder": [
 					"GREETING",
 					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"COMPLETE"
@@ -1971,7 +1985,7 @@
 					"expectedQuestionOrder": [],
 					"refusalOutcome": "none"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -2017,6 +2031,7 @@
 				"requiredStageOrder": [
 					"GREETING",
 					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"COMPLETE"
@@ -2046,7 +2061,7 @@
 					"expectedQuestionOrder": [],
 					"refusalOutcome": "none"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -2092,6 +2107,7 @@
 				"requiredStageOrder": [
 					"GREETING",
 					"DISCOVERY",
+					"VALUE",
 					"BOOKING_OFFER",
 					"COLLECT_BOOKING",
 					"POST_BOOKING_QUALIFICATION",
@@ -2130,7 +2146,7 @@
 					"expectedQuestionOrder": ["monthlyLeadVolume"],
 					"refusalOutcome": "none"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},

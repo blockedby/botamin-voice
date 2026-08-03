@@ -333,7 +333,7 @@ describe("orchestrator with durable SQLite booking service", () => {
 		expect(visible).toContain("Ромашка");
 		expect(visible).toContain("RosSelGosTorg@gmail.com");
 		expect(visible).toContain("+79555678955");
-		expect(visible).toContain("Сколько входящих лидов приходит за месяц?");
+		expect(visible).toContain("Сколько заявок вы получаете за месяц?");
 		expect(visible).not.toContain(
 			"Сколько менеджеров по продажам работает в вашей команде?",
 		);
@@ -374,7 +374,7 @@ describe("orchestrator with durable SQLite booking service", () => {
 			.map((event) => event.text)
 			.join(" ");
 		expect(alreadyAnsweredText).toContain(
-			"Сколько входящих лидов приходит за месяц?",
+			"Сколько заявок вы получаете за месяц?",
 		);
 		expect(alreadyAnsweredText).not.toContain(
 			"Сколько менеджеров по продажам работает в вашей команде?",
@@ -481,6 +481,8 @@ describe("orchestrator with durable SQLite booking service", () => {
 			now: () => new Date(timestamp),
 		});
 		expect(orchestrator.apply({ type: "connected" }).ok).toBe(true);
+		expect(orchestrator.apply({ type: "discovery_requested" }).ok).toBe(true);
+		expect(orchestrator.apply({ type: "value_ready" }).ok).toBe(true);
 		expect(orchestrator.apply({ type: "booking_offered" }).ok).toBe(true);
 		expect(orchestrator.apply({ type: "booking_accepted" }).ok).toBe(true);
 		const socket = new TestSocket();
@@ -637,6 +639,8 @@ describe("orchestrator with durable SQLite booking service", () => {
 			now: () => new Date(timestamp),
 		});
 		expect(orchestrator.apply({ type: "connected" }).ok).toBe(true);
+		expect(orchestrator.apply({ type: "discovery_requested" }).ok).toBe(true);
+		expect(orchestrator.apply({ type: "value_ready" }).ok).toBe(true);
 		expect(orchestrator.apply({ type: "booking_offered" }).ok).toBe(true);
 		expect(orchestrator.apply({ type: "booking_accepted" }).ok).toBe(true);
 		const socket = new TestSocket();

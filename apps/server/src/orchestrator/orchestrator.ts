@@ -18,6 +18,7 @@ import type {
 	SttPort,
 	SttTranscriptionResult,
 	ToolRequest,
+	TtsAudioSegment,
 	TtsPort,
 } from "@botamin/contracts";
 import {
@@ -54,6 +55,7 @@ import { AtomicSttTurnGate } from "./reliability";
 import {
 	chunkPreparedSpeech,
 	prepareSpeech,
+	renderPreparedSpeech,
 	SpeechBudgetGuard,
 	type SpeechBudgetOptions,
 	type SpeechChunkerOptions,
@@ -183,6 +185,27 @@ export interface DraftConfirmationInput {
 
 interface RenderResult {
 	visibleText: string;
+	audioProduced: boolean;
+}
+
+interface SpeechSynthesisJob {
+	segmentId: string;
+	visibleFallback: string;
+	startFailed: boolean;
+	promise: Promise<SpeechSynthesisOutcome>;
+}
+
+type SpeechSynthesisOutcome =
+	| { kind: "success"; result: TtsAudioSegment }
+	| { kind: "failure" }
+	| { kind: "stale" };
+
+interface SpeechPipeline {
+	turn: { turnId: string; generationId: string };
+	controller: AbortController;
+	pending: SpeechSynthesisJob[];
+	failed: boolean;
+	degraded: boolean;
 	audioProduced: boolean;
 }
 
@@ -1495,11 +1518,9 @@ export class ConversationOrchestrator {
 					heldActionSpeech.push(...ready);
 					continue;
 				}
-				for (const phrase of ready) {
-					const rendered = yield* this.#renderPhrase(input, phrase);
-					if (rendered.visibleText) visible.push(rendered.visibleText);
-					audioProduced ||= rendered.audioProduced;
-				}
+				const rendered = yield* this.#renderPhrases(input, ready);
+				visible.push(...rendered.visibleTexts);
+				audioProduced ||= rendered.audioProduced;
 			}
 
 			for (const event of this.#takeDynamicEvents(input.generationId))
@@ -1541,11 +1562,12 @@ export class ConversationOrchestrator {
 				}
 			}
 			if (!suppressModelSpeech && !brainFailure) {
-				for (const phrase of [...heldActionSpeech, ...chunker.flush()]) {
-					const rendered = yield* this.#renderPhrase(input, phrase);
-					if (rendered.visibleText) visible.push(rendered.visibleText);
-					audioProduced ||= rendered.audioProduced;
-				}
+				const rendered = yield* this.#renderPhrases(input, [
+					...heldActionSpeech,
+					...chunker.flush(),
+				]);
+				visible.push(...rendered.visibleTexts);
+				audioProduced ||= rendered.audioProduced;
 			}
 		} catch {
 			brainFailure = {
@@ -2466,17 +2488,49 @@ export class ConversationOrchestrator {
 		turn: { turnId: string; generationId: string },
 		visibleText: string,
 	): AsyncGenerator<OrchestratorEvent, RenderResult> {
-		const visible = visibleText.replace(/\s+/gu, " ").trim();
-		if (!visible || !this.#generations.accept(turn.generationId, turn.turnId)) {
-			return { visibleText: "", audioProduced: false };
-		}
-		yield {
-			type: "text.delta",
-			generationId: turn.generationId,
-			text: visible,
+		const rendered = yield* this.#renderPhrases(turn, [visibleText]);
+		return {
+			visibleText: rendered.visibleTexts[0] ?? "",
+			audioProduced: rendered.audioProduced,
 		};
-		const audioProduced = yield* this.#renderSpokenPhrase(turn, visible);
-		return { visibleText: visible, audioProduced };
+	}
+
+	async *#renderPhrases(
+		turn: { turnId: string; generationId: string },
+		visibleTexts: readonly string[],
+	): AsyncGenerator<
+		OrchestratorEvent,
+		{ visibleTexts: string[]; audioProduced: boolean }
+	> {
+		const visible: string[] = [];
+		if (!this.#generations.accept(turn.generationId, turn.turnId)) {
+			return { visibleTexts: visible, audioProduced: false };
+		}
+		const pipeline = this.#createSpeechPipeline(turn);
+		const approvedContacts: Contact[] = this.#state.booking
+			? this.#state.booking.contacts
+			: (this.#draftStore?.approvedContacts(this.conversationId) ?? []);
+		for (const sourceText of visibleTexts) {
+			const text = sourceText.replace(/\s+/gu, " ").trim();
+			if (!text || !this.#generations.accept(turn.generationId, turn.turnId)) {
+				continue;
+			}
+			visible.push(text);
+			yield {
+				type: "text.delta",
+				generationId: turn.generationId,
+				text,
+			};
+			const prepared = prepareSpeech(text, {
+				contactProcessing: this.#state.contactConsentConfirmed,
+				approvedContacts,
+			});
+			if (prepared.spokenText) {
+				yield* this.#enqueuePreparedSpeech(pipeline, prepared, text);
+			}
+		}
+		yield* this.#drainSpeechPipeline(pipeline);
+		return { visibleTexts: visible, audioProduced: pipeline.audioProduced };
 	}
 
 	async *#renderSpokenPhrase(
@@ -2492,124 +2546,196 @@ export class ConversationOrchestrator {
 			approvedContacts,
 		});
 		if (!prepared.spokenText) return false;
-		if (!this.#tts) {
-			yield {
-				type: "degraded",
-				generationId: turn.generationId,
-				provider: "tts",
-				code: "TTS_UNAVAILABLE",
-				textFallback: visible,
-			};
-			return false;
-		}
-		let audioProduced = false;
-		for (const phrase of chunkPreparedSpeech(prepared, this.#chunkerOptions)) {
-			const produced = yield* this.#synthesizeSpeechSegment(
-				turn,
-				phrase,
-				visible,
-			);
-			if (!produced) return audioProduced;
-			audioProduced = true;
-		}
-		return audioProduced;
+		const pipeline = this.#createSpeechPipeline(turn);
+		yield* this.#enqueuePreparedSpeech(pipeline, prepared, visible);
+		yield* this.#drainSpeechPipeline(pipeline);
+		return pipeline.audioProduced;
 	}
 
-	async *#synthesizeSpeechSegment(
-		turn: { turnId: string; generationId: string },
+	#createSpeechPipeline(turn: {
+		turnId: string;
+		generationId: string;
+	}): SpeechPipeline {
+		const controller = new AbortController();
+		const generationSignal = this.#generations.signal(turn.generationId);
+		if (generationSignal.aborted) {
+			controller.abort(generationSignal.reason);
+		} else {
+			generationSignal.addEventListener(
+				"abort",
+				() => controller.abort(generationSignal.reason),
+				{ once: true },
+			);
+		}
+		return {
+			turn,
+			controller,
+			pending: [],
+			failed: false,
+			degraded: false,
+			audioProduced: false,
+		};
+	}
+
+	async *#enqueuePreparedSpeech(
+		pipeline: SpeechPipeline,
+		prepared: ReturnType<typeof prepareSpeech>,
+		visibleFallback: string,
+	): AsyncGenerator<OrchestratorEvent> {
+		if (pipeline.failed) return;
+		if (!this.#tts) {
+			pipeline.failed = true;
+			pipeline.degraded = true;
+			yield {
+				type: "degraded",
+				generationId: pipeline.turn.generationId,
+				provider: "tts",
+				code: "TTS_UNAVAILABLE",
+				textFallback: visibleFallback,
+			};
+			return;
+		}
+		const rendered = renderPreparedSpeech(prepared);
+		for (const spoken of chunkPreparedSpeech(rendered, this.#chunkerOptions)) {
+			while (pipeline.pending.length >= 2 && !pipeline.failed) {
+				yield* this.#drainNextSpeechJob(pipeline);
+			}
+			if (pipeline.failed) return;
+			const job = this.#startSpeechJob(pipeline, spoken, visibleFallback);
+			pipeline.pending.push(job);
+			if (job.startFailed) break;
+		}
+	}
+
+	#startSpeechJob(
+		pipeline: SpeechPipeline,
 		spoken: string,
 		visibleFallback: string,
-	): AsyncGenerator<OrchestratorEvent, boolean> {
-		const budget = this.#budgets.reserve(spoken);
-		if (!budget.ok || !this.#tts) {
-			yield {
-				type: "degraded",
-				generationId: turn.generationId,
-				provider: "tts",
-				code: "TTS_UNAVAILABLE",
-				textFallback: visibleFallback,
-			};
-			return false;
-		}
+	): SpeechSynthesisJob {
 		const segmentId = this.#createId();
-		if (!this.#prefetch.tryStart(segmentId)) {
-			yield {
-				type: "degraded",
-				generationId: turn.generationId,
-				provider: "tts",
-				code: "TTS_UNAVAILABLE",
-				textFallback: visibleFallback,
+		if (!this.#tts || !this.#prefetch.tryStart(segmentId)) {
+			return {
+				segmentId,
+				visibleFallback,
+				startFailed: true,
+				promise: Promise.resolve({ kind: "failure" }),
 			};
-			return false;
 		}
-		const ttsStartedAt = this.#metrics?.markTtsRequest();
-		let ttsSettled = false;
-		const settleTts = (outcome: "success" | "failure" | "stale"): void => {
-			if (ttsSettled || ttsStartedAt === undefined) return;
-			ttsSettled = true;
-			this.#metrics?.recordTtsCompletion(ttsStartedAt, outcome);
-		};
-		try {
-			const result = TtsAudioSegmentSchema.parse(
-				await this.#tts.synthesize({
-					conversationId: this.conversationId,
-					turnId: turn.turnId,
-					generationId: turn.generationId,
-					segmentId,
-					text: spoken,
-					signal: this.#generations.signal(turn.generationId),
-				}),
-			);
-			if (
-				!this.#generations.accept(turn.generationId, turn.turnId) ||
-				result.generationId !== turn.generationId ||
-				result.segmentId !== segmentId
-			) {
-				settleTts("stale");
-				yield {
-					type: "ignored",
-					generationId: result.generationId,
-					source: "tts",
-				};
-				return false;
-			}
-			const sequence = this.#generations.nextAudioSeq(turn.generationId);
-			if (sequence === null) {
-				settleTts("stale");
-				return false;
-			}
-			settleTts("success");
-			this.#metrics?.markFirstPlaybackReady(turn.turnId);
-			yield {
-				type: "audio.segment",
-				generationId: result.generationId,
-				segmentId: result.segmentId,
-				sequence,
-				contentType: result.contentType,
-				bytes: result.bytes,
-				final: true,
+		const budget = this.#budgets.reserve(spoken);
+		if (!budget.ok) {
+			this.#prefetch.finish(segmentId);
+			return {
+				segmentId,
+				visibleFallback,
+				startFailed: true,
+				promise: Promise.resolve({ kind: "failure" }),
 			};
-			return true;
-		} catch {
-			const current = this.#generations.accept(turn.generationId, turn.turnId);
-			settleTts(current ? "failure" : "stale");
-			if (current) {
+		}
+
+		const tts = this.#tts;
+		const turn = pipeline.turn;
+		const request = Object.freeze({
+			conversationId: this.conversationId,
+			turnId: turn.turnId,
+			generationId: turn.generationId,
+			segmentId,
+			text: spoken,
+			signal: pipeline.controller.signal,
+		});
+		const ttsStartedAt = this.#metrics?.markTtsRequest();
+		const promise = Promise.resolve()
+			.then(() => tts.synthesize(request))
+			.then((rawResult): SpeechSynthesisOutcome => {
+				const result = TtsAudioSegmentSchema.parse(rawResult);
+				if (
+					pipeline.controller.signal.aborted ||
+					!this.#generations.accept(turn.generationId, turn.turnId)
+				) {
+					return { kind: "stale" };
+				}
+				if (
+					result.generationId !== turn.generationId ||
+					result.segmentId !== segmentId
+				) {
+					return { kind: "failure" };
+				}
+				return { kind: "success", result };
+			})
+			.catch(
+				(): SpeechSynthesisOutcome =>
+					pipeline.controller.signal.aborted ||
+					!this.#generations.accept(turn.generationId, turn.turnId)
+						? { kind: "stale" }
+						: { kind: "failure" },
+			)
+			.then((outcome) => {
+				if (ttsStartedAt !== undefined) {
+					this.#metrics?.recordTtsCompletion(ttsStartedAt, outcome.kind);
+				}
+				return outcome;
+			})
+			.finally(() => this.#prefetch.finish(segmentId));
+		return { segmentId, visibleFallback, startFailed: false, promise };
+	}
+
+	async *#drainNextSpeechJob(
+		pipeline: SpeechPipeline,
+	): AsyncGenerator<OrchestratorEvent> {
+		const job = pipeline.pending.shift();
+		if (!job) return;
+		const outcome = await job.promise;
+		if (pipeline.failed) return;
+		if (
+			outcome.kind === "stale" ||
+			!this.#generations.accept(
+				pipeline.turn.generationId,
+				pipeline.turn.turnId,
+			)
+		) {
+			pipeline.failed = true;
+			pipeline.controller.abort("stale TTS pipeline");
+			pipeline.pending.length = 0;
+			return;
+		}
+		if (outcome.kind === "failure") {
+			pipeline.failed = true;
+			pipeline.controller.abort("ordered TTS failure");
+			// Later promises are already rejection-safe and retain their global
+			// coordinator slots until settlement, but no buffered audio is retained
+			// by this ordered publisher after the first failure.
+			pipeline.pending.length = 0;
+			if (!pipeline.degraded) {
+				pipeline.degraded = true;
 				yield {
 					type: "degraded",
-					generationId: turn.generationId,
+					generationId: pipeline.turn.generationId,
 					provider: "tts",
 					code: "TTS_UNAVAILABLE",
-					textFallback: visibleFallback,
+					textFallback: job.visibleFallback,
 				};
 			}
-			return false;
-		} finally {
-			settleTts(
-				this.#generations.accept(turn.generationId, turn.turnId)
-					? "failure"
-					: "stale",
-			);
-			this.#prefetch.finish(segmentId);
+			return;
+		}
+		const sequence = this.#generations.nextAudioSeq(pipeline.turn.generationId);
+		if (sequence === null) return;
+		pipeline.audioProduced = true;
+		this.#metrics?.markFirstPlaybackReady(pipeline.turn.turnId);
+		yield {
+			type: "audio.segment",
+			generationId: outcome.result.generationId,
+			segmentId: outcome.result.segmentId,
+			sequence,
+			contentType: outcome.result.contentType,
+			bytes: outcome.result.bytes,
+			final: true,
+		};
+	}
+
+	async *#drainSpeechPipeline(
+		pipeline: SpeechPipeline,
+	): AsyncGenerator<OrchestratorEvent> {
+		while (pipeline.pending.length > 0 && !pipeline.failed) {
+			yield* this.#drainNextSpeechJob(pipeline);
 		}
 	}
 

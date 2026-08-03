@@ -76,6 +76,43 @@ export type SpeechBudgetDecision =
 	| { ok: true; turnChars: number; sessionChars: number }
 	| { ok: false; reason: "segment" | "turn" | "session" };
 
+const KNOWN_RUSSIAN_PRONUNCIATIONS = [
+	{ pattern: /(?<![\p{L}\p{N}])CRM(?![\p{L}\p{N}])/giu, spoken: "си-эр-эм" },
+	{ pattern: /(?<![\p{L}\p{N}])ООО(?![\p{L}\p{N}])/gu, spoken: "о-о-о" },
+] as const;
+
+/**
+ * Applies a deliberately small provider-neutral TTS rendering pass. Privacy
+ * and contact authority have already been resolved by prepareSpeech(); the
+ * visible transcript is never passed through this function.
+ *
+ * Protected approved contacts are returned byte-for-byte unchanged. This is
+ * intentionally conservative: punctuation edits around an expanded contact
+ * could otherwise invalidate its atomic offsets.
+ */
+export function renderPreparedSpeech(prepared: PreparedSpeech): PreparedSpeech {
+	if (!prepared.spokenText || prepared.protectedSpans.length > 0)
+		return prepared;
+
+	let spokenText = prepared.spokenText
+		.replace(/[\t\v\f ]+/gu, " ")
+		.replace(/\s+([,.!?;:])/gu, "$1")
+		.replace(/([,!?;:])(?=\p{L})/gu, (punctuation, _capture, offset, source) =>
+			/\p{N}/u.test(source[offset - 1] ?? "") ? punctuation : `${punctuation} `,
+		)
+		.replace(/(?<=\p{L})\.(?=\p{Lu})/gu, ". ")
+		.trim();
+	for (const pronunciation of KNOWN_RUSSIAN_PRONUNCIATIONS) {
+		spokenText = spokenText.replace(
+			pronunciation.pattern,
+			pronunciation.spoken,
+		);
+	}
+	return spokenText === prepared.spokenText
+		? prepared
+		: { ...prepared, spokenText };
+}
+
 interface StructuredJsonRegion {
 	start: number;
 	/** Exclusive end; absent while a JSON-looking structure is incomplete. */

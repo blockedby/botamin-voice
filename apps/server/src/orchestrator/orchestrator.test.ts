@@ -37,7 +37,11 @@ import {
 	ConversationOrchestrator,
 	type OrchestratorEvent,
 } from "./orchestrator";
-import { prepareSpeech, type SpeechChunkerOptions } from "./speech";
+import {
+	prepareSpeech,
+	type SpeechBudgetOptions,
+	type SpeechChunkerOptions,
+} from "./speech";
 import {
 	type ConversationState,
 	createInitialConversationState,
@@ -161,6 +165,7 @@ function fixture(
 		initialState?: ConversationState;
 		now?: () => Date;
 		speechChunker?: SpeechChunkerOptions;
+		speechBudgets?: SpeechBudgetOptions;
 	} = {},
 ) {
 	const stt = options.stt ?? new FakeStt({ text: "Да, сохраните данные" });
@@ -177,6 +182,7 @@ function fixture(
 		initialState: options.initialState ?? collectionState(),
 		...(options.now ? { now: options.now } : {}),
 		...(options.speechChunker ? { speechChunker: options.speechChunker } : {}),
+		...(options.speechBudgets ? { speechBudgets: options.speechBudgets } : {}),
 	});
 	return { orchestrator, stt, brain, bookings, tts };
 }
@@ -210,6 +216,52 @@ class RetryTts implements TtsPort {
 	async health(): Promise<TtsHealth> {
 		return "ready";
 	}
+}
+
+class ControlledTts implements TtsPort {
+	readonly inputs: TtsSynthesisRequest[] = [];
+	readonly #settlers: Array<{
+		resolve: (segment: TtsAudioSegment) => void;
+		reject: (error: Error) => void;
+	}> = [];
+
+	async synthesize(request: TtsSynthesisRequest): Promise<TtsAudioSegment> {
+		this.inputs.push(request);
+		return new Promise<TtsAudioSegment>((resolve, reject) => {
+			this.#settlers.push({ resolve, reject });
+		});
+	}
+
+	succeed(index: number): void {
+		const request = this.inputs[index];
+		if (!request) throw new Error(`missing controlled TTS request ${index}`);
+		this.#settlers[index]?.resolve({
+			generationId: request.generationId,
+			segmentId: request.segmentId,
+			contentType: "audio/mpeg",
+			bytes: Uint8Array.from(createDeterministicMp3Fixture()),
+			final: true,
+		});
+	}
+
+	fail(index: number): void {
+		this.#settlers[index]?.reject(new Error("private controlled TTS failure"));
+	}
+
+	async health(): Promise<TtsHealth> {
+		return "ready";
+	}
+}
+
+async function waitForTtsInputs(
+	tts: { inputs: readonly TtsSynthesisRequest[] },
+	count: number,
+): Promise<void> {
+	for (let attempt = 0; attempt < 1_000; attempt += 1) {
+		if (tts.inputs.length >= count) return;
+		await Promise.resolve();
+	}
+	throw new Error(`timed out waiting for ${count} TTS inputs`);
 }
 
 describe("atomic transcript intake", () => {
@@ -2222,7 +2274,7 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		const failing = new FailingTts();
 		const { orchestrator, brain, bookings } = fixture({ tts: failing });
 		const events = await collect(orchestrator.acceptAudioCommit(commit()));
-		expect(failing.inputs).toHaveLength(1);
+		expect(failing.inputs).toHaveLength(2);
 		expect((brain as FakeBrain).turns).toHaveLength(1);
 		expect(bookings.domainEvents).toHaveLength(1);
 		expect(orchestrator.state.booking?.status).toBe("booked");
@@ -2253,6 +2305,160 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			final: true,
 			contentType: "audio/mpeg",
 		});
+	});
+
+	test("prefetch starts two complete phrases before the first settles and publishes in source order", async () => {
+		const source =
+			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
+		const tts = new ControlledTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain(speechScript(source)),
+			tts,
+			initialState: valueState(),
+		});
+		const events: OrchestratorEvent[] = [];
+		const run = (async () => {
+			for await (const event of orchestrator.acceptAudioCommit(commit())) {
+				events.push(event);
+			}
+		})();
+
+		await waitForTtsInputs(tts, 2);
+		expect(tts.inputs).toHaveLength(2);
+		expect(tts.inputs.every((request) => Object.isFrozen(request))).toBe(true);
+		tts.succeed(1);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(events.some((event) => event.type === "audio.segment")).toBe(false);
+		tts.succeed(0);
+		await run;
+
+		const audio = events.filter((event) => event.type === "audio.segment");
+		expect(audio.map((event) => event.segmentId)).toEqual(
+			tts.inputs.map((request) => request.segmentId),
+		);
+		expect(audio.map((event) => event.sequence)).toEqual([0, 1]);
+		expect(new Set(tts.inputs.map((request) => request.segmentId)).size).toBe(
+			2,
+		);
+		expect(tts.inputs.map((request) => request.text).join(" ")).toBe(source);
+	});
+
+	test("an ordered first-segment failure aborts and suppresses successful prefetched audio", async () => {
+		const source =
+			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
+		const tts = new ControlledTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain(speechScript(source)),
+			tts,
+			initialState: valueState(),
+		});
+		const events: OrchestratorEvent[] = [];
+		const run = (async () => {
+			for await (const event of orchestrator.acceptAudioCommit(commit())) {
+				events.push(event);
+			}
+		})();
+		await waitForTtsInputs(tts, 2);
+		tts.fail(0);
+		await run;
+
+		expect(tts.inputs[1]?.signal.aborted).toBe(true);
+		expect(events.filter((event) => event.type === "audio.segment")).toEqual(
+			[],
+		);
+		expect(events.filter((event) => event.type === "degraded")).toHaveLength(1);
+		tts.succeed(1);
+		await Promise.resolve();
+		expect(events.filter((event) => event.type === "audio.segment")).toEqual(
+			[],
+		);
+	});
+
+	test("an ordered second-segment failure keeps only the first audio event", async () => {
+		const source =
+			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
+		const tts = new ControlledTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain(speechScript(source)),
+			tts,
+			initialState: valueState(),
+		});
+		const events: OrchestratorEvent[] = [];
+		const run = (async () => {
+			for await (const event of orchestrator.acceptAudioCommit(commit())) {
+				events.push(event);
+			}
+		})();
+		await waitForTtsInputs(tts, 2);
+		tts.fail(1);
+		tts.succeed(0);
+		await run;
+
+		const audioIndex = events.findIndex(
+			(event) => event.type === "audio.segment",
+		);
+		const degradedIndex = events.findIndex(
+			(event) => event.type === "degraded",
+		);
+		expect(audioIndex).toBeGreaterThanOrEqual(0);
+		expect(degradedIndex).toBeGreaterThan(audioIndex);
+		expect(
+			events.filter((event) => event.type === "audio.segment"),
+		).toHaveLength(1);
+		expect(events.filter((event) => event.type === "degraded")).toHaveLength(1);
+	});
+
+	test("barge-in aborts both prefetched requests and suppresses every late result", async () => {
+		const source =
+			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
+		const tts = new ControlledTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain(speechScript(source)),
+			tts,
+			initialState: valueState(),
+		});
+		const events: OrchestratorEvent[] = [];
+		const run = (async () => {
+			for await (const event of orchestrator.acceptAudioCommit(commit())) {
+				events.push(event);
+			}
+		})();
+		await waitForTtsInputs(tts, 2);
+		await orchestrator.interrupt(generation1);
+		expect(tts.inputs.every((request) => request.signal.aborted)).toBe(true);
+		tts.succeed(1);
+		tts.succeed(0);
+		await run;
+		expect(events.some((event) => event.type === "audio.segment")).toBe(false);
+		expectNoTerminalCompletion(events);
+	});
+
+	test("prefetched provider-owned retries retain text and IDs while budgets charge once", async () => {
+		const source =
+			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
+		const tts = new RetryTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain(speechScript(source)),
+			tts,
+			initialState: valueState(),
+			speechBudgets: {
+				maxCharsPerSegment: 100,
+				maxCharsPerTurn: 145,
+				maxCharsPerSession: 300,
+			},
+		});
+		const events = await collect(orchestrator.acceptAudioCommit(commit()));
+		expect(tts.inputs.map((request) => request.text).join(" ")).toBe(source);
+		expect(tts.inputs).toHaveLength(2);
+		expect(tts.attempts).toBe(4);
+		expect(new Set(tts.inputs.map((request) => request.segmentId)).size).toBe(
+			2,
+		);
+		expect(
+			events.filter((event) => event.type === "audio.segment"),
+		).toHaveLength(2);
+		expect(events.some((event) => event.type === "degraded")).toBe(false);
 	});
 
 	test("barge-in aborts generation and suppresses late Luna text", async () => {

@@ -3,6 +3,7 @@ import {
 	chunkPreparedSpeech,
 	chunkSpeech,
 	prepareSpeech,
+	renderPreparedSpeech,
 	SpeechBudgetGuard,
 	SpeechPrefetchCoordinator,
 	StreamingSentenceChunker,
@@ -520,6 +521,42 @@ describe("approved contact speech", () => {
 			forwardedCount: 0,
 		});
 		expect(chunkPreparedSpeech(prepared)).toEqual(["Почта контакт скрыт."]);
+	});
+});
+
+describe("provider-neutral speech rendering", () => {
+	test("adds ordinary Russian punctuation spacing and expands only known pronunciations", () => {
+		const prepared = prepareSpeech(
+			"Здравствуйте,это CRM!Расскажу о подходе!Продолжим?",
+			{ contactProcessing: false, approvedContacts: [] },
+		);
+		expect(renderPreparedSpeech(prepared).spokenText).toBe(
+			"Здравствуйте, это си-эр-эм! Расскажу о подходе! Продолжим?",
+		);
+		expect(prepared.spokenText).toBe(
+			"Здравствуйте,это CRM!Расскажу о подходе!Продолжим?",
+		);
+	});
+
+	test("leaves date, time, decimal, range, and grouped numeric semantics unchanged", () => {
+		const source =
+			"Дата 10.08.2026, время 16:00, рост 3,14%, диапазон 1000000-2000000 и 12 500 заявок.";
+		const prepared = prepareSpeech(source, {
+			contactProcessing: false,
+			approvedContacts: [],
+		});
+		expect(renderPreparedSpeech(prepared).spokenText).toBe(source);
+	});
+
+	test("returns protected approved-contact speech unchanged", () => {
+		const prepared = prepareSpeech("Почта: atomic.contact@example.com. CRM", {
+			contactProcessing: true,
+			approvedContacts: [
+				{ channel: "email", value: "atomic.contact@example.com" },
+			],
+		});
+		expect(prepared.protectedSpans).toHaveLength(1);
+		expect(renderPreparedSpeech(prepared)).toBe(prepared);
 	});
 });
 

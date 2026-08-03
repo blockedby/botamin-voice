@@ -233,7 +233,7 @@ describe("observability pipeline wiring", () => {
 		await orchestrator.close();
 	});
 
-	test("records stale TTS settlement before a delayed ignored-event consumer", async () => {
+	test("records stale TTS settlement while suppressing delayed stale events", async () => {
 		let now = 8_000;
 		let notifyStarted: (() => void) | undefined;
 		let releaseSynthesis: (() => void) | undefined;
@@ -331,11 +331,8 @@ describe("observability pipeline wiring", () => {
 		await synthesisStarted;
 		await orchestrator.interrupt(generationId);
 		releaseSynthesis?.();
-		const ignored = await pending;
-		expect(ignored).toMatchObject({
-			done: false,
-			value: { type: "ignored", source: "tts" },
-		});
+		const suppressed = await pending;
+		expect(suppressed).toEqual({ done: true, value: undefined });
 		let value = metrics.snapshot() as {
 			latencyMs: Record<
 				string,

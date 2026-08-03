@@ -274,3 +274,64 @@ export function containsPhoneLikeText(input: string): boolean {
 	const result = scanPhoneLikeText(input);
 	return result.overflow || result.regions.length > 0;
 }
+
+/**
+ * Return the source offset of a suffix that may still become phone-like when
+ * more model text arrives. This is deliberately conservative: callers use it
+ * only to keep a short-lived streaming suffix out of a provider-bound phrase.
+ */
+export function trailingPhoneLikeHoldbackStart(input: string): number | null {
+	const view = createScanView(input);
+	if (view === null) return 0;
+	const originalEnd = view.text.length;
+	const prospective = `${view.text}00000000`;
+	PHONE_CANDIDATE.lastIndex = 0;
+	for (const match of prospective.matchAll(PHONE_CANDIDATE)) {
+		const normalizedEnd = match.index + match[0].length;
+		if (match.index >= originalEnd || normalizedEnd <= originalEnd) continue;
+		const sourceStart = view.starts[match.index];
+		return sourceStart === undefined ? 0 : sourceStart;
+	}
+	return null;
+}
+
+/** Source offsets whose NFKC scan characters separate two normalized digits. */
+export function phoneLikeNumericSeparatorOffsets(
+	input: string,
+): ReadonlySet<number> | null {
+	const view = createScanView(input);
+	if (view === null) return null;
+	const offsets = new Set<number>();
+	for (let index = 1; index + 1 < view.text.length; index += 1) {
+		if (
+			/[0-9]/u.test(view.text[index - 1] ?? "") &&
+			!/[0-9]/u.test(view.text[index] ?? "") &&
+			/[0-9]/u.test(view.text[index + 1] ?? "")
+		) {
+			const sourceOffset = view.starts[index];
+			if (sourceOffset !== undefined) offsets.add(sourceOffset);
+		}
+	}
+	return offsets;
+}
+
+/**
+ * Return the source end of a leading numeric/separator run using the exact
+ * NFKC character mapping used by the phone detector. Streaming callers use
+ * this only after a bounded fail-closed redaction to discard continuation
+ * fragments until ordinary text terminates the protected run.
+ */
+export function phoneLikeStreamingRunPrefixEnd(input: string): number {
+	let sourceEnd = 0;
+	for (const sourceCharacter of input) {
+		let mapped = "";
+		for (const normalizedCharacter of sourceCharacter.normalize("NFKC")) {
+			mapped += normalizeScanCharacter(normalizedCharacter);
+			if (mapped.length > PHONE_SCAN_MAX_CODE_POINT_EXPANSION)
+				return input.length;
+		}
+		if (!/^[0-9 ().,:;/\\[\]{}+-]*$/u.test(mapped)) break;
+		sourceEnd += sourceCharacter.length;
+	}
+	return sourceEnd;
+}

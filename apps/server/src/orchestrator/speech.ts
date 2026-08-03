@@ -1,4 +1,10 @@
 import {
+	phoneLikeNumericSeparatorOffsets,
+	phoneLikeStreamingRunPrefixEnd,
+	scanPhoneLikeText,
+	trailingPhoneLikeHoldbackStart,
+} from "@botamin/contracts";
+import {
 	type ApprovedSpeechContact,
 	MAX_APPROVED_SPEECH_CONTACTS,
 	markApprovedSpeechContacts,
@@ -278,27 +284,27 @@ function indexInside(pattern: RegExp, text: string, index: number): boolean {
 	return false;
 }
 
-function punctuationProtected(text: string, index: number): boolean {
+function punctuationProtected(
+	text: string,
+	index: number,
+	numericSeparators: ReadonlySet<number> | null,
+): boolean {
 	if (indexInside(EMAIL, text, index) || indexInside(RAW_URL, text, index)) {
 		return true;
 	}
-	const previous = text[index - 1] ?? "";
-	const next = text[index + 1] ?? "";
-	if (/\d/u.test(previous) && /\d/u.test(next)) return true;
+	if (numericSeparators === null || numericSeparators.has(index)) return true;
 	return ABBREVIATION_END.test(text.slice(Math.max(0, index - 12), index + 1));
-}
-
-function isUnsafeNumberBoundary(text: string, index: number): boolean {
-	const left = text.slice(0, index).match(/\d[\d\s().+-]*$/u)?.[0] ?? "";
-	const right = text.slice(index).match(/^\s*[\d().-]/u)?.[0] ?? "";
-	return left.length > 0 && right.length > 0;
 }
 
 function boundaries(text: string): number[] {
 	const result: number[] = [];
+	const numericSeparators = phoneLikeNumericSeparatorOffsets(text);
 	for (let index = 0; index < text.length; index += 1) {
 		const character = text[index] ?? "";
-		if (/[.!?;]/u.test(character) && !punctuationProtected(text, index)) {
+		if (
+			/[.!?;]/u.test(character) &&
+			!punctuationProtected(text, index, numericSeparators)
+		) {
 			result.push(index + 1);
 		}
 	}
@@ -306,9 +312,17 @@ function boundaries(text: string): number[] {
 }
 
 function safeWordBoundary(text: string, limit: number): number {
+	const phoneScan = scanPhoneLikeText(text);
 	for (let index = Math.min(limit, text.length); index > 0; index -= 1) {
 		if (!/\s/u.test(text[index] ?? "")) continue;
-		if (isUnsafeNumberBoundary(text, index)) continue;
+		if (
+			phoneScan.overflow ||
+			phoneScan.regions.some(
+				(region) => index > region.start && index < region.end,
+			)
+		) {
+			continue;
+		}
 		return index;
 	}
 	return Math.min(limit, text.length);
@@ -318,6 +332,7 @@ function safeWordBoundary(text: string, limit: number): number {
 export class StreamingSentenceChunker {
 	#buffer = "";
 	#first = true;
+	#redactingPhoneRun = false;
 	readonly #firstTarget: number;
 	readonly #firstMinimum: number;
 	readonly #softTarget: number;
@@ -364,11 +379,21 @@ export class StreamingSentenceChunker {
 
 	clear(): void {
 		this.#buffer = "";
+		this.#redactingPhoneRun = false;
 	}
 
 	#drain(flush: boolean, idle: boolean): string[] {
 		const chunks: string[] = [];
 		while (this.#buffer.trim()) {
+			if (this.#redactingPhoneRun) {
+				const protectedEnd = phoneLikeStreamingRunPrefixEnd(this.#buffer);
+				if (protectedEnd === this.#buffer.length) {
+					if (flush || this.#buffer.length > this.#hardLimit) this.#buffer = "";
+					break;
+				}
+				this.#buffer = this.#buffer.slice(protectedEnd);
+				this.#redactingPhoneRun = false;
+			}
 			this.#buffer = this.#buffer.trimStart();
 			const structured = findStructuredJson(this.#buffer);
 			if (structured) {
@@ -407,7 +432,54 @@ export class StreamingSentenceChunker {
 				if (end < this.#buffer.length)
 					end = safeWordBoundary(this.#buffer, end);
 			}
-			if (end === undefined || end <= 0) break;
+			const phoneScan = scanPhoneLikeText(this.#buffer);
+			let crossingPhoneStart: number | null = null;
+			if (end !== undefined) {
+				const proposedEnd = end;
+				const crossing = phoneScan.overflow
+					? { start: 0, end: this.#buffer.length }
+					: phoneScan.regions.find(
+							(region) =>
+								proposedEnd > region.start && proposedEnd < region.end,
+						);
+				if (crossing) {
+					crossingPhoneStart = crossing.start;
+					end =
+						crossing.start === 0 &&
+						crossing.end <= this.#hardLimit &&
+						crossing.end < this.#buffer.length
+							? crossing.end
+							: crossing.start;
+				}
+			}
+			const phoneHoldback = trailingPhoneLikeHoldbackStart(this.#buffer);
+			if (phoneHoldback !== null && end !== undefined && end > phoneHoldback) {
+				end = phoneHoldback;
+			}
+			if (end === undefined || end <= 0) {
+				if (phoneHoldback === 0 && flush && !idle) {
+					if (this.#buffer.length <= this.#hardLimit) end = this.#buffer.length;
+					else {
+						this.#buffer = "";
+						this.#redactingPhoneRun = true;
+						chunks.push(CONTACT_REDACTION);
+						this.#first = false;
+						break;
+					}
+				} else if (
+					(phoneHoldback === 0 ||
+						crossingPhoneStart === 0 ||
+						phoneScan.overflow) &&
+					this.#buffer.length > this.#hardLimit
+				) {
+					this.#buffer = "";
+					this.#redactingPhoneRun = true;
+					chunks.push(CONTACT_REDACTION);
+					this.#first = false;
+					break;
+				} else break;
+			}
+			if (end === undefined) break;
 			const chunk = this.#buffer.slice(0, end).trim();
 			this.#buffer = this.#buffer.slice(end);
 			if (chunk) {

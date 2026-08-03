@@ -461,6 +461,122 @@ describe("bounded streaming phrase chunker", () => {
 		expect(chunks.join(" ")).toContain("См. подробности");
 		expect(chunks.every((chunk) => !chunk.endsWith("ООО"))).toBe(true);
 	});
+
+	test("holds Unicode phone prefixes across punctuation deltas and idle flushes", () => {
+		const source = "Телефон +⁷.⁹⁹⁹.¹²³.⁴⁵.⁶⁷";
+		const chunker = new StreamingSentenceChunker({
+			firstMinimum: 1,
+			firstTarget: 20,
+			softTarget: 120,
+			hardLimit: 120,
+			idleFlushMs: 1,
+		});
+		const providerBound: string[] = [];
+		for (const delta of ["Телефон +⁷.", "⁹⁹⁹.", "¹²³.", "⁴⁵.", "⁶⁷"]) {
+			providerBound.push(...chunker.push(delta).map(sanitizeSpeech));
+			providerBound.push(...chunker.flushIdle(1).map(sanitizeSpeech));
+		}
+		providerBound.push(...chunker.flush().map(sanitizeSpeech));
+		const concatenated = providerBound.filter(Boolean).join(" ");
+		expect(concatenated).toBe("Телефон контакт скрыт");
+		expect(concatenated).not.toContain(source);
+		expect(concatenated.normalize("NFKC").replace(/\D/gu, "")).not.toMatch(
+			/\d{8}/u,
+		);
+	});
+
+	test("releases an exact approved phone only as one natural marker-allowlisted phrase", () => {
+		const chunker = new StreamingSentenceChunker({
+			firstMinimum: 1,
+			firstTarget: 20,
+			softTarget: 120,
+			hardLimit: 120,
+		});
+		const chunks: string[] = [];
+		for (const delta of ["Телефон +7 ", "955 ", "567-", "89-", "55"]) {
+			chunks.push(...chunker.push(delta));
+		}
+		chunks.push(...chunker.flush());
+		expect(chunks).toEqual(["Телефон", "+7 955 567-89-55"]);
+		expect(
+			chunks
+				.map(
+					(chunk) =>
+						prepareSpeech(chunk, {
+							contactProcessing: true,
+							approvedContacts: [{ channel: "phone", value: "+79555678955" }],
+						}).spokenText,
+				)
+				.join(" "),
+		).toBe(
+			"Телефон плюс семь, девятьсот пятьдесят пять, пятьсот шестьдесят семь, восемьдесят девять, пятьдесят пять",
+		);
+	});
+
+	test("protects the shared Unicode separator corpus at target and hard boundaries", () => {
+		for (const separator of [
+			".",
+			":",
+			";",
+			"•",
+			"∶",
+			"·",
+			"–",
+			"\u00a0",
+			"\u2007",
+			"\u200b",
+		]) {
+			const candidate = `+７${separator}⁹٩９${separator}¹۲３${separator}⁴٥${separator}６⁷`;
+			const source = `${"Обычная вводная фраза ".repeat(5)}телефон ${candidate}. Продолжим.`;
+			const chunks = chunkSpeech(source, {
+				firstMinimum: 40,
+				firstTarget: 80,
+				softTarget: 120,
+				hardLimit: 120,
+			});
+			const providerBound = chunks
+				.map(sanitizeSpeech)
+				.filter(Boolean)
+				.join(" ");
+			expect(chunks.every((chunk) => [...chunk].length <= 120)).toBe(true);
+			expect(chunks.join(" ")).toBe(source);
+			expect(providerBound).toContain("Продолжим.");
+			expect(providerBound).not.toContain(candidate);
+			expect(providerBound.normalize("NFKC").replace(/\D/gu, "")).not.toMatch(
+				/79991234567/u,
+			);
+		}
+	});
+
+	test("fails closed without unbounded buffering for an overlong numeric run", () => {
+		const chunker = new StreamingSentenceChunker({
+			firstMinimum: 1,
+			firstTarget: 20,
+			softTarget: 120,
+			hardLimit: 120,
+			idleFlushMs: 1,
+		});
+		const chunks = chunker.push(`+${"⁷·".repeat(200)}`);
+		expect(chunks).toEqual(["контакт скрыт"]);
+		expect(chunker.pending.length).toBeLessThanOrEqual(120);
+		expect(chunker.flushIdle(1)).toEqual([]);
+		expect(chunker.push("⁹⁹⁹ продолжение обычного ответа.")).toEqual([
+			"продолжение обычного ответа.",
+		]);
+		expect(chunker.flush()).toEqual([]);
+	});
+
+	test("retains completed ordinary numeric controls", () => {
+		const source =
+			"Рост 3.14 процента. Дело № 1234567. Время 16:00. Обработано 12 500 заявок.";
+		const chunks = chunkSpeech(source, {
+			firstMinimum: 20,
+			firstTarget: 60,
+			softTarget: 120,
+			hardLimit: 120,
+		});
+		expect(chunks.map(sanitizeSpeech).join(" ")).toBe(source);
+	});
 });
 
 describe("TTS budgets and prefetch coordination", () => {

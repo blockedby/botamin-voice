@@ -18,6 +18,7 @@ import type {
 	TtsPort,
 	TtsSynthesisRequest,
 } from "@botamin/contracts";
+import { containsPhoneLikeText } from "@botamin/contracts";
 import {
 	createDeterministicMp3Fixture,
 	createTestBookingContacts,
@@ -36,6 +37,7 @@ import {
 	ConversationOrchestrator,
 	type OrchestratorEvent,
 } from "./orchestrator";
+import type { SpeechChunkerOptions } from "./speech";
 import {
 	type ConversationState,
 	createInitialConversationState,
@@ -158,6 +160,7 @@ function fixture(
 		tts?: TtsPort | null;
 		initialState?: ConversationState;
 		now?: () => Date;
+		speechChunker?: SpeechChunkerOptions;
 	} = {},
 ) {
 	const stt = options.stt ?? new FakeStt({ text: "Да, сохраните данные" });
@@ -173,6 +176,7 @@ function fixture(
 		tts,
 		initialState: options.initialState ?? collectionState(),
 		...(options.now ? { now: options.now } : {}),
+		...(options.speechChunker ? { speechChunker: options.speechChunker } : {}),
 	});
 	return { orchestrator, stt, brain, bookings, tts };
 }
@@ -1751,6 +1755,63 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		for (const input of tts.inputs) {
 			expect(input.text.length).toBeLessThanOrEqual(240);
 			expect(input.text).not.toMatch(/@|999|example\.com|https/u);
+		}
+	});
+
+	test("never reconstructs the reviewer Unicode phone across provider calls or retries", async () => {
+		const source = "Телефон +⁷.⁹⁹⁹.¹²³.⁴⁵.⁶⁷";
+		const twoDeltaSplits = Array.from(
+			{ length: source.length - 1 },
+			(_, index) => [source.slice(0, index + 1), source.slice(index + 1)],
+		);
+		const permutations: readonly (readonly string[])[] = [
+			[source],
+			...twoDeltaSplits,
+			["Телефон +⁷.", "⁹⁹⁹.", "¹²³.", "⁴⁵.", "⁶⁷"],
+			["Телефон ", "+", "⁷", ".", "⁹⁹", "⁹.¹", "²³.⁴⁵.⁶", "⁷"],
+			[...source],
+		];
+
+		for (const deltas of permutations) {
+			const brain = new FakeBrain([
+				...deltas.map(
+					(text): BrainDelta => ({
+						type: "speech.delta",
+						turnId: turn1,
+						generationId: generation1,
+						text,
+					}),
+				),
+				{ type: "turn.completed", turnId: turn1, generationId: generation1 },
+			]);
+			const tts = new RetryTts();
+			const { orchestrator } = fixture({
+				brain,
+				tts,
+				initialState: valueState(),
+				speechChunker: {
+					firstMinimum: 1,
+					firstTarget: 20,
+					softTarget: 120,
+					hardLimit: 120,
+				},
+			});
+			const events = await collect(orchestrator.acceptAudioCommit(commit()));
+			const providerBound = tts.inputs.map((input) => input.text).join(" ");
+			const normalizedDigits = providerBound
+				.normalize("NFKC")
+				.replace(/\D/gu, "");
+
+			expect(events.find((event) => event.type === "text.done")).toMatchObject({
+				text: source,
+			});
+			expect(tts.inputs.length).toBeGreaterThan(0);
+			expect(tts.attempts).toBe(tts.inputs.length * 2);
+			expect(tts.inputs.every((input) => input.text.length <= 120)).toBe(true);
+			expect(providerBound).toContain("контакт скрыт");
+			expect(providerBound).not.toContain(source);
+			expect(containsPhoneLikeText(providerBound)).toBe(false);
+			expect(normalizedDigits).not.toMatch(/\d{8}/u);
 		}
 	});
 

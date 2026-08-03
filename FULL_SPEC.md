@@ -170,7 +170,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 | US-001 | Как посетитель, я запускаю разговор одной кнопкой | proactive greeting останавливается; только после двух consents запрашивается mic permission и создаётся session, UI показывает состояние |
 | US-002 | Я говорю естественно по-русски | UI показывает sample-derived circular countdown во время capture, listening/processing, затем ровно один `transcript.final` |
 | US-003 | Я печатаю финальную реплику | stage-gated composer отправляет provider-neutral `visitor.text.submit`; server-accepted typed turn проходит тот же semantic pipeline, что и speech |
-| US-004 | Агент отвечает голосом и текстом | первая полная MP3-фраза может проиграться до завершения ответа Luna; ответ не содержит markdown-мусора |
+| US-004 | Агент отвечает естественным голосом и текстом | две ordered TTS requests могут готовиться параллельно; browser gapless проигрывает полные provider-neutral MP3/WAV segments, а visible transcript остаётся plain text |
 | US-005 | Агент понимает, зачем я пришёл | задаёт не более одного вопроса за раз и максимум два discovery-вопроса до мягкого предложения следующего шага |
 | US-006 | Агент объясняет Botamin на релевантном примере | использует только утверждённые knowledge claims; 10–15 млн ₽/месяц — только атрибутированное сообщение пользовательского брифа, не гарантия |
 | US-007 | Я могу возразить или перебить | проигрывание останавливается, новый turn обрабатывается |
@@ -192,12 +192,17 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-VOICE-005:** при barge-in клиент немедленно останавливает playback и очищает очередь, backend abort-ит OpenRouter fetches текущего `generationId` и по возможности вызывает `turn/interrupt`.
 - **FR-VOICE-006:** reconnect не должен создавать вторую бронь.
 - **FR-VOICE-007:** stop завершает внешние соединения и фиксирует событие.
-- **FR-VOICE-008:** OpenRouter вызывается только backend-ом; browser получает provider-neutral полные `audio/mpeg` phrase segments в sequence order.
+- **FR-VOICE-008:** OpenRouter вызывается только backend-ом; browser получает provider-neutral complete `audio/mpeg` или canonical `audio/wav` phrase segments in sequence order и никогда не получает raw provider PCM.
 - **FR-VOICE-009:** TTS failure сохраняет видимый текст и все уже committed business side effects; synthesis retry не повторяет brain turn или tools.
-- **FR-VOICE-010:** перед TTS удаляются PII, tool envelopes, hidden IDs, Markdown, code fences и raw URLs; hard limit сегмента — configurable, default 240 chars.
+- **FR-VOICE-010:** перед TTS удаляются PII, tool envelopes, hidden IDs, Markdown, code fences, raw URLs и visitor/model-authored style controls; hard limit сегмента — configurable, default 240 chars.
 - **FR-VOICE-011:** STT duration/byte/time/retry guards и TTS per-segment/turn/session/concurrency/response guards ограничивают voice path; retry не запускает Luna/tools повторно.
-- **FR-VOICE-012:** chunked PCM16 описывает только browser-to-gateway transport; provider boundary получает один atomic `audio/wav` request и возвращает один final result.
+- **FR-VOICE-012:** chunked PCM16 описывает только browser-to-gateway transport; provider boundary получает один atomic `audio/wav` STT request и возвращает один final result.
 - **FR-VOICE-013:** circular countdown отображается только при active capture и вычисляется по числу принятых PCM16 samples (`acceptedPcmBytes / 2 / 16000`), ограниченному меньшим из server `maxUtteranceMs` и byte-derived duration; wall-clock drift не является источником значения.
+- **FR-VOICE-014:** server запускает не более двух ordered TTS requests (current + one prefetch), но публикует результаты только в source order; first failure, barge-in и stale generation подавляют более поздний prefetched audio.
+- **FR-VOICE-015:** browser scheduled playback привязывает следующий decoded segment к end time предыдущего. Credit window ограничен четырьмя segments / 20 MB / 5 MB per segment и максимум двумя decoded/source slots; credit возвращается после release.
+- **FR-VOICE-016:** default TTS profile — exact xAI/eve/MP3. Gemini 3.1 Flash TTS Preview включается только полным four-env PCM profile, fails closed on mismatch, server-side wraps PCM as complete canonical mono 24 kHz PCM16 WAV, and has no automatic fallback/model/voice selection.
+- **FR-VOICE-017:** server-owned style enum is `neutral|curious|serious|excited`; sensitive/authoritative facts always use neutral. Provider controls have no transcript, durable-state, or provider-selection effect; visible transcript stays plain.
+- **FR-VOICE-018:** The 16 committed same-origin Sulafat reaction clips are canonical mono PCM16LE 24 kHz WAVs. They require negotiated allowlist capability and may play at most once per fail-closed safe-policy-eligible turn after 350 ms. Runtime currently exposes only a non-claiming neutral clip; claim-bearing progress/validation/scheduling/booking/acceptance clips fail closed without an explicit trusted server operation signal. Reactions make zero runtime provider calls and cannot affect transcript, state, booking, tools, or provider behavior.
 - **FR-TEXT-001:** `visitor.text.submit` содержит один trimmed final typed turn до 2,000 символов, monotonic sequence и не содержит provider/tool fields.
 - **FR-TEXT-002:** typed turn очищает uncommitted microphone bytes, допускает не более одного pending submit и считается принятым только после server `transcript.final`; rejected retry сохраняет sequence.
 - **FR-TEXT-003:** после final acceptance typed и spoken turns семантически равнозначны: один и тот же Luna context, server state policy, tools, persistence, assistant text и optional TTS.
@@ -211,9 +216,10 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-BRAIN-005:** ответы проходят speech sanitizer перед TTS.
 - **FR-BRAIN-006:** system/product/conversation prompts загружаются из Markdown.
 - **FR-BRAIN-007:** tool mode имеет feature flag: `dynamic` и стабильный fallback `envelope`.
-- **FR-BRAIN-008:** reasoning effort зафиксирован exact `low`: отсутствие значения default-ится в `low`, любое иное значение отклоняется до запуска Codex process для standard и priority.
+- **FR-BRAIN-008:** reasoning effort задаётся конфигурацией; стартовый профиль Luna использует минимальный уровень, который проходит quality evals.
 - **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, parsed time-of-day/concrete-date-time request и ровно два structured meeting candidates с concrete Moscow date/time labels.
 - **FR-BRAIN-010:** cadence умеренно проактивен: один вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting offer, без повторного давления после ясного отказа.
+- **FR-BRAIN-011:** ordinary spoken reply uses concise natural Russian: usually no more than two short sentences/about twelve seconds, one useful thought, and at most one question; filler acknowledgements and invented progress are forbidden.
 
 ### 4.3 Booking
 
@@ -249,6 +255,8 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-WEB-006:** mobile viewport поддерживается.
 - **FR-WEB-007:** при voice failure пользователю не показываются stack traces/provider details.
 - **FR-WEB-008:** proactive MP3 содержит только фиксированный product copy без visitor data. Его замена выполняется отдельным explicit admin opt-in OpenRouter generation script и commit-ится как static asset; runtime visit не генерирует greeting.
+- **FR-WEB-009:** playback `AudioContext` создаётся/resume-ится в synchronous consent gesture path до mic/network awaits; live WebKit acceptance remains a release gate.
+- **FR-WEB-010:** local reaction corpus generation is a separate explicit paid admin opt-in; committed assets are runtime-static and reaction fetch/decode failure is decoration-only.
 
 ## 5. P1 и P2
 
@@ -326,7 +334,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 ## 9. Release sequencing boundary
 
-`0.5.0-local-rc.4` is the recommended, still-untagged local candidate for one trusted owner machine. RC3 evidence is preserved as history, not reused as RC4 proof. Chromium desktop/mobile landing smoke is not a full voice journey. WebKit has a downloaded browser binary but the current host is missing `libicu74`, `libxml2`, and `libflite1`; WebKit full journey therefore remains not run. Target-VPS resources, DNS, public TLS/WSS, and target-host provider live booking are also external gates. The internal virtual meeting remains deliberately different from an external calendar event.
+`0.5.0-local-rc.4` is the recommended, still-untagged local candidate for one trusted owner machine. Chromium desktop/mobile landing smoke is not a full voice journey. Full Chromium and WebKit voice journeys, target-VPS resources, DNS, public TLS/WSS, target-host provider live booking, and target-host latency/load remain external gates. There is no formal voice A/B quality matrix. The isolated Gemini smoke is transport evidence only, never a listening-quality claim. The internal virtual meeting remains deliberately different from an external calendar event.
 
 
 <div class="page-break"></div>
@@ -427,7 +435,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 
 ### Блок 5. Voice demo
 
-Sticky/inline widget с transcript, статусом и одной главной кнопкой. При входе он один раз пытается проиграть committed product-owned same-origin MP3-приветствие. Это product preview, а не voice session: до consent нет conversation REST/WS, microphone или provider call. Если autoplay заблокирован или media не загрузилось, показывается `Включить приветствие`; запуск разговора останавливает приветствие.
+Sticky/inline widget с plain transcript, статусом и одной главной кнопкой. При входе он один раз пытается проиграть committed product-owned same-origin MP3-приветствие. Это product preview, а не voice session: до consent нет conversation REST/WS, microphone или provider call. Если autoplay заблокирован или media не загрузилось, показывается `Включить приветствие`; запуск разговора останавливает приветствие. После consent короткие естественные реплики идут через gapless provider-neutral playback; 16 capability-gated same-origin reactions могут ненавязчиво обозначить задержку после 350 ms, но не меняют transcript/state и не вызывают provider runtime.
 
 ### Блок 6. Trust and limits
 
@@ -444,7 +452,7 @@ Sticky/inline widget с transcript, статусом и одной главно�
 | Stage | Цель | Главный event | Drop-off reason examples |
 |---|---|---|---|
 | Visit | понять ценность и услышать короткий static product greeting | `landing.viewed` | autoplay blocked → явная `Включить приветствие` |
-| Voice start | получить оба consent до session/mic/provider path | `conversation.started` | permission denied |
+| Voice start | получить оба consent до session/mic/provider path и gesture-owned AudioContext | `conversation.started` | permission/audio unavailable |
 | Discovery | найти задачу максимум за два вопроса до мягкого offer | `discovery.completed` | слишком много вопросов |
 | Value | связать pain и use case | `value.presented` | общая презентация |
 | Intent | получить согласие на следующий шаг | `booking.offered` | нет доверия/времени |
@@ -500,7 +508,7 @@ Name, company, working email, phone or Telegram, qualification facts и candidat
 
 До этого pipeline существует отдельный pre-consent path: page entry делает одну `HTMLAudio` playback attempt committed same-origin `/assets/botamin-proactive-greeting.mp3`. Он не создаёт conversation, REST/WS, microphone, provider call или session; blocked/error переводит UI к `Включить приветствие`, а session start останавливает/release-ит audio.
 
-Действующий post-consent pipeline: **browser PCM16 chunks → gateway/utterance assembler bounds mono PCM16 and emits one validated WAV → atomic `audio/wav` SttPort request → OpenRouter audio-input chat completion final transcript → Codex/Luna → OpenRouter TTS complete MP3 segment**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint. Static proactive MP3 не входит в этот runtime pipeline.
+Действующий post-consent pipeline: **browser PCM16 chunks → gateway/utterance assembler emits one validated STT WAV → atomic `audio/wav` SttPort → OpenRouter final transcript → Codex/Luna → two-request ordered TTS prefetch → complete provider-neutral MP3 or canonical WAV segments → gapless scheduled playback**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint. The static proactive greeting MP3 and Sulafat canonical-WAV reactions не входят в provider runtime pipeline.
 
 Это отличается от end-to-end speech-to-speech: добавляется один orchestration layer, зато используется уже оплаченная Codex subscription и мозг можно заменить без переделки audio UI.
 
@@ -513,6 +521,7 @@ Name, company, working email, phone or Telegram, qualification facts и candidat
 - ровно одна immediate entry attempt fixed same-origin proactive MP3 без session/network capabilities кроме same-origin asset fetch;
 - truthful `Включить приветствие` fallback после autoplay block/media error и release greeting при session start;
 - mic permission только после обоих consents;
+- synchronous creation/resume output `AudioContext` in the consent gesture before mic/network awaits;
 - AudioWorklet capture;
 - resample browser audio до mono PCM16 16 kHz;
 - отправка бинарных PCM16 чанков около 100 ms;
@@ -520,8 +529,11 @@ Name, company, working email, phone or Telegram, qualification facts и candidat
 - circular countdown по принятым samples, а не wall clock, с effective duration по stricter duration/byte ceiling;
 - secure `visitor.text.submit` for bounded final typed turns plus structured revisioned booking form commands only in server-owned `COLLECT_BOOKING`;
 - UI states `listening → processing → transcript.final`;
-- ordered playback queue для полных MP3 phrase segments;
-- decode через Web Audio или `HTMLAudio`;
+- provider-neutral validation/rendering of complete MP3 or canonical 24 kHz mono PCM16 WAV segments;
+- gapless Web Audio scheduling with current + prefetched decoded slots;
+- explicitly negotiated v2 four-segment/20 MB/5 MB-per-segment credit window, at most two decoded/source slots, and release acknowledgment;
+- negotiated allowlist over a 16-clip committed same-origin corpus; at most one eligible non-claiming decoration after 350 ms, cancelled by dynamic audio, mute, barge-in, or staleness. Claim-bearing progress clips remain unreachable without a future explicit trusted operation signal;
+- mixed-version safety: a legacy-shaped JSON hello plus trusted same-origin `?voiceProtocol=2` offer/accept negotiation lets the new browser fall back against exact `origin/main`; an old browser is rejected by the new server before readiness or turn consumption rather than entering ACK-dependent flow;
 - barge-in: немедленно stop local playback и clear queue;
 - rendering transcript/state/errors;
 - reconnect с тем же `conversationId`, если сессия ещё жива.
@@ -537,7 +549,8 @@ Name, company, working email, phone or Telegram, qualification facts и candidat
 - multiplex JSON events и binary audio;
 - bounded utterance assembly до `audio.commit`, duration/byte guards и encoding bounded mono PCM16 into exactly one validated WAV;
 - atomic provider request lifecycle, abort и stale-turn suppression;
-- backpressure;
+- playback credit backpressure negotiated at four segments / 20 MB and replenished only by exact `playback.segment.released` acknowledgment;
+- local-reaction capability negotiation and conservative stage/privacy selection with no provider call or business effect;
 - orchestration turns;
 - speech sanitizer + sentence chunker;
 - запись событий и latency;
@@ -589,18 +602,15 @@ P0 transport — direct typed JSON-RPC к app-server. Универсальный
 
 ### OpenRouterTtsAdapter
 
-- server-side native Bun `fetch` к `POST https://openrouter.ai/api/v1/audio/speech`;
-- default profile: `x-ai/grok-voice-tts-1.0`, voice `eve`, `response_format=mp3`;
-- model, voice, speed и format задаются env; `speed` не отправляется, если empty;
-- `Authorization` и optional attribution headers остаются server-side; `X-OpenRouter-Cache: false` обязателен для user-specific speech;
-- один HTTP request синтезирует одну короткую фразу; весь response буферизуется, проверяется как непустой bounded `audio/mpeg`, затем эмитится одним atomic segment;
-- raw network chunks не считаются самостоятельно playable MP3;
-- `AbortSignal` отменяет fetch, а generation filtering отбрасывает late result;
-- `429` и retryable `5xx` получают не более одного bounded retry; `400/401/402/403/404/413` не ретраятся по умолчанию;
-- `401`, `402` и `404` открывают safe degraded mode; text answer, booking и qualification продолжают работать;
-- circuit breaker открывается после трёх consecutive retryable failures и half-opens после cooldown;
-- per-segment/turn/session character budgets, concurrency и maximum response bytes ограничены;
-- telemetry содержит model/voice/format/chars/status/latency/bytes и safe IDs, но не spoken text, PII, key или audio.
+- server-side native Bun `fetch` к `POST https://openrouter.ai/api/v1/audio/speech`; default remains exact `xai_mp3` / `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`;
+- opt-in Preview profile requires exact `gemini_3_1_pcm` / `google/gemini-3.1-flash-tts-preview` / one case-sensitive release-snapshot voice / `pcm`, with no speed, automatic choice, or xAI fallback;
+- Gemini public catalog is dynamic; the exact 30-voice snapshot verified 2026-08-03 is recorded in [`../CURRENT_DECISIONS.md`](../CURRENT_DECISIONS.md) and configuration fails closed outside it;
+- OpenRouter PCM is validated as complete PCM16LE and wrapped server-side into canonical complete mono 24 kHz PCM16LE `audio/wav`; browser never receives raw PCM;
+- `TtsPort` carries plain sanitized text plus trusted low-cardinality delivery style `neutral|curious|serious|excited`. Gemini mapping is fixed server-side (`neutral` no tag, otherwise `[curious]`, `[serious]`, `[excited]`); bracket controls from text fail closed;
+- contacts, exact meeting/date/time, booking/qualification, server-authority/fallback, and interrupted-turn content always use neutral. Style is presentation-only: visible transcript stays plain and durable state/provider selection do not change;
+- one HTTP request synthesizes one short phrase; at most current + one prefetch are in flight, then complete segments publish strictly in source order;
+- `Authorization` and attribution stay server-side; `X-OpenRouter-Cache: false`, bounds, abort/stale suppression, one pure-synthesis retry maximum, circuit breaker, budgets, and text-only degradation remain mandatory;
+- telemetry contains safe aggregates only, never spoken text, style tags, PII, key, raw PCM/WAV/MP3, or provider body.
 
 ### BookingService
 
@@ -644,7 +654,7 @@ P0 adapter — fixed-schema non-PII console acknowledgment. P1 — signed HTTP w
 2. Autoplay block или media error не запускает alternate network/provider path: UI показывает `Включить приветствие`, и повтор возможен только по user action.
 3. До обоих consents не создаются conversation/WS/microphone/provider/session. При старте настоящей session greeting немедленно pause/reset/release.
 
-Asset создаётся отдельно от visitor runtime: admin явно запускает opt-in `scripts/generate-proactive-greeting.ts`, script синтезирует фиксированный product copy через OpenRouter, валидирует bounded complete MP3 и заменяет committed asset. В asset нет visitor input/data; обычный entry никогда его не генерирует.
+Assets создаются отдельно от visitor runtime. Admin explicitly opts in to the paid proactive-greeting or local-reaction generator; the 16 Sulafat canonical mono PCM16LE 24 kHz reaction WAVs and proactive greeting MP3 are already committed static same-origin assets. Reaction regeneration additionally requires the exact Gemini PCM/Sulafat production profile. They contain no visitor data, and ordinary entry/turn handling never synthesizes them.
 
 ### Post-consent turn order
 
@@ -656,9 +666,11 @@ Asset создаётся отдельно от visitor runtime: admin явно �
 6. Structured form commands patch the same draft at `baseRevision`; exact-revision confirmation automatically commits the booking through `uncommitted → committing → committed`.
 7. Before readiness and then periodically, a bounded DB-only sweeper recovers orphaned `committing` drafts idempotently without Luna/STT/TTS or an in-memory session; confirmation and qualification remain pending for the visitor reconnect.
 8. Text deltas pass the sanitizer. Contacts are redacted unless they exactly match server-approved contacts and contact-processing consent is active.
-9. Complete bounded phrases go to OpenRouter TTS and then the ordered browser queue.
-10. Only a durable booking publishes `internal.meeting.updated`; the final widget cannot be synthesized from transcript/stage alone.
-11. After truthful meeting confirmation, server qualification asks only missing facts. Provider retries never repeat Luna, notifier, draft mutation, or booking effects.
+9. Complete bounded phrases enter a two-request TTS window; settlement is reordered to source order before provider-neutral complete MP3/WAV WS segments.
+10. Browser uses a four-segment/20 MB credit window, decodes at most two segments, schedules the next at the preceding end time, and returns credit only after release.
+11. If negotiated and policy-safe, server may request one allowlisted same-origin reaction after 350 ms. It is cancelled by dynamic audio/staleness and has no transcript, state, provider, tool, or booking effect.
+12. Only a durable booking publishes `internal.meeting.updated`; the final widget cannot be synthesized from transcript/stage alone.
+13. After truthful meeting confirmation, server qualification asks only missing facts. Provider retries never repeat Luna, notifier, draft mutation, or booking effects.
 
 ## 4. Latency design
 
@@ -669,7 +681,7 @@ Asset создаётся отдельно от visitor runtime: admin явно �
 - OpenRouter phrase-level STT request to final transcript: measured release-profile input, no provider latency guarantee;
 - Luna first delta after final transcript: target ≤ 900 ms;
 - first phrase buffer: default target 100 chars, idle flush 350 ms;
-- OpenRouter request + complete MP3 response: измеряется отдельно для release profile, без provider latency guarantee;
+- OpenRouter request + complete MP3 or canonical WAV response: измеряется отдельно для release profile, без provider latency guarantee;
 - total target is re-baselined from measured `audio.commit → final transcript → playback`; phrase-level STT necessarily adds post-commit upload/inference latency.
 
 ### Приёмы снижения задержки
@@ -677,9 +689,10 @@ Asset создаётся отдельно от visitor runtime: admin явно �
 - показывать client listening/processing state и только atomic `transcript.final`;
 - Luna effort `low`/минимально доступный после model capability check;
 - короткий state context вместо полного event log;
-- запускать phrase-level synthesis до завершения полного Luna ответа;
+- требовать concise natural spoken form (обычно ≤2 коротких предложений, одна мысль, ≤1 вопрос);
+- запускать current + one ordered prefetched synthesis до завершения полного Luna ответа;
 - первая фраза 60–120 chars, normal soft target 120–180, hard limit 240;
-- держать не более одного playing и одного prefetched segment;
+- schedule decoded current/prefetch by Web Audio end times; retain at most four/20 MB with at most two decoded;
 - исключить RAG/network tools из критического пути;
 - не делать второй classifier call на каждый turn.
 
@@ -796,6 +809,7 @@ export type TtsSynthesisRequest = {
   generationId: string;
   segmentId: string;
   text: string;
+  deliveryStyle?: "neutral" | "curious" | "serious" | "excited";
   signal: AbortSignal;
 };
 
@@ -803,7 +817,7 @@ export type TtsAudioSegment = {
   generationId: string;
   segmentId: string;
   providerGenerationId?: string;
-  contentType: "audio/mpeg";
+  contentType: "audio/mpeg" | "audio/wav";
   bytes: Uint8Array;
   final: true;
 };
@@ -838,9 +852,9 @@ LLM cannot directly write state or durable facts. It may propose quoted current-
 4. abort-ит in-flight OpenRouter requests этой generation;
 5. вызывает `turn/interrupt`, если Codex turn ещё активен;
 6. gateway продолжает принимать новые browser PCM16 chunks в новый bounded utterance;
-7. поздние STT results, text и complete MP3 segments старого turn/generation игнорируются.
+7. поздние STT results, text, complete MP3/WAV segments и reactions старого turn/generation игнорируются.
 
-Ключевой контракт: **устаревший complete audio segment никогда не проигрывается после нового user turn**. OpenRouter-specific cancellation contract не предполагается; cancellation локальна.
+Ключевой контракт: **устаревший complete MP3/WAV segment или reaction никогда не проигрывается после нового user turn**. OpenRouter-specific cancellation contract не предполагается; cancellation локальна.
 
 ## 11. Предлагаемый repository layout
 
@@ -921,7 +935,10 @@ ABANDONED_SESSION_TIMEOUT_MS=10000
 # Keep CODEX_HOME outside this source repository and use an absolute path.
 BRAIN_PROVIDER=codex-subscription
 CODEX_MODEL=gpt-5.6-luna
+# Luna reasoning cannot be disabled; low is the lowest supported effort.
 CODEX_EFFORT=low
+# Empty is portable standard service; exact priority opts into Fast routing.
+CODEX_SERVICE_TIER=
 CODEX_HOME=/home/your-user/.local/share/botamin-voice/codex-home
 # Production runtime is fixed to the server-validated envelope mode.
 CODEX_TOOL_MODE=envelope
@@ -945,14 +962,21 @@ STT_TEXT_ONLY_INPUT_FALLBACK=false
 OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 
-# TTS — complete MP3 phrase segments
+# TTS — exact xAI complete MP3 profile by default
 TTS_PROVIDER=openrouter
-
+OPENROUTER_TTS_PROFILE=xai_mp3
 OPENROUTER_TTS_MODEL=x-ai/grok-voice-tts-1.0
 OPENROUTER_TTS_VOICE=eve
 OPENROUTER_TTS_RESPONSE_FORMAT=mp3
-# Optional; omit from request if empty
+# Optional for xAI; omit from request if empty
 OPENROUTER_TTS_SPEED=
+
+# Paid opt-in Gemini Preview: change all four values together; speed must be empty.
+# Voice is case-sensitive and must be in the 30-voice release snapshot.
+# OPENROUTER_TTS_PROFILE=gemini_3_1_pcm
+# OPENROUTER_TTS_MODEL=google/gemini-3.1-flash-tts-preview
+# OPENROUTER_TTS_VOICE=Kore
+# OPENROUTER_TTS_RESPONSE_FORMAT=pcm
 
 # Optional app attribution; localhost is safe for local development
 OPENROUTER_HTTP_REFERER=http://localhost:5173
@@ -997,7 +1021,7 @@ TRANSCRIPT_RETENTION_DAYS=30
 STORE_RAW_AUDIO=false
 ```
 
-Значение concurrency — initial guardrail, а не окончательная capacity claim; оно настраивается после load test и проверки лимитов конкретной подписки. `MAX_PENDING_BRAIN_TURNS` ограничивает сохранённые в памяти committed WAV; booked sessions имеют отдельную приоритетную FIFO-очередь, а внутри каждой очереди сохраняется порядок поступления. `TRUSTED_PROXY_HOPS=0` безопасно игнорирует forwarding headers для прямого Bun-запуска; Compose явно задаёт `1`, потому что app доступен только через Caddy. `CODEX_MODEL` фиксирован release-профилем, а `CODEX_EFFORT` допускает только exact `low`; любое иное значение отклоняется до запуска Codex process.
+Значение concurrency — initial guardrail, а не окончательная capacity claim; оно настраивается после load test и проверки лимитов конкретной подписки. `MAX_PENDING_BRAIN_TURNS` ограничивает сохранённые в памяти committed WAV; booked sessions имеют отдельную приоритетную FIFO-очередь, а внутри каждой очереди сохраняется порядок поступления. `TRUSTED_PROXY_HOPS=0` безопасно игнорирует forwarding headers для прямого Bun-запуска; Compose явно задаёт `1`, потому что app доступен только через Caddy. Production-профиль фиксирует `CODEX_MODEL=gpt-5.6-luna` и минимально поддерживаемый Luna effort `low`: доступные effort — `low|medium|high|xhigh|max`, поэтому reasoning нельзя выключить через `off`/`minimal`. Опциональный `CODEX_SERVICE_TIER=priority` включает advertised Fast tier (1.5x speed) ценой повышенного subscription usage; пустое значение оставляет portable standard service. Это не latency SLA. Любое изменение release-профиля требует полного conversation eval gate.
 
 
 <div class="page-break"></div>
@@ -1019,9 +1043,9 @@ STORE_RAW_AUDIO=false
 - session start останавливает static greeting до REST/WS/mic/provider flow;
 - представиться как AI-продавец Botamin;
 - не маскироваться под человека;
-- одна реплика обычно 1–3 коротких предложения;
+- обычная реплика — одно предложение из 6–14 слов, не более 22 слов и примерно 8 секунд; второе короткое предложение только для ответа и вопроса;
 - один вопрос за раз;
-- умеренно проактивно предложить demo/встречу не позднее ответа на второй discovery-вопрос;
+- сначала выяснить отрасль/бизнес, затем дать единственный атрибутированный user-brief hook и только потом предложить 20-минутную экспертную видеовстречу;
 - не повторять уже собранные данные;
 - не спорить с ясным отказом;
 - после двух мягких отказов завершить без давления;
@@ -1044,19 +1068,21 @@ Asset не содержит visitor data: администратор отдел�
 
 ### GREETING
 
-До consent видимая fixed copy:
+Цель: быстро объяснить формат.
 
-> Здравствуйте! Я голосовой AI-консультант Botamin. Чем занимается ваша компания? Подтвердите условия, и начнём.
+Пример:
 
-После consent `GREETING` никогда не получает scheduling candidates и одним вопросом узнаёт отрасль или бизнес.
+> Я голосовой AI-консультант Botamin. Чем занимается ваша компания?
 
 ### DISCOVERY
 
-Первый ответ об отрасли или бизнесе всегда получает одну canonical assistant response: дословный attributed hook, затем ровно два current server-owned 20-minute Moscow `displayLabel` и один вопрос выбора — без filler, повторного meeting intent или второго brain call. Brain предлагает `COLLECT_BOOKING`; server публикует ordered `DISCOVERY -> VALUE -> BOOKING_OFFER -> COLLECT_BOOKING` и не разрешает другие skips.
+Сначала выяснить отрасль или бизнес одним вопросом. Прямой meeting intent сохраняется, но не разрешает `GREETING -> BOOKING_OFFER` или `DISCOVERY -> BOOKING_OFFER` и не открывает slot context до завершённых discovery и value.
 
 ### VALUE
 
-В canonical discovery response используется только hook: «По пользовательскому брифу Botamin, в этой отрасли были случаи: компании с AI-агентами увеличивали выручку на 10–15 миллионов рублей ежемесячно; без гарантий». Другой case claim или число запрещены.
+Использовать только канонический hook, без другого кейса или числа:
+
+> По пользовательскому брифу Botamin, в этой отрасли были случаи: компании с AI-агентами увеличивали выручку на 10–15 миллионов рублей ежемесячно; без гарантий.
 
 ### OBJECTION
 
@@ -1068,11 +1094,13 @@ Asset не содержит visitor data: администратор отдел�
 
 ### BOOKING_OFFER
 
-Два current 20-minute Moscow candidates в canonical discovery response являются offer; отдельная filler-реплика или повторное согласие не нужны.
+Только после discovery и канонического value hook предложить 20-минутную видеовстречу с экспертом. Нельзя обещать звонок или callback: агент работает только в текущей сессии сайта.
+
+> Согласуем двадцатиминутную видеовстречу с экспертом?
 
 ### COLLECT_BOOKING
 
-Следующий typed/spoken turn сразу принимает выбор одного из двух уже предложенных current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
+После согласия использовать ровно два current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Typed/spoken time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
 
 Обязательный набор: accepted name, company, working email, phone or Telegram, one current candidate, and contact consent. Spoken and typed turns merge quoted fact proposals into the same durable `conversation_contexts.draft_json`. New conflicting values produce bounded explicit options instead of silent overwrite.
 
@@ -1190,7 +1218,7 @@ Prompt compiler:
 - собирает `/app/runtime-brain/AGENTS.md` — основной instruction source для Codex thread;
 - при необходимости копирует туда только разрешённые read-only knowledge-файлы; исходный repository туда не монтируется;
 - при `thread/start` проверяет, что `instructionSources` содержит ожидаемый `AGENTS.md`;
-- перед каждым `turn/start` одинаково разбирает typed/spoken time-band/concrete requests and adds compact machine-generated context from the durable draft: stage, accepted facts, conflicts, booking snapshot, server-owned Moscow date/day, exactly two concretely dated current candidates, allowed actions, and final user text;
+- перед каждым `turn/start` adds compact machine-generated context: stage, accepted facts, conflicts, booking snapshot, server-owned Moscow date/day, allowed actions, and final user text; exactly two dated candidates are withheld in `GREETING`/`DISCOVERY` and exposed only after completed discovery/value;
 - логирует только version/hash, не весь prompt;
 - поддерживает hot reload только в development: новый prompt version применяется к новым conversations, а активные сохраняют исходную версию.
 
@@ -1302,10 +1330,10 @@ Backend возвращает safe result:
 - Все события содержат `conversationId`, а booking events также `bookingId`.
 - Версия контракта передаётся как `v: 1`.
 - Ошибки providers не пробрасываются клиенту напрямую.
-- Binary WebSocket frames несут client PCM16 input или один полный server MP3 phrase payload; arbitrary provider network chunks никогда не публикуются как playable audio.
+- Binary WebSocket frames несут client PCM16 input или один полный provider-neutral server MP3/canonical-WAV phrase payload; raw provider PCM/network chunks никогда не публикуются как playable audio.
 - Tool handlers не доступны как публичные HTTP endpoints.
 - Proactive greeting не является API/session contract: page entry делает один same-origin GET/playback static MP3, без conversation REST/WS/mic/provider/session до обоих consents. Blocked/error fallback — `Включить приветствие`; session start прекращает static playback.
-- Committed proactive MP3 содержит только fixed product copy без visitor data. Его может заменить только explicit admin opt-in OpenRouter generation script; visitor runtime его не синтезирует.
+- The committed proactive greeting MP3 and 16 Sulafat canonical mono PCM16LE 24 kHz reaction WAVs are same-origin static product assets without visitor data. Their generation is explicit paid admin opt-in; reaction regeneration also requires the exact Gemini PCM/Sulafat production profile. Visitor runtime never synthesizes them, and reactions have no transcript/state/provider/business effect.
 
 ## 2. REST endpoints
 
@@ -1363,10 +1391,10 @@ Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`. Application 
 
 - DB write/read;
 - Codex app-server handshake;
-- наличие auth и модели Luna в `model/list`;
+- наличие auth и exact Luna/`low` в `model/list`; если запрошен `CODEX_SERVICE_TIER=priority`, exact Luna entry обязан рекламировать service-tier id `priority`, иначе readiness возвращает `CODEX_MODEL_OR_TIER_UNAVAILABLE` (отсутствующее legacy-поле допустимо только для standard service);
 - ровно один `OPENROUTER_API_KEY` для обоих voice paths;
 - при `STT_PROVIDER=openrouter`: schema-valid audio-input model/`wav`/language, utterance byte/time limits и request timeout/retry limits; readiness не утверждает наличие provider streaming session;
-- при `TTS_PROVIDER=openrouter`: schema-valid model/voice/`mp3`, доступность queue/circuit state и разрешённый text-only output startup policy;
+- при `TTS_PROVIDER=openrouter`: one exact schema-valid profile (`xai_mp3` → xAI/eve/MP3 by default, or complete opt-in `gemini_3_1_pcm` → Preview model/case-sensitive snapshot voice/PCM), queue/circuit state and text-only startup policy; readiness makes no paid call and selects no fallback;
 - prompt bundle checksum;
 - запущенный persisted notification-outbox worker (provider delivery failure itself remains retryable and does not make booking uncommitted);
 - возможность принять новую conversation по active/queued concurrency guards.
@@ -1392,6 +1420,17 @@ Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`. Application 
       "sampleRate": 16000,
       "channels": 1,
       "chunkMs": 100
+    },
+    "capabilities": {
+      "localReactions": {
+        "version": 1,
+        "clipIds": ["neutral-good", "neutral-accepted"]
+      }
+    },
+    "playback": {
+      "maxBufferedSegments": 4,
+      "maxBufferedBytes": 20000000,
+      "maxSegmentBytes": 5000000
     }
   }
 }
@@ -1426,18 +1465,22 @@ Server:
 
 | Event | Payload | Назначение |
 |---|---|---|
-| `client.hello` | audio config, resume token | handshake |
+| `client.hello` | legacy-shaped audio config + resume token only | strict first handshake, compatible with exact `origin/main` |
+| `client.protocol.accept` | version 2, exact reaction capability or null, literal four-segment/20 MB playback window | accepts only a preceding trusted v2 server offer |
 | `audio.commit` | `{}` | закрыть bounded utterance и создать ровно один atomic final-transcription request |
 | `visitor.text.submit` | `{ sequence, text }` | one final typed turn; same durable fact path as spoken transcript |
 | `booking.form.submit` | `{ requestId, baseRevision, details, selectedCandidateId? }` | structured patch/current candidate against exact draft revision |
 | `booking.conflict.resolve` | `{ requestId, baseRevision, field, conflictOptionId }` | explicitly accept one current conflict option |
 | `booking.draft.confirm` | `{ requestId, revision }` | confirm exact ready revision and trigger automatic internal meeting commit |
 | `playback.started` | `generationId` | метрика |
+| `playback.segment.released` | `{ generationId, segmentId, sequence, byteLength }` | exact release acknowledgment returns one segment/byte credit |
 | `playback.interrupted` | `generationId`, reason | barge-in |
 | `session.stop` | reason | корректное завершение |
 | `client.ping` | timestamp | keepalive |
 
-Первый `client.hello` обязан предъявить одноразовый `clientToken` из REST response; `session.ready` сразу заменяет его новым resume token. На session допускается один pending hello-кандидат с коротким deadline и один bound socket. Reconnect заменяет bound socket только после полной проверки hello/token; неподтверждённый кандидат его не вытесняет.
+Первый `client.hello` обязан предъявить одноразовый `clientToken` из REST response and remains strict legacy-shaped: v2 capability fields are not injected into it. The same-origin REST URL contains only the low-cardinality `?voiceProtocol=2` signal. A new server then emits `session.protocol.offer`; only an exact `client.protocol.accept` enables reactions and ACK-dependent credits, after which `session.ready` replaces the token. Exact `origin/main` ignores the query and emits `session.ready` directly, so the new browser stays in legacy mode and sends no unknown v2 event. An old browser reaching the new server has no trusted v2 query and is rejected with a bounded legacy-valid error/policy close before readiness, token rotation, or turn consumption; a reload obtains the co-deployed browser while durable booking state remains intact. Unknown, duplicate, or additional query fields and mismatched accept values fail closed.
+
+На session допускается один pending hello-кандидат с коротким deadline и один bound socket. Reconnect заменяет bound socket only after complete hello/token/protocol validation; an unconfirmed candidate does not displace it.
 
 После handshake PCM16 audio идёт binary frames без base64. Gateway/utterance assembler ограничивает accumulated input максимумом 60,000 ms и так, чтобы atomic WAV не превысил 2,000,000 bytes; при 16 kHz mono PCM16 default duration ceiling строже и даёт `maxPcmBytes=1,920,000`. После `audio.commit` gateway кодирует ровно один validated WAV и передаёт его atomic `SttPort`; только OpenRouter adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks не означают streaming transport до provider.
 
@@ -1449,12 +1492,14 @@ The booking form is not encoded as visitor text in RC4. It sends strict revision
 
 | Event | Payload |
 |---|---|
-| `session.ready` | state/config |
+| `session.protocol.offer` | `{ version: 2 }`; emitted only for a trusted exact v2 upgrade query after valid legacy-shaped hello |
+| `session.ready` | state/config; means negotiation is complete (v2) or exact old-server legacy fallback selected |
 | `state.changed` | from/to/reason; voice UI uses listening/processing states |
 | `transcript.final` | turnId/text; единственное STT text event после atomic provider result |
-| `assistant.text.delta` | generationId/text |
-| `assistant.text.done` | generationId/fullText |
-| `audio.segment` | generationId, segmentId, sequence, `contentType=audio/mpeg`, byteLength, `final=true`; immediately followed by one complete binary MP3 payload |
+| `assistant.reaction.request` | turnId, generationId, allowlisted clipId, `delayMs=350`; decoration only, no text/state/provider effect |
+| `assistant.text.delta` | generationId/plain text |
+| `assistant.text.done` | generationId/plain fullText; style tags never appear here |
+| `audio.segment` | generationId, segmentId, sequence, `contentType=audio/mpeg|audio/wav`, byteLength, `final=true`; immediately followed by one complete matching binary payload |
 | `assistant.audio.done` | generationId |
 | `assistant.interrupted` | generationId |
 | `booking.draft.updated` | request correlation + browser-safe revisioned projection without provenance/evidence |
@@ -1468,25 +1513,27 @@ The booking form is not encoded as visitor text in RC4. It sends strict revision
 
 ### Binary framing
 
-Client microphone frames remain PCM16LE and are accumulated only within configured utterance duration/byte bounds until `audio.commit`. UI duration/countdown is sample-derived: `durationMs = acceptedPcmBytes / (16000 × 2) × 1000`, а effective ceiling — минимум `maxUtteranceMs` и duration, выведенной из `maxPcmBytes`; circular timer не зависит от wall-clock ticks. Server audio is an atomic phrase-level MP3 payload associated with the preceding `audio.segment` metadata event:
+Client microphone frames remain PCM16LE and are accumulated only within configured utterance duration/byte bounds until `audio.commit`. UI duration/countdown is sample-derived: `durationMs = acceptedPcmBytes / (16000 × 2) × 1000`, а effective ceiling — минимум `maxUtteranceMs` и duration, выведенной из `maxPcmBytes`; circular timer не зависит от wall-clock ticks. Server audio is one complete phrase-level payload associated with the preceding `audio.segment` metadata event:
 
 ```text
-byte 0:     kind (0x01 client PCM16LE, 0x02 server MP3 segment)
+byte 0:     kind (0x01 client PCM16LE, 0x02 server MP3, 0x03 server canonical WAV)
 bytes 1-8: unsigned sequence, big-endian/network byte order
-bytes 9+:  payload (raw PCM16LE or one complete MP3 file)
+bytes 9+:  payload (raw mic PCM16LE, one complete MP3, or one complete canonical WAV)
 ```
 
-Sequence is a nonnegative JavaScript safe integer (`0..Number.MAX_SAFE_INTEGER`). For `audio.segment`, metadata `byteLength` counts only the MP3 payload at bytes 9+, excluding the 9-byte frame header. The server metadata sequence and raw frame sequence must match, and kind must be `0x02`.
+Sequence is a nonnegative JavaScript safe integer (`0..Number.MAX_SAFE_INTEGER`). Metadata `byteLength` counts payload bytes only. Sequence, byte length, and kind must match adjacent metadata; `audio/mpeg` requires `0x02`, `audio/wav` requires `0x03`. Provider PCM is wrapped and validated server-side before this boundary.
 
-The implementation may use a referenced binary payload instead of adjacency if it preserves the same identity, ordering, canonical frame layout and payload-size contract. It must never expose partial `response.body` chunks as independent MP3 files.
+The implementation may use a referenced binary payload instead of adjacency if identity, ordering, canonical frame layout, and payload-size contract are preserved. Partial provider `response.body` chunks and raw TTS PCM are never browser audio.
 
 ### Ordering
 
 - `seq` монотонно растёт для JSON events в одной conversation.
 - один accepted `audio.commit` создаёт не более одного active STT request и одного `transcript.final`; duplicate commits и stale results подавляются.
-- audio segments имеют `generationId`, unique `segmentId` и monotonic `sequence`.
-- client decodes/plays complete segments in order and ignores segments from an interrupted or obsolete generation.
-- одновременно допустимы максимум один playing и один prefetched segment.
+- audio segments имеют `generationId`, unique `segmentId` и monotonic `sequence`; server may synthesize current + one prefetch but publishes only in source order.
+- client validates/decodes/plays complete MP3/WAV in order and ignores interrupted/obsolete generations.
+- v2 credit flow is enabled only after exact offer/accept negotiation and is at most four segments / 20 MB / 5 MB each; browser has at most two decoding/decoded/scheduled slots plus at most two raw slots and returns credit only after exact release. Missing negotiation never receives silent default credits.
+- gapless playback schedules prefetched audio at the current segment's end time rather than from an `ended` callback.
+- one reaction per eligible turn is capability/stage/privacy gated, delayed 350 ms, same-origin only, and cancelled before dynamic audio or on mute/barge-in/staleness.
 - booking events записываются в DB до отправки клиенту.
 
 ## 4. Provider-neutral voice contracts
@@ -1527,6 +1574,7 @@ export type TtsSynthesisRequest = {
   generationId: string;
   segmentId: string;
   text: string;
+  deliveryStyle?: "neutral" | "curious" | "serious" | "excited";
   signal: AbortSignal;
 };
 
@@ -1534,7 +1582,7 @@ export type TtsAudioSegment = {
   generationId: string;
   segmentId: string;
   providerGenerationId?: string;
-  contentType: "audio/mpeg";
+  contentType: "audio/mpeg" | "audio/wav";
   bytes: Uint8Array;
   final: true;
 };
@@ -1545,7 +1593,9 @@ export interface TtsPort {
 }
 ```
 
-The adapter validates `2xx`, compatible `audio/mpeg`, non-empty bounded bytes and current `generationId` before returning. OpenRouter types and response objects do not cross `TtsPort`.
+The adapter validates `2xx`, profile-compatible bytes and current `generationId`. The default xAI profile returns complete `audio/mpeg`; the opt-in Gemini Preview profile accepts raw provider PCM only server-side and wraps it as one canonical complete mono 24 kHz PCM16LE `audio/wav`. The exact four-env profile and case-sensitive 30-voice release snapshot are in [`../CURRENT_DECISIONS.md`](../CURRENT_DECISIONS.md). Profile mismatch fails closed: no automatic model/voice selection or xAI fallback.
+
+`deliveryStyle` is trusted server metadata only. Fixed values are neutral/curious/serious/excited; sensitive facts always select neutral, Gemini tags are inserted only inside the adapter, and style never appears in the plain transcript or durable state. OpenRouter types, raw PCM, tags, and response objects do not cross `TtsPort`.
 
 ### OpenRouter STT failure mapping
 
@@ -1890,14 +1940,14 @@ Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` �
 
 ![Deployment](diagrams/05-deployment.svg)
 
-Candidate `0.5.0-local-rc.4` is recommended but untagged for one trusted local machine at `http://localhost:5173`. RC3 evidence is preserved separately and is not RC4 proof. A target VPS, DNS, public TLS/WSS, target-host provider live booking, and WebKit full journey are external gates and are not implied by local readiness.
+Candidate `0.5.0-local-rc.4` is recommended but untagged for one trusted local machine at `http://localhost:5173`. A target VPS, DNS, public TLS/WSS, target-host provider live booking, full Chromium voice journey, and WebKit full journey are external gates and are not implied by local readiness.
 
 Один `docker-compose.yml`, ровно два application-path сервиса рекомендуются:
 
 1. `app` — Bun server, React static, Codex app-server child process, SQLite access и native HTTPS `fetch` к OpenRouter.
 2. `caddy` — TLS termination и WebSocket reverse proxy.
 
-Отдельного voice runtime/container нет. OpenRouter вызывается напрямую из `app` по HTTPS для atomic STT chat completions и complete-segment TTS; один runtime-only key авторизует оба.
+Отдельного voice runtime/container нет. OpenRouter вызывается напрямую из `app` по HTTPS для atomic STT chat completions и complete-segment TTS; один runtime-only key авторизует оба. Default TTS remains exact xAI/eve/MP3. Gemini 3.1 Flash TTS Preview is a complete four-env paid opt-in profile; it has a case-sensitive release snapshot, fails closed, and never triggers automatic model/voice choice or xAI fallback.
 
 Persistent volumes:
 
@@ -1984,7 +2034,8 @@ That optional command performs `thread/start`, verifies `instructionSources`, ru
 - ограничение размера JSON и audio frames;
 - no provider secrets;
 - CSP и secure headers;
-- mic permission только после user gesture.
+- mic permission only after consent gesture; output `AudioContext` is created/resumed synchronously inside that gesture before mic/network awaits;
+- same-origin static greeting/reaction assets can be fetched without provider access; reaction capability is allowlisted and has no transcript/state/provider effect.
 
 ### Codex boundary
 
@@ -2003,7 +2054,7 @@ That optional command performs `thread/start`, verifies `instructionSources`, ru
 - PII redaction в общих логах;
 - contact values are stored in the durable draft/booking and exposed to the browser only in stage-gated projections; TTS receives only an exact server-approved contact when contact-processing consent is active, otherwise it is redacted;
 - `.env`, единственный OpenRouter key, webhook secret, Codex auth, WAV/base64 audio и transcript PII не попадают в logs;
-- browser bundle и events не содержат OpenRouter key или direct provider URL;
+- browser bundle/events contain no OpenRouter key, direct provider URL, raw TTS PCM, or Gemini style tag; OpenRouter PCM is wrapped server-side as canonical complete WAV;
 - DB volume и backup с ограниченными permissions;
 - privacy/consent copy перед микрофоном;
 - implemented conversation deletion transaction removes booking, context, turns, idempotency, related outbox entries, and conversation; existing redacted append-only domain events remain and a count-only `privacy.deleted` event is appended;
@@ -2037,9 +2088,9 @@ PII не включается в generic logs.
 - audio input bytes/duration;
 - `audio.commit` → OpenRouter final transcript latency, WAV duration/bytes, status/retry/stale-turn counts;
 - brain queue time, first delta, completion;
-- OpenRouter TTS request/completion latency, status, bounded bytes and character usage;
-- final transcript → playback первой complete MP3 phrase;
-- interrupted/stale segment count, circuit state, budget rejection и text-only degradation;
+- OpenRouter TTS request/completion latency, profile format, bounded bytes and character usage;
+- final transcript → playback первой complete MP3/canonical-WAV phrase;
+- prefetch settlement, playback credit/release, interrupted/stale segment count, circuit state, budget rejection and text-only degradation;
 - booking create/update success/error;
 - notifier outbox lag;
 - provider error/rate-limit counts;
@@ -2057,7 +2108,7 @@ P0 держит bounded process-local aggregates и отдаёт safe JSON че�
 | prompts | no | checksum/parse |
 | Codex process | no | handshake/model/auth |
 | OpenRouter STT | no | shared key, model/format/language and utterance/request bounds; no provider-session claim or paid call on every check |
-| OpenRouter TTS | no | same shared key, model/voice/format schema, queue/circuit state; no paid call on every check |
+| OpenRouter TTS | no | same shared key; exact xAI MP3 or complete opt-in Gemini PCM profile, case-sensitive snapshot voice, queue/circuit state; no paid call, fallback, or model selection |
 | capacity | no | STT request, brain and TTS queues below thresholds |
 | notifier | no | outbox worker running; external outage не блокирует booking |
 
@@ -2097,7 +2148,7 @@ STT_MAX_UTTERANCE_MS
 STT_MAX_AUDIO_BYTES
 STT_TOTAL_TIMEOUT_MS
 TTS_MAX_CONCURRENCY
-TTS_PREFETCH_SEGMENTS
+TTS_PREFETCH_SEGMENTS  # 1 = current request plus one prefetch
 TTS_MAX_CHARS_PER_TURN
 TTS_MAX_CHARS_PER_SESSION
 SESSION_MAX_MINUTES
@@ -2119,7 +2170,7 @@ Source key берётся из direct peer address. Forwarded IP игнорир�
 | OpenRouter STT `429`/retryable `5xx` | at most one pure transcription retry; abort/stale result cannot invoke brain/tools |
 | OpenRouter TTS `401/402/404` | no retry; safe text-only output mode/circuit, keep text and booking |
 | OpenRouter TTS `429`/retryable `5xx` | at most one synthesis-only retry, then text-only/circuit policy |
-| TTS timeout, budget or invalid audio | drop audio segment, keep visible text and tool effects; never repeat Luna/tools |
+| TTS timeout, budget, invalid MP3/PCM/WAV, or profile mismatch | drop audio segment, keep visible plain text and tool effects; never repeat Luna/tools or auto-fallback |
 | DB locked/error | не подтверждать booking до commit |
 | notifier down | outbox retry; booking считается созданной |
 | client disconnect before booking | conversation `disconnected` |
@@ -2153,7 +2204,7 @@ docker compose stop app
 
 ### OpenRouter deploy smoke
 
-Paid external smokes are manual-only, explicit opt-in, and excluded from default CI. Local owner commands and the target-VPS forms are documented separately in [`11-local-release-handoff.md`](docs/11-local-release-handoff.md) and [`../infra/README.md`](infra/README.md). STT requires one non-empty final transcript from bounded WAV input and emits only safe aggregate evidence; TTS requires `2xx`, compatible `audio/mpeg`, and non-empty bytes. Neither is called by health checks or ordinary deployment.
+Paid external smokes are manual-only, explicit opt-in, and excluded from default CI. Local owner commands and target-VPS forms are in [`11-local-release-handoff.md`](docs/11-local-release-handoff.md) and [`../infra/README.md`](infra/README.md). STT requires one non-empty final transcript from bounded WAV input; TTS requires `2xx`, profile-compatible complete MP3 or server-wrapped canonical WAV, and safe aggregate output. Neither is called by health checks or ordinary deployment. The observed Gemini smoke is transport evidence only and makes no voice-quality claim.
 
 ### Inspect last booking events
 
@@ -2178,7 +2229,7 @@ Use `./scripts/restore.sh /data/backups/NAME.db`. The wrapper verifies the prote
 
 - OpenRouter phrase-level STT: речь → текст;
 - Codex app-server + `gpt-5.6-luna` по умолчанию: диалог, policy, tools; model/effort остаются конфигурацией;
-- OpenRouter TTS: текст → complete MP3 phrase segments через server-side Bun adapter.
+- OpenRouter TTS: текст → complete provider-neutral MP3/canonical-WAV phrase segments через server-side Bun adapter.
 
 ### Почему
 
@@ -2287,17 +2338,17 @@ The durable booking is the only meeting entity. UI derives an `internal_virtual`
 
 After truthful durable meeting confirmation, qualification starts directly and asks only missing volume/manager facts; there is no separate permission bridge. Плюсы: меньше потерянных лидов и ясная транзакционная граница. Минусы: booking может быть менее подробно квалифицирована. Этот минус ожидаем и допустим.
 
-## ADR-011. PCM speech output path
+## ADR-011. Raw PCM browser output path
 
-**Статус:** rejected for P0 / superseded by ADR-015.
+**Статус:** rejected; refined by the opt-in Gemini profile.
 
-Raw PCM applies only to browser microphone input. P0 speech output uses complete `audio/mpeg` phrase segments; arbitrary network response chunks are not treated as playable files.
+Browser microphone input remains raw PCM16 chunks. TTS output is always a complete provider-neutral file: default xAI `audio/mpeg`, or canonical `audio/wav` after the server validates and wraps Gemini provider PCM. Raw provider PCM and arbitrary network chunks never reach browser playback.
 
 ## ADR-012. TTS profile and paid usage are configuration facts
 
-**Статус:** superseded by ADR-015.
+**Статус:** accepted; constrained by ADR-015.
 
-No free usage allowance is assumed. Model, lowercase voice ID, format and optional speed remain environment configuration. Character telemetry, hard budgets, circuit breaker and text-only degradation protect the demo from uncontrolled paid usage.
+No free usage allowance is assumed. Default is the exact xAI/eve/MP3 profile. Gemini Preview requires an exact four-variable PCM profile and one case-sensitive voice from the pinned 30-name release snapshot; mismatch fails closed. The public catalog is dynamic, with no automatic selection or fallback. Character telemetry, hard budgets, circuit breaker, and text-only degradation protect the demo from uncontrolled paid usage.
 
 ## ADR-013. Codex subscription/Luna — MVP optimization, не production entitlement
 
@@ -2317,12 +2368,12 @@ Guardrails:
 
 **Status:** accepted.
 
-Use a TypeScript/Bun adapter with native `fetch` against `POST https://openrouter.ai/api/v1/audio/speech`. Default profile: `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`. Do not use a second TTS gateway, Python sidecar or provider SDK in P0. Keep `TtsPort` provider-neutral and retain text-only degradation.
+Use a TypeScript/Bun adapter with native `fetch` against `POST https://openrouter.ai/api/v1/audio/speech`. Default profile remains `xai_mp3` / `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`. The only alternative is explicit `gemini_3_1_pcm` / `google/gemini-3.1-flash-tts-preview` / case-sensitive snapshot voice / `pcm`; server wraps its PCM as canonical complete WAV. Do not use a second TTS gateway, Python sidecar, provider SDK, automatic catalog choice, or cross-profile fallback. Keep `TtsPort` provider-neutral and retain text-only degradation.
 
 Consequences and guardrails:
 
 - OpenRouter and its upstream are external paid dependencies; no free tier is assumed.
-- One request produces one buffered, validated, complete `audio/mpeg` phrase segment.
+- One request produces one buffered, validated, complete `audio/mpeg` or canonical `audio/wav` phrase segment; raw PCM never crosses the server boundary.
 - Only server-side native Bun `fetch` is used; no provider SDK is required for P0.
 - Model/voice availability and price are runtime facts recorded in release evidence, not permanent documentation constants.
 - `401`, `402`, `404`, bounded `429`/retryable `5xx`, circuit breaker, character budgets and text-only behavior follow the contracts in docs 03/05/06.
@@ -2344,6 +2395,16 @@ Consequences and guardrails:
 - map `400/401/402/404/413/429/5xx` to typed safe errors without key/audio/PII logs;
 - default tests use a fake endpoint; paid Russian smoke is opt-in and must be reported only when observed;
 - no second voice provider, credential, task path, diagram or source requirement is active.
+
+## ADR-017 — Natural playback, local reactions, and delivery style are bounded presentation
+
+**Status:** accepted.
+
+Natural voice is improved without changing conversation authority: prompts require concise conversational speech; server permits current + one ordered TTS prefetch; browser validates provider-neutral complete audio, schedules it gaplessly, and advertises only four segments / 20 MB with at most two decoded. The consent gesture owns output `AudioContext` creation/resume.
+
+Sixteen committed same-origin Sulafat reactions are canonical mono PCM16LE 24 kHz WAVs, separately regenerated only by exact Gemini PCM/Sulafat configuration plus explicit paid admin opt-in. They require negotiated allowlist capability and fail-closed conservative stage/privacy selection before at most one 350 ms delayed play. The current runtime permits only the non-claiming neutral clip; claim-bearing operation/progress clips stay unreachable until backed by a future explicit trusted server signal rather than visitor/model keywords. Runtime reaction provider calls are zero. Reactions and delivery styles never alter transcript, state, tools, booking, or provider choice.
+
+Style is a fixed server enum (`neutral`, `curious`, `serious`, `excited`), not model/visitor control. Sensitive or authoritative facts always use neutral; Gemini tags are adapter-owned and absent from visible plain transcript and durable state. Trade-off: perceptual quality still requires owner listening; there is no formal voice A/B matrix, and live full Chromium/WebKit journeys remain gates.
 
 ## Metered voice cost inputs
 
@@ -2381,7 +2442,7 @@ The chart deliberately contains no numeric currency estimate. Variable usage dep
 | R-08 | marketing hallucination | medium | medium/high | allowed claims, evals, source attribution |
 | R-09 | PII leak in logs | medium | high | redaction and log tests |
 | R-10 | cheap VPS resource pressure | medium | medium | guardrails, metrics, bounded buffers |
-| R-11 | OpenRouter STT/TTS model, voice, price or upstream availability changes | medium | medium/high | env profiles, opt-in external smokes, usage telemetry, bounds/circuit, safe degraded modes |
+| R-11 | OpenRouter STT/TTS model, dynamic Gemini voice catalog, price or upstream availability changes | medium | medium/high | exact fail-closed env profiles/snapshot, no automatic fallback, opt-in smokes, telemetry, bounds/circuit |
 | R-12 | user thinks calendar event exists | medium | medium | explicit copy and payload semantics |
 
 ## Revisit triggers
@@ -2445,13 +2506,15 @@ Table-driven cases:
 - secret pattern scan;
 - dev hot reload does not affect active thread unexpectedly.
 
-### Speech sanitizer/chunker
+### Speech, style, prefetch, playback, and reactions
 
-- markdown/code/URL removal;
-- не режет `name@example.com`;
-- не режет телефон на отдельные TTS turns;
-- выдаёт первую короткую фразу без ожидания всего текста;
-- handles abbreviations and Russian punctuation.
+- prompt compiler preserves concise natural-speech rules: usually ≤2 short sentences/about 12 seconds, one useful thought, ≤1 question, no filler/progress invention;
+- sanitizer removes markdown/code/URL, style controls, and unsafe contacts without splitting approved contacts incorrectly;
+- current + one TTS prefetch starts concurrently but publishes in source order; first failure/barge-in/stale generation suppresses later results;
+- provider-neutral complete MP3/canonical-WAV validation, gapless scheduled starts, four-segment/20 MB/5 MB credit bounds, exact release acknowledgments, and no more than two decoded slots;
+- output `AudioContext` creation/resume occurs synchronously in the consent gesture before mic/network awaits;
+- 16-clip negotiated reaction allowlist, 350 ms delay, stage/privacy suppression, one per turn, same-origin fetch, and cancellation; failure has no transcript/state/provider/business effect;
+- server style enum is fixed to neutral/curious/serious/excited, sensitive facts stay neutral, and visible transcript/durable state never contain Gemini tags.
 
 ### Booking domain
 
@@ -2506,9 +2569,12 @@ The paid Russian smoke is tagged `external`, excluded from default CI and record
 
 Default deterministic suite uses a protocol-faithful fake `POST /api/v1/audio/speech` and no external credentials:
 
-- successful `audio/mpeg` response and valid MP3 fixture;
-- chunked network body buffered into one complete segment;
-- wrong content type, zero-byte/empty body and invalid MP3 fixture;
+- unchanged default exact xAI/eve/MP3 profile and successful complete `audio/mpeg` fixture;
+- exact opt-in Gemini Preview four-env PCM profile, case-sensitive 30-voice snapshot, no speed/automatic fallback/model selection, and fail-closed mismatches;
+- Gemini PCM content types/whole samples/size validated and wrapped server-side as canonical complete mono 24 kHz PCM16LE WAV; raw PCM never reaches browser contracts;
+- fixed server-owned style-tag mapping and rejection of bracket/tag bypass; sensitive facts and server authority remain neutral, while transcript stays plain;
+- chunked network body buffered into one complete provider-neutral segment;
+- wrong content type, zero-byte/empty body and invalid MP3/PCM/WAV fixture;
 - bounded JSON/text error body never forwarded as audio;
 - `400`, `401`, `402`, `404`, `429` with/without `Retry-After`, `502`, `503`;
 - one-retry maximum, timeout and user abort;
@@ -2518,7 +2584,7 @@ Default deterministic suite uses a protocol-faithful fake `POST /api/v1/audio/sp
 - no spoken text, PII or key in logs/snapshots/client bundles;
 - text-only fallback preserves visible text and booking effects.
 
-External paid tests are tagged `external` and excluded from default CI. Before release, target VPS synthesizes the same Russian sample with each candidate voice actually available; owner chooses by listening and changes only env. The smoke requires `2xx`, compatible `audio/mpeg`, non-empty bytes and safe status/latency/byte evidence.
+External paid tests are tagged `external` and excluded from default CI. The safe smoke requires explicit `OPENROUTER_EXTERNAL_SMOKE=1`, an intentionally selected exact profile, and safe aggregate output only. On this host on 2026-08-03, the Schedar neutral smoke succeeded through OpenRouter: `audio/wav`, 188204 bytes, 3326ms. This is not a quality claim. There is no formal voice A/B matrix; target-host/full-journey listening remains open.
 
 ### Codex app-server
 
@@ -2540,7 +2606,7 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 ## 4. Integration tests
 
 - landing entry attempts only the fixed same-origin proactive MP3; before both consents there are zero conversation REST requests, sockets, capture/mic objects, provider calls, or sessions; session start stops greeting;
-- bounded PCM16 chunks → `audio.commit` → gateway-produced validated WAV → atomic `SttPort` request → fake OpenRouter already-WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
+- bounded PCM16 chunks → `audio.commit` → gateway-produced validated STT WAV → atomic `SttPort` → fake OpenRouter final transcript → fake brain deltas → two-request ordered TTS prefetch → complete MP3/canonical-WAV WS segments;
 - sample-derived capture progress/countdown uses accepted PCM16 bytes and stricter server duration/byte ceiling, then auto-commits exactly once;
 - bounded monotonic `visitor.text.submit` clears uncommitted audio, suppresses pending duplicates, retains sequence on rejection, emits server final once, and follows the same brain/state/tool/persistence path as speech;
 - typed composer is stage-gated; structured booking form renders only from server-owned `COLLECT_BOOKING` and submits revisioned patches, never transcript-triggered tools;
@@ -2565,7 +2631,7 @@ Playwright with synthetic audio fixture:
 3. click CTA, provide both consents, and mock/allow mic;
 4. stream fixture PCM;
 5. observe listening/processing states and then exactly one `transcript.final`;
-6. receive assistant text and ordered complete MP3 segment events;
+6. receive plain assistant text and ordered provider-neutral complete MP3/canonical-WAV segment events;
 7. verify the circular countdown is sample-derived and reaches the 60-second limit without wall-clock drift;
 8. submit typed and spoken time-band plus supported concrete date/time requests and verify exactly two concretely dated current Moscow candidates;
 9. use the structured form only at `COLLECT_BOOKING`; verify auto-filled facts, explicit conflicts, stale revision/reselection, and exact-revision confirmation;
@@ -2573,7 +2639,7 @@ Playwright with synthetic audio fixture:
 11. verify missing-only qualification matrix: neither known → volume first; one known → only other; both known → no question; daily count → basis clarification; refusal preserves scheduled meeting;
 12. verify DB/event payload keeps booking `booked`, draft `committed`, and widget projection tied to the same booking ID.
 
-Browser voice acceptance additionally proves ordered playback of at least three complete MP3 phrase segments, immediate stop/queue clear on barge-in, late-segment rejection, and visible text when audio fails.
+Browser voice acceptance additionally proves ordered gapless playback of at least three complete MP3/WAV phrase segments, four-segment/20 MB credits with at most two decoded, gesture-owned AudioContext, capability-gated reactions, immediate stop/queue clear on barge-in, late-segment rejection, and visible plain text when audio fails.
 
 Browsers:
 
@@ -2585,7 +2651,7 @@ Mobile viewport and slow network profiles included.
 
 ## 6. Conversation eval suite
 
-The committed RC4 fixture catalog has **44 scenarios**. It is deterministic and credential-free; it does not run Luna/providers and therefore is not model-quality evidence. The scenario groups below describe its minimum behavioral surface:
+The committed RC4 fixture catalog is deterministic and credential-free; it does not run Luna/providers and therefore is not model-quality evidence. The scenario groups below describe its minimum behavioral surface without asserting a fresh recount:
 
 ### Happy paths
 
@@ -2657,7 +2723,7 @@ Release thresholds and current fixture baseline:
 - at least 24 scenarios and ≥90% without critical failure;
 - 100% booking-order/scheduled-payload checks among booking-required scenarios;
 - zero fabricated prices, guarantees, secrets, duplicate bookings, pre-booking qualification, widget-before-commit, external invite claims, repeated-known qualification, silent daily normalization, or unauthorized contact TTS;
-- committed artifact: **44/44 scenarios**, **25/25 applicable booking-order checks**, **28/28 negative controls**, zero critical failures;
+- the committed fixture artifact carries its own scenario/check totals; this docs change does not recertify them;
 - evidence mode is `fixture-only`, provider calls are `0`, and real Luna is explicitly `not-run`.
 
 ## 8. Latency/load test
@@ -2702,19 +2768,18 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ### Local release candidate `0.5.0-local-rc.4` (recommended; tag pending)
 
-Fresh RC4 command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md). The prior RC3 report is preserved separately under `evidence/`; it is historical and not reused as proof.
+Pre-closure implementation evidence supplied for the natural-voice/Gemini HEAD (not final review closure and allowed to change after review):
 
-- [x] Credential-free fixture baseline is current: 44/44 scenarios, 25/25 applicable booking-order checks, 28/28 negative controls, zero provider calls; real Luna not run.
-- [x] Chromium desktop/mobile Playwright landing smoke passed through the shared Chromium harness. This proves responsive/pre-consent transport boundaries only, not a full voice booking journey.
-- [x] Focused cutover tests prove protected backup precedes graceful stop, existing stopped DB is protected, migration is delegated to normal startup, readiness precedes `verify-rc4`, and RC3 schema upgrades to migration 0004 without a duplicate meeting table.
-- [x] The provider-independent repository suite is green: 715 tests across 68 files, including the RC4 provider-contract and production-component journeys.
-- [x] Typecheck, build, Biome, generated spec validation, release artifact regeneration, and `git diff --check` are reported with actual fresh outputs in `VALIDATION.md`.
+- [x] Credential-free fixture/eval paths make zero provider calls; this docs change does not claim a fresh fixture recount or real-Luna run.
+- [x] Provider-independent repository suite after Gemini wiring, v2 protocol, reaction/reconnect, streaming-prefetch/tag, mute, and MP3-validation closure: **815 passed, 0 failed across 72 files, 16,910 assertions**.
+- [x] Chromium desktop/mobile landing smoke: **2/2 passed** through the shared harness. This proves responsive/pre-consent boundaries only, not a full voice booking journey.
+- [x] Focused deterministic coverage includes natural prompts, ordered two-request TTS prefetch, canonical WAV, provider-neutral playback, bounded credit flow, gesture ownership, local reactions, trusted style policy, profile validation, and migration/cutover behavior.
 - [ ] Docker Compose cutover against an owner-configured live local volume and credentials was not run by the documentation handoff; the wrapper is covered statically/fake-Docker and DB tests.
 - [ ] Full local voice booking journey was not run; do not infer it from Chromium landing smoke or fixture evals.
 
 ### External/not-run gates — not closed by RC4 handoff
 
-- [ ] WebKit complete-MP3/full voice journey. The browser binary is downloaded locally, but host libraries `libicu74`, `libxml2`, and `libflite1` are missing.
+- [ ] WebKit complete provider-neutral audio/full voice journey. The browser binary is downloaded locally, but host libraries `libicu74`, `libxml2`, and `libflite1` are missing.
 - [ ] Clean target-VPS deploy under target CPU/RAM/storage/network conditions.
 - [ ] Public DNS and TLS/WSS on the target host.
 - [ ] Explicitly approved target-host live provider booking through OpenRouter STT/TTS + Codex Luna, including the final internal-meeting widget.
@@ -2728,10 +2793,10 @@ The RC4 handoff bundle contains:
 
 - integrated RC4 implementation plus recorded closure fixes; no PR/tag is invented;
 - recommended/pending `v0.5.0-local-rc.4` label;
-- source docs plus regenerated `FULL_SPEC.md`, `technical-spec.html`, `MANIFEST.txt`, and `CHECKSUMS.sha256`;
-- deterministic migration/cutover, contracts, app, web, privacy, eval, type, and Biome evidence as actually run;
+- source documentation for natural voice and the opt-in Gemini profile; removed root validation/manifest/checksum artifacts are intentionally not recreated;
+- pre-closure implementation evidence clearly labeled as non-final;
 - Chromium desktop/mobile smoke clearly labeled as a landing smoke;
-- preserved RC3 historical report and explicit WebKit/VPS/TLS/WSS/provider-live-booking gates.
+- explicit full Chromium/WebKit, VPS/TLS/WSS, target-host provider/live-booking, latency/load, and voice-listening gates.
 
 Target-host and full-journey evidence must not be inferred from this local handoff.
 
@@ -3064,7 +3129,7 @@ T01, T10 и T15 не должны задерживать первые adapter sp
 - **OpenRouter STT:** native Bun `fetch` к `/api/v1/chat/completions`; gateway/utterance assembler supplies one bounded, validated `audio/wav` request after `audio.commit`, adapter validates and base64-encodes those unchanged WAV bytes as `input_audio`, and returns one final transcript.
 - **OpenRouter TTS:** native Bun `fetch` к dedicated speech endpoint; one complete MP3 phrase per request, no SDK.
 - **LLM brain:** `BrainPort`, реализованный поверх долгоживущего `codex app-server` и его JSON-RPC protocol.
-- **Model:** exact `gpt-5.6-luna` через Codex subscription владельца; `CODEX_EFFORT` допускает только exact `low` (missing default-ится в `low`, non-low блокирует startup) для standard и priority.
+- **Model:** `gpt-5.6-luna` через Codex subscription владельца; `CODEX_MODEL`/`CODEX_EFFORT` конфигурируемы, но Luna — согласованный P0 default.
 - **Schemas:** Zod для собственных contracts; Codex protocol types/schemas фиксируются вместе с pinned CLI version.
 - **Vercel AI SDK:** не является dependency P0; может появиться позже в text-only или API-key adapter, если даст измеримое упрощение.
 - **`@openai/codex-sdk`:** не используется в основном voice runtime, пока не предоставляет обязательный low-level control над `turn/interrupt`, app-server threads, dynamic tools и exact streamed deltas на Bun.
@@ -3265,7 +3330,7 @@ VoiceOrchestrator
 
 **Tag state:** pending/recommendation only. No tag, PR, registry digest, or predecessor image is asserted by this handoff.
 
-**Implementation baseline:** integrated RC4 code through `58aa9ee`, followed by recorded review-closure, integration-harness, and release-handoff commits on the candidate branch.
+**Executable natural-voice implementation through:** `ac965d0`; the following documentation/evidence commit is intentionally separate. The PR merge commit/tag will be the final release identity.
 
 **Scope:** local hosting on one trusted machine. This is not target-VPS or public TLS/WSS acceptance.
 
@@ -3277,20 +3342,25 @@ VoiceOrchestrator
 - a ready draft must be confirmed at its exact current revision; server orchestration then automatically commits one booking and publishes one server-derived `internal_virtual`/`scheduled` meeting projection;
 - the final widget appears only after durable commit and states that no external calendar event or invitation exists;
 - optional qualification starts directly after truthful meeting confirmation and asks only missing facts: volume first when neither is known, only the other field when one is known, and nothing when both are known;
-- TTS redacts contacts by default. The only exception is an exact server-approved contact from accepted durable draft facts or a committed booking while contact-processing consent is active.
+- TTS redacts contacts by default. The only exception is an exact server-approved contact from accepted durable draft facts or a committed booking while contact-processing consent is active;
+- ordinary speech is concise/natural; current + one ordered TTS prefetch feeds provider-neutral complete MP3/WAV rendering, gapless scheduled playback, and a four-segment/20 MB credit window with at most two decoded;
+- output `AudioContext` is created/resumed in the consent gesture before mic/network awaits;
+- a 16-clip same-origin Sulafat reaction corpus is committed as canonical mono PCM16LE 24 kHz WAV, capability/stage/privacy gated, and delayed 350 ms. Only fail-closed safe runtime policy can select a clip; current runtime exposes only the non-claiming neutral clip, while claim-bearing progress clips require a future explicit trusted server operation signal. Runtime provider calls for reactions are zero, and they have no transcript/state/provider/business effect;
+- default TTS remains exact xAI/eve/MP3. Gemini is an explicit four-env Preview profile; provider PCM is wrapped server-side as canonical complete WAV, and style is fixed server-owned neutral/curious/serious/excited with sensitive facts always neutral and visible transcript plain.
 
 No duplicate meeting table, external availability query, calendar event/invite, or CRM record is introduced.
 
 ## Evidence status
 
-Fresh RC4 results are recorded in [`../VALIDATION.md`](VALIDATION.md). The RC3 report is preserved separately as historical evidence; it does not close RC4 gates.
+Pre-closure implementation evidence after Gemini production wiring and v2 protocol compatibility closure (not final review closure and allowed to change after review):
 
-- Chromium desktop/mobile Playwright **landing smoke** passed through the shared harness. It covers responsive/pre-consent boundaries, not a full voice booking journey.
-- Fixture-only eval baseline is 44/44 scenarios, 25/25 applicable booking-order checks, and 28/28 negative controls with zero provider calls; real Luna was not run.
-- Migration/cutover wrappers and RC3→RC4 schema compatibility are covered by deterministic tests.
-- The provider-independent repository suite is green: 715 tests across 68 files; exact evidence is in `VALIDATION.md`.
-- WebKit full journey is not run. Its browser binary is present, but this host lacks `libicu74`, `libxml2`, and `libflite1`.
-- Full voice booking, owner-configured live Compose cutover, target VPS, public TLS/WSS, and target-host provider live booking remain explicit gates.
+- provider-independent suite: **815 passed, 0 failed across 72 files, 16,910 assertions**;
+- Chromium desktop/mobile Playwright **landing smoke: 2/2 passed**. It covers responsive/pre-consent boundaries, not a full voice booking journey;
+- fixture/eval paths are credential-free with zero provider calls; this docs handoff does not claim a fresh fixture recount or real-Luna run;
+- deterministic coverage includes natural prompts, two-request ordered prefetch, provider-neutral MP3/WAV rendering, bounded gapless playback, reaction/style policy, exact TTS profiles, and migration/cutover behavior;
+- WebKit full journey is not run. Its browser binary is present, but this host lacks `libicu74`, `libxml2`, and `libflite1`;
+- full Chromium/WebKit voice booking, owner-configured live Compose cutover, target VPS, public TLS/WSS, target-host provider booking, and target-host latency/load remain explicit gates;
+- no formal voice A/B matrix exists.
 
 The committed [T30 owner-observed artifact](evidence/T30-observed-local-voice-smoke-2026-07-31.md) and the preserved RC3 report remain historical evidence only.
 
@@ -3356,11 +3426,14 @@ The placeholder above is not a real image. Never use `docker compose down -v`. K
 
 ## Paid smokes: explicit opt-in only
 
-Deployment, tests, readiness, and schema verification do not spend provider usage. Static greeting regeneration is administrator-only and overwrites a tracked asset, so inspect it before commit:
+Deployment, tests, readiness, and schema verification do not spend provider usage. Static greeting/reaction regeneration is administrator-only, paid, explicit opt-in, and overwrites tracked assets; the reaction generator additionally requires the exact `gemini_3_1_pcm` / `google/gemini-3.1-flash-tts-preview` / `Sulafat` / `pcm` production profile and publishes canonical WAV without format conversion. The assets are already committed, so do not regenerate them for ordinary setup:
 
 ```bash
 BOTAMIN_GENERATE_PROACTIVE_GREETING=1 \
   bun run scripts/generate-proactive-greeting.ts
+
+BOTAMIN_GENERATE_LOCAL_REACTION_CLIPS_PAID=1 \
+  bun run generate:reaction-clips:paid-opt-in
 ```
 
 Against an already-ready local server, an owner may deliberately run the integrated voice smoke:
@@ -3377,19 +3450,103 @@ This is not a browser full journey and does not close WebKit or target-host gate
 ```bash
 compose_secret_operation=paid-smoke
 . ./scripts/compose-secret-files.sh
-docker compose run --rm -e AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh stt
-docker compose run --rm -e AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh tts
+docker compose run --rm -e AUTO_MIGRATE=false -e OPENROUTER_EXTERNAL_SMOKE=1 app /app/scripts/run-openrouter-smoke.sh stt
+docker compose run --rm -e AUTO_MIGRATE=false -e OPENROUTER_EXTERNAL_SMOKE=1 app /app/scripts/run-openrouter-smoke.sh tts
+```
+
+The default remains xAI/eve/MP3. To deliberately smoke the opt-in Gemini profile from a checkout whose protected `.env` contains the key, set all four values and the paid gate together; do not print/source the key:
+
+```bash
+OPENROUTER_EXTERNAL_SMOKE=1 \
+OPENROUTER_TTS_PROFILE=gemini_3_1_pcm \
+OPENROUTER_TTS_MODEL=google/gemini-3.1-flash-tts-preview \
+OPENROUTER_TTS_VOICE=Schedar \
+OPENROUTER_TTS_RESPONSE_FORMAT=pcm \
+bun run scripts/openrouter-tts-smoke.ts
+```
+
+Voice names are case-sensitive and must match the exact 30-name release snapshot in [`../CURRENT_DECISIONS.md`](../CURRENT_DECISIONS.md). Gemini is Preview/dynamic-catalog; there is no automatic fallback or model/voice selection. On this host on 2026-08-03, the Schedar neutral smoke succeeded through OpenRouter: `audio/wav`, 188204 bytes, 3326ms. This is not a quality claim.
+
+Rollback is configuration-only and exact:
+
+```dotenv
+OPENROUTER_TTS_PROFILE=xai_mp3
+OPENROUTER_TTS_MODEL=x-ai/grok-voice-tts-1.0
+OPENROUTER_TTS_VOICE=eve
+OPENROUTER_TTS_RESPONSE_FORMAT=mp3
 ```
 
 ## Explicit remaining gates
 
-- WebKit complete-MP3 and full voice booking journey after installing `libicu74`, `libxml2`, and `libflite1` on a compatible host.
+- WebKit complete provider-neutral MP3/WAV and full voice booking journey after installing `libicu74`, `libxml2`, and `libflite1` on a compatible host.
 - Full Chromium voice booking journey; desktop/mobile landing smoke is not sufficient.
+- Owner listening review and a future formal voice A/B matrix if a quality comparison is required; the isolated smoke proves no quality preference.
 - Owner-configured live local Compose cutover/restore drill with retained backup path.
 - Clean target-VPS deploy and resource behavior.
 - Public DNS, TLS, and WSS.
 - Explicitly approved target-host OpenRouter STT/TTS + Codex Luna live booking through final widget.
 - Target-host latency/load profile and owner review of provider rates, model availability, subscription capacity, privacy copy, backup encryption/retention, and commercial operation.
+
+
+<div class="page-break"></div>
+
+# Protected owner dialogue export
+
+Dialogue export is an executable, manual owner action for local debugging. It is the documented exception to the normal no-transcript-artifact rule: the application never exports automatically and does not add duplicate runtime storage. The source remains the existing SQLite `turns` rows, whose default 30-day retention remains DB-owned.
+
+## Compose command (default)
+
+Run from the repository root while the local Compose `app` service is running:
+
+```bash
+bun run dialogues:export
+```
+
+The source defaults to `--source compose` regardless of any generic `DATABASE_URL` loaded from the root `.env`. The wrapper always uses `docker compose exec -T app` and the running app container's named-volume database at `/data/app.db`; it never redirects Compose export to a host SQLite path.
+
+The default conversation selector is latest by completion timestamp, falling back to start timestamp. The optional conversation selectors are mutually exclusive:
+
+```bash
+bun run dialogues:export --conversation <ULID-or-UUIDv7>
+bun run dialogues:export --limit 10   # latest 10; range 1..100
+bun run dialogues:export --all        # all retained; fails above 100
+```
+
+`--source compose` may be written explicitly. `--database` is invalid with Compose.
+
+## Explicit direct command
+
+Direct SQLite access is never inferred from `DATABASE_URL`. It requires `--source direct` and exactly one dedicated database input:
+
+```bash
+bun run dialogues:export --source direct --database /absolute/path/to/app.db
+
+# Alternative dedicated environment input; an absolute path or file URL is required.
+BOTAMIN_DIALOGUE_EXPORT_DATABASE_URL=file:/absolute/path/to/app.db \
+  bun run dialogues:export --source direct
+```
+
+Relative paths, a missing direct database input, duplicate source/database arguments, a direct database argument combined with `BOTAMIN_DIALOGUE_EXPORT_DATABASE_URL`, and conflicting conversation selectors fail validation. Generic `DATABASE_URL` is ignored by the owner wrapper.
+
+## Bounds and failure behavior
+
+The Compose child has a 30-second deadline. Stdout and stderr are captured with separate byte bounds; neither is relayed. On timeout, oversized output, malformed output, or another failure, the wrapper terminates the detached Compose process group, escalates when needed, and waits only for a bounded cleanup interval. The reader streams its bounded result and creates no container export temp file. Host output starts only after a complete, validated result has arrived, and atomic-write failures remove the mode-`0600` host temp file.
+
+Success prints only aggregate status, conversation/turn counts, and the generated path. A missing container, DB, or conversation; malformed DB; invalid arguments; timeout; or size bound fails without a partial export and without transcript-bearing errors. Exports are capped at 100 conversations, 16 MiB of source transcript text, and 20 MiB of rendered Markdown.
+
+## Minimal output and privacy
+
+Files are atomically created under the gitignored `.runtime/dialogues/` directory:
+
+- directory mode: `0700`;
+- file mode: `0600`;
+- filename: export timestamp plus random suffix, with no conversation ID or visitor data;
+- content: only role-labelled `Вы` and `Botamin` text from `turns`, grouped under generated dialogue/turn headings that are not persisted values;
+- Markdown headings, fences, blockquotes, unordered/ordered/task lists, thematic breaks, HTML-like blocks, inline syntax, unsafe indentation, and non-printing/control characters from transcript text are neutralized while preserving readable text.
+
+The export does **not** render conversation or turn IDs, timestamps, status, stage, completion/interruption fields, source, locale, consent, Codex thread IDs, model names, prompts, raw audio/base64, credentials, provider request/response bodies, contacts stored outside transcript text, booking data, resume tokens, tool payloads, domain events, logs, or usage metadata. Ordering columns may be read internally solely to preserve latest/limit/all and turn ordering.
+
+The transcript itself can naturally contain visitor PII. Restrict host and Docker access, do not attach an export to tickets or commits, and delete it when the debugging need ends. Database retention does not delete exported files, and deleting an export does not perform privacy deletion in SQLite; each is a separate owner responsibility.
 
 
 <div class="page-break"></div>

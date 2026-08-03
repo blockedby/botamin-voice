@@ -1,23 +1,17 @@
 #!/usr/bin/env bun
 import { Database } from "bun:sqlite";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute } from "node:path";
 
 export const MAX_CONVERSATIONS = 100;
 export const MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
 export const MAX_EXPORT_BYTES = 20 * 1024 * 1024;
 
+const COMPOSE_DATABASE_PATH = "/data/app.db";
 const ENTITY_ID_PATTERN =
 	/^(?:[0-9A-HJKMNP-TV-Z]{26}|[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu;
-const MOSCOW_FORMATTER = new Intl.DateTimeFormat("en-CA", {
-	timeZone: "Europe/Moscow",
-	year: "numeric",
-	month: "2-digit",
-	day: "2-digit",
-	hour: "2-digit",
-	minute: "2-digit",
-	second: "2-digit",
-	hourCycle: "h23",
-});
+const MARKDOWN_PUNCTUATION = new Set(
+	Array.from("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"),
+);
 
 export type ExportSelection =
 	| { kind: "latest" }
@@ -46,22 +40,8 @@ export class DialogueExportError extends Error {
 	}
 }
 
-type ConversationRow = {
-	id: string;
-	status: string;
-	stage: string;
-	started_at: string;
-	ended_at: string | null;
-};
-
-type TurnRow = {
-	user_text: string;
-	assistant_text: string;
-	state_before: string;
-	state_after: string;
-	completed_at: string | null;
-	interrupted: number;
-};
+type ConversationRow = { id: string };
+type TurnRow = { user_text: string; assistant_text: string };
 
 function invalidArguments(): never {
 	throw new DialogueExportError("INVALID_ARGUMENTS");
@@ -112,34 +92,52 @@ export function parseExportArgs(argv: readonly string[]): ExportSelection {
 		Number(limit !== undefined) +
 		Number(all);
 	if (modeCount > 1) invalidArguments();
-	if (conversationId !== undefined)
+	if (conversationId !== undefined) {
 		return { kind: "conversation", conversationId };
+	}
 	if (limit !== undefined) return { kind: "limit", limit };
 	if (all) return { kind: "all" };
 	return { kind: "latest" };
 }
 
-export function databasePathFromUrl(
-	url = process.env.DATABASE_URL ?? "file:/data/app.db",
-): string {
+/** Accepts only an explicit absolute SQLite path or file URL. */
+export function databasePathFromUrl(url: string): string {
 	const value = url.startsWith("file:") ? url.slice("file:".length) : url;
-	if (value.length === 0 || value.includes("?") || value.includes("#")) {
+	if (
+		value.length === 0 ||
+		value.includes("?") ||
+		value.includes("#") ||
+		value.includes("\0") ||
+		!isAbsolute(value)
+	) {
 		throw new DialogueExportError("DATABASE_UNAVAILABLE");
 	}
-	return isAbsolute(value) ? value : resolve(value);
+	return value;
 }
 
-function formatTimestamp(value: string | null): string {
-	if (value === null) return "not recorded";
-	const date = new Date(value);
-	if (Number.isNaN(date.getTime())) {
-		throw new DialogueExportError("INVALID_DATA");
+function parseReaderArgs(argv: readonly string[]): {
+	databasePath: string;
+	selection: ExportSelection;
+} {
+	let databasePath: string | undefined;
+	const selectorArguments: string[] = [];
+	for (let index = 0; index < argv.length; index += 1) {
+		const argument = argv[index] ?? invalidArguments();
+		if (argument !== "--database") {
+			selectorArguments.push(argument);
+			continue;
+		}
+		if (databasePath !== undefined) invalidArguments();
+		const value = argv[index + 1] ?? invalidArguments();
+		if (!isAbsolute(value)) invalidArguments();
+		databasePath = value;
+		index += 1;
 	}
-	const parts = Object.fromEntries(
-		MOSCOW_FORMATTER.formatToParts(date).map((part) => [part.type, part.value]),
-	);
-	const moscow = `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
-	return `${date.toISOString()} UTC / ${moscow} MSK (Europe/Moscow, UTC+03:00)`;
+	if (databasePath === undefined) invalidArguments();
+	return {
+		databasePath,
+		selection: parseExportArgs(selectorArguments),
+	};
 }
 
 function visibleControls(value: string): string {
@@ -149,27 +147,30 @@ function visibleControls(value: string): string {
 		const hidden =
 			(codePoint <= 0x1f && codePoint !== 0x0a) ||
 			(codePoint >= 0x7f && codePoint <= 0x9f) ||
-			(codePoint >= 0x202a && codePoint <= 0x202e) ||
-			(codePoint >= 0x2066 && codePoint <= 0x2069) ||
-			codePoint === 0xfeff;
+			/\p{Cf}/u.test(character);
 		return hidden
 			? `\\u${codePoint.toString(16).toUpperCase().padStart(4, "0")}`
 			: character;
 	}).join("");
 }
 
-/** Escapes Markdown syntax, fences, and non-printing controls without dropping transcript text. */
+/** Neutralizes inline and line-start Markdown while preserving readable text. */
 export function escapeMarkdownText(value: string): string {
-	const visible = visibleControls(
-		value.normalize("NFC").replace(/\r\n?/gu, "\n").replaceAll("\t", "    "),
+	const normalized = visibleControls(
+		value
+			.normalize("NFC")
+			.replace(/\r\n?/gu, "\n")
+			.replace(/[\u2028\u2029]/gu, "\n")
+			.replaceAll("\t", "    "),
 	);
-	return visible.replaceAll("\\", "\\\\").replace(/([`*_[\]<>#~|])/gu, "\\$1");
-}
-
-function markdownQuote(value: string): string {
-	return escapeMarkdownText(value)
+	const escaped = Array.from(normalized, (character) =>
+		MARKDOWN_PUNCTUATION.has(character) ? `\\${character}` : character,
+	).join("");
+	return escaped
 		.split("\n")
-		.map((line) => (line.length === 0 ? ">" : `> ${line}`))
+		.map((line) =>
+			line.replace(/^ +/u, (spaces) => "&#32;".repeat(spaces.length)),
+		)
 		.join("\n");
 }
 
@@ -177,11 +178,10 @@ function selectConversations(
 	database: Database,
 	selection: ExportSelection,
 ): ConversationRow[] {
-	const columns = "id, status, stage, started_at, ended_at";
 	if (selection.kind === "conversation") {
 		return database
 			.query<ConversationRow, [string]>(
-				`SELECT ${columns} FROM conversations WHERE id = ?`,
+				"SELECT id FROM conversations WHERE id = ?",
 			)
 			.all(selection.conversationId);
 	}
@@ -197,7 +197,7 @@ function selectConversations(
 		}
 		return database
 			.query<ConversationRow, []>(
-				`SELECT ${columns} FROM conversations
+				`SELECT id FROM conversations
 				 ORDER BY COALESCE(ended_at, started_at) DESC, started_at DESC, id DESC`,
 			)
 			.all();
@@ -205,7 +205,7 @@ function selectConversations(
 	const limit = selection.kind === "limit" ? selection.limit : 1;
 	return database
 		.query<ConversationRow, [number]>(
-			`SELECT ${columns} FROM conversations
+			`SELECT id FROM conversations
 			 ORDER BY COALESCE(ended_at, started_at) DESC, started_at DESC, id DESC
 			 LIMIT ?`,
 		)
@@ -234,7 +234,7 @@ function renderConversation(
 ): { markdown: string; turnCount: number } {
 	const turns = database
 		.query<TurnRow, [string]>(
-			`SELECT user_text, assistant_text, state_before, state_after, completed_at, interrupted
+			`SELECT user_text, assistant_text
 			 FROM turns
 			 WHERE conversation_id = ?
 			 ORDER BY CASE WHEN completed_at IS NULL THEN 1 ELSE 0 END,
@@ -242,39 +242,19 @@ function renderConversation(
 			          rowid ASC`,
 		)
 		.all(conversation.id);
-	const lines = [
-		`## Conversation ${ordinal}`,
-		"",
-		`- Started: ${formatTimestamp(conversation.started_at)}`,
-		`- Ended: ${formatTimestamp(conversation.ended_at)}`,
-		`- Status: ${escapeMarkdownText(conversation.status)}`,
-		`- Final stage: ${escapeMarkdownText(conversation.stage)}`,
-		`- Complete: ${conversation.status === "completed" ? "yes" : "no"}`,
-		`- Turns: ${turns.length}`,
-		"",
-	];
+	const lines = [`## Диалог ${ordinal}`, ""];
 
 	for (const [index, turn] of turns.entries()) {
-		if (turn.interrupted !== 0 && turn.interrupted !== 1) {
-			throw new DialogueExportError("INVALID_DATA");
-		}
 		lines.push(
-			`### Turn ${index + 1}`,
+			`### Реплика ${index + 1}`,
 			"",
-			`- Completed: ${formatTimestamp(turn.completed_at)}`,
-			`- Complete: ${turn.completed_at !== null && turn.interrupted === 0 ? "yes" : "no"}`,
-			`- Interrupted: ${turn.interrupted === 1 ? "yes" : "no"}`,
-			`- Stage: ${escapeMarkdownText(turn.state_before)} → ${escapeMarkdownText(turn.state_after)}`,
+			"#### Вы",
 			"",
-			"#### Visitor",
-			"",
-			markdownQuote(turn.user_text),
+			escapeMarkdownText(turn.user_text),
 			"",
 			"#### Botamin",
 			"",
-			turn.assistant_text.length === 0
-				? "> _(no assistant text recorded)_"
-				: markdownQuote(turn.assistant_text),
+			escapeMarkdownText(turn.assistant_text),
 			"",
 		);
 	}
@@ -282,9 +262,8 @@ function renderConversation(
 }
 
 export function buildDialogueExport(
-	databasePath = databasePathFromUrl(),
+	databasePath: string,
 	selection: ExportSelection = { kind: "latest" },
-	now = new Date(),
 ): DialogueExportEnvelope {
 	let database: Database;
 	try {
@@ -312,13 +291,7 @@ export function buildDialogueExport(
 			}
 		}
 
-		const generatedAt = formatTimestamp(now.toISOString());
-		const sections: string[] = [
-			"# Botamin dialogue export",
-			"",
-			`Generated: ${generatedAt}`,
-			"",
-		];
+		const sections = ["# Диалоги Botamin", ""];
 		let turnCount = 0;
 		for (const [index, conversation] of conversations.entries()) {
 			const rendered = renderConversation(database, conversation, index + 1);
@@ -369,11 +342,15 @@ function readerExitCode(code: DialogueExportErrorCode): number {
 
 if (import.meta.main) {
 	try {
-		const envelope = buildDialogueExport(
-			databasePathFromUrl(),
-			parseExportArgs(Bun.argv.slice(2)),
+		const parsed = parseReaderArgs(Bun.argv.slice(2));
+		if (parsed.databasePath !== COMPOSE_DATABASE_PATH) {
+			throw new DialogueExportError("INVALID_ARGUMENTS");
+		}
+		process.stdout.write(
+			JSON.stringify(
+				buildDialogueExport(parsed.databasePath, parsed.selection),
+			),
 		);
-		process.stdout.write(JSON.stringify(envelope));
 	} catch (error) {
 		const code =
 			error instanceof DialogueExportError ? error.code : "INVALID_DATA";

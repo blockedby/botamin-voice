@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, open, rename, rm } from "node:fs/promises";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
 	buildDialogueExport,
 	type DialogueExportEnvelope,
@@ -14,9 +14,30 @@ import {
 } from "./dialogue-export-reader";
 
 const DEFAULT_OUTPUT_DIRECTORY = ".runtime/dialogues";
+const COMPOSE_DATABASE_PATH = "/data/app.db";
+const COMPOSE_CHILD_TIMEOUT_MS = 30_000;
+const COMPOSE_TERMINATE_GRACE_MS = 500;
+const COMPOSE_TERMINATE_WAIT_MS = 2_000;
 const MAX_IPC_BYTES = MAX_EXPORT_BYTES * 2 + 1024 * 1024;
-const USAGE =
-	"Usage: bun run dialogues:export [--conversation <ULID-or-UUIDv7> | --limit <1..100> | --all]";
+const MAX_STDERR_BYTES = 64 * 1024;
+const DIRECT_DATABASE_ENV = "BOTAMIN_DIALOGUE_EXPORT_DATABASE_URL";
+const USAGE = `Usage:
+  bun run dialogues:export [--source compose] [--conversation <ULID-or-UUIDv7> | --limit <1..100> | --all]
+  bun run dialogues:export --source direct (--database <absolute-sqlite-path> | ${DIRECT_DATABASE_ENV}=file:/absolute/path)`;
+
+type Environment = Record<string, string | undefined>;
+
+export type DialogueExportRequest =
+	| { source: "compose"; selection: ExportSelection }
+	| { source: "direct"; databasePath: string; selection: ExportSelection };
+
+export type ComposeReadOptions = {
+	timeoutMs?: number;
+	terminateGraceMs?: number;
+	terminateWaitMs?: number;
+	environment?: Environment;
+	cwd?: string;
+};
 
 export type ProtectedWriteOptions = {
 	now?: Date;
@@ -29,8 +50,9 @@ function safeSuffix(): string {
 }
 
 function filenameTimestamp(now: Date): string {
-	if (Number.isNaN(now.getTime()))
+	if (Number.isNaN(now.getTime())) {
 		throw new DialogueExportError("INVALID_DATA");
+	}
 	return now.toISOString().replace(/[-:.]/gu, "");
 }
 
@@ -74,6 +96,62 @@ export async function writeProtectedDialogueFile(
 	}
 }
 
+function invalidArguments(): never {
+	throw new DialogueExportError("INVALID_ARGUMENTS");
+}
+
+export function parseDialogueExportArgs(
+	argv: readonly string[],
+	environment: Environment = process.env,
+): DialogueExportRequest {
+	let source: "compose" | "direct" | undefined;
+	let databaseArgument: string | undefined;
+	const selectorArguments: string[] = [];
+
+	for (let index = 0; index < argv.length; index += 1) {
+		const argument = argv[index] ?? invalidArguments();
+		if (argument === "--source") {
+			if (source !== undefined) invalidArguments();
+			const value = argv[index + 1];
+			if (value === "compose") source = "compose";
+			else if (value === "direct") source = "direct";
+			else invalidArguments();
+			index += 1;
+			continue;
+		}
+		if (argument === "--database") {
+			if (databaseArgument !== undefined) invalidArguments();
+			const value = argv[index + 1] ?? invalidArguments();
+			if (!isAbsolute(value)) invalidArguments();
+			databaseArgument = value;
+			index += 1;
+			continue;
+		}
+		selectorArguments.push(argument);
+	}
+
+	const selection = parseExportArgs(selectorArguments);
+	if ((source ?? "compose") === "compose") {
+		if (databaseArgument !== undefined) invalidArguments();
+		return { source: "compose", selection };
+	}
+
+	const configuredDatabase = environment[DIRECT_DATABASE_ENV];
+	const hasConfiguredDatabase =
+		configuredDatabase !== undefined && configuredDatabase !== "";
+	if (databaseArgument !== undefined && hasConfiguredDatabase)
+		invalidArguments();
+	if (databaseArgument !== undefined) {
+		return { source: "direct", databasePath: databaseArgument, selection };
+	}
+	if (!hasConfiguredDatabase) invalidArguments();
+	return {
+		source: "direct",
+		databasePath: databasePathFromUrl(configuredDatabase),
+		selection,
+	};
+}
+
 function selectionArguments(selection: ExportSelection): string[] {
 	switch (selection.kind) {
 		case "latest":
@@ -90,6 +168,7 @@ function selectionArguments(selection: ExportSelection): string[] {
 async function collectBounded(
 	stream: ReadableStream<Uint8Array>,
 	maximumBytes: number,
+	overflowCode: DialogueExportErrorCode,
 ): Promise<Uint8Array> {
 	const reader = stream.getReader();
 	const chunks: Uint8Array[] = [];
@@ -99,8 +178,8 @@ async function collectBounded(
 		if (result.done) break;
 		bytes += result.value.byteLength;
 		if (bytes > maximumBytes) {
-			await reader.cancel();
-			throw new DialogueExportError("EXPORT_TOO_LARGE");
+			await reader.cancel().catch(() => undefined);
+			throw new DialogueExportError(overflowCode);
 		}
 		chunks.push(result.value);
 	}
@@ -111,14 +190,6 @@ async function collectBounded(
 		offset += chunk.byteLength;
 	}
 	return output;
-}
-
-async function discard(stream: ReadableStream<Uint8Array>): Promise<void> {
-	const reader = stream.getReader();
-	for (;;) {
-		const result = await reader.read();
-		if (result.done) return;
-	}
 }
 
 function validateEnvelope(value: unknown): DialogueExportEnvelope {
@@ -154,9 +225,70 @@ function childErrorCode(status: number): DialogueExportErrorCode {
 	}
 }
 
-async function readFromCompose(
+function processGroupExists(pid: number): boolean {
+	if (process.platform === "win32") return false;
+	try {
+		process.kill(-pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function signalChildGroup(
+	child: ReturnType<typeof Bun.spawn>,
+	signal: NodeJS.Signals,
+): void {
+	try {
+		if (process.platform === "win32") child.kill(signal);
+		else process.kill(-child.pid, signal);
+	} catch {
+		try {
+			child.kill(signal);
+		} catch {
+			// The process or process group has already exited.
+		}
+	}
+}
+
+async function waitForGroupExit(pid: number, maximumMs: number): Promise<void> {
+	const deadline = Date.now() + maximumMs;
+	while (processGroupExists(pid) && Date.now() < deadline) {
+		await Bun.sleep(10);
+	}
+}
+
+async function terminateChildGroup(
+	child: ReturnType<typeof Bun.spawn>,
+	graceMs: number,
+	waitMs: number,
+): Promise<void> {
+	signalChildGroup(child, "SIGTERM");
+	if (process.platform === "win32") await Bun.sleep(graceMs);
+	else await waitForGroupExit(child.pid, graceMs);
+	if (
+		(process.platform === "win32" && child.exitCode === null) ||
+		processGroupExists(child.pid)
+	) {
+		signalChildGroup(child, "SIGKILL");
+	}
+	await Promise.race([
+		child.exited.catch(() => -1),
+		Bun.sleep(waitMs).then(() => -1),
+	]);
+	if (process.platform !== "win32") {
+		await waitForGroupExit(child.pid, waitMs);
+	}
+}
+
+export async function readFromCompose(
 	selection: ExportSelection,
+	options: ComposeReadOptions = {},
 ): Promise<DialogueExportEnvelope> {
+	const timeoutMs = options.timeoutMs ?? COMPOSE_CHILD_TIMEOUT_MS;
+	const terminateGraceMs =
+		options.terminateGraceMs ?? COMPOSE_TERMINATE_GRACE_MS;
+	const terminateWaitMs = options.terminateWaitMs ?? COMPOSE_TERMINATE_WAIT_MS;
 	let child: ReturnType<typeof Bun.spawn>;
 	try {
 		child = Bun.spawn(
@@ -168,30 +300,56 @@ async function readFromCompose(
 				"app",
 				"bun",
 				"/app/scripts/dialogue-export-reader.ts",
+				"--database",
+				COMPOSE_DATABASE_PATH,
 				...selectionArguments(selection),
 			],
 			{
 				stdout: "pipe",
 				stderr: "pipe",
-				env: process.env,
+				env: options.environment ?? process.env,
+				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+				detached: true,
 			},
 		);
 	} catch {
 		throw new DialogueExportError("DATABASE_UNAVAILABLE");
 	}
 
+	if (
+		!(child.stdout instanceof ReadableStream) ||
+		!(child.stderr instanceof ReadableStream)
+	) {
+		await terminateChildGroup(child, terminateGraceMs, terminateWaitMs);
+		throw new DialogueExportError("DATABASE_UNAVAILABLE");
+	}
+
+	const stdoutPromise = collectBounded(
+		child.stdout,
+		MAX_IPC_BYTES,
+		"EXPORT_TOO_LARGE",
+	);
+	const stderrPromise = collectBounded(
+		child.stderr,
+		MAX_STDERR_BYTES,
+		"DATABASE_UNAVAILABLE",
+	);
+	const streamsAndExit = Promise.all([
+		stdoutPromise,
+		stderrPromise,
+		child.exited,
+	]);
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const deadline = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(
+			() => reject(new DialogueExportError("DATABASE_UNAVAILABLE")),
+			timeoutMs,
+		);
+	});
+
 	try {
-		if (
-			!(child.stdout instanceof ReadableStream) ||
-			!(child.stderr instanceof ReadableStream)
-		) {
-			throw new DialogueExportError("DATABASE_UNAVAILABLE");
-		}
-		const [stdout, , status] = await Promise.all([
-			collectBounded(child.stdout, MAX_IPC_BYTES),
-			discard(child.stderr),
-			child.exited,
-		]);
+		const [stdout, , status] = await Promise.race([streamsAndExit, deadline]);
+		if (timer !== undefined) clearTimeout(timer);
 		if (status !== 0) {
 			throw new DialogueExportError(childErrorCode(status));
 		}
@@ -205,21 +363,39 @@ async function readFromCompose(
 		}
 		return validateEnvelope(decoded);
 	} catch (error) {
-		if (child.exitCode === null) child.kill();
-		throw error;
+		if (timer !== undefined) clearTimeout(timer);
+		await terminateChildGroup(child, terminateGraceMs, terminateWaitMs);
+		await Promise.race([
+			Promise.allSettled([stdoutPromise, stderrPromise]),
+			Bun.sleep(terminateWaitMs),
+		]);
+		throw error instanceof DialogueExportError
+			? error
+			: new DialogueExportError("DATABASE_UNAVAILABLE");
 	}
 }
 
 export async function collectDialogueExport(
-	selection: ExportSelection,
+	request: DialogueExportRequest,
+	composeOptions: ComposeReadOptions = {},
 ): Promise<DialogueExportEnvelope> {
-	if (
-		process.env.DATABASE_URL !== undefined &&
-		process.env.DATABASE_URL !== ""
-	) {
-		return buildDialogueExport(databasePathFromUrl(), selection);
+	if (request.source === "direct") {
+		return buildDialogueExport(request.databasePath, request.selection);
 	}
-	return readFromCompose(selection);
+	return readFromCompose(request.selection, composeOptions);
+}
+
+export async function performDialogueExport(
+	request: DialogueExportRequest,
+	outputDirectory: string,
+	composeOptions: ComposeReadOptions = {},
+): Promise<{ envelope: DialogueExportEnvelope; target: string }> {
+	const envelope = await collectDialogueExport(request, composeOptions);
+	const target = await writeProtectedDialogueFile(
+		outputDirectory,
+		envelope.markdown,
+	);
+	return { envelope, target };
 }
 
 function failureReason(code: DialogueExportErrorCode): string {
@@ -239,14 +415,15 @@ function failureReason(code: DialogueExportErrorCode): string {
 
 export async function runDialogueExport(
 	argv: readonly string[],
+	environment: Environment = process.env,
 ): Promise<number> {
 	if (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h")) {
 		process.stdout.write(`${USAGE}\n`);
 		return 0;
 	}
-	let selection: ExportSelection;
+	let request: DialogueExportRequest;
 	try {
-		selection = parseExportArgs(argv);
+		request = parseDialogueExportArgs(argv, environment);
 	} catch {
 		process.stderr.write(
 			"dialogues export: status=failed conversations=0 turns=0 path=none reason=invalid-arguments\n",
@@ -256,12 +433,12 @@ export async function runDialogueExport(
 	}
 
 	try {
-		const envelope = await collectDialogueExport(selection);
 		const configuredDirectory =
-			process.env.DIALOGUES_EXPORT_OUTPUT_DIR ?? DEFAULT_OUTPUT_DIRECTORY;
-		const target = await writeProtectedDialogueFile(
+			environment.DIALOGUES_EXPORT_OUTPUT_DIR ?? DEFAULT_OUTPUT_DIRECTORY;
+		const { envelope, target } = await performDialogueExport(
+			request,
 			configuredDirectory,
-			envelope.markdown,
+			{ environment },
 		);
 		const displayPath = relative(process.cwd(), target);
 		const safePath =

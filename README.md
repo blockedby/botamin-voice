@@ -72,14 +72,18 @@ Run the canonical credential-free test suite with `bun run test`; it excludes ig
 ### Owner dialogue export
 
 ```bash
+# Defaults explicitly to the running Compose app and its /data/app.db named volume.
 bun run dialogues:export
-# Optional, mutually exclusive selectors:
-bun run dialogues:export --conversation <ULID-or-UUIDv7>
+# Optional, mutually exclusive conversation selectors:
 bun run dialogues:export --limit 10
 bun run dialogues:export --all
+bun run dialogues:export --conversation <ULID-or-UUIDv7>
+
+# Direct access is never inferred from DATABASE_URL. Select it and name an absolute DB.
+bun run dialogues:export --source direct --database /absolute/path/to/app.db
 ```
 
-This explicit manual command reads a consistent, read-only SQLite snapshot from the running Compose app (or a direct local `DATABASE_URL`) and atomically writes protected Markdown under `.runtime/dialogues/`. The default is the latest completed/started conversation; `--limit` is `1..100`, while `--all` fails above 100. Only aggregate status/count/path reaches the terminal—never transcript text. Exports can contain visitor PII, are owner-managed separately from the DB's 30-day transcript retention, and must be deleted separately. See [`docs/12-dialogue-export.md`](docs/12-dialogue-export.md) for exclusions and safeguards.
+This executable owner command reads a consistent, read-only SQLite snapshot and atomically writes protected Markdown under `.runtime/dialogues/`. Compose is the default even when the repository `.env` defines `DATABASE_URL`; direct access requires `--source direct` plus either `--database` or the dedicated `BOTAMIN_DIALOGUE_EXPORT_DATABASE_URL`. The default conversation selector is latest; `--limit` is `1..100`, while `--all` fails above 100. Output contains only non-persisted structural headings and role-labelled `Вы`/`Botamin` transcript text. Only aggregate status/count/path reaches the terminal—never transcript text. Exports can contain visitor PII, are owner-managed separately from the DB's 30-day transcript retention, and must be deleted separately. See [`docs/12-dialogue-export.md`](docs/12-dialogue-export.md) for exclusions and safeguards.
 
 ```bash
 # Service state
@@ -128,6 +132,6 @@ Never use `docker compose down -v` on a host with bookings or Codex auth. Restor
 | `docs/11-local-release-handoff.md` | local RC runbook, checklist, limitations, rollback |
 | `docs/12-dialogue-export.md` | manual protected owner transcript export |
 | `evidence/T30-observed-local-voice-smoke-2026-07-31.md` | historical redacted owner-observed local provider path |
-| `FULL_SPEC.md` / `technical-spec.html` | generated specification; not updated by this docs-only change |
+| `FULL_SPEC.md` / `technical-spec.html` | generated views of the authoritative `docs/*.md` source documents |
 
 The unavailable Notion source remains a known research limitation; see the detailed scope and research documents before changing product claims.

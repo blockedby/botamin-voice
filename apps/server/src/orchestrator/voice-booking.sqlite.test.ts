@@ -93,6 +93,8 @@ function setup(options: {
 	initialSlots?: [MeetingSlot, MeetingSlot];
 	currentSlots?: [MeetingSlot, MeetingSlot];
 	filename?: string;
+	qualificationEnabled?: boolean;
+	tts?: TtsPort;
 	wrapBookings?: (delegate: SqliteBookingService) => BookingService;
 }) {
 	const database = openDomainDatabase({
@@ -100,13 +102,14 @@ function setup(options: {
 	});
 	databases.push(database);
 	const conversationId = Bun.randomUUIDv7();
+	const qualificationEnabled = options.qualificationEnabled ?? false;
 	new ConversationStore(database).create({
 		id: conversationId,
 		stage: "COLLECT_BOOKING",
 		promptVersion,
 		source: "landing",
 		locale: "ru-RU",
-		qualificationEnabled: false,
+		qualificationEnabled,
 		consentAt: instant,
 		startedAt: instant,
 	});
@@ -139,10 +142,10 @@ function setup(options: {
 		brain,
 		bookings: bookingsService,
 		draftStore,
-		tts,
+		tts: options.tts ?? tts,
 		now: () => new Date(instant),
 		initialState: {
-			...createInitialConversationState({ qualificationEnabled: false }),
+			...createInitialConversationState({ qualificationEnabled }),
 			stage: "COLLECT_BOOKING",
 			contactConsentConfirmed: true,
 		},
@@ -194,6 +197,49 @@ function preloadReadyFacts(
 		baseRevision: draft.revision,
 		details: completeDetails,
 		...(selectedCandidateId ? { selectedCandidateId } : {}),
+	});
+}
+
+function preloadQualificationFacts(
+	harness: ReturnType<typeof setup>,
+	facts: { monthlyLeadVolume?: string; salesManagerCount?: number },
+) {
+	const draft = harness.draftStore.load(harness.conversationId);
+	if (!draft) throw new Error("draft missing");
+	const monthlyQuote = "300 лидов в месяц";
+	const managerQuote = "5 менеджеров";
+	const currentTurnText = [
+		facts.monthlyLeadVolume === undefined ? "" : monthlyQuote,
+		facts.salesManagerCount === undefined ? "" : managerQuote,
+	]
+		.filter(Boolean)
+		.join(", ");
+	return harness.draftStore.ingestProposals({
+		conversationId: harness.conversationId,
+		expectedRevision: draft.revision,
+		source: "typed_message",
+		turnId: Bun.randomUUIDv7(),
+		currentTurnText,
+		proposals: [
+			...(facts.monthlyLeadVolume === undefined
+				? []
+				: [
+						{
+							field: "monthlyLeadVolume" as const,
+							value: facts.monthlyLeadVolume,
+							quote: monthlyQuote,
+						},
+					]),
+			...(facts.salesManagerCount === undefined
+				? []
+				: [
+						{
+							field: "salesManagerCount" as const,
+							value: facts.salesManagerCount,
+							quote: managerQuote,
+						},
+					]),
+		],
 	});
 }
 
@@ -392,31 +438,271 @@ describe("typed and spoken server-owned draft completion", () => {
 		).toBe(0);
 	});
 
-	test("disconnect during a blocked durable create reconciles booking and reconnect stage", async () => {
-		let releaseCreate: () => void = () => undefined;
-		let markCreateStarted: () => void = () => undefined;
-		const createStarted = new Promise<void>((resolve) => {
-			markCreateStarted = resolve;
+	test("blocked create disconnect defers none, partial, and complete qualification until confirmation", async () => {
+		const cases = [
+			{
+				name: "none",
+				facts: {},
+				expectedStatus: "none",
+				expectedStage: "POST_BOOKING_QUALIFICATION",
+				expectedQuestion: "Сколько входящих лидов приходит за месяц?",
+				unexpectedQuestion: "Сколько менеджеров",
+				expectedQualificationWrites: 0,
+			},
+			{
+				name: "partial",
+				facts: { monthlyLeadVolume: "300 в месяц" },
+				expectedStatus: "partial",
+				expectedStage: "POST_BOOKING_QUALIFICATION",
+				expectedQuestion:
+					"Сколько менеджеров по продажам работает в вашей команде?",
+				unexpectedQuestion: "Сколько входящих лидов",
+				expectedQualificationWrites: 1,
+			},
+			{
+				name: "complete",
+				facts: {
+					monthlyLeadVolume: "300 в месяц",
+					salesManagerCount: 5,
+				},
+				expectedStatus: "complete",
+				expectedStage: "COMPLETE",
+				expectedQuestion: "виртуальная встреча создана",
+				unexpectedQuestion: "Сколько",
+				expectedQualificationWrites: 1,
+			},
+		] as const;
+
+		for (const testCase of cases) {
+			let releaseCreate: () => void = () => undefined;
+			let markCreateStarted: () => void = () => undefined;
+			let qualificationWrites = 0;
+			const createStarted = new Promise<void>((resolve) => {
+				markCreateStarted = resolve;
+			});
+			const createGate = new Promise<void>((resolve) => {
+				releaseCreate = resolve;
+			});
+			const harness = setup({
+				qualificationEnabled: true,
+				wrapBookings: (delegate) => ({
+					candidateMeetingSlots: () => delegate.candidateMeetingSlots(),
+					async createBooking(input) {
+						markCreateStarted();
+						await createGate;
+						return delegate.createBooking(input);
+					},
+					async appendQualification(input) {
+						qualificationWrites += 1;
+						return delegate.appendQualification(input);
+					},
+					findByConversationId: (id) => delegate.findByConversationId(id),
+				}),
+			});
+			const initial = harness.draftStore.load(harness.conversationId);
+			if (!initial) throw new Error("draft missing");
+			let ready = preloadReadyFacts(harness, initial.candidates[0].candidateId);
+			if (Object.keys(testCase.facts).length > 0) {
+				ready = preloadQualificationFacts(harness, testCase.facts);
+			}
+			const pending = collect(
+				harness.orchestrator.confirmBookingDraft({
+					turnId: Bun.randomUUIDv7(),
+					generationId: Bun.randomUUIDv7(),
+					confirmation: {
+						requestId: Bun.randomUUIDv7(),
+						revision: ready.revision,
+					},
+				}),
+			);
+			await createStarted;
+			await harness.orchestrator.disconnect();
+			releaseCreate();
+			const disconnectedEvents = await pending;
+			expect(
+				disconnectedEvents.some((event) => event.type === "text.delta"),
+				testCase.name,
+			).toBe(false);
+			expect(qualificationWrites, testCase.name).toBe(0);
+			expect(
+				await harness.bookingsService.findByConversationId(
+					harness.conversationId,
+				),
+			).toMatchObject({ qualificationStatus: "none" });
+			expect(harness.draftStore.load(harness.conversationId)).toMatchObject({
+				commitStatus: "committed",
+			});
+			expect(harness.orchestrator.state).toMatchObject({
+				stage: "DISCONNECTED",
+				resumeStage: "BOOKED",
+				bookingConfirmationDelivered: false,
+				booking: { status: "booked", qualificationStatus: "none" },
+			});
+
+			expect(harness.orchestrator.apply({ type: "reconnect" }).ok).toBe(true);
+			const resumed = await collect(typed(harness.orchestrator, "продолжить"));
+			const eventTypes = resumed.map((event) => event.type);
+			const textIndex = eventTypes.indexOf("text.delta");
+			const confirmationStateIndex = resumed.findIndex(
+				(event) =>
+					event.type === "state.changed" &&
+					event.reason === "booking_confirmation_retained",
+			);
+			expect(textIndex, testCase.name).toBeGreaterThanOrEqual(0);
+			expect(confirmationStateIndex, testCase.name).toBeGreaterThan(textIndex);
+			const updateIndex = eventTypes.indexOf("booking.updated");
+			if (testCase.expectedQualificationWrites > 0) {
+				expect(updateIndex, testCase.name).toBeGreaterThan(
+					confirmationStateIndex,
+				);
+			} else expect(updateIndex, testCase.name).toBe(-1);
+			const confirmation = assistantText(resumed);
+			expect(confirmation, testCase.name).toContain(testCase.expectedQuestion);
+			expect(confirmation, testCase.name).not.toContain(
+				testCase.unexpectedQuestion,
+			);
+			expect(harness.orchestrator.state, testCase.name).toMatchObject({
+				stage: testCase.expectedStage,
+				bookingConfirmationDelivered: true,
+				booking: { qualificationStatus: testCase.expectedStatus },
+			});
+			expect(qualificationWrites, testCase.name).toBe(
+				testCase.expectedQualificationWrites,
+			);
+			await harness.orchestrator.reconcileDurableBooking();
+			expect(qualificationWrites, `${testCase.name} duplicate write`).toBe(
+				testCase.expectedQualificationWrites,
+			);
+			expect(harness.brain.turns, testCase.name).toHaveLength(0);
+		}
+	});
+
+	test("transport loss before confirmation text delivery retains only the booking", async () => {
+		const harness = setup({ qualificationEnabled: true });
+		const initial = harness.draftStore.load(harness.conversationId);
+		if (!initial) throw new Error("draft missing");
+		preloadReadyFacts(harness, initial.candidates[0].candidateId);
+		const ready = preloadQualificationFacts(harness, {
+			monthlyLeadVolume: "300 в месяц",
+			salesManagerCount: 5,
 		});
-		const createGate = new Promise<void>((resolve) => {
-			releaseCreate = resolve;
+		const iterator = harness.orchestrator
+			.confirmBookingDraft({
+				turnId: Bun.randomUUIDv7(),
+				generationId: Bun.randomUUIDv7(),
+				confirmation: {
+					requestId: Bun.randomUUIDv7(),
+					revision: ready.revision,
+				},
+			})
+			[Symbol.asyncIterator]();
+		for (let index = 0; index < 3; index += 1) {
+			const next = await iterator.next();
+			expect(next.done).toBe(false);
+			expect(next.value?.type).not.toBe("text.delta");
+		}
+		await iterator.return?.(undefined);
+		expect(harness.orchestrator.state).toMatchObject({
+			stage: "BOOKED",
+			bookingConfirmationDelivered: false,
+			booking: { qualificationStatus: "none" },
 		});
+		expect(harness.tts.inputs).toHaveLength(0);
+		expect(
+			await harness.bookingsService.findByConversationId(
+				harness.conversationId,
+			),
+		).toMatchObject({ qualificationStatus: "none" });
+	});
+
+	test("retained confirmation text still orders qualification when transport detaches before TTS", async () => {
+		let qualificationWrites = 0;
 		const harness = setup({
+			qualificationEnabled: true,
 			wrapBookings: (delegate) => ({
 				candidateMeetingSlots: () => delegate.candidateMeetingSlots(),
-				async createBooking(input) {
-					markCreateStarted();
-					await createGate;
-					return delegate.createBooking(input);
+				createBooking: (input) => delegate.createBooking(input),
+				async appendQualification(input) {
+					qualificationWrites += 1;
+					return delegate.appendQualification(input);
 				},
-				appendQualification: (input) => delegate.appendQualification(input),
 				findByConversationId: (id) => delegate.findByConversationId(id),
 			}),
 		});
 		const initial = harness.draftStore.load(harness.conversationId);
 		if (!initial) throw new Error("draft missing");
-		const ready = preloadReadyFacts(harness, initial.candidates[0].candidateId);
-		const pending = collect(
+		preloadReadyFacts(harness, initial.candidates[0].candidateId);
+		const ready = preloadQualificationFacts(harness, {
+			monthlyLeadVolume: "300 в месяц",
+			salesManagerCount: 5,
+		});
+		const iterator = harness.orchestrator
+			.confirmBookingDraft({
+				turnId: Bun.randomUUIDv7(),
+				generationId: Bun.randomUUIDv7(),
+				confirmation: {
+					requestId: Bun.randomUUIDv7(),
+					revision: ready.revision,
+				},
+			})
+			[Symbol.asyncIterator]();
+		for (let index = 0; index < 3; index += 1) await iterator.next();
+		const visible = await iterator.next();
+		expect(visible.value).toMatchObject({ type: "text.delta" });
+		expect(harness.orchestrator.state.bookingConfirmationDelivered).toBe(false);
+		await harness.orchestrator.disconnect();
+		const retainedEvents: OrchestratorEvent[] = [];
+		for (;;) {
+			const next = await iterator.next();
+			if (next.done) break;
+			retainedEvents.push(next.value);
+		}
+		expect(retainedEvents.map((event) => event.type)).toContain(
+			"booking.updated",
+		);
+		expect(qualificationWrites).toBe(1);
+		expect(harness.tts.inputs).toHaveLength(0);
+		expect(harness.orchestrator.state).toMatchObject({
+			stage: "DISCONNECTED",
+			resumeStage: "COMPLETE",
+			bookingConfirmationDelivered: true,
+			booking: { qualificationStatus: "complete" },
+		});
+		expect(harness.orchestrator.apply({ type: "reconnect" })).toMatchObject({
+			ok: true,
+			state: { stage: "COMPLETE" },
+		});
+	});
+
+	test("visible confirmation survives TTS failure before qualification completes", async () => {
+		const failingTts: TtsPort = {
+			synthesize: async () => {
+				throw new Error("TTS unavailable");
+			},
+			health: async () => "degraded",
+		};
+		let qualificationWrites = 0;
+		const harness = setup({
+			qualificationEnabled: true,
+			tts: failingTts,
+			wrapBookings: (delegate) => ({
+				candidateMeetingSlots: () => delegate.candidateMeetingSlots(),
+				createBooking: (input) => delegate.createBooking(input),
+				async appendQualification(input) {
+					qualificationWrites += 1;
+					return delegate.appendQualification(input);
+				},
+				findByConversationId: (id) => delegate.findByConversationId(id),
+			}),
+		});
+		const initial = harness.draftStore.load(harness.conversationId);
+		if (!initial) throw new Error("draft missing");
+		preloadReadyFacts(harness, initial.candidates[0].candidateId);
+		const ready = preloadQualificationFacts(harness, {
+			monthlyLeadVolume: "300 в месяц",
+			salesManagerCount: 5,
+		});
+		const events = await collect(
 			harness.orchestrator.confirmBookingDraft({
 				turnId: Bun.randomUUIDv7(),
 				generationId: Bun.randomUUIDv7(),
@@ -426,27 +712,76 @@ describe("typed and spoken server-owned draft completion", () => {
 				},
 			}),
 		);
-		await createStarted;
-		await harness.orchestrator.disconnect();
-		releaseCreate();
-		await expect(pending).resolves.toBeArray();
-		expect(
-			harness.database.select({ value: count() }).from(bookings).get()?.value,
-		).toBe(1);
-		expect(harness.draftStore.load(harness.conversationId)).toMatchObject({
-			commitStatus: "committed",
-		});
+		const types = events.map((event) => event.type);
+		expect(types.indexOf("text.delta")).toBeLessThan(types.indexOf("degraded"));
+		expect(events).toContainEqual(
+			expect.objectContaining({ type: "degraded", provider: "tts" }),
+		);
+		expect(qualificationWrites).toBe(1);
 		expect(harness.orchestrator.state).toMatchObject({
+			stage: "COMPLETE",
+			bookingConfirmationDelivered: true,
+			booking: { qualificationStatus: "complete" },
+		});
+	});
+
+	test("restart reconciliation never infers confirmation from complete qualification", async () => {
+		const harness = setup({ qualificationEnabled: true });
+		const initial = harness.draftStore.load(harness.conversationId);
+		if (!initial) throw new Error("draft missing");
+		preloadReadyFacts(harness, initial.candidates[0].candidateId);
+		const ready = preloadQualificationFacts(harness, {
+			monthlyLeadVolume: "300 в месяц",
+			salesManagerCount: 5,
+		});
+		await collect(
+			harness.orchestrator.confirmBookingDraft({
+				turnId: Bun.randomUUIDv7(),
+				generationId: Bun.randomUUIDv7(),
+				confirmation: {
+					requestId: Bun.randomUUIDv7(),
+					revision: ready.revision,
+				},
+			}),
+		);
+		const eventsBefore = harness.database
+			.select({ value: count() })
+			.from(domainEvents)
+			.get()?.value;
+		const restarted = new ConversationOrchestrator({
+			conversationId: harness.conversationId,
+			promptVersion,
+			stt: new QueueStt([]),
+			brain: new FakeBrain(),
+			bookings: harness.bookingsService,
+			draftStore: harness.draftStore,
+			tts: new FakeTts(),
+			initialState: {
+				...createInitialConversationState({ qualificationEnabled: true }),
+				stage: "DISCONNECTED",
+				resumeStage: "COLLECT_BOOKING",
+				contactConsentConfirmed: true,
+			},
+		});
+		await restarted.reconcileDurableBooking();
+		expect(restarted.state).toMatchObject({
 			stage: "DISCONNECTED",
 			resumeStage: "BOOKED",
-			booking: { status: "booked" },
+			bookingConfirmationDelivered: false,
+			booking: { qualificationStatus: "complete" },
 		});
-		expect(harness.orchestrator.apply({ type: "reconnect" }).ok).toBe(true);
-		expect(harness.orchestrator.state).toMatchObject({
-			stage: "BOOKED",
-			resumeStage: null,
-			booking: { status: "booked" },
+		expect(restarted.apply({ type: "reconnect" }).ok).toBe(true);
+		const resumed = await collect(typed(restarted, "продолжить"));
+		expect(assistantText(resumed)).toContain("виртуальная встреча создана");
+		expect(assistantText(resumed)).not.toContain("Сколько");
+		expect(restarted.state).toMatchObject({
+			stage: "COMPLETE",
+			bookingConfirmationDelivered: true,
 		});
+		expect(
+			harness.database.select({ value: count() }).from(domainEvents).get()
+				?.value,
+		).toBe(eventsBefore);
 	});
 
 	test("restart reconciles an existing write and recovers a crash before create", async () => {

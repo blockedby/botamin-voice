@@ -173,27 +173,35 @@ describe("approved contact speech", () => {
 		});
 	});
 
-	test("redacts unapproved slash, comma, zero-width, Unicode, and mixed phone shapes", () => {
+	test("redacts conservative phone mutations with either contact-processing mode", () => {
 		for (const detected of [
+			"+7:999:123:45:67",
+			"+7;999;123;45;67",
+			"+7•999·123‣45∙67",
 			"+7/999/123/45/67",
 			"+7,999,123,45,67",
 			"+7\u200B999\u200C123\u206045\uFEFF67",
+			"+7\u00A0999\u2007123\u202F45\u300067",
 			"+٧/٩٩٩/١٢٣/٤٥/٦٧",
+			"+7（999）123−45—67",
 			"+7 (999)/123,45\u200B67",
+			"+7:999•123/45,67",
 			"+7 )999( 123-45-67",
 			"+7 ((999)) 123-45-67",
 			"+7  999 123-45-67",
 			"+1 (202 555-0101",
 		]) {
-			const prepared = prepareSpeech(`Телефон ${detected}`, {
-				contactProcessing: true,
-				approvedContacts: [phone],
-			});
-			expect(prepared.spokenText).toBe("Телефон контакт скрыт");
-			expect(prepared.metadata).toEqual({
-				forwardedChannels: [],
-				forwardedCount: 0,
-			});
+			for (const contactProcessing of [false, true]) {
+				const prepared = prepareSpeech(`Телефон ${detected}`, {
+					contactProcessing,
+					approvedContacts: [phone],
+				});
+				expect(prepared.spokenText).toBe("Телефон контакт скрыт");
+				expect(prepared.metadata).toEqual({
+					forwardedChannels: [],
+					forwardedCount: 0,
+				});
+			}
 		}
 	});
 
@@ -217,15 +225,25 @@ describe("approved contact speech", () => {
 		}
 	});
 
-	test("preserves normal counts, grouped case claims, dates, times, and decimals", () => {
-		const source =
-			"Кейс: 12 500 заявок, выручка 1 000 000, рост 3,14%, дата 10.08.2026, время 12:30.";
-		const prepared = prepareSpeech(source, {
-			contactProcessing: true,
-			approvedContacts: [phone],
-		});
-		expect(prepared.spokenText).toBe(source);
-		expect(prepared.metadata.forwardedCount).toBe(0);
+	test("preserves case numbers, dates, times, decimals, percentages, ranges, and grouped counts", () => {
+		const controls = [
+			"Кейс: 12 500 заявок, выручка 1 000 000, рост 3,14%, дата 10.08.2026, время 16:00.",
+			"Дело № 1234567, заявка # 7654321 и тикет N 2345678.",
+			"Период 10.08.2026—12.08.2026, окно 09:00–16:00.",
+			"События 10.08.2026 16:00, 10.08.2026T16:00 и 16:00 10.08.2026.",
+			"Значение 1234567,89, доля 1234567%, диапазон 1000000-2000000.",
+			"Обработано 12\u00A0500 заявок и 1\u202F000\u202F000 обращений.",
+		];
+		for (const source of controls) {
+			for (const contactProcessing of [false, true]) {
+				const prepared = prepareSpeech(source, {
+					contactProcessing,
+					approvedContacts: [phone],
+				});
+				expect(prepared.spokenText).toBe(source.replace(/\s+/gu, " "));
+				expect(prepared.metadata.forwardedCount).toBe(0);
+			}
+		}
 	});
 
 	test("normalizes strict Telegram mentions and t.me URLs case-insensitively", () => {

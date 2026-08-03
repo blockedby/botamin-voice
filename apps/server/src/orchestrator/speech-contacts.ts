@@ -22,8 +22,8 @@ const CONTACT_REDACTION = "контакт скрыт";
 const PRIVATE_USE = /[\uE000-\uF8FF]/gu;
 const EMAIL_CANDIDATE =
 	/(?<![\p{L}\p{N}.!#$%&'*+/=?^_`{|}~@-])[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+(?![\p{L}\p{N}-])/giu;
-const PHONE_CANDIDATE =
-	/(?<![\p{L}\p{N}])(?:\+[\p{Zs}\t]*)?[\p{Nd}](?:[\p{Nd}\p{Zs}\t().,/\\（）‐‑‒–—―−\u200B-\u200D\u2060\uFEFF-]*[\p{Nd}])?(?:[\p{L}_][\p{L}\p{N}_]*)?/gu;
+export const PHONE_LIKE_SPEECH_CANDIDATE_SOURCE = String.raw`(?<![\p{L}\p{N}])(?:\+[\p{Z}\s\p{Cf}]*)?[\p{Nd}](?:[\p{Nd}\p{Z}\s\p{Cf}().,:;\/\\（）\[\]{}‐‑‒–—―−·•‣∙⋅◦▪▫●○-]*[\p{Nd}])?(?:[\p{L}_][\p{L}\p{N}_]*)?(?:\s*%)?`;
+const PHONE_CANDIDATE = new RegExp(PHONE_LIKE_SPEECH_CANDIDATE_SOURCE, "gu");
 const PHONE_EXTENSION = /^\s*(?:доб\.?|ext\.?)\s*\p{Nd}+/iu;
 const TELEGRAM_MENTION =
 	/(?<![\p{L}\p{N}_@])@[a-zA-Z][a-zA-Z0-9_]{3,30}[a-zA-Z0-9](?![a-zA-Z0-9_])/gu;
@@ -41,10 +41,32 @@ const INTERNATIONAL_PHONE = /^\+[1-9][0-9]*(?:[ -][0-9]+)*$/u;
 const INTERNATIONAL_PHONE_WITH_AREA =
 	/^\+[1-9][0-9]{0,2} ?\([0-9]{2,5}\)(?:[ -][0-9]+)+$/u;
 const GROUPED_NUMBER =
-	/^\p{Nd}{1,3}(?:[\p{Zs}\t,]\p{Nd}{3})+(?:[.,]\p{Nd}{1,2})?$/u;
+	/^\p{Nd}{1,3}(?:[\p{Z}\s,]\p{Nd}{3})+(?:[.,]\p{Nd}{1,2})?$/u;
 const DECIMAL_NUMBER = /^\p{Nd}+[.,]\p{Nd}{1,2}$/u;
-const CALENDAR_DATE =
-	/^(?:\p{Nd}{1,2}[./-]\p{Nd}{1,2}[./-]\p{Nd}{2,4}|\p{Nd}{4}[./-]\p{Nd}{1,2}[./-]\p{Nd}{1,2})$/u;
+const CALENDAR_DATE_SOURCE = String.raw`(?:\p{Nd}{1,2}[./-]\p{Nd}{1,2}[./-]\p{Nd}{2,4}|\p{Nd}{4}[./-]\p{Nd}{1,2}[./-]\p{Nd}{1,2})`;
+const CLOCK_TIME_SOURCE = String.raw`(?:[01]?\p{Nd}|2[0-3]):[0-5]\p{Nd}(?::[0-5]\p{Nd}(?:[.,]\p{Nd}{1,6})?)?`;
+const CALENDAR_DATE = new RegExp(`^${CALENDAR_DATE_SOURCE}$`, "u");
+const DATE_OR_TIME_ITEM_SOURCE = String.raw`(?:${CALENDAR_DATE_SOURCE}(?:[T,\p{Z}\s]+${CLOCK_TIME_SOURCE})?|${CLOCK_TIME_SOURCE}(?:[\p{Z}\s]+${CALENDAR_DATE_SOURCE})?)`;
+const DATE_OR_TIME_SEQUENCE = new RegExp(`^${DATE_OR_TIME_ITEM_SOURCE}$`, "u");
+const DATE_OR_TIME_LIST_PREFIX = new RegExp(
+	String.raw`^${DATE_OR_TIME_ITEM_SOURCE}(?:[\p{Z}\s]*[,;][\p{Z}\s]*${DATE_OR_TIME_ITEM_SOURCE})*`,
+	"u",
+);
+const DATE_OR_TIME_RANGE = new RegExp(
+	String.raw`^(?:${CALENDAR_DATE_SOURCE}|${CLOCK_TIME_SOURCE})[\p{Z}\s]*(?:-|‐|‑|‒|–|—|―|−)[\p{Z}\s]*(?:${CALENDAR_DATE_SOURCE}|${CLOCK_TIME_SOURCE})$`,
+	"u",
+);
+const NUMBER_RANGE =
+	/^\p{Nd}+(?:[.,]\p{Nd}{1,2})?[\p{Z}\s]*(?:-|‐|‑|‒|–|—|―|−)[\p{Z}\s]*\p{Nd}+(?:[.,]\p{Nd}{1,2})?$/u;
+const PERCENTAGE =
+	/^(?:\p{Nd}+[.,]\p{Nd}{1,2}|\p{Nd}{1,3}(?:[\p{Z}\s,]\p{Nd}{3})*|\p{Nd}+)[\p{Z}\s]*%$/u;
+const CASE_NUMBER_PREFIX =
+	/(?:(?:^|[^\p{L}])(?:дело|кейс|заявк[аи]|заказ|тикет|обращение|сч[её]т)\s*(?:№|#|N)?|[№#])\s*$/iu;
+
+interface PhoneCandidateContext {
+	input: string;
+	start: number;
+}
 
 interface Region {
 	start: number;
@@ -102,16 +124,41 @@ function canonicalEmail(value: string): string | null {
 }
 
 /** Conservative residual detector used only after exact approved contacts are marked. */
-export function isPhoneLikeSpeechCandidate(value: string): boolean {
+export function isPhoneLikeSpeechCandidate(
+	value: string,
+	context?: PhoneCandidateContext,
+): boolean {
 	const normalized = value.normalize("NFKC").trim();
-	const digitCount = [...normalized].filter((character) =>
+	const firstSuffix = normalized.search(/[\p{L}_]/u);
+	const numericPart =
+		firstSuffix < 0 ? normalized : normalized.slice(0, firstSuffix);
+	const digitCount = [...numericPart].filter((character) =>
 		/\p{Nd}/u.test(character),
 	).length;
 	if (digitCount < 7) return false;
+	const ordinaryDateTimePrefix = context
+		? context.input
+				.slice(context.start)
+				.normalize("NFKC")
+				.match(DATE_OR_TIME_LIST_PREFIX)?.[0]
+		: undefined;
 	if (
 		CALENDAR_DATE.test(normalized) ||
+		DATE_OR_TIME_SEQUENCE.test(normalized) ||
+		(ordinaryDateTimePrefix !== undefined &&
+			ordinaryDateTimePrefix.length >= normalized.length) ||
+		DATE_OR_TIME_RANGE.test(normalized) ||
 		GROUPED_NUMBER.test(normalized) ||
-		DECIMAL_NUMBER.test(normalized)
+		DECIMAL_NUMBER.test(normalized) ||
+		NUMBER_RANGE.test(normalized) ||
+		PERCENTAGE.test(normalized)
+	) {
+		return false;
+	}
+	if (
+		context &&
+		!normalized.startsWith("+") &&
+		CASE_NUMBER_PREFIX.test(context.input.slice(0, context.start))
 	) {
 		return false;
 	}
@@ -327,7 +374,14 @@ export function markApprovedSpeechContacts(
 
 	PHONE_CANDIDATE.lastIndex = 0;
 	for (const match of text.matchAll(PHONE_CANDIDATE)) {
-		if (!isPhoneLikeSpeechCandidate(match[0])) continue;
+		if (
+			!isPhoneLikeSpeechCandidate(match[0], {
+				input: text,
+				start: match.index,
+			})
+		) {
+			continue;
+		}
 		const matchEnd = match.index + match[0].length;
 		const extension = text.slice(matchEnd).match(PHONE_EXTENSION)?.[0] ?? "";
 		const next = text[matchEnd] ?? "";

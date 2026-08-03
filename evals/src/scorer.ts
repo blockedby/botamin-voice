@@ -494,6 +494,71 @@ function detectsRawUrl(text: string): boolean {
 	).test(normalized);
 }
 
+const PHONE_CANDIDATE_SOURCE = String.raw`(?<![\p{L}\p{N}])(?:\+[\p{Z}\s\p{Cf}]*)?[\p{Nd}](?:[\p{Nd}\p{Z}\s\p{Cf}().,:;\/\\（）\[\]{}‐‑‒–—―−·•‣∙⋅◦▪▫●○-]*[\p{Nd}])?(?:[\p{L}_][\p{L}\p{N}_]*)?(?:\s*%)?`;
+const PHONE_CANDIDATE = new RegExp(PHONE_CANDIDATE_SOURCE, "gu");
+const PHONE_GROUPED_NUMBER =
+	/^\p{Nd}{1,3}(?:[\p{Z}\s,]\p{Nd}{3})+(?:[.,]\p{Nd}{1,2})?$/u;
+const PHONE_DECIMAL = /^\p{Nd}+[.,]\p{Nd}{1,2}$/u;
+const PHONE_DATE_SOURCE = String.raw`(?:\p{Nd}{1,2}[./-]\p{Nd}{1,2}[./-]\p{Nd}{2,4}|\p{Nd}{4}[./-]\p{Nd}{1,2}[./-]\p{Nd}{1,2})`;
+const PHONE_TIME_SOURCE = String.raw`(?:[01]?\p{Nd}|2[0-3]):[0-5]\p{Nd}(?::[0-5]\p{Nd}(?:[.,]\p{Nd}{1,6})?)?`;
+const PHONE_DATE_OR_TIME_ITEM_SOURCE = String.raw`(?:${PHONE_DATE_SOURCE}(?:[T,\p{Z}\s]+${PHONE_TIME_SOURCE})?|${PHONE_TIME_SOURCE}(?:[\p{Z}\s]+${PHONE_DATE_SOURCE})?)`;
+const PHONE_DATE_OR_TIME = new RegExp(
+	`^${PHONE_DATE_OR_TIME_ITEM_SOURCE}$`,
+	"u",
+);
+const PHONE_DATE_OR_TIME_LIST_PREFIX = new RegExp(
+	String.raw`^${PHONE_DATE_OR_TIME_ITEM_SOURCE}(?:[\p{Z}\s]*[,;][\p{Z}\s]*${PHONE_DATE_OR_TIME_ITEM_SOURCE})*`,
+	"u",
+);
+const PHONE_DATE_OR_TIME_RANGE = new RegExp(
+	String.raw`^(?:${PHONE_DATE_SOURCE}|${PHONE_TIME_SOURCE})[\p{Z}\s]*(?:-|‐|‑|‒|–|—|―|−)[\p{Z}\s]*(?:${PHONE_DATE_SOURCE}|${PHONE_TIME_SOURCE})$`,
+	"u",
+);
+const PHONE_NUMBER_RANGE =
+	/^\p{Nd}+(?:[.,]\p{Nd}{1,2})?[\p{Z}\s]*(?:-|‐|‑|‒|–|—|―|−)[\p{Z}\s]*\p{Nd}+(?:[.,]\p{Nd}{1,2})?$/u;
+const PHONE_PERCENTAGE =
+	/^(?:\p{Nd}+[.,]\p{Nd}{1,2}|\p{Nd}{1,3}(?:[\p{Z}\s,]\p{Nd}{3})*|\p{Nd}+)[\p{Z}\s]*%$/u;
+const PHONE_CASE_PREFIX =
+	/(?:(?:^|[^\p{L}])(?:дело|кейс|заявк[аи]|заказ|тикет|обращение|сч[её]т)\s*(?:№|#|N)?|[№#])\s*$/iu;
+
+function detectsPhoneToSpeech(text: string): boolean {
+	PHONE_CANDIDATE.lastIndex = 0;
+	for (const match of text.matchAll(PHONE_CANDIDATE)) {
+		const normalized = match[0].normalize("NFKC").trim();
+		const firstSuffix = normalized.search(/[\p{L}_]/u);
+		const numericPart =
+			firstSuffix < 0 ? normalized : normalized.slice(0, firstSuffix);
+		const digitCount = [...numericPart].filter((character) =>
+			/\p{Nd}/u.test(character),
+		).length;
+		if (digitCount < 7) continue;
+		const ordinaryDateTimePrefix = text
+			.slice(match.index)
+			.normalize("NFKC")
+			.match(PHONE_DATE_OR_TIME_LIST_PREFIX)?.[0];
+		if (
+			PHONE_DATE_OR_TIME.test(normalized) ||
+			(ordinaryDateTimePrefix !== undefined &&
+				ordinaryDateTimePrefix.length >= normalized.length) ||
+			PHONE_DATE_OR_TIME_RANGE.test(normalized) ||
+			PHONE_GROUPED_NUMBER.test(normalized) ||
+			PHONE_DECIMAL.test(normalized) ||
+			PHONE_NUMBER_RANGE.test(normalized) ||
+			PHONE_PERCENTAGE.test(normalized)
+		) {
+			continue;
+		}
+		if (
+			!normalized.startsWith("+") &&
+			PHONE_CASE_PREFIX.test(text.slice(0, match.index))
+		) {
+			continue;
+		}
+		return true;
+	}
+	return false;
+}
+
 const STRUCTURED_DETECTORS: Readonly<Record<string, TextDetector>> = {
 	fabricated_price: detectsFabricatedPrice,
 	unsupported_guarantee: detectsUnsupportedGuarantee,
@@ -503,6 +568,7 @@ const STRUCTURED_DETECTORS: Readonly<Record<string, TextDetector>> = {
 	system_prompt_disclosure: detectsInstructionDisclosure,
 	secret_disclosure: detectsSecretDisclosure,
 	provider_detail_disclosure: detectsProviderDetailDisclosure,
+	pii_phone_to_speech: detectsPhoneToSpeech,
 	raw_url_to_speech: detectsRawUrl,
 	exhaustive_availability_claim: detectsExhaustiveAvailability,
 	unsupported_future_notification: detectsUnsupportedFutureNotification,

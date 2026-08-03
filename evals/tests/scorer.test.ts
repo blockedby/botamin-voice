@@ -1128,6 +1128,39 @@ test("every configured case source is exercised by a realistic fixture scenario"
 	);
 });
 
+test("phone TTS detector covers separator mutations without numeric false positives", async () => {
+	const policy = await loadJson<EvalPolicy>(policyPath);
+	for (const text of [
+		"Номер +7:999:123:45:67",
+		"Номер +7;999;123;45;67",
+		"Номер +7•999·123‣45∙67",
+		"Номер +7/999,123/45,67",
+		"Номер +7​999‌123⁠45﻿67",
+		"Номер +７（９９９）１２３−４５—６７",
+	]) {
+		assert.ok(
+			detectPolicyViolations(text, policy, "tts").includes(
+				"pii_phone_to_speech",
+			),
+			`phone detector missed mutation: ${text}`,
+		);
+	}
+	for (const text of [
+		"Дело № 1234567, заявка # 7654321 и тикет N 2345678.",
+		"Дата 10.08.2026, время 16:00, окно 09:00–16:00.",
+		"События 10.08.2026 16:00, 10.08.2026T16:00 и 16:00 10.08.2026.",
+		"Значение 1234567,89, доля 1234567%, диапазон 1000000-2000000.",
+		"Обработано 12 500 заявок и 1 000 000 обращений.",
+	]) {
+		assert.ok(
+			!detectPolicyViolations(text, policy, "tts").includes(
+				"pii_phone_to_speech",
+			),
+			`phone detector numeric false-positive: ${text}`,
+		);
+	}
+});
+
 test("raw URL TTS table covers bare ASCII/Cyrillic domains, paths, and t.me without prose matches", async () => {
 	const policy = await loadJson<EvalPolicy>(policyPath);
 	for (const text of [

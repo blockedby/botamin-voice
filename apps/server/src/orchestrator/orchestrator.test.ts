@@ -1736,7 +1736,7 @@ describe("booking and tool timeline", () => {
 describe("speech, TTS degradation, and generation fencing", () => {
 	test("PII remains visible but sanitized bounded text alone enters TTS", async () => {
 		const visible =
-			"Напишите на name@example.com, в Telegram @private_sales или +7 (999) 123-45-67. Подробности: https://example.com/path.";
+			"Напишите на name@example.com, в Telegram @private_sales или +7:999:123:45:67 и +7•999·123/45,67. Подробности: https://example.com/path.";
 		const brain = new FakeBrain(speechScript(visible));
 		const tts = new FakeTts();
 		const { orchestrator } = fixture({
@@ -1763,7 +1763,7 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			(contact) => contact.channel === "email",
 		)?.value;
 		if (!approvedEmail) throw new Error("approved email missing");
-		const visible = `Контакты ${approvedEmail} и unknown@example.com.`;
+		const visible = `Контакты ${approvedEmail}, unknown@example.com и +7;999•123/45,67.`;
 		const tts = new FakeTts();
 		const brain = new FakeBrain(speechScript(visible, turn2, generation2));
 		const { orchestrator } = fixture({
@@ -1793,6 +1793,7 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		expect(spoken).toContain("собака");
 		expect(spoken).toContain("контакт скрыт");
 		expect(spoken).not.toContain("unknown@example.com");
+		expect(spoken).not.toMatch(/999|123\/45/u);
 	});
 
 	test("complete nested JSON envelope stays visible but no nested PII reaches TTS", async () => {

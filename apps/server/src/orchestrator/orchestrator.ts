@@ -517,22 +517,19 @@ export class ConversationOrchestrator {
 		if (!booking || booking.id !== draft.bookingId) {
 			throw new BookingDraftError("BOOKING_MISMATCH");
 		}
-		const retainedStage =
-			this.#state.stage === "DISCONNECTED"
-				? this.#state.resumeStage
-				: this.#state.stage;
+		// Qualification data proves only that facts were stored. It can never prove
+		// that the server confirmation text was delivered or retained.
+		const bookingConfirmationDelivered =
+			this.#state.bookingConfirmationDelivered;
 		const durableStage: ConversationState["stage"] =
-			booking.qualificationStatus === "complete" ||
-			booking.qualificationStatus === "skipped" ||
-			retainedStage === "COMPLETE"
-				? "COMPLETE"
-				: this.#state.qualificationEnabled &&
-						(booking.qualificationStatus === "partial" ||
-							retainedStage === "POST_BOOKING_QUALIFICATION" ||
-							this.#state.bookingConfirmationDelivered)
-					? "POST_BOOKING_QUALIFICATION"
-					: "BOOKED";
-		const bookingConfirmationDelivered = durableStage !== "BOOKED";
+			!bookingConfirmationDelivered
+				? "BOOKED"
+				: booking.qualificationStatus === "complete" ||
+						booking.qualificationStatus === "skipped"
+					? "COMPLETE"
+					: this.#state.qualificationEnabled
+						? "POST_BOOKING_QUALIFICATION"
+						: "BOOKED";
 		if (this.#state.stage === "DISCONNECTED") {
 			this.#state = {
 				...this.#state,
@@ -600,7 +597,8 @@ export class ConversationOrchestrator {
 			this.#sttTurns.suspend();
 			this.#lifecycleInterruption = this.#invalidateActiveWork("disconnect");
 		} else if (previousStage === "DISCONNECTED") {
-			this.#sttTurns.reopen();
+			if (isTerminalStage(this.#state.stage)) this.#sttTurns.close();
+			else this.#sttTurns.reopen();
 		} else if (isTerminalStage(this.#state.stage)) {
 			this.#sttTurns.close();
 			this.#lifecycleInterruption = this.#invalidateActiveWork("terminal");
@@ -892,65 +890,14 @@ export class ConversationOrchestrator {
 				reason: "booking_draft_committed",
 			};
 		}
-		const qualificationFrom = this.#state.stage;
-		this.apply({ type: "booking_confirmation_delivered" });
-		if (this.#state.stage !== qualificationFrom) {
-			yield {
-				type: "state.changed",
-				generationId: input.generationId,
-				from: qualificationFrom,
-				to: this.#state.stage,
-				reason: "booking_confirmation_retained",
-			};
-		}
-		const qualificationEvent = this.#state.qualificationEnabled
-			? await this.#applyAcceptedDraftQualification(
-					input.turnId,
-					input.generationId,
-				)
-			: null;
-		if (qualificationEvent) yield qualificationEvent;
-		booking = this.#state.booking ?? booking;
-		const question = this.#state.qualificationEnabled
-			? this.#pendingDailyLeadVolume &&
-				booking.qualification?.monthlyLeadVolume === undefined
-				? DAILY_LEAD_BASIS_QUESTION
-				: missingQualificationQuestion(booking)
-			: null;
-		const text = bookingConfirmationText(booking, question);
-		const rendered = yield* this.#renderPhrase(input, text);
-		let terminal = false;
-		if (
-			(this.#state.stage as ConversationState["stage"]) ===
-				"POST_BOOKING_QUALIFICATION" &&
-			booking.qualificationStatus === "complete"
-		) {
-			const completeFrom = this.#state.stage;
-			const completed = this.apply({ type: "qualification_completed" });
-			if (completed.ok) {
-				terminal = true;
-				yield {
-					type: "state.changed",
-					generationId: input.generationId,
-					from: completeFrom,
-					to: "COMPLETE",
-					reason: "qualification_complete",
-				};
-			}
-		} else if (!this.#state.qualificationEnabled) {
-			const completeFrom = this.#state.stage;
-			const completed = this.apply({ type: "complete" });
-			if (completed.ok) {
-				terminal = true;
-				yield {
-					type: "state.changed",
-					generationId: input.generationId,
-					from: completeFrom,
-					to: "COMPLETE",
-					reason: "qualification_disabled",
-				};
-			}
-		}
+		if (!committedState.ok) return;
+		const text = bookingConfirmationText(
+			booking,
+			this.#qualificationQuestionForConfirmation(booking),
+		);
+		const delivered = yield* this.#deliverBookingConfirmation(input, text);
+		const rendered = delivered.rendered;
+		const terminal = delivered.terminal;
 		if (terminal) {
 			yield* this.#finishTerminalResponse(
 				{ generationId: input.generationId, turnId: input.turnId },
@@ -1221,16 +1168,16 @@ export class ConversationOrchestrator {
 			this.#state.booking &&
 			!this.#state.bookingConfirmationDelivered
 		) {
-			const question = this.#state.qualificationEnabled
-				? missingQualificationQuestion(this.#state.booking)
-				: null;
-			const text = bookingConfirmationText(this.#state.booking, question);
-			const rendered = yield* this.#renderPhrase(input, text);
-			if (rendered.visibleText) visible.push(rendered.visibleText);
-			audioProduced ||= rendered.audioProduced;
-			if (!this.#generations.accept(input.generationId, input.turnId)) return;
-			this.apply({ type: "booking_confirmation_delivered" });
-			if (isTerminalStage(this.#state.stage)) {
+			const text = bookingConfirmationText(
+				this.#state.booking,
+				this.#qualificationQuestionForConfirmation(this.#state.booking),
+			);
+			const delivered = yield* this.#deliverBookingConfirmation(input, text);
+			if (delivered.rendered.visibleText) {
+				visible.push(delivered.rendered.visibleText);
+			}
+			audioProduced ||= delivered.rendered.audioProduced;
+			if (delivered.terminal) {
 				yield* this.#finishTerminalResponse(
 					{ generationId: input.generationId, turnId: input.turnId },
 					visible,
@@ -1830,6 +1777,32 @@ export class ConversationOrchestrator {
 		return undefined;
 	}
 
+	#qualificationQuestionForConfirmation(
+		booking: BookingSnapshot,
+	): string | null {
+		if (!this.#state.qualificationEnabled) return null;
+		const accepted = this.#draftStore?.acceptedFacts(this.conversationId) ?? {};
+		const effectiveBooking: BookingSnapshot = {
+			...booking,
+			qualification: {
+				...(booking.qualification ?? {}),
+				...(accepted.monthlyLeadVolume === undefined
+					? {}
+					: { monthlyLeadVolume: accepted.monthlyLeadVolume }),
+				...(accepted.salesManagerCount === undefined
+					? {}
+					: { salesManagerCount: accepted.salesManagerCount }),
+			},
+		};
+		if (
+			this.#pendingDailyLeadVolume &&
+			effectiveBooking.qualification?.monthlyLeadVolume === undefined
+		) {
+			return DAILY_LEAD_BASIS_QUESTION;
+		}
+		return missingQualificationQuestion(effectiveBooking);
+	}
+
 	#draftConfirmationQuestion(
 		draft: NonNullable<ReturnType<BookingDraftStore["load"]>>,
 	): string {
@@ -1926,7 +1899,18 @@ export class ConversationOrchestrator {
 	): Promise<Extract<OrchestratorEvent, { type: "booking.updated" }> | null> {
 		const current = this.#state.booking;
 		const store = this.#draftStore;
-		if (!current || !store) return null;
+		const qualificationStageRetained =
+			this.#state.stage === "POST_BOOKING_QUALIFICATION" ||
+			(this.#state.stage === "DISCONNECTED" &&
+				this.#state.resumeStage === "POST_BOOKING_QUALIFICATION");
+		if (
+			!current ||
+			!store ||
+			!this.#state.bookingConfirmationDelivered ||
+			!qualificationStageRetained
+		) {
+			return null;
+		}
 		const accepted = store.acceptedFacts(this.conversationId);
 		const patch: { monthlyLeadVolume?: string; salesManagerCount?: number } =
 			{};
@@ -2376,6 +2360,99 @@ export class ConversationOrchestrator {
 		return yield* this.#renderPhrase(turn, visible);
 	}
 
+	async *#deliverBookingConfirmation(
+		turn: { turnId: string; generationId: string },
+		visibleText: string,
+	): AsyncGenerator<
+		OrchestratorEvent,
+		{ rendered: RenderResult; terminal: boolean }
+	> {
+		const visible = visibleText.replace(/\s+/gu, " ").trim();
+		if (!visible || !this.#generations.accept(turn.generationId, turn.turnId)) {
+			return {
+				rendered: { visibleText: "", audioProduced: false },
+				terminal: false,
+			};
+		}
+
+		// Resuming after this yield proves the text event was consumed by the
+		// transport mapper and retained, even if the socket detaches before TTS.
+		yield {
+			type: "text.delta",
+			generationId: turn.generationId,
+			text: visible,
+		};
+		const confirmationFrom = this.#state.stage;
+		const confirmed = this.apply({ type: "booking_confirmation_delivered" });
+		if (!confirmed.ok) {
+			return {
+				rendered: { visibleText: visible, audioProduced: false },
+				terminal: false,
+			};
+		}
+		if (this.#state.stage !== confirmationFrom) {
+			yield {
+				type: "state.changed",
+				generationId: turn.generationId,
+				from: confirmationFrom,
+				to: this.#state.stage,
+				reason: "booking_confirmation_retained",
+			};
+		}
+
+		const qualificationEvent = this.#state.qualificationEnabled
+			? await this.#applyAcceptedDraftQualification(
+					turn.turnId,
+					turn.generationId,
+				)
+			: null;
+		if (qualificationEvent) yield qualificationEvent;
+
+		const audioProduced = yield* this.#renderSpokenPhrase(turn, visible);
+		let terminal = false;
+		const booking = this.#state.booking;
+		if (
+			this.#state.qualificationEnabled &&
+			booking &&
+			(booking.qualificationStatus === "complete" ||
+				booking.qualificationStatus === "skipped")
+		) {
+			const completeFrom = this.#state.stage;
+			const completed = this.apply({ type: "qualification_completed" });
+			if (completed.ok) {
+				terminal = this.#state.stage === "COMPLETE";
+				if (this.#state.stage !== completeFrom) {
+					yield {
+						type: "state.changed",
+						generationId: turn.generationId,
+						from: completeFrom,
+						to: this.#state.stage,
+						reason: "qualification_complete",
+					};
+				}
+			}
+		} else if (!this.#state.qualificationEnabled) {
+			const completeFrom = this.#state.stage;
+			const completed = this.apply({ type: "complete" });
+			if (completed.ok) {
+				terminal = this.#state.stage === "COMPLETE";
+				if (this.#state.stage !== completeFrom) {
+					yield {
+						type: "state.changed",
+						generationId: turn.generationId,
+						from: completeFrom,
+						to: this.#state.stage,
+						reason: "qualification_disabled",
+					};
+				}
+			}
+		}
+		return {
+			rendered: { visibleText: visible, audioProduced },
+			terminal,
+		};
+	}
+
 	async *#renderPhrase(
 		turn: { turnId: string; generationId: string },
 		visibleText: string,
@@ -2389,7 +2466,15 @@ export class ConversationOrchestrator {
 			generationId: turn.generationId,
 			text: visible,
 		};
+		const audioProduced = yield* this.#renderSpokenPhrase(turn, visible);
+		return { visibleText: visible, audioProduced };
+	}
 
+	async *#renderSpokenPhrase(
+		turn: { turnId: string; generationId: string },
+		visible: string,
+	): AsyncGenerator<OrchestratorEvent, boolean> {
+		if (!this.#generations.accept(turn.generationId, turn.turnId)) return false;
 		const approvedContacts: Contact[] = this.#state.booking
 			? this.#state.booking.contacts
 			: (this.#draftStore?.approvedContacts(this.conversationId) ?? []);
@@ -2397,7 +2482,7 @@ export class ConversationOrchestrator {
 			contactProcessing: this.#state.contactConsentConfirmed,
 			approvedContacts,
 		}).spokenText;
-		if (!spoken) return { visibleText: visible, audioProduced: false };
+		if (!spoken) return false;
 		if (!this.#tts) {
 			yield {
 				type: "degraded",
@@ -2406,7 +2491,7 @@ export class ConversationOrchestrator {
 				code: "TTS_UNAVAILABLE",
 				textFallback: visible,
 			};
-			return { visibleText: visible, audioProduced: false };
+			return false;
 		}
 		let audioProduced = false;
 		for (const phrase of chunkSpeech(spoken, this.#chunkerOptions)) {
@@ -2415,10 +2500,10 @@ export class ConversationOrchestrator {
 				phrase,
 				visible,
 			);
-			if (!produced) return { visibleText: visible, audioProduced };
+			if (!produced) return audioProduced;
 			audioProduced = true;
 		}
-		return { visibleText: visible, audioProduced };
+		return audioProduced;
 	}
 
 	async *#synthesizeSpeechSegment(

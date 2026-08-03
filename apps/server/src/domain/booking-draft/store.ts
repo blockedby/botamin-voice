@@ -212,6 +212,7 @@ export interface BookingDraftStore {
 		conversationId: string,
 		expectedRevision: number,
 	): InternalBookingDraft;
+	reconcile(conversationId: string): InternalBookingDraft;
 	acceptedFacts(conversationId: string): AcceptedConversationFacts;
 	approvedContacts(conversationId: string): Contact[];
 }
@@ -692,6 +693,76 @@ export class SqliteBookingDraftStore implements BookingDraftStore {
 			draft.commitStatus = "failed";
 			return { material: false };
 		});
+	}
+
+	reconcile(conversationId: string): InternalBookingDraft {
+		return this.database.transaction(
+			(): InternalBookingDraft => {
+				const draft = this.requireDraft(conversationId);
+				const durableBooking = this.database
+					.select({ id: bookings.id })
+					.from(bookings)
+					.where(eq(bookings.conversationId, conversationId))
+					.get();
+				// A committing draft may legitimately outlive the process that issued
+				// createBooking. Without a durable row there is nothing to reconcile.
+				if (durableBooking === undefined) return draft;
+
+				this.assertBookingMatches(draft, durableBooking.id);
+				if (draft.commitStatus === "committed") {
+					if (draft.bookingId !== durableBooking.id) {
+						throw new BookingDraftError("BOOKING_MISMATCH");
+					}
+					return draft;
+				}
+				if (
+					draft.commitStatus !== "committing" &&
+					!(
+						draft.confirmationStatus === "confirmed" &&
+						(draft.commitStatus === "uncommitted" ||
+							draft.commitStatus === "failed")
+					)
+				) {
+					throw new BookingDraftError("BOOKING_MISMATCH");
+				}
+
+				if (draft.revision >= Number.MAX_SAFE_INTEGER) {
+					throw new BookingDraftError("INVALID_REVISION");
+				}
+				const timestamp = this.timestamp(draft.updatedAt);
+				const reconciled = this.parseInputDraft({
+					...draft,
+					commitStatus: "committed",
+					bookingId: durableBooking.id,
+					revision: draft.revision + 1,
+					updatedAt: timestamp,
+					factRegistry: {
+						...draft.factRegistry,
+						revision: draft.revision + 1,
+						updatedAt: timestamp,
+					},
+				});
+				const changed = this.database
+					.update(conversationContexts)
+					.set({
+						revision: reconciled.revision,
+						draftJson: canonicalJson(reconciled),
+						updatedAt: reconciled.updatedAt,
+					})
+					.where(
+						and(
+							eq(conversationContexts.conversationId, conversationId),
+							eq(conversationContexts.revision, draft.revision),
+						),
+					)
+					.returning({ revision: conversationContexts.revision })
+					.get();
+				if (changed === undefined)
+					throw new BookingDraftError("INVALID_REVISION");
+				return reconciled;
+			},
+			{ behavior: "immediate" },
+		);
 	}
 
 	acceptedFacts(conversationId: string): AcceptedConversationFacts {

@@ -454,6 +454,99 @@ describe("SqliteBookingDraftStore", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("reconciles exact durable bookings and fails closed on mismatch", async () => {
+		const { database, conversationId, store } = setup();
+		const ready = readyDraft(store, conversationId);
+		const confirmed = store.confirm(conversationId, {
+			requestId: Bun.randomUUIDv7(),
+			revision: ready.revision,
+		});
+		const committing = store.markCommitting(conversationId, confirmed.revision);
+		const booking = await new SqliteBookingService(database, {
+			now: () => now,
+		}).createBooking({
+			conversationId,
+			idempotencyKey: "draft-reconcile-booking-0001",
+			name: "Алексей",
+			company: "Example LLC",
+			contacts: store.approvedContacts(conversationId),
+			meetingSlot: committing.selectedCandidate?.meetingSlot ?? slots[0],
+			consentConfirmed: true,
+		});
+		const reconciled = store.reconcile(conversationId);
+		expect(reconciled).toMatchObject({
+			commitStatus: "committed",
+			bookingId: booking.bookingId,
+		});
+		expect(store.reconcile(conversationId)).toEqual(reconciled);
+
+		const other = setup();
+		const otherReady = readyDraft(other.store, other.conversationId);
+		const otherConfirmed = other.store.confirm(other.conversationId, {
+			requestId: Bun.randomUUIDv7(),
+			revision: otherReady.revision,
+		});
+		const otherCommitting = other.store.markCommitting(
+			other.conversationId,
+			otherConfirmed.revision,
+		);
+		await new SqliteBookingService(other.database, {
+			now: () => now,
+		}).createBooking({
+			conversationId: other.conversationId,
+			idempotencyKey: "draft-reconcile-booking-0002",
+			name: "Чужое имя",
+			company: "Example LLC",
+			contacts: other.store.approvedContacts(other.conversationId),
+			meetingSlot: otherCommitting.selectedCandidate?.meetingSlot ?? slots[0],
+			consentConfirmed: true,
+		});
+		expectDraftError(
+			() => other.store.reconcile(other.conversationId),
+			"BOOKING_MISMATCH",
+		);
+		closeDomainDatabase(database);
+		closeDomainDatabase(other.database);
+	});
+
+	test("reconciles a confirmed uncommitted draft only after an exact durable booking exists", async () => {
+		const { database, conversationId, store } = setup();
+		const ready = readyDraft(store, conversationId);
+		const confirmed = store.confirm(conversationId, {
+			requestId: Bun.randomUUIDv7(),
+			revision: ready.revision,
+		});
+		if (!confirmed.selectedCandidate) throw new Error("candidate missing");
+		const created = await new SqliteBookingService(database, {
+			now: () => now,
+		}).createBooking({
+			conversationId,
+			idempotencyKey: "confirmed-reconcile-booking-0001",
+			name: "Алексей",
+			company: "Example LLC",
+			contacts: store.approvedContacts(conversationId),
+			meetingSlot: confirmed.selectedCandidate.meetingSlot,
+			consentConfirmed: true,
+		});
+		expect(store.reconcile(conversationId)).toMatchObject({
+			commitStatus: "committed",
+			bookingId: created.bookingId,
+		});
+		closeDomainDatabase(database);
+	});
+
+	test("does not hydrate a committing draft without a durable booking", () => {
+		const { database, conversationId, store } = setup();
+		const ready = readyDraft(store, conversationId);
+		const confirmed = store.confirm(conversationId, {
+			requestId: Bun.randomUUIDv7(),
+			revision: ready.revision,
+		});
+		const committing = store.markCommitting(conversationId, confirmed.revision);
+		expect(store.reconcile(conversationId)).toEqual(committing);
+		closeDomainDatabase(database);
+	});
+
 	test("fails closed when persisted JSON is syntactically valid but not a strict draft", () => {
 		const { database, conversationId, store } = setup();
 		const draft = store.initialize(conversationId, slots);

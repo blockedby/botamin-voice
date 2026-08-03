@@ -394,6 +394,17 @@ export class GatewaySession {
 				this.#closeWithError(socket, "SESSION_EXPIRED", false);
 				return;
 			}
+			await this.#ensureDraft();
+			let booking = null;
+			try {
+				booking = await this.#orchestrator.reconcileDurableBooking();
+			} catch {
+				this.#closeWithError(socket, "INTERNAL_ERROR", false);
+				return;
+			}
+			const draft = this.#draftStore
+				? this.#draftStore.browserDraft(this.conversationId)
+				: null;
 			const previous = this.#activeSocket;
 			this.#clearPendingHello();
 			this.#activeSocket = socket;
@@ -411,10 +422,6 @@ export class GatewaySession {
 			);
 			for (const record of this.#history) this.#sendRecord(socket, record);
 			const token = this.#rotateResumeToken();
-			const draft = await this.#ensureDraft();
-			const booking = await this.#bookings.findByConversationId(
-				this.conversationId,
-			);
 			this.#sendEvent(
 				"session.ready",
 				{

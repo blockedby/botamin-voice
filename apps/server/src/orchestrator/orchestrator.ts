@@ -1,6 +1,7 @@
 import type {
 	BookingRevisionConfirmation,
 	BookingService,
+	BookingSnapshot,
 	BrainDelta,
 	BrainPort,
 	BrainTurnInput,
@@ -473,6 +474,58 @@ export class ConversationOrchestrator {
 		return this.#sttTurns.acceptedCommits;
 	}
 
+	/** Reconciles and hydrates the in-memory state from the durable booking. */
+	async reconcileDurableBooking(): Promise<BookingSnapshot | null> {
+		const store = this.#draftStore;
+		if (!store) return null;
+		const draft = store.reconcile(this.conversationId);
+		if (draft.commitStatus !== "committed" || !draft.bookingId) return null;
+		const booking = await this.#bookings.findByConversationId(
+			this.conversationId,
+		);
+		if (!booking || booking.id !== draft.bookingId) {
+			throw new BookingDraftError("BOOKING_MISMATCH");
+		}
+		const retainedStage =
+			this.#state.stage === "DISCONNECTED"
+				? this.#state.resumeStage
+				: this.#state.stage;
+		const durableStage: ConversationState["stage"] =
+			booking.qualificationStatus === "complete" ||
+			booking.qualificationStatus === "skipped" ||
+			retainedStage === "COMPLETE"
+				? "COMPLETE"
+				: this.#state.qualificationEnabled &&
+						(booking.qualificationStatus === "partial" ||
+							retainedStage === "POST_BOOKING_QUALIFICATION" ||
+							this.#state.bookingConfirmationDelivered)
+					? "POST_BOOKING_QUALIFICATION"
+					: "BOOKED";
+		const bookingConfirmationDelivered = durableStage !== "BOOKED";
+		if (this.#state.stage === "DISCONNECTED") {
+			this.#state = {
+				...this.#state,
+				booking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered,
+				resumeStage: durableStage,
+			};
+		} else if (!isTerminalStage(this.#state.stage)) {
+			this.#state = {
+				...this.#state,
+				stage: durableStage,
+				booking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered,
+				resumeStage: null,
+			};
+			if (durableStage === "COMPLETE") this.#sttTurns.close();
+		} else {
+			this.#state = { ...this.#state, booking };
+		}
+		return booking;
+	}
+
 	apply(event: ConversationEvent): TransitionResult {
 		const result = transition(this.#state, event);
 		if (!result.ok) return result;
@@ -669,6 +722,7 @@ export class ConversationOrchestrator {
 		this.#pendingDraftConfirmation = null;
 		const store = this.#draftStore;
 		if (!store) throw new BookingDraftError("INVALID_TRANSITION");
+		await this.reconcileDurableBooking();
 		const existing = store.load(this.conversationId);
 		if (existing?.commitStatus === "committed") {
 			const replayed = store.confirm(this.conversationId, input.confirmation);
@@ -735,21 +789,13 @@ export class ConversationOrchestrator {
 			if (!booking || booking.id !== result.bookingId) {
 				throw new BookingDraftError("BOOKING_MISMATCH");
 			}
-			confirmed = store.markCommitted(
-				this.conversationId,
-				committing.revision,
-				booking.id,
-			);
+			confirmed = store.reconcile(this.conversationId);
 		} catch (error) {
 			booking = await this.#bookings
 				.findByConversationId(this.conversationId)
 				.catch(() => null);
 			if (booking) {
-				confirmed = store.markCommitted(
-					this.conversationId,
-					committing.revision,
-					booking.id,
-				);
+				confirmed = store.reconcile(this.conversationId);
 			} else {
 				const failed = store.markFailed(
 					this.conversationId,
@@ -774,7 +820,20 @@ export class ConversationOrchestrator {
 		if (!booking) throw new BookingDraftError("BOOKING_MISMATCH");
 		const from = this.#state.stage;
 		const committedState = this.apply({ type: "booking_committed", booking });
-		if (!committedState.ok) throw new BookingDraftError("INVALID_TRANSITION");
+		if (!committedState.ok) {
+			const disconnected =
+				(this.#state.stage as ConversationState["stage"]) === "DISCONNECTED";
+			if (!disconnected) {
+				throw new BookingDraftError("INVALID_TRANSITION");
+			}
+			this.#state = {
+				...this.#state,
+				booking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered: false,
+				resumeStage: "BOOKED",
+			};
+		}
 		yield {
 			type: "booking.draft.updated",
 			generationId: input.generationId,
@@ -787,13 +846,15 @@ export class ConversationOrchestrator {
 			bookingId: booking.id,
 			created,
 		};
-		yield {
-			type: "state.changed",
-			generationId: input.generationId,
-			from,
-			to: "BOOKED",
-			reason: "booking_draft_committed",
-		};
+		if (committedState.ok) {
+			yield {
+				type: "state.changed",
+				generationId: input.generationId,
+				from,
+				to: "BOOKED",
+				reason: "booking_draft_committed",
+			};
+		}
 		const qualificationFrom = this.#state.stage;
 		this.apply({ type: "booking_confirmation_delivered" });
 		if (this.#state.stage !== qualificationFrom) {

@@ -33,7 +33,7 @@ export const ContactSchema = z.discriminatedUnion("channel", [
 	z
 		.object({
 			channel: z.literal("phone"),
-			value: z.string().trim().min(5).max(64),
+			value: z.string().regex(/^\+7[0-9]{10}$/u),
 		})
 		.strict(),
 	z

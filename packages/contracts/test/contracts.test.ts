@@ -21,6 +21,7 @@ import {
 	BookingToolExecutionSchema,
 	BrainTurnInputSchema,
 	ClientWsEventSchema,
+	ContactSchema,
 	CreateBookingInputSchema,
 	CreateConversationRequestSchema,
 	decodeBinaryAudioFrame,
@@ -103,6 +104,25 @@ describe("shared contracts", () => {
 				consent: { ...request.consent, voiceProcessing: false },
 			}).success,
 		).toBe(false);
+	});
+
+	test("accepts only canonical Russian phone contacts", () => {
+		expect(
+			ContactSchema.safeParse({ channel: "phone", value: "+79991234567" })
+				.success,
+		).toBe(true);
+		for (const value of [
+			"89991234567",
+			"+7 999 123-45-67",
+			"+7/999/123/45/67",
+			"+٧٩٩٩١٢٣٤٥٦٧",
+			"+7999123456",
+			"+799912345678",
+		]) {
+			expect(ContactSchema.safeParse({ channel: "phone", value }).success).toBe(
+				false,
+			);
+		}
 	});
 
 	test("requires complete lead data, consent, and one structured meeting slot", () => {

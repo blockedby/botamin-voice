@@ -23,7 +23,7 @@ const PRIVATE_USE = /[\uE000-\uF8FF]/gu;
 const EMAIL_CANDIDATE =
 	/(?<![\p{L}\p{N}.!#$%&'*+/=?^_`{|}~@-])[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+(?![\p{L}\p{N}-])/giu;
 const PHONE_CANDIDATE =
-	/(?<![\p{L}\p{N}])(?:\+[\p{Zs}\t]*)?[\p{Nd}](?:[\p{Nd}\p{Zs}\t().\-‐‑‒–—―−]*[\p{Nd}])?(?![\p{L}\p{N}])/gu;
+	/(?<![\p{L}\p{N}])(?:\+[\p{Zs}\t]*)?[\p{Nd}](?:[\p{Nd}\p{Zs}\t().,/\\‐‑‒–—―−\u200B-\u200D\u2060\uFEFF-]*[\p{Nd}])?(?![\p{L}\p{N}])/gu;
 const TELEGRAM_MENTION =
 	/(?<![\p{L}\p{N}_@])@[a-zA-Z][a-zA-Z0-9_]{3,30}[a-zA-Z0-9](?![a-zA-Z0-9_])/gu;
 const TELEGRAM_URL =
@@ -37,6 +37,11 @@ const DOMAIN =
 	/^[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?(?:\.[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?)+$/u;
 const TELEGRAM_USERNAME = /^[a-zA-Z][a-zA-Z0-9_]{3,30}[a-zA-Z0-9]$/u;
 const ALLOWED_PHONE = /^[+\p{Nd}\p{Zs}\t().\-‐‑‒–—―−]+$/u;
+const GROUPED_NUMBER =
+	/^\p{Nd}{1,3}(?:[\p{Zs}\t,]\p{Nd}{3})+(?:[.,]\p{Nd}{1,2})?$/u;
+const DECIMAL_NUMBER = /^\p{Nd}+[.,]\p{Nd}{1,2}$/u;
+const CALENDAR_DATE =
+	/^(?:\p{Nd}{1,2}[./-]\p{Nd}{1,2}[./-]\p{Nd}{2,4}|\p{Nd}{4}[./-]\p{Nd}{1,2}[./-]\p{Nd}{1,2})$/u;
 
 interface Region {
 	start: number;
@@ -101,6 +106,23 @@ function canonicalEmail(value: string): string | null {
 		return null;
 	}
 	return `${local}@${domain.toLowerCase()}`;
+}
+
+/** Conservative residual detector used only after exact approved contacts are marked. */
+export function isPhoneLikeSpeechCandidate(value: string): boolean {
+	const normalized = value.normalize("NFKC").trim();
+	const digitCount = [...normalized].filter((character) =>
+		/\p{Nd}/u.test(character),
+	).length;
+	if (digitCount < 7 || digitCount > 15) return false;
+	if (
+		CALENDAR_DATE.test(normalized) ||
+		GROUPED_NUMBER.test(normalized) ||
+		DECIMAL_NUMBER.test(normalized)
+	) {
+		return false;
+	}
+	return true;
 }
 
 function decimalDigit(character: string): string | null {
@@ -315,10 +337,7 @@ export function markApprovedSpeechContacts(
 
 	PHONE_CANDIDATE.lastIndex = 0;
 	for (const match of text.matchAll(PHONE_CANDIDATE)) {
-		const digitCount = [...match[0]].filter((value) =>
-			/\p{Nd}/u.test(value),
-		).length;
-		if (digitCount < 7) continue;
+		if (!isPhoneLikeSpeechCandidate(match[0])) continue;
 		const canonical = canonicalPhone(match[0]);
 		pushCandidate(
 			candidates,

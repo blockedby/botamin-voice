@@ -79,6 +79,7 @@ function setup(options: {
 	stt?: SttPort;
 	initialSlots?: [MeetingSlot, MeetingSlot];
 	currentSlots?: [MeetingSlot, MeetingSlot];
+	wrapBookings?: (delegate: SqliteBookingService) => BookingService;
 }) {
 	const database = openDomainDatabase({ filename: ":memory:" });
 	databases.push(database);
@@ -96,15 +97,17 @@ function setup(options: {
 	const delegate = new SqliteBookingService(database, {
 		now: () => new Date(instant),
 	});
-	const bookingsService: BookingService = options.currentSlots
-		? {
-				candidateMeetingSlots: async () =>
-					options.currentSlots as [MeetingSlot, MeetingSlot],
-				createBooking: (input) => delegate.createBooking(input),
-				appendQualification: (input) => delegate.appendQualification(input),
-				findByConversationId: (id) => delegate.findByConversationId(id),
-			}
-		: delegate;
+	const bookingsService: BookingService = options.wrapBookings
+		? options.wrapBookings(delegate)
+		: options.currentSlots
+			? {
+					candidateMeetingSlots: async () =>
+						options.currentSlots as [MeetingSlot, MeetingSlot],
+					createBooking: (input) => delegate.createBooking(input),
+					appendQualification: (input) => delegate.appendQualification(input),
+					findByConversationId: (id) => delegate.findByConversationId(id),
+				}
+			: delegate;
 	const draftStore = new SqliteBookingDraftStore(database, {
 		now: () => new Date(instant),
 	});
@@ -135,6 +138,7 @@ function setup(options: {
 		tts,
 		brain,
 		orchestrator,
+		bookingsService,
 		initialSlots,
 	};
 }
@@ -329,6 +333,181 @@ describe("typed and spoken server-owned draft completion", () => {
 		expect(
 			harness.database.select({ value: count() }).from(bookings).get()?.value,
 		).toBe(0);
+	});
+
+	test("disconnect during a blocked durable create reconciles booking and reconnect stage", async () => {
+		let releaseCreate: () => void = () => undefined;
+		let markCreateStarted: () => void = () => undefined;
+		const createStarted = new Promise<void>((resolve) => {
+			markCreateStarted = resolve;
+		});
+		const createGate = new Promise<void>((resolve) => {
+			releaseCreate = resolve;
+		});
+		const harness = setup({
+			wrapBookings: (delegate) => ({
+				candidateMeetingSlots: () => delegate.candidateMeetingSlots(),
+				async createBooking(input) {
+					markCreateStarted();
+					await createGate;
+					return delegate.createBooking(input);
+				},
+				appendQualification: (input) => delegate.appendQualification(input),
+				findByConversationId: (id) => delegate.findByConversationId(id),
+			}),
+		});
+		const initial = harness.draftStore.load(harness.conversationId);
+		if (!initial) throw new Error("draft missing");
+		const ready = preloadReadyFacts(harness, initial.candidates[0].candidateId);
+		const pending = collect(
+			harness.orchestrator.confirmBookingDraft({
+				turnId: Bun.randomUUIDv7(),
+				generationId: Bun.randomUUIDv7(),
+				confirmation: {
+					requestId: Bun.randomUUIDv7(),
+					revision: ready.revision,
+				},
+			}),
+		);
+		await createStarted;
+		await harness.orchestrator.disconnect();
+		releaseCreate();
+		await expect(pending).resolves.toBeArray();
+		expect(
+			harness.database.select({ value: count() }).from(bookings).get()?.value,
+		).toBe(1);
+		expect(harness.draftStore.load(harness.conversationId)).toMatchObject({
+			commitStatus: "committed",
+		});
+		expect(harness.orchestrator.state).toMatchObject({
+			stage: "DISCONNECTED",
+			resumeStage: "BOOKED",
+			booking: { status: "booked" },
+		});
+		expect(harness.orchestrator.apply({ type: "reconnect" }).ok).toBe(true);
+		expect(harness.orchestrator.state).toMatchObject({
+			stage: "BOOKED",
+			resumeStage: null,
+			booking: { status: "booked" },
+		});
+	});
+
+	test("restart hydrates an exact committing draft but not a draft without a durable booking", async () => {
+		const committed = setup({});
+		const initial = committed.draftStore.load(committed.conversationId);
+		if (!initial) throw new Error("draft missing");
+		const ready = preloadReadyFacts(
+			committed,
+			initial.candidates[0].candidateId,
+		);
+		const confirmed = committed.draftStore.confirm(committed.conversationId, {
+			requestId: Bun.randomUUIDv7(),
+			revision: ready.revision,
+		});
+		const committing = committed.draftStore.markCommitting(
+			committed.conversationId,
+			confirmed.revision,
+		);
+		const facts = committed.draftStore.acceptedFacts(committed.conversationId);
+		if (!facts.name || !facts.company || !committing.selectedCandidate) {
+			throw new Error("ready facts missing");
+		}
+		await committed.bookingsService.createBooking({
+			conversationId: committed.conversationId,
+			idempotencyKey: `booking-draft-${committed.conversationId}`,
+			name: facts.name,
+			company: facts.company,
+			contacts: committed.draftStore.approvedContacts(committed.conversationId),
+			meetingSlot: committing.selectedCandidate.meetingSlot,
+			consentConfirmed: true,
+		});
+		const restarted = new ConversationOrchestrator({
+			conversationId: committed.conversationId,
+			promptVersion,
+			stt: new QueueStt([]),
+			brain: new FakeBrain(),
+			bookings: committed.bookingsService,
+			draftStore: committed.draftStore,
+			initialState: {
+				...createInitialConversationState({ qualificationEnabled: false }),
+				stage: "DISCONNECTED",
+				resumeStage: "COLLECT_BOOKING",
+				contactConsentConfirmed: true,
+			},
+		});
+		const hydrated = await restarted.reconcileDurableBooking();
+		expect(hydrated?.status).toBe("booked");
+		expect(restarted.state).toMatchObject({
+			stage: "DISCONNECTED",
+			resumeStage: "BOOKED",
+			booking: { id: hydrated?.id },
+		});
+		expect(committed.draftStore.load(committed.conversationId)).toMatchObject({
+			commitStatus: "committed",
+			bookingId: hydrated?.id,
+		});
+
+		const noBooking = setup({});
+		const noBookingInitial = noBooking.draftStore.load(
+			noBooking.conversationId,
+		);
+		if (!noBookingInitial) throw new Error("draft missing");
+		const noBookingReady = preloadReadyFacts(
+			noBooking,
+			noBookingInitial.candidates[0].candidateId,
+		);
+		const noBookingConfirmed = noBooking.draftStore.confirm(
+			noBooking.conversationId,
+			{
+				requestId: Bun.randomUUIDv7(),
+				revision: noBookingReady.revision,
+			},
+		);
+		noBooking.draftStore.markCommitting(
+			noBooking.conversationId,
+			noBookingConfirmed.revision,
+		);
+		expect(await noBooking.orchestrator.reconcileDurableBooking()).toBeNull();
+		expect(noBooking.orchestrator.state).toMatchObject({
+			stage: "COLLECT_BOOKING",
+			booking: null,
+		});
+		expect(
+			noBooking.database.select({ value: count() }).from(bookings).get()?.value,
+		).toBe(0);
+	});
+
+	test("durable booking mismatch fails closed without hydrating state", async () => {
+		const harness = setup({});
+		const initial = harness.draftStore.load(harness.conversationId);
+		if (!initial) throw new Error("draft missing");
+		const ready = preloadReadyFacts(harness, initial.candidates[0].candidateId);
+		const confirmed = harness.draftStore.confirm(harness.conversationId, {
+			requestId: Bun.randomUUIDv7(),
+			revision: ready.revision,
+		});
+		const committing = harness.draftStore.markCommitting(
+			harness.conversationId,
+			confirmed.revision,
+		);
+		if (!committing.selectedCandidate) throw new Error("candidate missing");
+		await harness.bookingsService.createBooking({
+			conversationId: harness.conversationId,
+			idempotencyKey: "mismatched-restart-booking",
+			name: "Несовпадающее имя",
+			company: "Ромашка",
+			contacts: harness.draftStore.approvedContacts(harness.conversationId),
+			meetingSlot: committing.selectedCandidate.meetingSlot,
+			consentConfirmed: true,
+		});
+		await expect(
+			harness.orchestrator.reconcileDurableBooking(),
+		).rejects.toMatchObject({ code: "BOOKING_MISMATCH" });
+		expect(harness.orchestrator.state.booking).toBeNull();
+		expect(harness.draftStore.load(harness.conversationId)).toMatchObject({
+			commitStatus: "committing",
+			bookingId: null,
+		});
 	});
 
 	test("refusal, interruption, and reconnect clear pending confirmation without committing", async () => {

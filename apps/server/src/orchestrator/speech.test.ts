@@ -121,6 +121,54 @@ describe("approved contact speech", () => {
 		);
 	});
 
+	test("redacts unapproved slash, comma, zero-width, Unicode, and mixed phone shapes", () => {
+		for (const detected of [
+			"+7/999/123/45/67",
+			"+7,999,123,45,67",
+			"+7\u200B999\u200C123\u206045\uFEFF67",
+			"+٧/٩٩٩/١٢٣/٤٥/٦٧",
+			"+7 (999)/123,45\u200B67",
+		]) {
+			const prepared = prepareSpeech(`Телефон ${detected}`, {
+				contactProcessing: true,
+				approvedContacts: [phone],
+			});
+			expect(prepared.spokenText).toBe("Телефон контакт скрыт");
+			expect(prepared.metadata).toEqual({
+				forwardedChannels: [],
+				forwardedCount: 0,
+			});
+		}
+	});
+
+	test("redacts phone suffixes and near-matches without relaxing approval", () => {
+		for (const detected of [
+			"5556789",
+			"55567895",
+			"555678955",
+			"+79555678956",
+			"+7/955/567/89/55",
+		]) {
+			const prepared = prepareSpeech(`Контакт ${detected}.`, {
+				contactProcessing: true,
+				approvedContacts: [phone],
+			});
+			expect(prepared.spokenText).toBe("Контакт контакт скрыт.");
+			expect(prepared.metadata.forwardedCount).toBe(0);
+		}
+	});
+
+	test("preserves normal counts, grouped case claims, dates, times, and decimals", () => {
+		const source =
+			"Кейс: 12 500 заявок, выручка 1 000 000, рост 3,14%, дата 10.08.2026, время 12:30.";
+		const prepared = prepareSpeech(source, {
+			contactProcessing: true,
+			approvedContacts: [phone],
+		});
+		expect(prepared.spokenText).toBe(source);
+		expect(prepared.metadata.forwardedCount).toBe(0);
+	});
+
 	test("normalizes strict Telegram mentions and t.me URLs case-insensitively", () => {
 		for (const detected of ["@sales_bot", "https://t.me/SALES_BOT/"]) {
 			const prepared = prepareSpeech(`Телеграм ${detected}.`, {

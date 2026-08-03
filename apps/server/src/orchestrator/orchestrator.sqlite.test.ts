@@ -738,6 +738,9 @@ describe("orchestrator with durable SQLite booking service", () => {
 				},
 			},
 		});
+		expect(
+			database.select({ value: count() }).from(bookings).get()?.value,
+		).toBe(1);
 		await session.stop();
 		closeDomainDatabase(database);
 	});

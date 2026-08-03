@@ -1,5 +1,6 @@
 import {
 	type ApprovedSpeechContact,
+	isPhoneLikeSpeechCandidate,
 	MAX_APPROVED_SPEECH_CONTACTS,
 	markApprovedSpeechContacts,
 	type SpeechContactChannel,
@@ -14,7 +15,8 @@ const MARKDOWN_LINK = /\[([^\x5d]+)\]\(\s*(?:https?:\/\/|www\.)[^)]+\)/giu;
 const RAW_URL = /(?:https?:\/\/|www\.)[^\s<>()]*[\p{L}\p{N}/#]/giu;
 const EMAIL =
 	/[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/giu;
-const PHONE = /(?<![\p{L}\p{N}])(?:\+?\d[\d\s().-]{5,}\d)(?![\p{L}\p{N}])/gu;
+const PHONE =
+	/(?<![\p{L}\p{N}])(?:\+?[\p{Nd}](?:[\p{Nd}\p{Zs}\t().,/\\‐‑‒–—―−\u200B-\u200D\u2060\uFEFF-]*[\p{Nd}]){6,})(?![\p{L}\p{N}])/gu;
 const TELEGRAM = /(?<![\p{L}\p{N}])@[a-zA-Z][a-zA-Z0-9_]{3,31}\b/gu;
 const UUID =
 	/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/giu;
@@ -201,7 +203,9 @@ export function sanitizeSpeech(input: string): string {
 	text = text.replace(MARKDOWN_LINK, "$1");
 	text = text.replace(RAW_URL, " ");
 	text = text.replace(EMAIL, CONTACT_REDACTION);
-	text = text.replace(PHONE, CONTACT_REDACTION);
+	text = text.replace(PHONE, (candidate) =>
+		isPhoneLikeSpeechCandidate(candidate) ? CONTACT_REDACTION : candidate,
+	);
 	text = text.replace(TELEGRAM, CONTACT_REDACTION);
 	text = text.replace(HIDDEN_ID, " ");
 	text = text.replace(UUID, " ");

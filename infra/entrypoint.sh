@@ -150,6 +150,35 @@ if [ -z "${OPENROUTER_STT_MODEL:-}" ] || [ -z "${OPENROUTER_STT_LANGUAGE:-}" ]; 
   log "OpenRouter STT model and language must be configured"
   exit 64
 fi
+case "${OPENROUTER_TTS_PROFILE:-xai_mp3}" in
+  xai_mp3)
+    if [ "${OPENROUTER_TTS_MODEL:-x-ai/grok-voice-tts-1.0}" != "x-ai/grok-voice-tts-1.0" ] || \
+       [ "${OPENROUTER_TTS_VOICE:-eve}" != "eve" ] || \
+       [ "${OPENROUTER_TTS_RESPONSE_FORMAT:-mp3}" != "mp3" ]; then
+      log "OPENROUTER_TTS_PROFILE=xai_mp3 requires the exact xAI model, eve voice, and mp3 format"
+      exit 64
+    fi
+    ;;
+  gemini_3_1_pcm)
+    if [ "${OPENROUTER_TTS_MODEL:-}" != "google/gemini-3.1-flash-tts-preview" ] || \
+       [ "${OPENROUTER_TTS_RESPONSE_FORMAT:-}" != "pcm" ] || \
+       [ -n "${OPENROUTER_TTS_SPEED:-}" ]; then
+      log "OPENROUTER_TTS_PROFILE=gemini_3_1_pcm requires the exact Gemini model, pcm format, and no speed override"
+      exit 64
+    fi
+    case "${OPENROUTER_TTS_VOICE:-}" in
+      Zephyr|Puck|Charon|Kore|Fenrir|Leda|Orus|Aoede|Callirrhoe|Autonoe|Enceladus|Iapetus|Umbriel|Algieba|Despina|Erinome|Algenib|Rasalgethi|Laomedeia|Achernar|Alnilam|Schedar|Gacrux|Pulcherrima|Achird|Zubenelgenubi|Vindemiatrix|Sadachbia|Sadaltager|Sulafat) ;;
+      *)
+        log "OPENROUTER_TTS_VOICE is outside the case-sensitive Gemini release snapshot"
+        exit 64
+        ;;
+    esac
+    ;;
+  *)
+    log "OPENROUTER_TTS_PROFILE must be xai_mp3 or gemini_3_1_pcm"
+    exit 64
+    ;;
+esac
 if [ -z "${OPENROUTER_API_KEY:-}" ]; then
   if [ "$TTS_TEXT_ONLY_FALLBACK" = "true" ]; then
     log "OpenRouter key is absent; voice is degraded, STT does not substitute typed input, and TTS uses text-only output fallback"

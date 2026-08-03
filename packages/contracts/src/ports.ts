@@ -370,6 +370,14 @@ export const SttHealthSchema = z.enum(["ready", "degraded", "unavailable"]);
  * Zod: it is a live Web Platform cancellation capability, not JSON data, and
  * cannot be serialized or reconstructed reliably at a REST/WS boundary.
  */
+/** Optional low-cardinality delivery intent selected only by trusted server code. */
+export const TtsDeliveryStyleSchema = z.enum([
+	"neutral",
+	"curious",
+	"serious",
+	"excited",
+]);
+
 export const TtsSynthesisRequestDataSchema = z
 	.object({
 		conversationId: EntityIdSchema,
@@ -377,6 +385,7 @@ export const TtsSynthesisRequestDataSchema = z
 		generationId: EntityIdSchema,
 		segmentId: EntityIdSchema,
 		text: z.string().min(1).max(20_000),
+		deliveryStyle: TtsDeliveryStyleSchema.optional(),
 	})
 	.strict();
 
@@ -436,6 +445,7 @@ export type TtsHealth = z.infer<typeof TtsHealthSchema>;
 export type TtsSynthesisRequestData = z.infer<
 	typeof TtsSynthesisRequestDataSchema
 >;
+export type TtsDeliveryStyle = z.infer<typeof TtsDeliveryStyleSchema>;
 /** TypeScript-only request boundary: validated data plus live cancellation. */
 export type TtsSynthesisRequest = TtsSynthesisRequestData & {
 	signal: AbortSignal;

@@ -50,4 +50,24 @@ describe("external paid OpenRouter smoke exclusion", () => {
 		expect(runner).toContain("openrouter-tts-smoke.ts");
 		expect(runner).toContain("intentionally paid and opt-in");
 	});
+
+	test("the TTS smoke selects its env profile and reports no audio or identifiers", async () => {
+		const source = await readFile(
+			join(root, "scripts/openrouter-tts-smoke.ts"),
+			"utf8",
+		);
+		for (const aggregate of ["contentType", "bytes", "latencyMs"]) {
+			expect(source).toContain(aggregate);
+		}
+		expect(source).toContain("loadOpenRouterVoiceConfig()");
+		for (const forbidden of [
+			"Bun.write",
+			"artifact",
+			"providerGenerationId",
+			"config.tts.model",
+			"config.tts.voice",
+		]) {
+			expect(source).not.toContain(forbidden);
+		}
+	});
 });

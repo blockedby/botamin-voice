@@ -877,6 +877,7 @@ describe("shared contracts", () => {
 			generationId: "01J00000000000000000000004",
 			segmentId: "01J00000000000000000000005",
 			text: "Готово.",
+			deliveryStyle: "curious" as const,
 		};
 		const request = {
 			...data,
@@ -894,6 +895,8 @@ describe("shared contracts", () => {
 			{ ...data, generationId: "not-an-id" },
 			{ ...data, segmentId: "not-an-id" },
 			{ ...data, text: "" },
+			{ ...data, deliveryStyle: "whisper" },
+			{ ...data, provider: { instructions: "whisper" } },
 		]) {
 			expect(TtsSynthesisRequestDataSchema.safeParse(invalid).success).toBe(
 				false,

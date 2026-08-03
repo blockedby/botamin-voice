@@ -5,13 +5,16 @@ import {
 
 export interface PlaybackSourceLike {
 	onended: (() => void) | null;
-	start(): void;
+	start(when: number): void;
 	stop(): void;
 }
 
 export interface AudioPlaybackApis<TDecoded = unknown> {
 	decodeAudioData(bytes: ArrayBuffer): Promise<TDecoded>;
 	createSource(buffer: TDecoded): PlaybackSourceLike;
+	resume(): Promise<void>;
+	currentTime(): number;
+	duration(buffer: TDecoded): number;
 	close?(): Promise<void>;
 }
 
@@ -19,102 +22,159 @@ export interface CompletePlaybackSegment extends AudioSegmentMetadata {
 	bytes: Uint8Array;
 }
 
-interface DecodedSlot<TDecoded> {
+export type PlaybackEnqueueRejection =
+	| "stale"
+	| "invalid"
+	| "overflow"
+	| "decode-error"
+	| "playback-error";
+
+export type PlaybackEnqueueOutcome =
+	| { status: "accepted" }
+	| {
+			status: "rejected";
+			reason: PlaybackEnqueueRejection;
+			error: Error;
+	  };
+
+type QueueSlot<TDecoded> =
+	| DecodingSlot
+	| DecodedSlot<TDecoded>
+	| ScheduledSlot<TDecoded>;
+
+interface SlotBase {
 	segment: CompletePlaybackSegment;
+	epoch: number;
+	resolve: (outcome: PlaybackEnqueueOutcome) => void;
+}
+
+interface DecodingSlot extends SlotBase {
+	phase: "decoding";
+}
+
+interface DecodedSlot<TDecoded> extends SlotBase {
+	phase: "decoded";
 	decoded: TDecoded;
 }
 
-interface PlayingSlot<TDecoded> extends DecodedSlot<TDecoded> {
+interface ScheduledSlot<TDecoded> extends SlotBase {
+	phase: "scheduled";
+	decoded: TDecoded;
 	source: PlaybackSourceLike;
+	startTime: number;
+	endTime: number;
 }
 
 interface HandoffSlot {
 	segment: CompletePlaybackSegment;
 	epoch: number;
-	resolve(accepted: boolean): void;
+	resolve: (outcome: PlaybackEnqueueOutcome) => void;
 }
 
+const ACCEPTED = { status: "accepted" } as const;
+
 /**
- * Ordered complete-MP3 player. Capacity is strictly one playing/starting slot,
- * one decoded/decoding prefetch slot, and one raw awaitable transport handoff;
- * further input is rejected instead of growing the decoded queue.
+ * Ordered complete-MP3 player with a fixed capacity: one current slot, one
+ * decoded/decoding/scheduled prefetch slot, and one raw transport handoff.
  */
 export class PhrasePlaybackQueue<TDecoded = unknown> {
 	private generationId: string | null = null;
 	private lastAcceptedSequence: number | null = null;
-	private playing: PlayingSlot<TDecoded> | null = null;
-	private starting: CompletePlaybackSegment | null = null;
-	private prefetched: DecodedSlot<TDecoded> | null = null;
-	private prefetching: CompletePlaybackSegment | null = null;
+	private current: QueueSlot<TDecoded> | null = null;
+	private prefetch: QueueSlot<TDecoded> | null = null;
 	private handoff: HandoffSlot | null = null;
 	private epoch = 0;
 	private muted = false;
+	private sealed = false;
+	private started = false;
+	private idleNotified = false;
 
 	constructor(
 		private readonly apis: AudioPlaybackApis<TDecoded>,
 		private readonly callbacks: {
 			onStarted?(segment: CompletePlaybackSegment): void;
 			onIdle?(generationId: string): void;
-			onError?(error: Error, segment: CompletePlaybackSegment): void;
+			onError?(
+				error: Error,
+				segment: CompletePlaybackSegment,
+				reason: Exclude<PlaybackEnqueueRejection, "stale">,
+			): void;
 		} = {},
 	) {}
+
+	resume(): Promise<void> {
+		return this.apis.resume();
+	}
 
 	beginGeneration(generationId: string): void {
 		if (generationId === this.generationId) return;
 		this.clearSlots();
 		this.generationId = generationId;
 		this.lastAcceptedSequence = null;
+		this.sealed = false;
+		this.started = false;
+		this.idleNotified = false;
 	}
 
-	async enqueue(segment: CompletePlaybackSegment): Promise<boolean> {
+	enqueue(segment: CompletePlaybackSegment): Promise<PlaybackEnqueueOutcome> {
 		if (
 			this.muted ||
 			this.generationId === null ||
-			segment.generationId !== this.generationId ||
-			segment.contentType !== "audio/mpeg" ||
-			segment.final !== true ||
-			!Number.isSafeInteger(segment.sequence) ||
-			segment.sequence < 0 ||
-			segment.byteLength !== segment.bytes.byteLength
+			segment.generationId !== this.generationId
 		) {
-			return false;
+			return Promise.resolve(rejected("stale", "Audio segment is stale"));
 		}
-		if (!MpegAudioBytesSchema.safeParse(segment.bytes).success) {
-			this.fail(new Error("Complete audio segment is not valid MP3"), segment);
-			return false;
+		if (!this.isValid(segment) || this.sealed) {
+			return Promise.resolve(
+				this.fail(
+					"invalid",
+					new Error("Complete audio segment is invalid"),
+					segment,
+				),
+			);
 		}
 		if (
 			this.lastAcceptedSequence !== null &&
 			segment.sequence <= this.lastAcceptedSequence
 		) {
-			return false;
+			return Promise.resolve(
+				this.fail(
+					"invalid",
+					new Error("Audio segment sequence is not monotonic"),
+					segment,
+				),
+			);
 		}
-
-		const playingOccupied = this.playing !== null || this.starting !== null;
-		const prefetchOccupied =
-			this.prefetched !== null || this.prefetching !== null;
-		if (playingOccupied && prefetchOccupied && this.handoff !== null) {
-			return false;
+		if (this.current && this.prefetch && this.handoff) {
+			return Promise.resolve(
+				this.fail(
+					"overflow",
+					new Error("Audio playback queue capacity exceeded"),
+					segment,
+				),
+			);
 		}
 
 		const isolated: CompletePlaybackSegment = {
 			...segment,
 			bytes: segment.bytes.slice(),
 		};
-		this.lastAcceptedSequence = segment.sequence;
+		this.lastAcceptedSequence = isolated.sequence;
 		const epoch = this.epoch;
-
-		if (playingOccupied && prefetchOccupied) {
-			return new Promise<boolean>((resolve) => {
+		return new Promise<PlaybackEnqueueOutcome>((resolve) => {
+			if (this.current && this.prefetch) {
 				this.handoff = { segment: isolated, epoch, resolve };
-			});
-		}
-		if (!playingOccupied) {
-			this.starting = isolated;
-		} else {
-			this.prefetching = isolated;
-		}
-		return this.decodeReserved(isolated, epoch);
+				return;
+			}
+			this.reserveDecode(isolated, epoch, resolve);
+		});
+	}
+
+	sealGeneration(generationId: string): boolean {
+		if (generationId !== this.generationId) return false;
+		this.sealed = true;
+		this.maybeIdle();
+		return true;
 	}
 
 	/** Immediate local barge-in: stop, clear, and make the generation stale. */
@@ -123,6 +183,7 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 		this.clearSlots();
 		this.generationId = null;
 		this.lastAcceptedSequence = null;
+		this.sealed = false;
 		return interrupted;
 	}
 
@@ -142,157 +203,239 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 	}
 
 	get bufferedSegmentCount(): number {
-		return (
-			(this.playing || this.starting ? 1 : 0) +
-			(this.prefetched || this.prefetching ? 1 : 0)
-		);
+		return (this.current ? 1 : 0) + (this.prefetch ? 1 : 0);
 	}
 
-	/** Raw transport handoff is separate from the two decoded/decoding slots. */
+	/** Raw transport handoff is separate from the two decode/source slots. */
 	get pendingHandoffCount(): number {
 		return this.handoff === null ? 0 : 1;
 	}
 
-	private async decode(segment: CompletePlaybackSegment): Promise<TDecoded> {
-		const exactBytes = segment.bytes.slice();
-		return this.apis.decodeAudioData(exactBytes.buffer);
+	private isValid(segment: CompletePlaybackSegment): boolean {
+		return (
+			segment.contentType === "audio/mpeg" &&
+			segment.final === true &&
+			Number.isSafeInteger(segment.sequence) &&
+			segment.sequence >= 0 &&
+			segment.byteLength === segment.bytes.byteLength &&
+			MpegAudioBytesSchema.safeParse(segment.bytes).success
+		);
 	}
 
-	private async decodeReserved(
+	private reserveDecode(
 		segment: CompletePlaybackSegment,
 		epoch: number,
-	): Promise<boolean> {
+		resolve: (outcome: PlaybackEnqueueOutcome) => void,
+	): void {
+		const slot: DecodingSlot = {
+			phase: "decoding",
+			segment,
+			epoch,
+			resolve,
+		};
+		if (!this.current) this.current = slot;
+		else this.prefetch = slot;
+		void this.decode(slot);
+	}
+
+	private async decode(slot: DecodingSlot): Promise<void> {
 		try {
-			const decoded = await this.decode(segment);
-			if (!this.isCurrent(segment, epoch)) return false;
-
-			if (this.starting === segment) {
-				this.starting = null;
-				const started = this.startPlaying({ segment, decoded }, epoch);
-				if (started) this.drainHandoff();
-				return started;
+			const exactBytes = slot.segment.bytes.slice();
+			const decoded = await this.apis.decodeAudioData(exactBytes.buffer);
+			if (!this.isCurrentSlot(slot)) {
+				slot.resolve(
+					rejected("stale", "Audio decode completed after cancellation"),
+				);
+				return;
 			}
-			if (this.prefetching !== segment) return false;
-
-			this.prefetching = null;
-			if (this.playing === null && this.starting === null) {
-				const started = this.startPlaying({ segment, decoded }, epoch);
-				if (started) this.drainHandoff();
-				return started;
+			const decodedSlot: DecodedSlot<TDecoded> = {
+				...slot,
+				phase: "decoded",
+				decoded,
+			};
+			if (this.current === slot) this.current = decodedSlot;
+			else this.prefetch = decodedSlot;
+			this.scheduleReady();
+		} catch (error) {
+			if (!this.isCurrentSlot(slot)) {
+				slot.resolve(
+					rejected("stale", "Audio decode failed after cancellation"),
+				);
+				return;
 			}
-			this.prefetched = { segment, decoded };
+			const failure = toError(error, "Audio decode failed");
+			slot.resolve(rejected("decode-error", failure));
+			this.removeSlot(slot);
+			this.fail("decode-error", failure, slot.segment);
+		}
+	}
+
+	private scheduleReady(): void {
+		if (this.current?.phase === "decoded") {
+			if (!this.schedule(this.current, Math.max(this.apis.currentTime(), 0))) {
+				return;
+			}
+		}
+		if (
+			this.current?.phase === "scheduled" &&
+			this.prefetch?.phase === "decoded"
+		) {
+			this.schedule(
+				this.prefetch,
+				Math.max(this.current.endTime, this.apis.currentTime()),
+			);
+		}
+	}
+
+	private schedule(slot: DecodedSlot<TDecoded>, startTime: number): boolean {
+		if (!this.isCurrentSlot(slot)) {
+			slot.resolve(rejected("stale", "Audio scheduling was cancelled"));
+			return false;
+		}
+		let source: PlaybackSourceLike | null = null;
+		try {
+			const duration = this.apis.duration(slot.decoded);
+			if (!Number.isFinite(duration) || duration <= 0) {
+				throw new Error("Decoded audio duration is invalid");
+			}
+			source = this.apis.createSource(slot.decoded);
+			const scheduled: ScheduledSlot<TDecoded> = {
+				...slot,
+				phase: "scheduled",
+				source,
+				startTime,
+				endTime: startTime + duration,
+			};
+			if (this.current === slot) this.current = scheduled;
+			else this.prefetch = scheduled;
+			source.onended = () => this.handleEnded(scheduled);
+			source.start(startTime);
+			slot.resolve(ACCEPTED);
+			if (!this.started) {
+				this.started = true;
+				this.callbacks.onStarted?.(slot.segment);
+			}
 			return true;
 		} catch (error) {
-			if (
-				this.isCurrent(segment, epoch) &&
-				(this.starting === segment || this.prefetching === segment)
-			) {
-				this.fail(toError(error), segment);
+			if (source) {
+				source.onended = null;
+				try {
+					source.stop();
+				} catch {
+					// The source may not have reached a startable state.
+				}
 			}
+			const failure = toError(error, "Audio playback failed");
+			slot.resolve(rejected("playback-error", failure));
+			this.removeSlot(slot);
+			this.fail("playback-error", failure, slot.segment);
 			return false;
 		}
 	}
 
-	private startPlaying(slot: DecodedSlot<TDecoded>, epoch: number): boolean {
-		if (!this.isCurrent(slot.segment, epoch)) return false;
-		try {
-			const source = this.apis.createSource(slot.decoded);
-			const playing: PlayingSlot<TDecoded> = { ...slot, source };
-			this.playing = playing;
-			source.onended = () => this.handleEnded(playing, epoch);
-			source.start();
-			this.callbacks.onStarted?.(slot.segment);
-			return true;
-		} catch (error) {
-			this.fail(toError(error), slot.segment);
-			return false;
-		}
-	}
-
-	private handleEnded(slot: PlayingSlot<TDecoded>, epoch: number): void {
-		if (this.playing !== slot) return;
-		this.playing = null;
-		if (!this.isCurrent(slot.segment, epoch)) return;
-
-		if (this.prefetched) {
-			const next = this.prefetched;
-			this.prefetched = null;
-			if (!this.startPlaying(next, epoch)) return;
-		} else if (this.prefetching) {
-			// Reserve the newly empty playing slot for the earlier pending decode.
-			this.starting = this.prefetching;
-			this.prefetching = null;
+	private handleEnded(slot: ScheduledSlot<TDecoded>): void {
+		if (!this.isCurrentSlot(slot)) return;
+		if (this.current === slot) {
+			this.current = this.prefetch;
+			this.prefetch = null;
+		} else {
+			this.prefetch = null;
 		}
 		this.drainHandoff();
-		if (
-			this.playing === null &&
-			this.starting === null &&
-			this.prefetched === null &&
-			this.prefetching === null &&
-			this.handoff === null &&
-			this.generationId
-		) {
-			this.callbacks.onIdle?.(this.generationId);
-		}
+		this.scheduleReady();
+		this.maybeIdle();
 	}
 
 	private drainHandoff(): void {
 		const handoff = this.handoff;
 		if (!handoff || handoff.epoch !== this.epoch) return;
-		const playingOccupied = this.playing !== null || this.starting !== null;
-		const prefetchOccupied =
-			this.prefetched !== null || this.prefetching !== null;
-		if (playingOccupied && prefetchOccupied) return;
-
+		if (this.current && this.prefetch) return;
 		this.handoff = null;
-		if (!playingOccupied) {
-			this.starting = handoff.segment;
-		} else {
-			this.prefetching = handoff.segment;
-		}
-		void this.decodeReserved(handoff.segment, handoff.epoch).then(
-			handoff.resolve,
-		);
+		this.reserveDecode(handoff.segment, handoff.epoch, handoff.resolve);
 	}
 
-	private isCurrent(segment: CompletePlaybackSegment, epoch: number): boolean {
+	private isCurrentSlot(slot: SlotBase): boolean {
 		return (
-			epoch === this.epoch &&
+			slot.epoch === this.epoch &&
 			!this.muted &&
-			this.generationId === segment.generationId
+			this.generationId === slot.segment.generationId &&
+			(this.current === slot || this.prefetch === slot)
 		);
 	}
 
-	private fail(error: Error, segment: CompletePlaybackSegment): void {
-		this.callbacks.onError?.(error, segment);
+	private removeSlot(slot: SlotBase): void {
+		if (this.current === slot) {
+			this.current = this.prefetch;
+			this.prefetch = null;
+		} else if (this.prefetch === slot) {
+			this.prefetch = null;
+		}
+	}
+
+	private maybeIdle(): void {
+		if (
+			!this.sealed ||
+			this.idleNotified ||
+			this.current ||
+			this.prefetch ||
+			this.handoff ||
+			!this.generationId
+		) {
+			return;
+		}
+		this.idleNotified = true;
+		this.callbacks.onIdle?.(this.generationId);
+	}
+
+	private fail(
+		reason: Exclude<PlaybackEnqueueRejection, "stale">,
+		error: Error,
+		segment: CompletePlaybackSegment,
+	): PlaybackEnqueueOutcome {
 		this.clearSlots();
 		this.generationId = null;
 		this.lastAcceptedSequence = null;
+		this.sealed = false;
+		this.callbacks.onError?.(error, segment, reason);
+		return rejected(reason, error);
 	}
 
 	private clearSlots(): void {
 		this.epoch += 1;
-		const source = this.playing?.source;
+		const slots = [this.current, this.prefetch];
 		const handoff = this.handoff;
-		this.playing = null;
-		this.starting = null;
-		this.prefetched = null;
-		this.prefetching = null;
+		this.current = null;
+		this.prefetch = null;
 		this.handoff = null;
-		handoff?.resolve(false);
-		if (source) {
-			source.onended = null;
-			try {
-				source.stop();
-			} catch {
-				// A source may already have ended; local cancellation is still complete.
+		for (const slot of slots) {
+			if (!slot) continue;
+			if (slot.phase === "scheduled") {
+				slot.source.onended = null;
+				try {
+					slot.source.stop();
+				} catch {
+					// A source may already have ended; cancellation is still complete.
+				}
 			}
+			slot.resolve(rejected("stale", "Audio playback was cancelled"));
 		}
+		handoff?.resolve(rejected("stale", "Audio handoff was cancelled"));
 	}
 }
 
-function toError(error: unknown): Error {
-	return error instanceof Error ? error : new Error("Audio playback failed");
+function rejected(
+	reason: PlaybackEnqueueRejection,
+	error: Error | string,
+): PlaybackEnqueueOutcome {
+	return {
+		status: "rejected",
+		reason,
+		error: typeof error === "string" ? new Error(error) : error,
+	};
+}
+
+function toError(error: unknown, fallback: string): Error {
+	return error instanceof Error ? error : new Error(fallback);
 }
 
 export function createBrowserAudioPlaybackApis(): AudioPlaybackApis<AudioBuffer> {
@@ -311,12 +454,15 @@ export function createBrowserAudioPlaybackApis(): AudioPlaybackApis<AudioBuffer>
 			source.connect(context.destination);
 			const wrapper: PlaybackSourceLike = {
 				onended: null,
-				start: () => source.start(),
+				start: (when) => source.start(when),
 				stop: () => source.stop(),
 			};
 			source.onended = () => wrapper.onended?.();
 			return wrapper;
 		},
+		resume: () => context.resume(),
+		currentTime: () => context.currentTime,
+		duration: (buffer) => buffer.duration,
 		close: () => context.close(),
 	};
 }

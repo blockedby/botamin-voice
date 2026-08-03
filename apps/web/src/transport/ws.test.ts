@@ -754,7 +754,8 @@ describe("voice WebSocket transport", () => {
 		const sources: FakePlaybackSource[] = [];
 		const decodedSequences: number[] = [];
 		const started: number[] = [];
-		const accepted: Array<Promise<boolean>> = [];
+		const accepted: Array<ReturnType<PhrasePlaybackQueue<number>["enqueue"]>> =
+			[];
 		const playbackApis: AudioPlaybackApis<number> = {
 			decodeAudioData: async (bytes) => {
 				decodedSequences.push(bytes.byteLength);
@@ -765,6 +766,9 @@ describe("voice WebSocket transport", () => {
 				sources.push(source);
 				return source;
 			},
+			resume: async () => undefined,
+			currentTime: () => 0,
+			duration: () => 1,
 		};
 		const playback = new PhrasePlaybackQueue(playbackApis, {
 			onStarted: (value) => started.push(value.sequence),
@@ -807,10 +811,10 @@ describe("voice WebSocket transport", () => {
 		expect(decodedSequences).toHaveLength(2);
 
 		sources[0]?.finish();
-		expect(await accepted[2]).toBe(true);
+		expect(await accepted[2]).toEqual({ status: "accepted" });
 		sources[1]?.finish();
 		sources[2]?.finish();
-		expect(started).toEqual([10, 11, 12]);
+		expect(started).toEqual([10]);
 		expect(decodedSequences).toHaveLength(3);
 		expect(playback.bufferedSegmentCount).toBe(0);
 	});

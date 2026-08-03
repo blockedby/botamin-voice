@@ -41,8 +41,10 @@ export type VoiceAction =
 	| { type: "transcript.final"; transcript: FinalTranscript }
 	| { type: "assistant.delta"; generationId: string; text: string }
 	| { type: "assistant.done"; generationId: string; fullText: string }
+	| { type: "audio.accepted"; generationId: string }
 	| { type: "speaking"; generationId: string }
 	| { type: "playback.complete" }
+	| { type: "playback.disconnected" }
 	| { type: "interrupted" }
 	| { type: "audio.error"; message: string }
 	| { type: "fatal.error"; message: string }
@@ -88,6 +90,11 @@ export function voiceReducer(
 				generationId: action.generationId,
 				assistantText: action.fullText,
 			};
+		case "audio.accepted":
+			return {
+				...state,
+				generationId: action.generationId,
+			};
 		case "speaking":
 			return {
 				...state,
@@ -98,6 +105,8 @@ export function voiceReducer(
 		case "playback.complete":
 		case "interrupted":
 			return { ...state, status: "listening", generationId: null };
+		case "playback.disconnected":
+			return { ...state, status: "processing", generationId: null };
 		case "audio.error":
 			return {
 				...state,
@@ -196,10 +205,12 @@ export class VoiceSessionController {
 			case "audio.segment":
 				if (!this.acceptGeneration(event.payload.generationId)) return false;
 				this.apply({
-					type: "speaking",
+					type: "audio.accepted",
 					generationId: event.payload.generationId,
 				});
 				return true;
+			case "assistant.audio.done":
+				return this.acceptGeneration(event.payload.generationId);
 			case "assistant.interrupted":
 				this.markGenerationStale(event.payload.generationId);
 				if (this.state.generationId === event.payload.generationId) {
@@ -241,11 +252,29 @@ export class VoiceSessionController {
 		return generationId;
 	}
 
+	playbackStarted(generationId: string): boolean {
+		if (
+			!this.acceptGeneration(generationId) ||
+			this.state.generationId !== generationId ||
+			this.state.status === "speaking"
+		) {
+			return false;
+		}
+		this.apply({ type: "speaking", generationId });
+		return true;
+	}
+
 	completePlayback(generationId: string): boolean {
 		if (this.state.generationId !== generationId) return false;
 		this.markGenerationStale(generationId);
 		this.apply({ type: "playback.complete" });
 		return true;
+	}
+
+	cancelLocalPlaybackForReconnect(): void {
+		if (this.stopped || this.state.generationId === null) return;
+		this.markGenerationStale(this.state.generationId);
+		this.apply({ type: "playback.disconnected" });
 	}
 
 	setAudioError(message: string): void {

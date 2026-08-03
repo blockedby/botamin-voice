@@ -236,6 +236,74 @@ describe("final-only voice state", () => {
 		expect(controller.state.assistantText).toBe("Старый");
 	});
 
+	test("audio metadata does not speak until the first source starts, once per generation", () => {
+		const controller = new VoiceSessionController();
+		controller.beginListening();
+		controller.commit(() => true);
+		controller.acceptEvent(
+			serverEvent("transcript.final", { turnId, text: "Начните звук" }),
+		);
+		controller.acceptEvent(
+			serverEvent("assistant.text.delta", { generationId, text: "Ответ" }, 2),
+		);
+		expect(
+			controller.acceptEvent(
+				serverEvent(
+					"audio.segment",
+					{
+						generationId,
+						segmentId: "01J00000000000000000000005",
+						sequence: 0,
+						contentType: "audio/mpeg",
+						byteLength: 789,
+						final: true,
+					},
+					3,
+				),
+			),
+		).toBe(true);
+		expect(controller.state.status).toBe("processing");
+		expect(controller.playbackStarted(generationId)).toBe(true);
+		expect(controller.state.status).toBe("speaking");
+		expect(controller.playbackStarted(generationId)).toBe(false);
+		expect(
+			controller.acceptEvent(
+				serverEvent("assistant.audio.done", { generationId }, 4),
+			),
+		).toBe(true);
+	});
+
+	test("reconnect cancellation clears only ephemeral playback state", () => {
+		const controller = new VoiceSessionController();
+		controller.beginListening();
+		controller.commit(() => true);
+		controller.acceptEvent(
+			serverEvent("transcript.final", { turnId, text: "Долговечный вопрос" }),
+		);
+		controller.acceptEvent(
+			serverEvent(
+				"assistant.text.done",
+				{ generationId, fullText: "Долговечный ответ" },
+				2,
+			),
+		);
+		controller.playbackStarted(generationId);
+		controller.cancelLocalPlaybackForReconnect();
+		expect(controller.state.status).toBe("processing");
+		expect(controller.state.generationId).toBeNull();
+		expect(controller.state.transcript?.text).toBe("Долговечный вопрос");
+		expect(controller.state.assistantText).toBe("Долговечный ответ");
+		expect(
+			controller.acceptEvent(
+				serverEvent(
+					"assistant.text.delta",
+					{ generationId, text: " поздно" },
+					3,
+				),
+			),
+		).toBe(false);
+	});
+
 	test("playback completion releases the generation and rejects its late events", () => {
 		const controller = new VoiceSessionController();
 		controller.beginListening();

@@ -52,7 +52,7 @@ import {
 } from "./policy";
 import { AtomicSttTurnGate } from "./reliability";
 import {
-	chunkSpeech,
+	chunkPreparedSpeech,
 	prepareSpeech,
 	SpeechBudgetGuard,
 	type SpeechBudgetOptions,
@@ -1193,7 +1193,16 @@ export class ConversationOrchestrator {
 			return;
 		}
 
-		const chunker = new StreamingSentenceChunker(this.#chunkerOptions);
+		const streamingApprovedContacts: Contact[] = this.#state
+			.contactConsentConfirmed
+			? this.#state.booking
+				? this.#state.booking.contacts
+				: (this.#draftStore?.approvedContacts(this.conversationId) ?? [])
+			: [];
+		const chunker = new StreamingSentenceChunker(
+			this.#chunkerOptions,
+			streamingApprovedContacts,
+		);
 		const heldActionSpeech: string[] = [];
 		let suppressModelSpeech = false;
 		let toolSettledThisTurn = false;
@@ -2478,11 +2487,11 @@ export class ConversationOrchestrator {
 		const approvedContacts: Contact[] = this.#state.booking
 			? this.#state.booking.contacts
 			: (this.#draftStore?.approvedContacts(this.conversationId) ?? []);
-		const spoken = prepareSpeech(visible, {
+		const prepared = prepareSpeech(visible, {
 			contactProcessing: this.#state.contactConsentConfirmed,
 			approvedContacts,
-		}).spokenText;
-		if (!spoken) return false;
+		});
+		if (!prepared.spokenText) return false;
 		if (!this.#tts) {
 			yield {
 				type: "degraded",
@@ -2494,7 +2503,7 @@ export class ConversationOrchestrator {
 			return false;
 		}
 		let audioProduced = false;
-		for (const phrase of chunkSpeech(spoken, this.#chunkerOptions)) {
+		for (const phrase of chunkPreparedSpeech(prepared, this.#chunkerOptions)) {
 			const produced = yield* this.#synthesizeSpeechSegment(
 				turn,
 				phrase,

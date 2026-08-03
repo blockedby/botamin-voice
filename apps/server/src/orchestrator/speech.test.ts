@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	chunkPreparedSpeech,
 	chunkSpeech,
 	prepareSpeech,
 	SpeechBudgetGuard,
@@ -90,6 +91,7 @@ describe("approved contact speech", () => {
 		});
 		expect(prepared).toEqual({
 			spokenText: "Почта: RosSelGosTorg собака GMAIL точка com.",
+			protectedSpans: [{ start: 7, end: 43 }],
 			metadata: { forwardedChannels: ["email"], forwardedCount: 1 },
 		});
 	});
@@ -193,6 +195,7 @@ describe("approved contact speech", () => {
 			});
 			expect(prepared).toEqual({
 				spokenText: "Телефон контакт скрыт",
+				protectedSpans: [],
 				metadata: { forwardedChannels: [], forwardedCount: 0 },
 			});
 		}
@@ -403,17 +406,120 @@ describe("approved contact speech", () => {
 		expect(metadata).not.toMatch(/RosSel|gmail|7955|Sales_Bot|собака/u);
 	});
 
-	test("expanded speech can be re-chunked under the 240-character ceiling", () => {
-		const prepared = prepareSpeech(
-			`Повтор: ${gmail.value}. Ещё раз: ${gmail.value}. И снова: ${gmail.value}.`,
-			{ contactProcessing: true, approvedContacts: [gmail] },
-		);
-		const chunks = chunkSpeech(prepared.spokenText);
-		expect(chunks.length).toBeGreaterThan(0);
-		for (const chunk of chunks) {
-			expect([...chunk].length).toBeLessThanOrEqual(240);
-			expect(chunk).not.toMatch(/^[\p{P}\p{S}\s]*$/u);
+	test("keeps expanded approved contacts atomic at every provider placement", () => {
+		const contacts = [gmail, phone, telegram] as const;
+		for (const contact of contacts) {
+			const contactOnly = prepareSpeech(contact.value, {
+				contactProcessing: true,
+				approvedContacts: [contact],
+			}).spokenText;
+			for (let position = 0; position <= 260; position += 1) {
+				const prefix = position === 0 ? "" : `${"а".repeat(position)} `;
+				const prepared = prepareSpeech(
+					`${prefix}${contact.value}, затем обычное продолжение ответа.`,
+					{ contactProcessing: true, approvedContacts: [contact] },
+				);
+				const chunks = chunkPreparedSpeech(prepared);
+				expect(
+					chunks.filter((chunk) => chunk.includes(contactOnly)).length,
+					`${contact.channel} at ${position}`,
+				).toBe(1);
+				expect(
+					chunks.every((chunk) => [...chunk].length <= 240),
+					`${contact.channel} length at ${position}`,
+				).toBe(true);
+				const providerText = chunks.join(" ");
+				expect(providerText.indexOf(contactOnly)).toBeGreaterThanOrEqual(0);
+				expect(providerText.indexOf("обычное продолжение")).toBeGreaterThan(
+					providerText.indexOf(contactOnly),
+				);
+			}
 		}
+	});
+
+	test("rebalances every reviewer phone prefix from 140 through 210", () => {
+		const contactOnly = prepareSpeech(phone.value, {
+			contactProcessing: true,
+			approvedContacts: [phone],
+		}).spokenText;
+		for (let prefixLength = 140; prefixLength <= 210; prefixLength += 1) {
+			const prepared = prepareSpeech(
+				`${"б".repeat(prefixLength)} ${phone.value}. После номера идёт суффикс.`,
+				{ contactProcessing: true, approvedContacts: [phone] },
+			);
+			const chunks = chunkPreparedSpeech(prepared);
+			expect(
+				chunks.filter((chunk) => chunk.includes(contactOnly)),
+				`prefix ${prefixLength}`,
+			).toHaveLength(1);
+			expect(chunks.every((chunk) => [...chunk].length <= 240)).toBe(true);
+		}
+	});
+
+	test("keeps multiple approved contacts ordered and individually atomic", () => {
+		const source = `${"вводная ".repeat(29)}${gmail.value}; телефон ${phone.value}, Telegram ${telegram.value}. ${"суффикс ".repeat(20)}`;
+		const prepared = prepareSpeech(source, {
+			contactProcessing: true,
+			approvedContacts: [gmail, phone, telegram],
+		});
+		const chunks = chunkPreparedSpeech(prepared);
+		const spoken = [gmail, phone, telegram].map(
+			(contact) =>
+				prepareSpeech(contact.value, {
+					contactProcessing: true,
+					approvedContacts: [contact],
+				}).spokenText,
+		);
+		for (const sequence of spoken) {
+			expect(chunks.filter((chunk) => chunk.includes(sequence))).toHaveLength(
+				1,
+			);
+		}
+		expect(chunks.join(" ")).toBe(prepared.spokenText);
+		expect(chunks.every((chunk) => [...chunk].length <= 240)).toBe(true);
+		expect(
+			spoken.map((sequence) => prepared.spokenText.indexOf(sequence)),
+		).toEqual(
+			[...spoken]
+				.map((sequence) => prepared.spokenText.indexOf(sequence))
+				.sort((left, right) => left - right),
+		);
+	});
+
+	test("redacts incomplete approved contact prefixes on final flush", () => {
+		for (const contact of [gmail, phone, telegram] as const) {
+			for (let end = 1; end < contact.value.length; end += 1) {
+				for (const contactProcessing of [false, true]) {
+					const prepared = prepareSpeech(`До ${contact.value.slice(0, end)}`, {
+						contactProcessing,
+						approvedContacts: [contact],
+					});
+					expect(prepared.spokenText, `${contact.channel} prefix ${end}`).toBe(
+						"До контакт скрыт",
+					);
+					expect(prepared.protectedSpans).toEqual([]);
+					expect(prepared.metadata.forwardedCount).toBe(0);
+				}
+			}
+		}
+	});
+
+	test("fails closed instead of splitting an oversized approved spoken form", () => {
+		const oversized = {
+			channel: "email",
+			value: `${`a${".a".repeat(30)}`}@example.com`,
+		} as const;
+		const prepared = prepareSpeech(`Почта ${oversized.value}.`, {
+			contactProcessing: true,
+			approvedContacts: [oversized],
+		});
+		expect(prepared.spokenText).toBe("Почта контакт скрыт.");
+		expect(prepared.protectedSpans).toEqual([]);
+		expect(prepared.metadata).toEqual({
+			forwardedChannels: [],
+			forwardedCount: 0,
+		});
+		expect(chunkPreparedSpeech(prepared)).toEqual(["Почта контакт скрыт."]);
 	});
 });
 
@@ -664,6 +770,51 @@ describe("bounded streaming phrase chunker", () => {
 			expect(providerBound.normalize("NFKC").replace(/\D/gu, "")).not.toMatch(
 				/79991234567/u,
 			);
+		}
+	});
+
+	test("holds every approved contact across model deltas and idle flushes", () => {
+		const contacts = [
+			{ channel: "email", value: "RosSelGosTorg@gmail.com" },
+			{ channel: "phone", value: "+79555678955" },
+			{ channel: "telegram", value: "@Sales_Bot" },
+		] as const;
+		const prefix = "обычная вводная ".repeat(11);
+		for (const contact of contacts) {
+			const contactOnly = prepareSpeech(contact.value, {
+				contactProcessing: true,
+				approvedContacts: [contact],
+			}).spokenText;
+			for (let split = 1; split < contact.value.length; split += 1) {
+				const chunker = new StreamingSentenceChunker(
+					{
+						firstMinimum: 1,
+						firstTarget: 100,
+						softTarget: 160,
+						hardLimit: 240,
+						idleFlushMs: 1,
+					},
+					[contact],
+				);
+				const rawChunks = [
+					...chunker.push(`${prefix}${contact.value.slice(0, split)}`),
+					...chunker.flushIdle(1),
+					...chunker.push(`${contact.value.slice(split)}. Продолжение.`),
+					...chunker.flush(),
+				];
+				const providerChunks = rawChunks.flatMap((chunk) =>
+					chunkPreparedSpeech(
+						prepareSpeech(chunk, {
+							contactProcessing: true,
+							approvedContacts: [contact],
+						}),
+					),
+				);
+				expect(
+					providerChunks.filter((chunk) => chunk.includes(contactOnly)),
+					`${contact.channel} split ${split}`,
+				).toHaveLength(1);
+			}
 		}
 	});
 

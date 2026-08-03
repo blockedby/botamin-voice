@@ -37,7 +37,7 @@ import {
 	ConversationOrchestrator,
 	type OrchestratorEvent,
 } from "./orchestrator";
-import type { SpeechChunkerOptions } from "./speech";
+import { prepareSpeech, type SpeechChunkerOptions } from "./speech";
 import {
 	type ConversationState,
 	createInitialConversationState,
@@ -1947,6 +1947,200 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			"Телефон плюс семь, девятьсот пятьдесят пять, пятьсот шестьдесят семь, восемьдесят девять, пятьдесят пять.",
 		);
 		expect(tts.inputs[0]?.text).not.toMatch(/7955|контакт скрыт/u);
+	});
+
+	test("recording TTS keeps approved contacts atomic across provider placements", async () => {
+		const approvedContacts = [
+			{ channel: "email", value: "atomic.contact@example.com" },
+			{ channel: "phone", value: "+79555678955" },
+			{ channel: "telegram", value: "@Atomic_Sales" },
+		] as const;
+		const bookings = new FakeBookingService();
+		await bookings.createBooking({
+			...bookingInput,
+			contacts: [...approvedContacts],
+		});
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const initialState: ConversationState = {
+			...createInitialConversationState(),
+			stage: "POST_BOOKING_QUALIFICATION",
+			booking,
+			contactConsentConfirmed: true,
+			bookingConfirmationDelivered: true,
+		};
+		const broadPlacements = Array.from(
+			{ length: 14 },
+			(_, index) => index * 20,
+		);
+		for (const contact of approvedContacts) {
+			const contactOnly = prepareSpeech(contact.value, {
+				contactProcessing: true,
+				approvedContacts: [contact],
+			}).spokenText;
+			const placements =
+				contact.channel === "phone"
+					? [
+							...new Set([
+								...broadPlacements,
+								...Array.from({ length: 71 }, (_, index) => 140 + index),
+							]),
+						]
+					: broadPlacements;
+			for (const position of placements) {
+				const prefix = "обычная фраза "
+					.repeat(Math.ceil((position + 1) / "обычная фраза ".length))
+					.slice(0, position);
+				const visible = `${prefix}${prefix ? " " : ""}${contact.value}, затем продолжение ответа.`;
+				const tts = new FakeTts();
+				const { orchestrator } = fixture({
+					bookings,
+					brain: new FakeBrain(speechScript(visible, turn2, generation2)),
+					tts,
+					initialState,
+				});
+				await collect(
+					orchestrator.acceptTextSubmit({
+						turnId: turn2,
+						generationId: generation2,
+						text: "Продолжайте.",
+						knownFacts: facts,
+					}),
+				);
+				expect(
+					tts.inputs.filter((input) => input.text.includes(contactOnly)),
+					`${contact.channel} at ${position}`,
+				).toHaveLength(1);
+				expect(tts.inputs.every((input) => [...input.text].length <= 240)).toBe(
+					true,
+				);
+			}
+		}
+	});
+
+	test("recording TTS preserves approved contacts across every model split", async () => {
+		const approvedContacts = [
+			{ channel: "email", value: "atomic.contact@example.com" },
+			{ channel: "phone", value: "+79555678955" },
+			{ channel: "telegram", value: "@Atomic_Sales" },
+		] as const;
+		const bookings = new FakeBookingService();
+		await bookings.createBooking({
+			...bookingInput,
+			contacts: [...approvedContacts],
+		});
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		for (const contact of approvedContacts) {
+			const contactOnly = prepareSpeech(contact.value, {
+				contactProcessing: true,
+				approvedContacts: [contact],
+			}).spokenText;
+			for (let split = 1; split < contact.value.length; split += 1) {
+				const prefix = "обычная вводная ".repeat(11);
+				const brain = new FakeBrain([
+					{
+						type: "speech.delta",
+						turnId: turn2,
+						generationId: generation2,
+						text: `${prefix}${contact.value.slice(0, split)}`,
+					},
+					{
+						type: "speech.delta",
+						turnId: turn2,
+						generationId: generation2,
+						text: `${contact.value.slice(split)}. Продолжение.`,
+					},
+					{ type: "turn.completed", turnId: turn2, generationId: generation2 },
+				]);
+				const tts = new FakeTts();
+				const { orchestrator } = fixture({
+					bookings,
+					brain,
+					tts,
+					initialState: {
+						...createInitialConversationState(),
+						stage: "POST_BOOKING_QUALIFICATION",
+						booking,
+						contactConsentConfirmed: true,
+						bookingConfirmationDelivered: true,
+					},
+				});
+				await collect(
+					orchestrator.acceptTextSubmit({
+						turnId: turn2,
+						generationId: generation2,
+						text: "Продолжайте.",
+						knownFacts: facts,
+					}),
+				);
+				expect(
+					tts.inputs.filter((input) => input.text.includes(contactOnly)),
+					`${contact.channel} split ${split}`,
+				).toHaveLength(1);
+			}
+		}
+	});
+
+	test("recording retry TTS keeps multiple approved contacts ordered and atomic", async () => {
+		const approvedContacts = [
+			{ channel: "email", value: "atomic.contact@example.com" },
+			{ channel: "phone", value: "+79555678955" },
+			{ channel: "telegram", value: "@Atomic_Sales" },
+		] as const;
+		const bookings = new FakeBookingService();
+		await bookings.createBooking({
+			...bookingInput,
+			contacts: [...approvedContacts],
+		});
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const visible = `${"вводная ".repeat(31)}${approvedContacts[0].value}; телефон ${approvedContacts[1].value}, Telegram ${approvedContacts[2].value}. ${"суффикс ".repeat(20)}`;
+		const tts = new RetryTts();
+		const { orchestrator } = fixture({
+			bookings,
+			brain: new FakeBrain(speechScript(visible, turn2, generation2)),
+			tts,
+			initialState: {
+				...createInitialConversationState(),
+				stage: "POST_BOOKING_QUALIFICATION",
+				booking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered: true,
+			},
+		});
+		await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn2,
+				generationId: generation2,
+				text: "Продолжайте.",
+				knownFacts: facts,
+			}),
+		);
+		const spokenContacts = approvedContacts.map(
+			(contact) =>
+				prepareSpeech(contact.value, {
+					contactProcessing: true,
+					approvedContacts: [contact],
+				}).spokenText,
+		);
+		for (const spokenContact of spokenContacts) {
+			expect(
+				tts.inputs.filter((input) => input.text.includes(spokenContact)),
+			).toHaveLength(1);
+		}
+		const providerText = tts.inputs.map((input) => input.text).join(" ");
+		expect(
+			spokenContacts.map((contact) => providerText.indexOf(contact)),
+		).toEqual(
+			[...spokenContacts]
+				.map((contact) => providerText.indexOf(contact))
+				.sort((left, right) => left - right),
+		);
+		expect(tts.inputs.every((input) => [...input.text].length <= 240)).toBe(
+			true,
+		);
+		expect(tts.attempts).toBe(tts.inputs.length * 2);
 	});
 
 	test("actual TTS forwards only committed contacts and redacts an unknown model contact", async () => {

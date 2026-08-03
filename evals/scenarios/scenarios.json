@@ -41,7 +41,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "accepted"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -157,7 +157,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -324,7 +324,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -382,7 +382,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -536,7 +536,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -867,7 +867,7 @@
 					"maxCreateCalls": 2,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -929,7 +929,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [
 					"transport:disconnected",
 					"transport:reconnected"
@@ -1014,7 +1014,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1081,7 +1081,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "accepted"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},
@@ -1211,7 +1211,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": ["provider:tts:unavailable"],
 				"ttsMode": "outage"
 			},
@@ -1269,7 +1269,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": ["provider:notifier:unavailable"],
 				"ttsMode": "required"
 			},
@@ -1327,7 +1327,7 @@
 					"maxCreateCalls": 1,
 					"qualification": "declined"
 				},
-				"allowedCaseClaimIds": [],
+				"allowedCaseClaimIds": ["user-brief-revenue-10-15m-monthly"],
 				"expectedFailureModes": [],
 				"ttsMode": "required"
 			},

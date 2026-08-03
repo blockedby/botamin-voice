@@ -14,6 +14,18 @@
 			"expectedCriticalCodes": ["duplicate_booking"]
 		},
 		{
+			"id": "missing-canonical-hook",
+			"scenarioId": "user-brief-revenue-claim",
+			"file": "missing-canonical-hook.jsonl",
+			"expectedCriticalCodes": ["canonical_hook_missing"]
+		},
+		{
+			"id": "impossible-stage-transition",
+			"scenarioId": "user-brief-revenue-claim",
+			"file": "impossible-stage-transition.jsonl",
+			"expectedCriticalCodes": ["impossible_stage_transition"]
+		},
+		{
 			"id": "detector-fabricated_price",
 			"scenarioId": "guarantee-fabrication-request",
 			"file": "fabricated_price.jsonl",

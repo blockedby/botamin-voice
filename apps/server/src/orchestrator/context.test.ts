@@ -38,17 +38,14 @@ function contextAt(
 }
 
 describe("server-owned Moscow brain context", () => {
-	test("meeting intent has no slot context before completed discovery and value", () => {
+	test("meeting intent has no slot context in greeting and two slots in discovery", () => {
 		const now = new Date("2025-01-09T09:00:00.000Z");
-		for (const stage of ["GREETING", "DISCOVERY"] as const) {
-			const context = contextAt(now, stage);
-			expect(BrainTurnInputSchema.safeParse(context).success).toBe(true);
-			expect(context.schedulingContext.candidateMeetingSlots).toEqual([]);
-			expect(context.schedulingContext.concreteRequestInterpretation).toEqual({
-				kind: "none",
-			});
-			expect(context.allowedActions).toEqual([]);
-		}
+		const greeting = contextAt(now, "GREETING");
+		expect(greeting.schedulingContext.candidateMeetingSlots).toEqual([]);
+		const discovery = contextAt(now, "DISCOVERY");
+		expect(BrainTurnInputSchema.safeParse(discovery).success).toBe(true);
+		expect(discovery.schedulingContext.candidateMeetingSlots).toHaveLength(2);
+		expect(discovery.allowedActions).toEqual([]);
 		expect(
 			contextAt(now, "VALUE").schedulingContext.candidateMeetingSlots,
 		).toHaveLength(2);

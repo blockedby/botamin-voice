@@ -14,6 +14,7 @@ const runtimeCwd = process.env.CODEX_CWD;
 const codexBin = process.env.CODEX_BIN ?? "codex";
 const model = process.env.CODEX_MODEL ?? "gpt-5.6-luna";
 const effort = process.env.CODEX_EFFORT ?? "low";
+if (effort !== "low") throw new Error("CODEX_EFFORT must be exactly low");
 const serviceTier = process.env.CODEX_SERVICE_TIER;
 if (
 	serviceTier !== undefined &&

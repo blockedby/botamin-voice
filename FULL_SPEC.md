@@ -211,7 +211,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-BRAIN-005:** ответы проходят speech sanitizer перед TTS.
 - **FR-BRAIN-006:** system/product/conversation prompts загружаются из Markdown.
 - **FR-BRAIN-007:** tool mode имеет feature flag: `dynamic` и стабильный fallback `envelope`.
-- **FR-BRAIN-008:** reasoning effort задаётся конфигурацией; стартовый профиль Luna использует минимальный уровень, который проходит quality evals.
+- **FR-BRAIN-008:** reasoning effort зафиксирован exact `low`: отсутствие значения default-ится в `low`, любое иное значение отклоняется до запуска Codex process для standard и priority.
 - **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, parsed time-of-day/concrete-date-time request и ровно два structured meeting candidates с concrete Moscow date/time labels.
 - **FR-BRAIN-010:** cadence умеренно проактивен: один вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting offer, без повторного давления после ясного отказа.
 
@@ -997,7 +997,7 @@ TRANSCRIPT_RETENTION_DAYS=30
 STORE_RAW_AUDIO=false
 ```
 
-Значение concurrency — initial guardrail, а не окончательная capacity claim; оно настраивается после load test и проверки лимитов конкретной подписки. `MAX_PENDING_BRAIN_TURNS` ограничивает сохранённые в памяти committed WAV; booked sessions имеют отдельную приоритетную FIFO-очередь, а внутри каждой очереди сохраняется порядок поступления. `TRUSTED_PROXY_HOPS=0` безопасно игнорирует forwarding headers для прямого Bun-запуска; Compose явно задаёт `1`, потому что app доступен только через Caddy. `CODEX_MODEL` и `CODEX_EFFORT` конфигурируемы, но любое изменение release-профиля требует полного conversation eval gate.
+Значение concurrency — initial guardrail, а не окончательная capacity claim; оно настраивается после load test и проверки лимитов конкретной подписки. `MAX_PENDING_BRAIN_TURNS` ограничивает сохранённые в памяти committed WAV; booked sessions имеют отдельную приоритетную FIFO-очередь, а внутри каждой очереди сохраняется порядок поступления. `TRUSTED_PROXY_HOPS=0` безопасно игнорирует forwarding headers для прямого Bun-запуска; Compose явно задаёт `1`, потому что app доступен только через Caddy. `CODEX_MODEL` фиксирован release-профилем, а `CODEX_EFFORT` допускает только exact `low`; любое иное значение отклоняется до запуска Codex process.
 
 
 <div class="page-break"></div>
@@ -1044,26 +1044,19 @@ Asset не содержит visitor data: администратор отдел�
 
 ### GREETING
 
-Цель: быстро объяснить формат.
+До consent видимая fixed copy:
 
-Пример:
+> Здравствуйте! Я голосовой AI-консультант Botamin. Чем занимается ваша компания? Подтвердите условия, и начнём.
 
-> Здравствуйте! Я голосовой AI-продавец Botamin. Могу за пару минут разобрать, где у вас теряются лиды, и показать подходящий сценарий. Что сейчас важнее: входящие заявки, недозвоны или холодная база?
+После consent `GREETING` никогда не получает scheduling candidates и одним вопросом узнаёт отрасль или бизнес.
 
 ### DISCOVERY
 
-Найти роль/сценарий и основной bottleneck. Задавать по одному вопросу и не более двух discovery-вопросов до краткого мягкого предложения demo/встречи. Если intent очевиден раньше, переходить к value/offer без анкеты.
+Первый ответ об отрасли или бизнесе всегда получает одну canonical assistant response: дословный attributed hook, затем ровно два current server-owned 20-minute Moscow `displayLabel` и один вопрос выбора — без filler, повторного meeting intent или второго brain call. Brain предлагает `COLLECT_BOOKING`; server публикует ordered `DISCOVERY -> VALUE -> BOOKING_OFFER -> COLLECT_BOOKING` и не разрешает другие skips.
 
 ### VALUE
 
-Структура:
-
-1. пересказать pain одной фразой;
-2. описать релевантный workflow Botamin;
-3. привести один case claim с атрибуцией, если помогает;
-4. проверить интерес.
-
-Число 10–15 млн ₽ в месяц допустимо только в точной атрибуции: это сообщение пользовательского брифа Botamin о прошлых результатах компаний, без независимой проверки, гарантии, прогноза или обещания собеседнику.
+В canonical discovery response используется только hook: «По пользовательскому брифу Botamin, в этой отрасли были случаи: компании с AI-агентами увеличивали выручку на 10–15 миллионов рублей ежемесячно; без гарантий». Другой case claim или число запрещены.
 
 ### OBJECTION
 
@@ -1075,13 +1068,11 @@ Asset не содержит visitor data: администратор отдел�
 
 ### BOOKING_OFFER
 
-Не говорить «давайте созвонимся» без value bridge.
-
-> Похоже, у вас есть конкретный сценарий для пилота. Могу зафиксировать короткую демонстрацию с коллегой, чтобы он пришёл уже с вариантом процесса. Записать?
+Два current 20-minute Moscow candidates в canonical discovery response являются offer; отдельная filler-реплика или повторное согласие не нужны.
 
 ### COLLECT_BOOKING
 
-После согласия использовать ровно два current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Typed/spoken time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
+Следующий typed/spoken turn сразу принимает выбор одного из двух уже предложенных current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
 
 Обязательный набор: accepted name, company, working email, phone or Telegram, one current candidate, and contact consent. Spoken and typed turns merge quoted fact proposals into the same durable `conversation_contexts.draft_json`. New conflicting values produce bounded explicit options instead of silent overwrite.
 
@@ -3073,7 +3064,7 @@ T01, T10 и T15 не должны задерживать первые adapter sp
 - **OpenRouter STT:** native Bun `fetch` к `/api/v1/chat/completions`; gateway/utterance assembler supplies one bounded, validated `audio/wav` request after `audio.commit`, adapter validates and base64-encodes those unchanged WAV bytes as `input_audio`, and returns one final transcript.
 - **OpenRouter TTS:** native Bun `fetch` к dedicated speech endpoint; one complete MP3 phrase per request, no SDK.
 - **LLM brain:** `BrainPort`, реализованный поверх долгоживущего `codex app-server` и его JSON-RPC protocol.
-- **Model:** `gpt-5.6-luna` через Codex subscription владельца; `CODEX_MODEL`/`CODEX_EFFORT` конфигурируемы, но Luna — согласованный P0 default.
+- **Model:** exact `gpt-5.6-luna` через Codex subscription владельца; `CODEX_EFFORT` допускает только exact `low` (missing default-ится в `low`, non-low блокирует startup) для standard и priority.
 - **Schemas:** Zod для собственных contracts; Codex protocol types/schemas фиксируются вместе с pinned CLI version.
 - **Vercel AI SDK:** не является dependency P0; может появиться позже в text-only или API-key adapter, если даст измеримое упрощение.
 - **`@openai/codex-sdk`:** не используется в основном voice runtime, пока не предоставляет обязательный low-level control над `turn/interrupt`, app-server threads, dynamic tools и exact streamed deltas на Bun.

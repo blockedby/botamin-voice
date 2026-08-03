@@ -2534,30 +2534,26 @@ fallback <code>Включить приветствие</code>; начало real
 проверяет MP3 и commit-ит результат. Runtime visitor не инициирует
 генерацию.</p>
 <h3 id="greeting">GREETING</h3>
-<p>Цель: быстро объяснить формат.</p>
-<p>Пример:</p>
+<p>До consent видимая fixed copy:</p>
 <blockquote>
-<p>Здравствуйте! Я голосовой AI-продавец Botamin. Могу за пару минут
-разобрать, где у вас теряются лиды, и показать подходящий сценарий. Что
-сейчас важнее: входящие заявки, недозвоны или холодная база?</p>
+<p>Здравствуйте! Я голосовой AI-консультант Botamin. Чем занимается ваша
+компания? Подтвердите условия, и начнём.</p>
 </blockquote>
+<p>После consent <code>GREETING</code> никогда не получает scheduling
+candidates и одним вопросом узнаёт отрасль или бизнес.</p>
 <h3 id="discovery">DISCOVERY</h3>
-<p>Найти роль/сценарий и основной bottleneck. Задавать по одному вопросу
-и не более двух discovery-вопросов до краткого мягкого предложения
-demo/встречи. Если intent очевиден раньше, переходить к value/offer без
-анкеты.</p>
+<p>Первый ответ об отрасли или бизнесе всегда получает одну canonical
+assistant response: дословный attributed hook, затем ровно два current
+server-owned 20-minute Moscow <code>displayLabel</code> и один вопрос
+выбора — без filler, повторного meeting intent или второго brain call.
+Brain предлагает <code>COLLECT_BOOKING</code>; server публикует ordered
+<code>DISCOVERY -&gt; VALUE -&gt; BOOKING_OFFER -&gt; COLLECT_BOOKING</code>
+и не разрешает другие skips.</p>
 <h3 id="value">VALUE</h3>
-<p>Структура:</p>
-<ol type="1">
-<li>пересказать pain одной фразой;</li>
-<li>описать релевантный workflow Botamin;</li>
-<li>привести один case claim с атрибуцией, если помогает;</li>
-<li>проверить интерес.</li>
-</ol>
-<p>Число 10–15 млн ₽ в месяц допустимо только в точной атрибуции: это
-сообщение пользовательского брифа Botamin о прошлых результатах
-компаний, без независимой проверки, гарантии, прогноза или обещания
-собеседнику.</p>
+<p>В canonical discovery response используется только hook: «По
+пользовательскому брифу Botamin, в этой отрасли были случаи: компании с
+AI-агентами увеличивали выручку на 10–15 миллионов рублей ежемесячно;
+без гарантий». Другой case claim или число запрещены.</p>
 <h3 id="objection">OBJECTION</h3>
 <p>Алгоритм:</p>
 <ol type="1">
@@ -2566,20 +2562,18 @@ demo/встречи. Если intent очевиден раньше, перехо
 <li>предложить проверяемый следующий шаг.</li>
 </ol>
 <h3 id="booking_offer">BOOKING_OFFER</h3>
-<p>Не говорить «давайте созвонимся» без value bridge.</p>
-<blockquote>
-<p>Похоже, у вас есть конкретный сценарий для пилота. Могу зафиксировать
-короткую демонстрацию с коллегой, чтобы он пришёл уже с вариантом
-процесса. Записать?</p>
-</blockquote>
+<p>Два current 20-minute Moscow candidates в canonical discovery response
+являются offer; отдельная filler-реплика или повторное согласие не
+нужны.</p>
 <h3 id="collect_booking">COLLECT_BOOKING</h3>
-<p>После согласия использовать ровно два current candidates из server
-draft; каждый содержит concrete Moscow date/time. Это текущие внутренние
-alternatives, а не global availability. Без preference это
-morning+evening. Typed/spoken time-band, rejection и supported concrete
-date+time requests проходят один bounded parser; concrete request
-получает exact permitted + alternative либо two nearest internal starts.
-Missing/ambiguous date or time требует clarification.</p>
+<p>Следующий typed/spoken turn сразу принимает выбор одного из двух уже
+предложенных current candidates из server draft; каждый содержит
+concrete Moscow date/time. Это текущие внутренние alternatives, а не
+global availability. Без preference это morning+evening. Time-band,
+rejection и supported concrete date+time requests проходят один bounded
+parser; concrete request получает exact permitted + alternative либо two
+nearest internal starts. Missing/ambiguous date or time требует
+clarification.</p>
 <p>Обязательный набор: accepted name, company, working email, phone or
 Telegram, one current candidate, and contact consent. Spoken and typed
 turns merge quoted fact proposals into the same durable

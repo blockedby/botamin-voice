@@ -48,11 +48,11 @@ Asset не содержит visitor data: администратор отдел�
 
 ### DISCOVERY
 
-Сначала выяснить отрасль или бизнес одним вопросом. Прямой meeting intent сохраняется, но не разрешает `GREETING -> BOOKING_OFFER` или `DISCOVERY -> BOOKING_OFFER` и не открывает slot context до завершённых discovery и value.
+Сначала выяснить отрасль или бизнес одним вопросом. `GREETING` никогда не получает slot context. Первый ответ об отрасли или бизнесе всегда получает одну canonical assistant response: дословный attributed hook, затем ровно два текущих server-owned 20-minute Moscow `displayLabel` и один вопрос выбора — без filler, повторного meeting intent или второго brain call. Brain предлагает `COLLECT_BOOKING`, а server применяет и публикует только эту ordered compound sequence: `DISCOVERY -> VALUE -> BOOKING_OFFER -> COLLECT_BOOKING`.
 
 ### VALUE
 
-Использовать только канонический hook, без другого кейса или числа:
+В canonical discovery response использовать только этот hook, без другого кейса или числа:
 
 > По пользовательскому брифу Botamin, в этой отрасли были случаи: компании с AI-агентами увеличивали выручку на 10–15 миллионов рублей ежемесячно; без гарантий.
 
@@ -66,13 +66,11 @@ Asset не содержит visitor data: администратор отдел�
 
 ### BOOKING_OFFER
 
-Только после discovery и канонического value hook предложить 20-минутную видеовстречу с экспертом. Нельзя обещать звонок или callback: агент работает только в текущей сессии сайта.
-
-> Согласуем двадцатиминутную видеовстречу с экспертом?
+Два текущих 20-minute Moscow candidates в canonical discovery response являются offer; отдельная filler-реплика или повторное согласие не нужны. Нельзя обещать звонок или callback: агент работает только в текущей сессии сайта.
 
 ### COLLECT_BOOKING
 
-После согласия использовать ровно два current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Typed/spoken time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
+Следующий typed/spoken turn сразу принимает выбор одного из двух уже предложенных current candidates из server draft; каждый содержит concrete Moscow date/time. Это текущие внутренние alternatives, а не global availability. Без preference это morning+evening. Time-band, rejection и supported concrete date+time requests проходят один bounded parser; concrete request получает exact permitted + alternative либо two nearest internal starts. Missing/ambiguous date or time требует clarification.
 
 Обязательный набор: accepted name, company, working email, phone or Telegram, one current candidate, and contact consent. Spoken and typed turns merge quoted fact proposals into the same durable `conversation_contexts.draft_json`. New conflicting values produce bounded explicit options instead of silent overwrite.
 

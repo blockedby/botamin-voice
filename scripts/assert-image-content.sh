@@ -33,6 +33,20 @@ docker run --rm --entrypoint sh "$image" -eu -c '
   test ! -e /codex-home/auth.json
 '
 
+for service_tier in '' priority; do
+  set +e
+  docker run --rm \
+    -e CODEX_EFFORT=high \
+    -e "CODEX_SERVICE_TIER=$service_tier" \
+    "$image" true >/dev/null 2>&1
+  status=$?
+  set -e
+  if [ "$status" -ne 64 ]; then
+    printf '%s\n' "Image entrypoint must reject non-low CODEX_EFFORT before app startup (tier=${service_tier:-standard}); got $status." >&2
+    exit 1
+  fi
+done
+
 for kind in stt tts; do
   source_path="scripts/openrouter-${kind}-smoke.ts"
   image_path="/app/$source_path"

@@ -83,7 +83,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 - **FR-BRAIN-005:** ответы проходят speech sanitizer перед TTS.
 - **FR-BRAIN-006:** system/product/conversation prompts загружаются из Markdown.
 - **FR-BRAIN-007:** tool mode имеет feature flag: `dynamic` и стабильный fallback `envelope`.
-- **FR-BRAIN-008:** reasoning effort задаётся конфигурацией; стартовый профиль Luna использует минимальный уровень, который проходит quality evals.
+- **FR-BRAIN-008:** reasoning effort зафиксирован exact `low`: отсутствие значения default-ится в `low`, любое иное значение отклоняется до запуска Codex process для standard и priority.
 - **FR-BRAIN-009:** каждый turn получает server-owned `currentInstant`, текущую московскую дату и день недели, parsed time-of-day/concrete-date-time request и ровно два structured meeting candidates с concrete Moscow date/time labels.
 - **FR-BRAIN-010:** cadence умеренно проактивен: один вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting offer, без повторного давления после ясного отказа.
 - **FR-BRAIN-011:** ordinary spoken reply uses concise natural Russian: usually no more than two short sentences/about twelve seconds, one useful thought, and at most one question; filler acknowledgements and invented progress are forbidden.

@@ -334,6 +334,8 @@ export class CodexAppServerBrain implements BrainPort {
 	private runtimeAgentsPath: string | undefined;
 
 	constructor(private readonly options: CodexBrainOptions) {
+		if (options.effort !== "low")
+			throw new Error("Codex reasoning effort must be exactly low");
 		if (options.serviceTier !== undefined && options.serviceTier !== "priority")
 			throw new Error("Codex service tier must be empty or priority");
 		this.serviceTier = options.serviceTier;
@@ -495,7 +497,7 @@ export class CodexAppServerBrain implements BrainPort {
 					sandboxPolicy: { type: "readOnly", networkAccess: false },
 					environments: [],
 					model: this.options.model,
-					effort: this.options.effort,
+					effort: "low",
 					...(this.serviceTier ? { serviceTier: this.serviceTier } : {}),
 					...(this.options.toolMode === "envelope"
 						? { outputSchema: BRAIN_ENVELOPE_OUTPUT_SCHEMA }
@@ -635,14 +637,14 @@ export class CodexAppServerBrain implements BrainPort {
 				);
 				const model = models.data.find(
 					(entry) =>
-						entry.id === this.options.model ||
+						entry.id === this.options.model &&
 						entry.model === this.options.model,
 				);
 				if (model) {
 					const effortSupported =
 						!model.supportedReasoningEfforts ||
 						model.supportedReasoningEfforts.some(
-							(entry) => entry.reasoningEffort === this.options.effort,
+							(entry) => entry.reasoningEffort === "low",
 						);
 					const tierSupported =
 						this.serviceTier === undefined ||
@@ -1059,6 +1061,8 @@ export function createCodexBrainFromEnv(
 		throw new Error("CODEX_HOME must be an absolute path");
 	if (!runtimeCwd || !isAbsolute(runtimeCwd))
 		throw new Error("CODEX_CWD must be an absolute path");
+	const effort = env.CODEX_EFFORT ?? "low";
+	if (effort !== "low") throw new Error("CODEX_EFFORT must be exactly low");
 	const serviceTier = env.CODEX_SERVICE_TIER;
 	if (
 		serviceTier !== undefined &&
@@ -1082,7 +1086,7 @@ export function createCodexBrainFromEnv(
 		throw new Error("CODEX_TOOL_MODE must be dynamic or envelope");
 	return new CodexAppServerBrain({
 		model: env.CODEX_MODEL ?? "gpt-5.6-luna",
-		effort: env.CODEX_EFFORT ?? "low",
+		effort: "low",
 		...(serviceTier === "priority" ? { serviceTier } : {}),
 		toolMode,
 		runtimeCwd,

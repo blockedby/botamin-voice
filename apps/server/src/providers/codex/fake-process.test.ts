@@ -1649,6 +1649,22 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		brains.push(defaultBrain);
 	});
 
+	test("environment factory rejects non-low effort before process startup for standard and priority", async () => {
+		const { cwd } = await runtime();
+		for (const serviceTier of [undefined, "priority"] as const) {
+			for (const effort of ["medium", "high", "xhigh", " low", "low "]) {
+				expect(() =>
+					createCodexBrainFromEnv({
+						CODEX_HOME: "/safe/codex-home",
+						CODEX_CWD: cwd,
+						CODEX_EFFORT: effort,
+						...(serviceTier ? { CODEX_SERVICE_TIER: serviceTier } : {}),
+					}),
+				).toThrow("CODEX_EFFORT must be exactly low");
+			}
+		}
+	});
+
 	test("environment factory rejects non-priority service tiers before process startup", async () => {
 		const { cwd } = await runtime();
 		for (const serviceTier of ["fast", "standard", " priority"]) {
@@ -1665,6 +1681,13 @@ describe("Codex app-server brain with deterministic fake process", () => {
 	test("health fails safely without subscription auth and checks the exact configured model", async () => {
 		const { cwd, agentsPath } = await runtime();
 		let authenticated = false;
+		let models: unknown[] = [
+			{
+				id: "gpt-5.6-luna",
+				model: "gpt-5.6-luna",
+				supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+			},
+		];
 		const { brain } = createBrain(cwd, async (message, process) => {
 			if (await standardResponse(message, process, agentsPath)) return;
 			if (message.method === "account/read")
@@ -1680,16 +1703,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 			if (message.method === "model/list")
 				await process.send({
 					id: message.id,
-					result: {
-						data: [
-							{
-								id: "gpt-5.6-luna",
-								model: "gpt-5.6-luna",
-								supportedReasoningEfforts: [{ reasoningEffort: "low" }],
-							},
-						],
-						nextCursor: null,
-					},
+					result: { data: models, nextCursor: null },
 				});
 		});
 		expect(await brain.health()).toEqual({
@@ -1698,6 +1712,36 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		});
 		authenticated = true;
 		expect(await brain.health()).toEqual({ status: "healthy" });
+		for (const contradictory of [
+			{ id: "gpt-5.6-luna", model: "other-model" },
+			{ id: "other-model", model: "gpt-5.6-luna" },
+		]) {
+			models = [
+				{
+					...contradictory,
+					supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+				},
+			];
+			expect(await brain.health()).toEqual({
+				status: "unavailable",
+				code: "CODEX_MODEL_OR_EFFORT_UNAVAILABLE",
+			});
+		}
+		for (const missingIdentity of [
+			{ id: "gpt-5.6-luna" },
+			{ model: "gpt-5.6-luna" },
+		]) {
+			models = [
+				{
+					...missingIdentity,
+					supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+				},
+			];
+			expect(await brain.health()).toEqual({
+				status: "unavailable",
+				code: "CODEX_PREFLIGHT_FAILED",
+			});
+		}
 	});
 
 	test("priority readiness requires its advertisement on the exact Luna model", async () => {
@@ -1722,6 +1766,27 @@ describe("Codex app-server brain with deterministic fake process", () => {
 				expected: { status: "healthy" },
 			},
 			{
+				name: "contradictory model alias",
+				models: [
+					{
+						id: "gpt-5.6-luna",
+						model: "other-model",
+						supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+						serviceTiers: [
+							{
+								id: "priority",
+								name: "Fast",
+								description: "1.5x speed, increased usage",
+							},
+						],
+					},
+				],
+				expected: {
+					status: "unavailable",
+					code: "CODEX_MODEL_OR_TIER_UNAVAILABLE",
+				},
+			},
+			{
 				name: "legacy speed field only",
 				models: [
 					{
@@ -1734,6 +1799,26 @@ describe("Codex app-server brain with deterministic fake process", () => {
 				expected: {
 					status: "unavailable",
 					code: "CODEX_MODEL_OR_TIER_UNAVAILABLE",
+				},
+			},
+			{
+				name: "missing model identity field",
+				models: [
+					{
+						id: "gpt-5.6-luna",
+						supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+						serviceTiers: [
+							{
+								id: "priority",
+								name: "Fast",
+								description: "1.5x speed, increased usage",
+							},
+						],
+					},
+				],
+				expected: {
+					status: "unavailable",
+					code: "CODEX_PREFLIGHT_FAILED",
 				},
 			},
 			{

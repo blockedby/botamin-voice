@@ -72,6 +72,30 @@ describe("validated runtime configuration", () => {
 		).toThrow();
 	});
 
+	test("defaults missing reasoning effort to low and rejects every non-low value", () => {
+		const withoutEffort = { ...validEnv };
+		delete (withoutEffort as Partial<typeof validEnv>).CODEX_EFFORT;
+		expect(createRuntimeConfig(withoutEffort).brain.effort).toBe("low");
+		for (const effort of ["medium", "high", "xhigh", " low", "low ", ""]) {
+			const env = { ...validEnv, CODEX_EFFORT: effort };
+			if (effort === "") {
+				delete (env as Partial<typeof validEnv>).CODEX_EFFORT;
+				expect(createRuntimeConfig(env).brain.effort).toBe("low");
+			} else {
+				expect(() => createRuntimeConfig(env)).toThrow(
+					expect.objectContaining({ field: "CODEX_EFFORT" }),
+				);
+			}
+		}
+		expect(() =>
+			createRuntimeConfig({
+				...validEnv,
+				CODEX_SERVICE_TIER: "priority",
+				CODEX_EFFORT: "high",
+			}),
+		).toThrow(expect.objectContaining({ field: "CODEX_EFFORT" }));
+	});
+
 	test("accepts only an explicit priority Codex service tier", () => {
 		expect(
 			createRuntimeConfig({ ...validEnv, CODEX_SERVICE_TIER: "priority" }).brain

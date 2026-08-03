@@ -78,6 +78,16 @@ function immediateScheduler() {
 }
 
 describe("proactive static greeting asset", () => {
+	test("keeps concise Botamin identity copy with exactly one business question", () => {
+		expect(PROACTIVE_GREETING_COPY).toBe(
+			"Здравствуйте! Я голосовой AI-консультант Botamin. Чем занимается ваша компания? Подтвердите условия, и начнём.",
+		);
+		expect(PROACTIVE_GREETING_COPY.match(/\?/gu)).toHaveLength(1);
+		expect(
+			PROACTIVE_GREETING_COPY.trim().split(/\s+/u).length,
+		).toBeLessThanOrEqual(22);
+	});
+
 	test("ships one bounded complete product-owned MP3", async () => {
 		const file = Bun.file(
 			resolve(

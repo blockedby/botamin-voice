@@ -301,23 +301,26 @@ export const BrainTurnInputSchema = z
 	.strict()
 	.superRefine((input, refinement) => {
 		if (
-			(input.stage === "GREETING" || input.stage === "DISCOVERY") &&
+			input.stage === "GREETING" &&
 			input.schedulingContext.candidateMeetingSlots.length !== 0
 		) {
 			refinement.addIssue({
 				code: "custom",
 				path: ["schedulingContext", "candidateMeetingSlots"],
-				message: "Scheduling candidates require completed discovery and value",
+				message: "Greeting must not expose scheduling candidates",
 			});
 		}
 		if (
-			(input.stage === "BOOKING_OFFER" || input.stage === "COLLECT_BOOKING") &&
+			(input.stage === "DISCOVERY" ||
+				input.stage === "BOOKING_OFFER" ||
+				input.stage === "COLLECT_BOOKING") &&
 			input.schedulingContext.candidateMeetingSlots.length !== 2
 		) {
 			refinement.addIssue({
 				code: "custom",
 				path: ["schedulingContext", "candidateMeetingSlots"],
-				message: "Booking stages require exactly two server candidates",
+				message:
+					"Discovery and booking stages require exactly two server candidates",
 			});
 		}
 	});

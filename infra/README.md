@@ -27,8 +27,9 @@ The deployment wrappers require a nonblank OpenRouter key. Raw unconfigured
 unready rather than receiving a hidden credential. `CODEX_TOOL_MODE=envelope`
 is the safe default because environment-only app wiring cannot inject the
 awaited backend executor required by A3 dynamic mode. Codex stays on
-`gpt-5.6-luna` with reasoning effort `low`; Luna does not support disabled
-reasoning (`low|medium|high|xhigh|max` are advertised). Leave
+`gpt-5.6-luna` with exact reasoning effort `low`; missing defaults to `low`,
+and every non-`low` value is rejected before the Codex process starts for
+standard and priority. Luna does not support disabled reasoning. Leave
 `CODEX_SERVICE_TIER=` empty for portable standard service, or let the local
 subscription owner set exact `priority`. Pinned Codex CLI 0.146.0 advertises
 priority as Fast/1.5x speed with increased subscription usage; it has no latency

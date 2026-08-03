@@ -551,7 +551,16 @@ test("qualification ordering and field limits use content plus durable evidence"
 		"Сколько менеджеров продаж работает с входящими лидами?",
 	]) {
 		const prebooking = structuredClone(original);
-		const assistant = prebooking.find((event) => event.sequence === 7);
+		const discovery = prebooking.find(
+			(event) => event.semantics?.includes("discovery_context") ?? false,
+		);
+		assert.ok(discovery);
+		const assistant = prebooking.find(
+			(event) =>
+				event.type === "message" &&
+				event.role === "assistant" &&
+				event.sequence > discovery.sequence,
+		);
 		assert.ok(assistant);
 		assistant.text = question;
 		delete assistant.semantics;
@@ -850,10 +859,23 @@ test("cadence, refusal, supplied slots, required contacts, input mode, and conci
 		);
 
 	const thirdQuestion = structuredClone(original);
-	const preOfferUser = thirdQuestion.find((event) => event.sequence === 9);
+	const preOfferUser = thirdQuestion.find(
+		(event) =>
+			event.type === "message" &&
+			event.role === "user" &&
+			event.sequence >
+				(thirdQuestion.find((candidate) =>
+					candidate.semantics?.includes("discovery_context"),
+				)?.sequence ?? 0),
+	);
 	assert.ok(preOfferUser);
 	preOfferUser.role = "assistant";
 	preOfferUser.text = "Какой канал даёт больше всего входящих лидов?";
+	const canonical = thirdQuestion.find((event) =>
+		event.claimRefs?.includes("user-brief-revenue-10-15m-monthly"),
+	);
+	assert.ok(canonical);
+	canonical.text = `${canonical.text} Как вы обрабатываете заявки?`;
 	assert.ok(codesFor(scenario, thirdQuestion).has("discovery_cadence"));
 
 	const missingOffer = structuredClone(original);

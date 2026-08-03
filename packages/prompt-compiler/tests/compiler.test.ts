@@ -185,7 +185,7 @@ test("enforces per-file and compiled-bundle size limits", async () => {
 
 	const oversizedBundle = await fixtureRoot(
 		(_relativePath, source) =>
-			`${source.toString("utf8")}\n${"x".repeat(6_500)}`,
+			`${source.toString("utf8")}\n${"x".repeat(6_000)}`,
 	);
 	await assert.rejects(
 		compilePromptBundle({

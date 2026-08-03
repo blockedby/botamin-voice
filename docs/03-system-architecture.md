@@ -441,7 +441,7 @@ ABANDONED_SESSION_TIMEOUT_MS=10000
 # Keep CODEX_HOME outside this source repository and use an absolute path.
 BRAIN_PROVIDER=codex-subscription
 CODEX_MODEL=gpt-5.6-luna
-# Luna reasoning cannot be disabled; low is the lowest supported effort.
+# Missing defaults to low; any non-low value fails before Codex starts.
 CODEX_EFFORT=low
 # Empty is portable standard service; exact priority opts into Fast routing.
 CODEX_SERVICE_TIER=

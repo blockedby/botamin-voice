@@ -180,7 +180,7 @@ export function buildBrainContext(input: BrainContextInput): BrainTurnInput {
 			input.rejectedTimeOfDayPreferences,
 			input.candidateMeetingSlots,
 			input.concreteRequest,
-			input.stage !== "GREETING" && input.stage !== "DISCOVERY",
+			input.stage !== "GREETING",
 		),
 		allowedActions: [...new Set(input.allowedActions)].sort(),
 		promptVersion: input.promptVersion,

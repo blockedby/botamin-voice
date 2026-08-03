@@ -6,7 +6,7 @@
 
 **Tag state:** pending/recommendation only. No tag, PR, registry digest, or predecessor image is asserted by this handoff.
 
-**Natural-voice implementation HEAD:** `739cb18`. This docs handoff does not claim final review closure.
+**Executable natural-voice implementation through:** `ac965d0`; the following documentation/evidence commit is intentionally separate. The PR merge commit/tag will be the final release identity.
 
 **Scope:** local hosting on one trusted machine. This is not target-VPS or public TLS/WSS acceptance.
 
@@ -21,7 +21,7 @@
 - TTS redacts contacts by default. The only exception is an exact server-approved contact from accepted durable draft facts or a committed booking while contact-processing consent is active;
 - ordinary speech is concise/natural; current + one ordered TTS prefetch feeds provider-neutral complete MP3/WAV rendering, gapless scheduled playback, and a four-segment/20 MB credit window with at most two decoded;
 - output `AudioContext` is created/resumed in the consent gesture before mic/network awaits;
-- 16 committed same-origin reaction MP3s are capability/stage/privacy gated and delayed 350 ms. Runtime provider calls for reactions are zero, and they have no transcript/state/provider/business effect;
+- a 16-clip same-origin reaction corpus is capability/stage/privacy gated and delayed 350 ms. Current runtime exposes only the non-claiming neutral clip; claim-bearing progress clips require a future explicit trusted server operation signal. Runtime provider calls for reactions are zero, and they have no transcript/state/provider/business effect;
 - default TTS remains exact xAI/eve/MP3. Gemini is an explicit four-env Preview profile; provider PCM is wrapped server-side as canonical complete WAV, and style is fixed server-owned neutral/curious/serious/excited with sensitive facts always neutral and visible transcript plain.
 
 No duplicate meeting table, external availability query, calendar event/invite, or CRM record is introduced.
@@ -30,7 +30,7 @@ No duplicate meeting table, external availability query, calendar event/invite, 
 
 Pre-closure implementation evidence after Gemini production wiring and v2 protocol compatibility closure (not final review closure and allowed to change after review):
 
-- provider-independent suite: **807 passed, 0 failed across 72 files, 16,794 assertions**;
+- provider-independent suite: **815 passed, 0 failed across 72 files, 16,910 assertions**;
 - Chromium desktop/mobile Playwright **landing smoke: 2/2 passed**. It covers responsive/pre-consent boundaries, not a full voice booking journey;
 - fixture/eval paths are credential-free with zero provider calls; this docs handoff does not claim a fresh fixture recount or real-Luna run;
 - deterministic coverage includes natural prompts, two-request ordered prefetch, provider-neutral MP3/WAV rendering, bounded gapless playback, reaction/style policy, exact TTS profiles, and migration/cutover behavior;

@@ -308,7 +308,7 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 Pre-closure implementation evidence supplied for the natural-voice/Gemini HEAD (not final review closure and allowed to change after review):
 
 - [x] Credential-free fixture/eval paths make zero provider calls; this docs change does not claim a fresh fixture recount or real-Luna run.
-- [x] Provider-independent repository suite after Gemini wiring and v2 protocol closure: **807 passed, 0 failed across 72 files, 16,794 assertions**.
+- [x] Provider-independent repository suite after Gemini wiring, v2 protocol, reaction/reconnect, streaming-prefetch/tag, mute, and MP3-validation closure: **815 passed, 0 failed across 72 files, 16,910 assertions**.
 - [x] Chromium desktop/mobile landing smoke: **2/2 passed** through the shared harness. This proves responsive/pre-consent boundaries only, not a full voice booking journey.
 - [x] Focused deterministic coverage includes natural prompts, ordered two-request TTS prefetch, canonical WAV, provider-neutral playback, bounded credit flow, gesture ownership, local reactions, trusted style policy, profile validation, and migration/cutover behavior.
 - [ ] Docker Compose cutover against an owner-configured live local volume and credentials was not run by the documentation handoff; the wrapper is covered statically/fake-Docker and DB tests.

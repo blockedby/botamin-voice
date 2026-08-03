@@ -5,11 +5,14 @@
 
 # Dependencies and build output
 node_modules/
+/node_modules
+
 dist/
 coverage/
 
 # Local runtime state
 .worktrees/
+.runtime/dialogues/
 .runtime/
 data/
 *.db

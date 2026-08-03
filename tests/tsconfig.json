@@ -23,6 +23,8 @@
 		"../apps/web/src/components/voiceTypes.ts",
 		"../packages/contracts/src/**/*.ts",
 		"../packages/test-fixtures/src/**/*.ts",
+		"../scripts/dialogue-export-reader.ts",
+		"../scripts/dialogues-export.ts",
 		"../scripts/materialize-compose-secrets.ts"
 	]
 }

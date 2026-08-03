@@ -69,6 +69,18 @@ Run the canonical credential-free test suite with `bun run test`; it excludes ig
 
 ## Local operations
 
+### Owner dialogue export
+
+```bash
+bun run dialogues:export
+# Optional, mutually exclusive selectors:
+bun run dialogues:export --conversation <ULID-or-UUIDv7>
+bun run dialogues:export --limit 10
+bun run dialogues:export --all
+```
+
+This explicit manual command reads a consistent, read-only SQLite snapshot from the running Compose app (or a direct local `DATABASE_URL`) and atomically writes protected Markdown under `.runtime/dialogues/`. The default is the latest completed/started conversation; `--limit` is `1..100`, while `--all` fails above 100. Only aggregate status/count/path reaches the terminal—never transcript text. Exports can contain visitor PII, are owner-managed separately from the DB's 30-day transcript retention, and must be deleted separately. See [`docs/12-dialogue-export.md`](docs/12-dialogue-export.md) for exclusions and safeguards.
+
 ```bash
 # Service state
 docker compose ps
@@ -114,6 +126,7 @@ Never use `docker compose down -v` on a host with bookings or Codex auth. Restor
 | `docs/08-testing-and-acceptance.md` | tests and local/later release gates |
 | `docs/09-agent-task-plan.md` | task dependencies and T40 status |
 | `docs/11-local-release-handoff.md` | local RC runbook, checklist, limitations, rollback |
+| `docs/12-dialogue-export.md` | manual protected owner transcript export |
 | `evidence/T30-observed-local-voice-smoke-2026-07-31.md` | historical redacted owner-observed local provider path |
 | `FULL_SPEC.md` / `technical-spec.html` | generated specification; not updated by this docs-only change |
 

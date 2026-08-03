@@ -20,9 +20,11 @@ import { fileURLToPath } from "node:url";
 import {
 	ATTRIBUTED_REVENUE_CLAIM_LINES,
 	BOOKING_ORDER_SENTENCE,
+	CANONICAL_REVENUE_HOOK,
 	compilePromptBundle,
 	FORBIDDEN_NATURAL_DIALOGUE_GUIDANCE,
 	FORBIDDEN_POLICY_PHRASES,
+	FORBIDDEN_STALE_SALES_GUIDANCE,
 	MAX_FILE_BYTES,
 	NATURAL_DIALOGUE_EXAMPLES,
 	PROMPT_ORDER,
@@ -256,6 +258,24 @@ test("rejects invalid UTF-8, secret-like assignments, and numeric currency price
 		);
 	}
 
+	const piggybackedPrice = await fixtureRoot((relativePath, source) =>
+		relativePath === "prompts/product.md"
+			? source
+					.toString("utf8")
+					.replace(
+						CANONICAL_REVENUE_HOOK,
+						`${CANONICAL_REVENUE_HOOK} Стоимость: 100 RUB`,
+					)
+			: source,
+	);
+	await assert.rejects(
+		compilePromptBundle({
+			sourceRoot: piggybackedPrice,
+			runtimeDir: await runtimeDirectory(),
+		}),
+		/numeric currency price/i,
+	);
+
 	const unsafeRevenue = await fixtureRoot((relativePath, source) =>
 		relativePath === "knowledge/cases.md"
 			? source
@@ -392,11 +412,57 @@ test("rejects stale robotic and unsafe dialogue guidance in active and starter p
 	}
 });
 
+test("rejects call, callback, personal-name, connection, and long-form guidance", async () => {
+	const promptPaths = PROMPT_ORDER.filter((path) =>
+		path.startsWith("prompts/"),
+	);
+	for (const relativePath of promptPaths) {
+		for (const prefix of ["", "starter"]) {
+			const source = (
+				await readFile(join(sourceRoot, prefix, relativePath), "utf8")
+			).toLocaleLowerCase("ru-RU");
+			for (const phrase of FORBIDDEN_STALE_SALES_GUIDANCE) {
+				for (const line of source.split("\n")) {
+					if (!line.includes(phrase)) continue;
+					assert.match(
+						line,
+						/(?:не\s+(?:говори|используй|называй|обещай)|если\s+посетитель\s+говорит|плохо:)/u,
+						`${join(prefix, relativePath)} contains unbounded stale guidance: ${phrase}`,
+					);
+				}
+			}
+		}
+	}
+
+	for (const phrase of FORBIDDEN_STALE_SALES_GUIDANCE) {
+		const fixture = await fixtureRoot((relativePath, source) =>
+			relativePath === "prompts/system.md"
+				? `${source.toString("utf8")}\n${phrase}\n`
+				: source,
+		);
+		await assert.rejects(
+			compilePromptBundle({
+				sourceRoot: fixture,
+				runtimeDir: await runtimeDirectory(),
+			}),
+			/stale call, personal-name, or human-identity guidance/i,
+		);
+	}
+
+	const greeting = await readFile(
+		join(sourceRoot, "prompts/system.md"),
+		"utf8",
+	);
+	assert.doesNotMatch(greeting, /(?:меня зовут|я\s+Анна|оператор\s+Анна)/iu);
+});
+
 test("keeps bounded natural alternatives state-aware, concise, and synchronized", async () => {
 	assert.deepEqual(
 		NATURAL_DIALOGUE_EXAMPLES.map((example) => example.name),
 		[
 			"brief discovery",
+			"inaudible recovery",
+			"off-topic return",
 			"objection",
 			"server-supplied scheduling",
 			"exact booking confirmation",
@@ -430,6 +496,20 @@ test("keeps bounded natural alternatives state-aware, concise, and synchronized"
 		);
 	}
 
+	const inaudible = NATURAL_DIALOGUE_EXAMPLES.find(
+		(example) => example.name === "inaudible recovery",
+	)?.spokenText;
+	assert.doesNotMatch(
+		inaudible ?? "",
+		/(?:перезвон|позвон|связь прервалась|соединени|я вас не слышу)/iu,
+	);
+	const offTopic = NATURAL_DIALOGUE_EXAMPLES.find(
+		(example) => example.name === "off-topic return",
+	)?.spokenText;
+	assert.doesNotMatch(
+		offTopic ?? "",
+		/(?:Рада это слышать|у меня всё хорошо|Понимаю)/iu,
+	);
 	const scheduling = NATURAL_DIALOGUE_EXAMPLES.find(
 		(example) => example.name === "server-supplied scheduling",
 	);
@@ -617,7 +697,8 @@ test("every numeric published case claim has a named source context", async () =
 		assert.match(section, /\*\*Required attribution:\*\*[^\n]+/u);
 		if (section.startsWith("Пользовательский бриф Botamin")) {
 			assert.match(section, /пользовательск(?:ом|ий) брифе? Botamin/iu);
-			assert.match(section, /не гарантия, прогноз или переносимый результат/iu);
+			assert.match(section, /без гарантий/iu);
+			assert.match(section, /с AI-агентами увеличивали выручку/iu);
 		} else {
 			assert.match(section, /опубликованн(?:ом|ый) кейс/u);
 		}

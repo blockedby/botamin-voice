@@ -158,9 +158,9 @@ export const SchedulingContextSchema = z
 			.max(1)
 			.default([]),
 		concreteRequestInterpretation: ConcreteSchedulingInterpretationSchema,
-		candidateMeetingSlots: z.tuple([
-			SchedulingCandidateSchema,
-			SchedulingCandidateSchema,
+		candidateMeetingSlots: z.union([
+			z.tuple([]),
+			z.tuple([SchedulingCandidateSchema, SchedulingCandidateSchema]),
 		]),
 	})
 	.strict()
@@ -206,9 +206,11 @@ export const SchedulingContextSchema = z
 				});
 			}
 		}
+		const [firstCandidate, secondCandidate] = context.candidateMeetingSlots;
 		if (
-			context.candidateMeetingSlots[0].meetingSlot.startAt ===
-			context.candidateMeetingSlots[1].meetingSlot.startAt
+			firstCandidate &&
+			secondCandidate &&
+			firstCandidate.meetingSlot.startAt === secondCandidate.meetingSlot.startAt
 		) {
 			refinement.addIssue({
 				code: "custom",
@@ -219,6 +221,14 @@ export const SchedulingContextSchema = z
 
 		const concrete = context.concreteRequestInterpretation;
 		if (concrete.kind === "none") return;
+		if (context.candidateMeetingSlots.length === 0) {
+			refinement.addIssue({
+				code: "custom",
+				path: ["concreteRequestInterpretation"],
+				message: "A concrete interpretation requires scheduling candidates",
+			});
+			return;
+		}
 		const candidateLocalStarts = context.candidateMeetingSlots.map(
 			(candidate) => {
 				const local = new Date(
@@ -288,7 +298,29 @@ export const BrainTurnInputSchema = z
 		allowedActions: z.array(BrainActionNameSchema).max(2),
 		promptVersion: z.string().regex(/^[a-f0-9]{64}$/i),
 	})
-	.strict();
+	.strict()
+	.superRefine((input, refinement) => {
+		if (
+			(input.stage === "GREETING" || input.stage === "DISCOVERY") &&
+			input.schedulingContext.candidateMeetingSlots.length !== 0
+		) {
+			refinement.addIssue({
+				code: "custom",
+				path: ["schedulingContext", "candidateMeetingSlots"],
+				message: "Scheduling candidates require completed discovery and value",
+			});
+		}
+		if (
+			(input.stage === "BOOKING_OFFER" || input.stage === "COLLECT_BOOKING") &&
+			input.schedulingContext.candidateMeetingSlots.length !== 2
+		) {
+			refinement.addIssue({
+				code: "custom",
+				path: ["schedulingContext", "candidateMeetingSlots"],
+				message: "Booking stages require exactly two server candidates",
+			});
+		}
+	});
 
 export const BrainDeltaSchema = z.discriminatedUnion("type", [
 	z

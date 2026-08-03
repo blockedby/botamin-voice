@@ -264,8 +264,7 @@ const BOOKING_FAILURE =
 	"Не получилось сохранить данные, поэтому я не буду подтверждать бронь. Проверьте контакт и попробуйте ещё раз.";
 const QUALIFICATION_FAILURE =
 	"Основные данные уже сохранены. Дополнительные ответы сейчас не удалось обновить, и на этом можно закончить.";
-const MONTHLY_LEAD_VOLUME_QUESTION =
-	"Сколько входящих лидов приходит за месяц?";
+const MONTHLY_LEAD_VOLUME_QUESTION = "Сколько заявок вы получаете за месяц?";
 const SALES_MANAGER_COUNT_QUESTION =
 	"Сколько менеджеров по продажам работает в вашей команде?";
 const DAILY_LEAD_BASIS_QUESTION = "Это по рабочим или календарным дням?";
@@ -2200,8 +2199,6 @@ export class ConversationOrchestrator {
 			case "GREETING->DISCOVERY":
 				event = { type: "discovery_requested" };
 				break;
-			case "GREETING->BOOKING_OFFER":
-			case "DISCOVERY->BOOKING_OFFER":
 			case "VALUE->BOOKING_OFFER":
 			case "OBJECTION->BOOKING_OFFER":
 				event = { type: "booking_offered" };

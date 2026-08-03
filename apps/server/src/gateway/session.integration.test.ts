@@ -375,6 +375,8 @@ function createHarness(
 	});
 	if (options.collectBooking) {
 		expect(orchestrator.apply({ type: "connected" }).ok).toBe(true);
+		expect(orchestrator.apply({ type: "discovery_requested" }).ok).toBe(true);
+		expect(orchestrator.apply({ type: "value_ready" }).ok).toBe(true);
 		expect(orchestrator.apply({ type: "booking_offered" }).ok).toBe(true);
 		expect(orchestrator.apply({ type: "booking_accepted" }).ok).toBe(true);
 	}
@@ -700,6 +702,10 @@ describe("gateway fake full WebSocket path", () => {
 			{
 				name: "unrelated booking-offer stage",
 				advance(orchestrator: ConversationOrchestrator) {
+					expect(orchestrator.apply({ type: "discovery_requested" }).ok).toBe(
+						true,
+					);
+					expect(orchestrator.apply({ type: "value_ready" }).ok).toBe(true);
 					expect(orchestrator.apply({ type: "booking_offered" }).ok).toBe(true);
 				},
 				visitorText: "Расскажите об архитектуре без подбора времени.",

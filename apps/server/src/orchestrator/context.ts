@@ -138,6 +138,7 @@ export function buildSchedulingContext(
 	rejectedTimeOfDayPreferences: readonly MeetingTimeBand[],
 	candidateMeetingSlots: readonly [MeetingSlot, MeetingSlot],
 	concreteRequest: ConcreteMeetingRequestParseResult = { kind: "none" },
+	exposeCandidates = true,
 ): BrainTurnInput["schedulingContext"] {
 	if (!Number.isFinite(now.getTime()))
 		throw new TypeError("Expected a valid runtime clock instant");
@@ -146,16 +147,19 @@ export function buildSchedulingContext(
 		currentInstant: now.toISOString(),
 		moscowLocalDate: `${String(local.getUTCFullYear()).padStart(4, "0")}-${String(local.getUTCMonth() + 1).padStart(2, "0")}-${String(local.getUTCDate()).padStart(2, "0")}`,
 		moscowWeekday: WEEKDAYS[local.getUTCDay()],
-		timeOfDayPreference,
-		rejectedTimeOfDayPreferences,
-		concreteRequestInterpretation: concreteInterpretation(
-			concreteRequest,
-			candidateMeetingSlots,
-		),
-		candidateMeetingSlots: candidateMeetingSlots.map((meetingSlot) => ({
-			meetingSlot,
-			displayLabel: displayLabel(meetingSlot),
-		})),
+		timeOfDayPreference: exposeCandidates ? timeOfDayPreference : "none",
+		rejectedTimeOfDayPreferences: exposeCandidates
+			? rejectedTimeOfDayPreferences
+			: [],
+		concreteRequestInterpretation: exposeCandidates
+			? concreteInterpretation(concreteRequest, candidateMeetingSlots)
+			: { kind: "none" },
+		candidateMeetingSlots: exposeCandidates
+			? candidateMeetingSlots.map((meetingSlot) => ({
+					meetingSlot,
+					displayLabel: displayLabel(meetingSlot),
+				}))
+			: [],
 	});
 }
 
@@ -176,6 +180,7 @@ export function buildBrainContext(input: BrainContextInput): BrainTurnInput {
 			input.rejectedTimeOfDayPreferences,
 			input.candidateMeetingSlots,
 			input.concreteRequest,
+			input.stage !== "GREETING" && input.stage !== "DISCOVERY",
 		),
 		allowedActions: [...new Set(input.allowedActions)].sort(),
 		promptVersion: input.promptVersion,

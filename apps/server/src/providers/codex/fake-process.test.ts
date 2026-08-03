@@ -139,7 +139,7 @@ function input(overrides: Partial<BrainTurnInput> = {}): BrainTurnInput {
 		turnId: EXTERNAL_TURN_ID,
 		generationId: GENERATION_ID,
 		userText: "Здравствуйте",
-		stage: "DISCOVERY",
+		stage: "VALUE",
 		knownFacts: { useCases: [], painPoints: [], objections: [] },
 		booking: null,
 		schedulingContext: createTestSchedulingContext(),

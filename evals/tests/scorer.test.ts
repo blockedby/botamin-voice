@@ -1040,8 +1040,8 @@ test("the user-brief revenue claim requires exact attribution and no extra figur
 	for (const event of transferable) {
 		if ((event.claimRefs ?? []).length > 0 && event.text)
 			event.text = event.text.replace(
-				"не гарантия, прогноз или переносимый результат",
-				"гарантия и прогноз результата",
+				"без гарантий",
+				"мы гарантируем результат",
 			);
 	}
 	const transferCodes = codesFor(transferable);

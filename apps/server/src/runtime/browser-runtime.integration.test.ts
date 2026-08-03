@@ -273,6 +273,7 @@ describe("browser-to-production-runtime terminal ERROR cleanup", () => {
 			expect(brainInputs).toHaveLength(1);
 			expect(brainInputs[0]).toMatchObject({
 				userText: "Сегодня воскресенье, предложи встречу на сегодня",
+				stage: "GREETING",
 				schedulingContext: {
 					currentInstant: "2099-01-08T09:00:00.000Z",
 					moscowLocalDate: "2099-01-08",
@@ -280,11 +281,9 @@ describe("browser-to-production-runtime terminal ERROR cleanup", () => {
 					timeOfDayPreference: "none",
 				},
 			});
-			expect(
-				brainInputs[0]?.schedulingContext.candidateMeetingSlots.map(
-					(candidate) => candidate.meetingSlot.startAt,
-				),
-			).toEqual(["2099-01-09T06:00:00.000Z", "2099-01-09T13:00:00.000Z"]);
+			expect(brainInputs[0]?.schedulingContext.candidateMeetingSlots).toEqual(
+				[],
+			);
 
 			const replacement = await runtimeFetch("/api/v1/conversations", {
 				method: "POST",

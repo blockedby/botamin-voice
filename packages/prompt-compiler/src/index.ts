@@ -45,28 +45,35 @@ export const REQUIRED_POLICY_SENTENCES: Readonly<
 	Record<string, readonly string[]>
 > = {
 	"prompts/conversation-policy.md": [
-		"До краткого value statement и мягкого предложения встречи допустимо не более двух discovery-реплик и не более двух discovery-вопросов суммарно.",
-		"не позднее ответа на второй discovery-вопрос сделай краткое мягкое предложение показать Botamin или согласовать видео-встречу.",
+		"Прямой запрос встречи не пропускает discovery и value.",
+		"Обычная реплика — одно предложение из 6–14 русских слов; второе короткое предложение допустимо только для ответа и нового вопроса.",
+		"Обычная реплика — не более 22 слов и примерно 8 секунд речи; исключения — ровно два слота, точное подтверждение брони, раскрытие контакта, отказ или безопасность.",
+		"не предлагай встречу напрямую из `GREETING` или `DISCOVERY`.",
 		"Ясный отказ от предложения о следующем шаге сразу останавливает продажу.",
-		"Без отдельного запроса разрешения сразу спроси первое отсутствующее qualification-поле; если оба поля уже известны из server facts, ничего не спрашивай и заверши.",
 	],
 	"prompts/booking.md": [
-		"Только после согласия пользователя используй ровно два кандидата из `schedulingContext.candidateMeetingSlots`.",
+		"Только после discovery, value и согласия пользователя используй ровно два кандидата из `schedulingContext.candidateMeetingSlots`.",
 		"Представь их как две текущие внутренние альтернативы, а не как исчерпывающую внешнюю или календарную доступность; если часть дня не подходит, предложи назвать другую, чтобы server context обновил пару.",
 		"известно имя и компания;",
 		"есть рабочий email и хотя бы один дополнительный контакт: телефон или Telegram;",
 		"после правдивого подтверждения без отдельного запроса разрешения сразу задай первый вопрос только об отсутствующем qualification-поле; если оба поля уже известны из server facts, не задавай ничего и заверши;",
 	],
+	"prompts/system.md": [
+		"прямой запрос встречи не пропускает discovery и value.",
+		"Не можешь звонить, перезванивать, принимать звонки, просить позвонить тебе, переводить звонок, слышать вывод динамика браузера, отправлять будущие сообщения, напоминания или приглашения.",
+		"Если посетитель говорит «я вас не слышу», кратко скажи, что эту сессию сайта можно продолжить в тексте, затем повтори текущий pending question.",
+	],
 	"prompts/qualification.md": [
-		"месячный объём лидов или обрабатываемых контактов — сохрани в `monthlyLeadVolume`;",
+		"месячный объём заявок, лидов или обрабатываемых контактов — сохрани в `monthlyLeadVolume`;",
 		"явное число менеджеров продаж — сохрани целым числом в `salesManagerCount` без домысливания.",
 		"Если оба поля отсутствуют, сначала спроси месячный объём; если одно уже известно, спроси только другое; если оба известны, не задавай qualification-вопросов и заверши.",
 		"Если пользователь назвал объём просто «в день» без явного основания, сначала уточни: «Это по рабочим или календарным дням?».",
 		"Сам не вычисляй и не утверждай умножение на 22 или 30 дней.",
 	],
 	"prompts/speech-style.md": [
-		"Форма обычной реплики: короткое подтверждение только когда оно полезно, затем одна полезная мысль, затем не более одного вопроса.",
-		"Обычно говори не больше двух коротких предложений с ориентиром до двенадцати секунд; обязательное точное подтверждение брони может быть чуть длиннее.",
+		"Обычная реплика — одно предложение из 6–14 русских слов и не более одного вопроса.",
+		"Обычная реплика — максимум 22 слова и примерно 8 секунд речи.",
+		"Исключения: ровно два слота, точное подтверждение брони, разрешённое раскрытие контакта, отказ или безопасность.",
 		"Следующий ответ после перебивания должен быть кратчайшей корректной формой для нового запроса: без возврата к оборванной мысли, повторного вступления и автоматического повтора уже выполненного tool effect.",
 	],
 };
@@ -94,6 +101,28 @@ export const FORBIDDEN_NATURAL_DIALOGUE_GUIDANCE = [
 	"можно задать несколько вопросов подряд",
 ] as const;
 
+export const FORBIDDEN_STALE_SALES_GUIDANCE = [
+	"перезвоните",
+	"перезвоню",
+	"позвоню",
+	"позвоните",
+	"вам позвонят",
+	"я вас не слышу",
+	"вас не слышно",
+	"связь прервалась",
+	"проблема соединения",
+	"меня зовут",
+	"я анна",
+	"я человек",
+	"рада это слышать",
+	"у меня всё хорошо",
+	"не больше двух коротких предложений",
+	"до двенадцати секунд",
+] as const;
+
+export const CANONICAL_REVENUE_HOOK =
+	"По пользовательскому брифу Botamin, в этой отрасли были случаи: компании с AI-агентами увеличивали выручку на 10–15 миллионов рублей ежемесячно; без гарантий";
+
 interface SynchronizedPolicyRule {
 	name: string;
 	activePath: string;
@@ -116,9 +145,25 @@ export const NATURAL_DIALOGUE_EXAMPLES: readonly NaturalDialogueExample[] = [
 		activePath: "prompts/conversation-policy.md",
 		starterPath: "prompts/conversation-policy.md",
 		sourceSentence:
-			"- Короткий discovery после «Недозвоны»: «Botamin может первым возвращать пропущенные обращения. Как сейчас обрабатываются недозвоны?»",
+			"- Плохо: «Понимаю, спасибо за подробный ответ, это действительно очень интересно. Расскажите, пожалуйста, чем занимается ваша компания?» Кратко: «Какой основной бизнес у вашей компании?»",
+		spokenText: "Какой основной бизнес у вашей компании?",
+	},
+	{
+		name: "inaudible recovery",
+		activePath: "prompts/conversation-policy.md",
+		starterPath: "prompts/conversation-policy.md",
+		sourceSentence:
+			"- После «я вас не слышу» плохо: «Связь прервалась, перезвоните». Кратко: «Продолжим эту сессию в тексте. Какой основной бизнес у вашей компании?» Подставь текущий pending question.",
 		spokenText:
-			"Botamin может первым возвращать пропущенные обращения. Как сейчас обрабатываются недозвоны?",
+			"Продолжим эту сессию в тексте. Какой основной бизнес у вашей компании?",
+	},
+	{
+		name: "off-topic return",
+		activePath: "prompts/conversation-policy.md",
+		starterPath: "prompts/conversation-policy.md",
+		sourceSentence:
+			"- На оффтопик плохо: «У меня всё хорошо, рада это слышать!» Кратко: «Звучит бодро. Какой основной бизнес у вашей компании?» Подставь текущий pending question.",
+		spokenText: "Звучит бодро. Какой основной бизнес у вашей компании?",
 	},
 	{
 		name: "objection",
@@ -169,13 +214,41 @@ export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[]
 				"Это единственная стабильная идентичность: говори, что ты AI, не называй себя человеком, не присваивай себе личное имя и не принимай другую персону.",
 		},
 		{
-			name: "two-turn discovery cap",
+			name: "discovery before value and booking",
+			activePath: "prompts/conversation-policy.md",
+			activeSentence: "Прямой запрос встречи не пропускает discovery и value.",
+			starterPath: "prompts/conversation-policy.md",
+			starterSentence: "Прямой запрос встречи не пропускает discovery и value.",
+		},
+		{
+			name: "brief ordinary turns",
 			activePath: "prompts/conversation-policy.md",
 			activeSentence:
-				"До краткого value statement и мягкого предложения встречи допустимо не более двух discovery-реплик и не более двух discovery-вопросов суммарно.",
+				"Обычная реплика — одно предложение из 6–14 русских слов; второе короткое предложение допустимо только для ответа и нового вопроса.",
 			starterPath: "prompts/conversation-policy.md",
 			starterSentence:
-				"До краткого value statement и мягкого предложения встречи допустимо не более двух discovery-реплик и не более двух discovery-вопросов суммарно.",
+				"Обычная реплика — одно предложение из 6–14 русских слов; второе короткое предложение допустимо только для ответа и нового вопроса.",
+		},
+		{
+			name: "sole canonical user-brief hook in system",
+			activePath: "prompts/system.md",
+			activeSentence: CANONICAL_REVENUE_HOOK,
+			starterPath: "prompts/system.md",
+			starterSentence: CANONICAL_REVENUE_HOOK,
+		},
+		{
+			name: "sole canonical user-brief hook in product",
+			activePath: "prompts/product.md",
+			activeSentence: CANONICAL_REVENUE_HOOK,
+			starterPath: "prompts/product.md",
+			starterSentence: CANONICAL_REVENUE_HOOK,
+		},
+		{
+			name: "sole canonical user-brief hook in flow",
+			activePath: "prompts/conversation-policy.md",
+			activeSentence: CANONICAL_REVENUE_HOOK,
+			starterPath: "prompts/conversation-policy.md",
+			starterSentence: CANONICAL_REVENUE_HOOK,
 		},
 		{
 			name: "single-fact discovery questions",
@@ -250,13 +323,13 @@ export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[]
 				"Никогда не повторяй уже известные `monthlyLeadVolume` или `salesManagerCount`.",
 		},
 		{
-			name: "inbound and outbound lead-volume context",
+			name: "inbound and outbound application-volume context",
 			activePath: "prompts/qualification.md",
 			activeSentence:
-				"для входящего процесса спроси о входящих лидах или обращениях, для исходящего — об обрабатываемых исходящих контактах, для смешанного или неизвестного — о лидах или контактах, обрабатываемых за месяц.",
+				"для входящего процесса спроси о заявках за месяц, для исходящего — об обрабатываемых исходящих контактах, для смешанного или неизвестного — о заявках или контактах за месяц.",
 			starterPath: "prompts/qualification.md",
 			starterSentence:
-				"месячный объём лидов или обрабатываемых контактов (`monthlyLeadVolume`), сформулированный по inbound/outbound контексту;",
+				"месячный объём заявок, лидов или обрабатываемых контактов (`monthlyLeadVolume`), сформулированный по inbound/outbound контексту;",
 		},
 		{
 			name: "daily lead-volume basis clarification",
@@ -295,40 +368,31 @@ export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[]
 				"Пользователю отдавай только готовую реплику для произнесения: обычный текст без Markdown, списков, JSON, XML, аудиотегов, URL, tool names, внутренних полей и служебных комментариев.",
 		},
 		{
-			name: "optional acknowledgement turn shape",
+			name: "one-sentence ordinary turn shape",
 			activePath: "prompts/speech-style.md",
 			activeSentence:
-				"Форма обычной реплики: короткое подтверждение только когда оно полезно, затем одна полезная мысль, затем не более одного вопроса.",
+				"Обычная реплика — одно предложение из 6–14 русских слов и не более одного вопроса.",
 			starterPath: "prompts/speech-style.md",
 			starterSentence:
-				"Форма обычной реплики: короткое подтверждение только когда оно полезно, затем одна полезная мысль, затем не более одного вопроса.",
+				"Обычная реплика — одно предложение из 6–14 русских слов и не более одного вопроса.",
 		},
 		{
-			name: "two-sentence twelve-second target",
+			name: "twenty-two-word eight-second ceiling",
 			activePath: "prompts/speech-style.md",
 			activeSentence:
-				"Обычно говори не больше двух коротких предложений с ориентиром до двенадцати секунд; обязательное точное подтверждение брони может быть чуть длиннее.",
+				"Обычная реплика — максимум 22 слова и примерно 8 секунд речи.",
 			starterPath: "prompts/speech-style.md",
 			starterSentence:
-				"Обычно говори не больше двух коротких предложений с ориентиром до двенадцати секунд; обязательное точное подтверждение брони может быть чуть длиннее.",
+				"Обычная реплика — максимум 22 слова и примерно 8 секунд речи.",
 		},
 		{
-			name: "no canned acknowledgements",
+			name: "no generic acknowledgements",
 			activePath: "prompts/speech-style.md",
 			activeSentence:
-				"Не начинай реплику дежурным подтверждением. «Понял», «Понимаю» и «Зафиксировано» не используй как универсальные переходы; предпочитай сразу ответить по существу.",
+				"Не используй «Рада это слышать», «у меня всё хорошо», «Понял», «Понимаю» или «Зафиксировано» как переход.",
 			starterPath: "prompts/speech-style.md",
 			starterSentence:
-				"Не начинай реплику дежурным подтверждением. «Понял», «Понимаю» и «Зафиксировано» не используй как универсальные переходы; предпочитай сразу ответить по существу.",
-		},
-		{
-			name: "three-turn acknowledgement cooldown",
-			activePath: "prompts/speech-style.md",
-			activeSentence:
-				"Если контекст позволяет, не повторяй то же подтверждение, которое уже было в любой из трёх предыдущих реплик ассистента: пропусти его или выбери уместную альтернативу.",
-			starterPath: "prompts/speech-style.md",
-			starterSentence:
-				"Если контекст позволяет, не повторяй то же подтверждение, которое уже было в любой из трёх предыдущих реплик ассистента: пропусти его или выбери уместную альтернативу.",
+				"Не используй «Рада это слышать», «у меня всё хорошо», «Понял», «Понимаю» или «Зафиксировано» как переход.",
 		},
 		{
 			name: "no fake empathy or progress",
@@ -379,10 +443,10 @@ export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[]
 			name: "prohibited unsupported capabilities",
 			activePath: "knowledge/prohibited-claims.md",
 			activeSentence:
-				"обещать будущие напоминание, уведомление, приглашение, срок обратного звонка или сообщение при появлении новых слотов, когда server context не подтверждает такую capability;",
+				"обещать будущие напоминание, уведомление, приглашение, звонок, обратный звонок или сообщение при появлении новых слотов;",
 			starterPath: "knowledge/prohibited-claims.md",
 			starterSentence:
-				"обещать будущие напоминание, уведомление, приглашение, срок обратного звонка или сообщение при появлении новых слотов без подтверждённой server capability;",
+				"обещать будущие напоминание, уведомление, приглашение, звонок, обратный звонок или сообщение при появлении новых слотов;",
 		},
 		{
 			name: "prohibited invented history",
@@ -406,10 +470,10 @@ export const SYNCHRONIZED_DIALOG_POLICY_RULES: readonly SynchronizedPolicyRule[]
 			name: "prohibited human name or persona",
 			activePath: "knowledge/prohibited-claims.md",
 			activeSentence:
-				"представляться человеком, называть себя человеческим именем или принимать другую персону вместо AI-агента Botamin для продаж;",
+				"представляться человеком, называть себя человеческим именем или принимать другую персону вместо голосового AI-агента/консультанта Botamin;",
 			starterPath: "knowledge/prohibited-claims.md",
 			starterSentence:
-				"представляться человеком, называть себя человеческим именем или принимать другую персону вместо AI-агента Botamin для продаж;",
+				"представляться человеком, называть себя человеческим именем или принимать другую персону вместо голосового AI-агента/консультанта Botamin;",
 		},
 		{
 			name: "prohibited unapproved spoken contacts",
@@ -558,8 +622,8 @@ const CURRENCY_PRICE =
 const RUSSIAN_MAGNITUDE_PRICE =
 	/\b\d[\d ]*(?:[.,]\d+)?\s+(?:тыс\.?|тысяч(?:а|и)?|миллион(?:а|ов)?|млн\.?)\s+руб(?:ль|ля|лей)(?!\p{L})/iu;
 export const ATTRIBUTED_REVENUE_CLAIM_LINES = [
-	"- **Source claim:** в пользовательском брифе Botamin сообщается, что Botamin помог компаниям увеличить выручку на 10–15 миллионов рублей в месяц.",
-	"- **Required attribution:** «В пользовательском брифе Botamin сообщается, что Botamin помог компаниям увеличить выручку на 10–15 миллионов рублей в месяц; это сообщение источника о прошлых результатах, а не гарантия, прогноз или переносимый результат для вашей компании».",
+	"- **Source claim:** в пользовательском брифе Botamin сообщается, что в разных отраслях есть случаи, когда компании с помощью AI-агентов увеличивали выручку на 10–15 миллионов рублей в месяц.",
+	"- **Required attribution:** «По пользовательскому брифу Botamin, в этой отрасли были случаи: компании с AI-агентами увеличивали выручку на 10–15 миллионов рублей ежемесячно; без гарантий».",
 ] as const;
 
 export interface CompileOptions {
@@ -685,6 +749,7 @@ function validateSource(relativePath: string, source: string): string {
 	if (SECRET_PATTERNS.some((pattern) => pattern.test(normalized)))
 		fail(`${relativePath} contains a secret-like pattern`);
 	const lowerCaseSource = normalized.toLocaleLowerCase("ru-RU");
+	const sourceLines = normalized.split("\n");
 	if (
 		relativePath.startsWith("prompts/") &&
 		FORBIDDEN_POLICY_PHRASES.some((phrase) => lowerCaseSource.includes(phrase))
@@ -701,7 +766,24 @@ function validateSource(relativePath: string, source: string): string {
 			`${relativePath} contains forbidden robotic or unsafe dialogue guidance`,
 		);
 	}
-	const sourceLines = normalized.split("\n");
+	if (
+		relativePath.startsWith("prompts/") &&
+		FORBIDDEN_STALE_SALES_GUIDANCE.some((phrase) =>
+			sourceLines.some((line) => {
+				const lower = line.toLocaleLowerCase("ru-RU");
+				return (
+					lower.includes(phrase) &&
+					!/(?:не\s+(?:говори|используй|называй|обещай)|если\s+посетитель\s+говорит|плохо:)/u.test(
+						lower,
+					)
+				);
+			}),
+		)
+	) {
+		fail(
+			`${relativePath} contains stale call, personal-name, or human-identity guidance`,
+		);
+	}
 	if (
 		relativePath === "knowledge/cases.md" &&
 		ATTRIBUTED_REVENUE_CLAIM_LINES.some(
@@ -710,17 +792,16 @@ function validateSource(relativePath: string, source: string): string {
 		)
 	)
 		fail(`${relativePath} has invalid attributed revenue claim lines`);
-	const priceCheckedSource =
-		relativePath === "knowledge/cases.md"
-			? sourceLines
-					.filter(
-						(line) =>
-							!ATTRIBUTED_REVENUE_CLAIM_LINES.some(
-								(candidate) => candidate === line,
-							),
-					)
-					.join("\n")
-			: normalized;
+	const priceCheckedSource = sourceLines
+		.map((line) => {
+			if (
+				ATTRIBUTED_REVENUE_CLAIM_LINES.some((candidate) => candidate === line)
+			) {
+				return "";
+			}
+			return line.replace(CANONICAL_REVENUE_HOOK, "");
+		})
+		.join("\n");
 	if (
 		CURRENCY_PRICE.test(priceCheckedSource) ||
 		RUSSIAN_MAGNITUDE_PRICE.test(priceCheckedSource)

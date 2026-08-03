@@ -293,6 +293,44 @@ async function waitForTtsInputs(
 }
 
 describe("atomic transcript intake", () => {
+	test("immediate meeting request cannot expose slots or skip discovery and value", async () => {
+		const brain = new FakeBrain([
+			{
+				type: "speech.delta",
+				turnId: turn1,
+				generationId: generation1,
+				text: "В какой отрасли работает ваша компания?",
+			},
+			{
+				type: "turn.completed",
+				turnId: turn1,
+				generationId: generation1,
+				nextStage: "BOOKING_OFFER",
+			},
+		]);
+		const { orchestrator } = fixture({
+			brain,
+			tts: null,
+			initialState: { ...createInitialConversationState(), stage: "GREETING" },
+		});
+
+		const events = await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn1,
+				generationId: generation1,
+				text: "Назначить встречу",
+				knownFacts: facts,
+			}),
+		);
+
+		expect(brain.turns).toHaveLength(1);
+		expect(brain.turns[0]?.stage).toBe("GREETING");
+		expect(brain.turns[0]?.schedulingContext.candidateMeetingSlots).toEqual([]);
+		expect(brain.turns[0]?.allowedActions).toEqual([]);
+		expect(orchestrator.state.stage).toBe("GREETING");
+		expect(events.some((event) => event.type === "state.changed")).toBe(false);
+	});
+
 	test("typed final bypasses STT but uses the same brain path without granting booking authority", async () => {
 		const brain = new FakeBrain(
 			speechScript("Проверю переданные данные и продолжу разговор."),
@@ -1371,7 +1409,7 @@ describe("booking and tool timeline", () => {
 			.filter((event) => event.type === "text.delta")
 			.map((event) => event.text)
 			.join(" ");
-		expect(confirmation).toContain("Сколько входящих лидов приходит за месяц?");
+		expect(confirmation).toContain("Сколько заявок вы получаете за месяц?");
 		expect(confirmation).not.toContain("Можно задать два коротких вопроса?");
 		expect(brain.turns).toHaveLength(1);
 		expect(orchestrator.state.stage).toBe("POST_BOOKING_QUALIFICATION");
@@ -1393,7 +1431,7 @@ describe("booking and tool timeline", () => {
 			completion: "complete" as const,
 			expectedStatus: "partial" as const,
 			expected:
-				"Дополнительный ответ сохранён. Сколько входящих лидов приходит за месяц?",
+				"Дополнительный ответ сохранён. Сколько заявок вы получаете за месяц?",
 			terminal: false,
 		},
 		{

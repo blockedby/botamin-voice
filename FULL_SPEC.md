@@ -45,7 +45,7 @@ MVP должен выглядеть как небольшой реальный �
 | Посетитель | потенциальный B2B-клиент Botamin |
 | Голосовой AI-продавец | ведёт разговор и достигает целевого действия |
 | Backend | владеет состоянием, tools, транзакциями и аудитом |
-| Получатель лида | в MVP читает console/webhook/push payload |
+| Получатель лида | в MVP получает PII-bearing payload через webhook/push |
 | Владелец проекта | редактирует Markdown prompts в Git |
 
 ## 3. В scope
@@ -64,7 +64,7 @@ MVP должен выглядеть как небольшой реальный �
 - automatic internal virtual meeting commit after exact confirmation of one of two concretely dated server-supplied 20-minute Moscow slots;
 - direct optional missing-only qualification after truthful meeting confirmation, limited to monthly lead/contact volume and integer sales-manager count;
 - SQLite persistence and server-derived final meeting widget;
-- console notifier и интерфейс для webhook/push;
+- non-PII console acknowledgment и интерфейс PII handoff для webhook/push;
 - transcript/event audit;
 - local-first Docker Compose, health checks and backup; VPS TLS/WSS is a later deployment gate;
 - тесты контрактов, компонентов, E2E и conversation evals.
@@ -97,7 +97,7 @@ MVP должен выглядеть как небольшой реальный �
 | Backend | Bun + TypeScript, Hono как лёгкий HTTP/WS слой |
 | Frontend | React + TypeScript + Vite |
 | Storage | SQLite в WAL-режиме, Drizzle migrations |
-| Notifications | console обязательно; webhook — адаптер |
+| Notifications | console — только non-PII acknowledgment; webhook — PII-bearing handoff |
 | Calendar | отсутствует |
 | Prompts | Markdown в Git |
 | Deployment | local-first Compose project on one trusted machine; app + Caddy only. One target VPS with TLS/WSS is the later production-shaped gate |
@@ -177,7 +177,7 @@ Botamin Voice Sales Agent — это лендинг с живой голосов
 | US-008 | Я соглашаюсь на встречу | server предлагает ровно два concretely dated current Moscow slots, не выдавая их за глобальную доступность; spoken/text/form заполняют один durable revisioned draft, а exact-revision confirmation автоматически commit-ит выбранный вариант |
 | US-009 | После встречи я могу ответить на два доп. вопроса | после durable commit и truthful confirmation server без отдельного permission turn спрашивает только первый missing fact: monthly lead/contact volume, затем integer `salesManagerCount`; known facts не повторяются, оба ответа одной репликой допустимы |
 | US-010 | Я могу отказаться от квалификации | без ответов статус `skipped`, после одного ответа `partial`; scheduled internal virtual meeting в обоих случаях остаётся `booked`, диалог корректно завершается |
-| US-011 | Получатель видит данные | console/webhook получает структурированный payload со слотом |
+| US-011 | Получатель видит данные | webhook получает структурированный PII-bearing payload со слотом; console пишет только non-PII acknowledgment |
 | US-012 | Сервис перезапускается | сохранённые booking/event данные остаются в volume |
 | US-013 | Проект сначала разворачивается локально | `scripts/deploy-local.sh` поднимает готовые app + Caddy на `http://localhost:5173`; target VPS/TLS проверяется отдельным later gate |
 
@@ -632,7 +632,7 @@ export interface LeadNotifier {
 }
 ```
 
-P0 adapter — structured console JSON. P1 — signed HTTP webhook с retry/outbox.
+P0 adapter — fixed-schema non-PII console acknowledgment. P1 — signed HTTP webhook с полным lead payload и retry/outbox.
 
 ## 3. Критический путь turn
 
@@ -982,7 +982,7 @@ TTS_MAX_CHARS_PER_SESSION=8000
 # Booking and qualification
 POST_BOOKING_QUALIFICATION_ENABLED=true
 
-# Notifications: console is sufficient for local development
+# Notifications: console safely acknowledges and discards the lead payload
 NOTIFIER=console
 WEBHOOK_URL=
 WEBHOOK_SIGNING_SECRET=
@@ -2712,7 +2712,7 @@ Fresh RC4 command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md). T
 - [x] Credential-free fixture baseline is current: 44/44 scenarios, 25/25 applicable booking-order checks, 28/28 negative controls, zero provider calls; real Luna not run.
 - [x] Chromium desktop/mobile Playwright landing smoke passed through the shared Chromium harness. This proves responsive/pre-consent transport boundaries only, not a full voice booking journey.
 - [x] Focused cutover tests prove protected backup precedes graceful stop, existing stopped DB is protected, migration is delegated to normal startup, readiness precedes `verify-rc4`, and RC3 schema upgrades to migration 0004 without a duplicate meeting table.
-- [x] The provider-independent repository suite is green: 660 tests across 66 files, including the RC4 provider-contract and production-component journeys.
+- [x] The provider-independent repository suite is green: 671 tests across 66 files, including the RC4 provider-contract and production-component journeys.
 - [x] Typecheck, build, Biome, generated spec validation, release artifact regeneration, and `git diff --check` are reported with actual fresh outputs in `VALIDATION.md`.
 - [ ] Docker Compose cutover against an owner-configured live local volume and credentials was not run by the documentation handoff; the wrapper is covered statically/fake-Docker and DB tests.
 - [ ] Full local voice booking journey was not run; do not infer it from Chromium landing smoke or fixture evals.
@@ -3293,7 +3293,7 @@ Fresh RC4 results are recorded in [`../VALIDATION.md`](VALIDATION.md). The RC3 r
 - Chromium desktop/mobile Playwright **landing smoke** passed through the shared harness. It covers responsive/pre-consent boundaries, not a full voice booking journey.
 - Fixture-only eval baseline is 44/44 scenarios, 25/25 applicable booking-order checks, and 28/28 negative controls with zero provider calls; real Luna was not run.
 - Migration/cutover wrappers and RC3→RC4 schema compatibility are covered by deterministic tests.
-- The provider-independent repository suite is green: 660 tests across 66 files; exact evidence is in `VALIDATION.md`.
+- The provider-independent repository suite is green: 671 tests across 66 files; exact evidence is in `VALIDATION.md`.
 - WebKit full journey is not run. Its browser binary is present, but this host lacks `libicu74`, `libxml2`, and `libflite1`.
 - Full voice booking, owner-configured live Compose cutover, target VPS, public TLS/WSS, and target-host provider live booking remain explicit gates.
 

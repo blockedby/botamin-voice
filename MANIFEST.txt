@@ -72,6 +72,7 @@ apps/server/src/orchestrator/intent.test.ts
 apps/server/src/orchestrator/orchestrator.sqlite.test.ts
 apps/server/src/orchestrator/orchestrator.test.ts
 apps/server/src/orchestrator/orchestrator.ts
+apps/server/src/orchestrator/orphan-recovery-worker.ts
 apps/server/src/orchestrator/policy.test.ts
 apps/server/src/orchestrator/policy.ts
 apps/server/src/orchestrator/reliability.test.ts

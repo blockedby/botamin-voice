@@ -54,7 +54,7 @@ bun run build: passed across all workspaces; production web/server bundles built
 bun run lint:format: passed, 173 files checked, no fixes
 bunx biome check infra/ops/db.ts infra/ops/db.test.ts infra/ops/scripts.test.ts: passed
 
-repository-wide test command: 660 passed, 0 failed across 66 files (5,131 assertions)
+repository-wide test command: 671 passed, 0 failed across 66 files (5,839 assertions)
 focused infra/ops command: 19 passed, 0 failed (147 assertions)
 offline eval: 44/44 scenarios; 25/25 booking-order; 28/28 negative controls; zero critical failures
 bun evals/src/generate-baseline.ts --check: deterministic artifact current
@@ -69,8 +69,8 @@ docker compose config --quiet: passed
 scripts/build-spec.sh + scripts/validate-spec.py: ALL VALIDATIONS PASSED
   - 15 tasks, 8 agent packets, 7 SVGs, 3 PNGs
   - generated HTML embeds 3 raster images and 7 SVGs
-scripts/update-release-artifacts.py: MANIFEST/CHECKSUMS regenerated for 363 files
-sha256sum -c CHECKSUMS.sha256: 363 files OK
+scripts/update-release-artifacts.py: MANIFEST/CHECKSUMS regenerated for 364 files
+sha256sum -c CHECKSUMS.sha256: 364 files OK
 git diff --check: passed
 ```
 

@@ -654,10 +654,11 @@ Asset создаётся отдельно от visitor runtime: admin явно �
 4. Only a valid current final transcript becomes a user turn. Monotonic `visitor.text.submit` creates the same accepted final-turn path without STT.
 5. Orchestrator parses typed/spoken input identically, extracts quoted fact proposals, and merges them into the revisioned durable draft; conflicting values become bounded explicit options rather than overwrite.
 6. Structured form commands patch the same draft at `baseRevision`; exact-revision confirmation automatically commits the booking through `uncommitted → committing → committed`.
-7. Text deltas pass the sanitizer. Contacts are redacted unless they exactly match server-approved contacts and contact-processing consent is active.
-8. Complete bounded phrases go to OpenRouter TTS and then the ordered browser queue.
-9. Only a durable booking publishes `internal.meeting.updated`; the final widget cannot be synthesized from transcript/stage alone.
-10. After truthful meeting confirmation, server qualification asks only missing facts. Provider retries never repeat Luna, notifier, draft mutation, or booking effects.
+7. Before readiness and then periodically, a bounded DB-only sweeper recovers orphaned `committing` drafts idempotently without Luna/STT/TTS or an in-memory session; confirmation and qualification remain pending for the visitor reconnect.
+8. Text deltas pass the sanitizer. Contacts are redacted unless they exactly match server-approved contacts and contact-processing consent is active.
+9. Complete bounded phrases go to OpenRouter TTS and then the ordered browser queue.
+10. Only a durable booking publishes `internal.meeting.updated`; the final widget cannot be synthesized from transcript/stage alone.
+11. After truthful meeting confirmation, server qualification asks only missing facts. Provider retries never repeat Luna, notifier, draft mutation, or booking effects.
 
 ## 4. Latency design
 
@@ -981,6 +982,9 @@ TTS_MAX_CHARS_PER_SESSION=8000
 
 # Booking and qualification
 POST_BOOKING_QUALIFICATION_ENABLED=true
+ORPHAN_RECOVERY_BATCH_SIZE=25
+ORPHAN_RECOVERY_MAX_PER_SWEEP=100
+ORPHAN_RECOVERY_INTERVAL_MS=60000
 
 # Notifications: console safely acknowledges and discards the lead payload
 NOTIFIER=console
@@ -1942,7 +1946,7 @@ The wrapper builds the app image, runs interactive device auth, checks login sta
 
 ### Readiness and optional deeper preflight
 
-`scripts/deploy-local.sh` waits for `/health/ready`. The automatic readiness path verifies the isolated Codex runtime configuration and app-server handshake, ChatGPT account/auth state, requested model/effort availability, the compiled prompt file, SQLite read/write, queue capacity, notifier state, and local STT/TTS configuration and circuit health. It does **not** run `thread/start`, inspect `instructionSources` from a created thread, execute a synthetic turn, wait for a streamed delta, or send `turn/interrupt`. Failed required checks make `/health/ready` return `503` and prevent new voice sessions.
+`scripts/deploy-local.sh` waits for `/health/ready`. Before readiness, a bounded DB-only recovery scan processes orphaned `committing` drafts without Luna/STT/TTS or an in-memory session; safe aggregate failures keep orphan-recovery health degraded and rows eligible for a later bounded sweep. The automatic readiness path also verifies the isolated Codex runtime configuration and app-server handshake, ChatGPT account/auth state, requested model/effort availability, the compiled prompt file, SQLite read/write, queue capacity, notifier state, and local STT/TTS configuration and circuit health. It does **not** run `thread/start`, inspect `instructionSources` from a created thread, execute a synthetic turn, wait for a streamed delta, or send `turn/interrupt`. Failed required checks make `/health/ready` return `503` and prevent new voice sessions.
 
 The standalone `scripts/codex-preflight.ts` is a separate, deeper owner-authorized check that has already been observed historically; it is not called by deployment or readiness. After compiling `AGENTS.md` into an isolated runtime directory, an owner may explicitly run:
 
@@ -2712,7 +2716,7 @@ Fresh RC4 command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md). T
 - [x] Credential-free fixture baseline is current: 44/44 scenarios, 25/25 applicable booking-order checks, 28/28 negative controls, zero provider calls; real Luna not run.
 - [x] Chromium desktop/mobile Playwright landing smoke passed through the shared Chromium harness. This proves responsive/pre-consent transport boundaries only, not a full voice booking journey.
 - [x] Focused cutover tests prove protected backup precedes graceful stop, existing stopped DB is protected, migration is delegated to normal startup, readiness precedes `verify-rc4`, and RC3 schema upgrades to migration 0004 without a duplicate meeting table.
-- [x] The provider-independent repository suite is green: 678 tests across 66 files, including the RC4 provider-contract and production-component journeys.
+- [x] The provider-independent repository suite is green: 687 tests across 67 files, including the RC4 provider-contract and production-component journeys.
 - [x] Typecheck, build, Biome, generated spec validation, release artifact regeneration, and `git diff --check` are reported with actual fresh outputs in `VALIDATION.md`.
 - [ ] Docker Compose cutover against an owner-configured live local volume and credentials was not run by the documentation handoff; the wrapper is covered statically/fake-Docker and DB tests.
 - [ ] Full local voice booking journey was not run; do not infer it from Chromium landing smoke or fixture evals.
@@ -3293,7 +3297,7 @@ Fresh RC4 results are recorded in [`../VALIDATION.md`](VALIDATION.md). The RC3 r
 - Chromium desktop/mobile Playwright **landing smoke** passed through the shared harness. It covers responsive/pre-consent boundaries, not a full voice booking journey.
 - Fixture-only eval baseline is 44/44 scenarios, 25/25 applicable booking-order checks, and 28/28 negative controls with zero provider calls; real Luna was not run.
 - Migration/cutover wrappers and RC3→RC4 schema compatibility are covered by deterministic tests.
-- The provider-independent repository suite is green: 678 tests across 66 files; exact evidence is in `VALIDATION.md`.
+- The provider-independent repository suite is green: 687 tests across 67 files; exact evidence is in `VALIDATION.md`.
 - WebKit full journey is not run. Its browser binary is present, but this host lacks `libicu74`, `libxml2`, and `libflite1`.
 - Full voice booking, owner-configured live Compose cutover, target VPS, public TLS/WSS, and target-host provider live booking remain explicit gates.
 

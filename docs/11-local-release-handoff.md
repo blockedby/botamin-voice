@@ -29,7 +29,7 @@ Fresh RC4 results are recorded in [`../VALIDATION.md`](../VALIDATION.md). The RC
 - Chromium desktop/mobile Playwright **landing smoke** passed through the shared harness. It covers responsive/pre-consent boundaries, not a full voice booking journey.
 - Fixture-only eval baseline is 44/44 scenarios, 25/25 applicable booking-order checks, and 28/28 negative controls with zero provider calls; real Luna was not run.
 - Migration/cutover wrappers and RC3→RC4 schema compatibility are covered by deterministic tests.
-- The provider-independent repository suite is green: 678 tests across 66 files; exact evidence is in `VALIDATION.md`.
+- The provider-independent repository suite is green: 687 tests across 67 files; exact evidence is in `VALIDATION.md`.
 - WebKit full journey is not run. Its browser binary is present, but this host lacks `libicu74`, `libxml2`, and `libflite1`.
 - Full voice booking, owner-configured live Compose cutover, target VPS, public TLS/WSS, and target-host provider live booking remain explicit gates.
 

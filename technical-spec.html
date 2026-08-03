@@ -2111,6 +2111,10 @@ overwrite.</li>
 <code>baseRevision</code>; exact-revision confirmation automatically
 commits the booking through
 <code>uncommitted → committing → committed</code>.</li>
+<li>Before readiness and then periodically, a bounded DB-only sweeper
+recovers orphaned <code>committing</code> drafts idempotently without
+Luna/STT/TTS or an in-memory session; confirmation and qualification
+remain pending for the visitor reconnect.</li>
 <li>Text deltas pass the sanitizer. Contacts are redacted unless they
 exactly match server-approved contacts and contact-processing consent is
 active.</li>
@@ -2441,6 +2445,9 @@ TTS_MAX_CHARS_PER_SESSION=8000
 
 # Booking and qualification
 POST_BOOKING_QUALIFICATION_ENABLED=true
+ORPHAN_RECOVERY_BATCH_SIZE=25
+ORPHAN_RECOVERY_MAX_PER_SWEEP=100
+ORPHAN_RECOVERY_INTERVAL_MS=60000
 
 # Notifications: console safely acknowledges and discards the lead payload
 NOTIFIER=console
@@ -4024,15 +4031,18 @@ checks login status, and stores the result in the fixed persistent
 <h3 id="readiness-and-optional-deeper-preflight">Readiness and optional
 deeper preflight</h3>
 <p><code>scripts/deploy-local.sh</code> waits for
-<code>/health/ready</code>. The automatic readiness path verifies the
-isolated Codex runtime configuration and app-server handshake, ChatGPT
-account/auth state, requested model/effort availability, the compiled
-prompt file, SQLite read/write, queue capacity, notifier state, and
-local STT/TTS configuration and circuit health. It does
-<strong>not</strong> run <code>thread/start</code>, inspect
-<code>instructionSources</code> from a created thread, execute a
-synthetic turn, wait for a streamed delta, or send
-<code>turn/interrupt</code>. Failed required checks make
+<code>/health/ready</code>. Before readiness, a bounded DB-only recovery
+scan processes orphaned <code>committing</code> drafts without
+Luna/STT/TTS or an in-memory session; safe aggregate failures keep
+orphan-recovery health degraded and rows eligible for a later bounded
+sweep. The automatic readiness path also verifies the isolated Codex
+runtime configuration and app-server handshake, ChatGPT account/auth
+state, requested model/effort availability, the compiled prompt file,
+SQLite read/write, queue capacity, notifier state, and local STT/TTS
+configuration and circuit health. It does <strong>not</strong> run
+<code>thread/start</code>, inspect <code>instructionSources</code> from
+a created thread, execute a synthetic turn, wait for a streamed delta,
+or send <code>turn/interrupt</code>. Failed required checks make
 <code>/health/ready</code> return <code>503</code> and prevent new voice
 sessions.</p>
 <p>The standalone <code>scripts/codex-preflight.ts</code> is a separate,
@@ -5262,7 +5272,7 @@ protected, migration is delegated to normal startup, readiness precedes
 <code>verify-rc4</code>, and RC3 schema upgrades to migration 0004
 without a duplicate meeting table.</label></li>
 <li><label><input type="checkbox" checked></input>The provider-independent
-repository suite is green: 678 tests across 66 files, including the RC4
+repository suite is green: 687 tests across 67 files, including the RC4
 provider-contract and production-component journeys.</label></li>
 <li><label><input type="checkbox" checked></input>Typecheck, build, Biome,
 generated spec validation, release artifact regeneration, and
@@ -6176,8 +6186,8 @@ booking-order checks, and 28/28 negative controls with zero provider
 calls; real Luna was not run.</li>
 <li>Migration/cutover wrappers and RC3→RC4 schema compatibility are
 covered by deterministic tests.</li>
-<li>The provider-independent repository suite is green: 678 tests across
-66 files; exact evidence is in <code>VALIDATION.md</code>.</li>
+<li>The provider-independent repository suite is green: 687 tests across
+67 files; exact evidence is in <code>VALIDATION.md</code>.</li>
 <li>WebKit full journey is not run. Its browser binary is present, but
 this host lacks <code>libicu74</code>, <code>libxml2</code>, and
 <code>libflite1</code>.</li>

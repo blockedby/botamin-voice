@@ -168,10 +168,11 @@ Asset создаётся отдельно от visitor runtime: admin явно �
 4. Only a valid current final transcript becomes a user turn. Monotonic `visitor.text.submit` creates the same accepted final-turn path without STT.
 5. Orchestrator parses typed/spoken input identically, extracts quoted fact proposals, and merges them into the revisioned durable draft; conflicting values become bounded explicit options rather than overwrite.
 6. Structured form commands patch the same draft at `baseRevision`; exact-revision confirmation automatically commits the booking through `uncommitted → committing → committed`.
-7. Text deltas pass the sanitizer. Contacts are redacted unless they exactly match server-approved contacts and contact-processing consent is active.
-8. Complete bounded phrases go to OpenRouter TTS and then the ordered browser queue.
-9. Only a durable booking publishes `internal.meeting.updated`; the final widget cannot be synthesized from transcript/stage alone.
-10. After truthful meeting confirmation, server qualification asks only missing facts. Provider retries never repeat Luna, notifier, draft mutation, or booking effects.
+7. Before readiness and then periodically, a bounded DB-only sweeper recovers orphaned `committing` drafts idempotently without Luna/STT/TTS or an in-memory session; confirmation and qualification remain pending for the visitor reconnect.
+8. Text deltas pass the sanitizer. Contacts are redacted unless they exactly match server-approved contacts and contact-processing consent is active.
+9. Complete bounded phrases go to OpenRouter TTS and then the ordered browser queue.
+10. Only a durable booking publishes `internal.meeting.updated`; the final widget cannot be synthesized from transcript/stage alone.
+11. After truthful meeting confirmation, server qualification asks only missing facts. Provider retries never repeat Luna, notifier, draft mutation, or booking effects.
 
 ## 4. Latency design
 
@@ -495,6 +496,9 @@ TTS_MAX_CHARS_PER_SESSION=8000
 
 # Booking and qualification
 POST_BOOKING_QUALIFICATION_ENABLED=true
+ORPHAN_RECOVERY_BATCH_SIZE=25
+ORPHAN_RECOVERY_MAX_PER_SWEEP=100
+ORPHAN_RECOVERY_INTERVAL_MS=60000
 
 # Notifications: console safely acknowledges and discards the lead payload
 NOTIFIER=console

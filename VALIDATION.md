@@ -24,7 +24,7 @@ The prior RC3 report is preserved verbatim at [`evidence/VALIDATION-local-rc3-20
 - Internal JSON preserves facts, provenance, bounded conflicts, exactly two candidate identities, selected candidate, readiness, exact-revision confirmation, commit state, booking ID, and timestamps. Browser projection strips conversation ownership, provenance, and evidence text.
 - Typed and spoken final turns use one accepted-turn/fact/scheduling/draft path. The structured form submits revisioned field/candidate commands into the same draft; it is not encoded as visitor text and cannot directly create a booking.
 - Scheduling always supplies exactly two current internal 20-minute Moscow candidates with concrete dates/times. Supported concrete date/time requests return exact+alternative or nearest internal candidates; stale/non-candidate selections fail closed.
-- Exact confirmation of a ready current revision automatically performs one idempotent booking commit. Only the durable booking derives the `internal_virtual` / `scheduled` projection and final widget; both external calendar/invite flags are false.
+- Exact confirmation of a ready current revision automatically performs one idempotent booking commit. A bounded DB-only startup/periodic sweeper recovers orphaned `committing` drafts without a session or provider call while leaving visitor confirmation/qualification pending. Only the durable booking derives the `internal_virtual` / `scheduled` projection and final widget; both external calendar/invite flags are false.
 - Qualification begins directly after truthful meeting confirmation and asks only missing facts. Volume precedes manager count only when both are missing; one known asks only the other; both known asks nothing. Generic daily volume requires working/calendar-day clarification.
 - Contact-shaped text is redacted from TTS by default. The narrow exception requires active contact-processing consent and an exact server-approved accepted-draft or committed-booking contact.
 - Fixture eval evidence is 44 scenarios, 25 applicable booking-order checks, and 28 negative controls. It is fixture-only with zero provider calls and real Luna not run.
@@ -54,7 +54,7 @@ bun run build: passed across all workspaces; production web/server bundles built
 bun run lint:format: passed, 173 files checked, no fixes
 bunx biome check infra/ops/db.ts infra/ops/db.test.ts infra/ops/scripts.test.ts: passed
 
-repository-wide test command: 678 passed, 0 failed across 66 files (5,973 assertions)
+repository-wide test command: 687 passed, 0 failed across 67 files (6,049 assertions)
 focused infra/ops command: 19 passed, 0 failed (147 assertions)
 offline eval: 44/44 scenarios; 25/25 booking-order; 28/28 negative controls; zero critical failures
 bun evals/src/generate-baseline.ts --check: deterministic artifact current
@@ -69,8 +69,8 @@ docker compose config --quiet: passed
 scripts/build-spec.sh + scripts/validate-spec.py: ALL VALIDATIONS PASSED
   - 15 tasks, 8 agent packets, 7 SVGs, 3 PNGs
   - generated HTML embeds 3 raster images and 7 SVGs
-scripts/update-release-artifacts.py: MANIFEST/CHECKSUMS regenerated for 364 files
-sha256sum -c CHECKSUMS.sha256: 364 files OK
+scripts/update-release-artifacts.py: MANIFEST/CHECKSUMS regenerated for 366 files
+sha256sum -c CHECKSUMS.sha256: 366 files OK
 git diff --check: passed
 ```
 

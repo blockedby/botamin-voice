@@ -21,6 +21,7 @@ apps/server/src/db/database.ts
 apps/server/src/db/index.ts
 apps/server/src/db/schema.ts
 apps/server/src/domain/booking-draft/index.ts
+apps/server/src/domain/booking-draft/recovery.ts
 apps/server/src/domain/booking-draft/store.test.ts
 apps/server/src/domain/booking-draft/store.ts
 apps/server/src/domain/booking/concrete-request.ts
@@ -109,6 +110,7 @@ apps/server/src/providers/openrouter/tts/mp3.ts
 apps/server/src/runtime/browser-runtime.integration.test.ts
 apps/server/src/runtime/config.test.ts
 apps/server/src/runtime/config.ts
+apps/server/src/runtime/orphan-recovery.integration.test.ts
 apps/server/src/runtime/runtime.integration.test.ts
 apps/server/src/runtime/runtime.ts
 apps/server/tsconfig.json

@@ -21,7 +21,7 @@
 - TTS redacts contacts by default. The only exception is an exact server-approved contact from accepted durable draft facts or a committed booking while contact-processing consent is active;
 - ordinary speech is concise/natural; current + one ordered TTS prefetch feeds provider-neutral complete MP3/WAV rendering, gapless scheduled playback, and a four-segment/20 MB credit window with at most two decoded;
 - output `AudioContext` is created/resumed in the consent gesture before mic/network awaits;
-- a 16-clip same-origin reaction corpus is capability/stage/privacy gated and delayed 350 ms. Current runtime exposes only the non-claiming neutral clip; claim-bearing progress clips require a future explicit trusted server operation signal. Runtime provider calls for reactions are zero, and they have no transcript/state/provider/business effect;
+- a 16-clip same-origin Sulafat reaction corpus is committed as canonical mono PCM16LE 24 kHz WAV, capability/stage/privacy gated, and delayed 350 ms. Only fail-closed safe runtime policy can select a clip; current runtime exposes only the non-claiming neutral clip, while claim-bearing progress clips require a future explicit trusted server operation signal. Runtime provider calls for reactions are zero, and they have no transcript/state/provider/business effect;
 - default TTS remains exact xAI/eve/MP3. Gemini is an explicit four-env Preview profile; provider PCM is wrapped server-side as canonical complete WAV, and style is fixed server-owned neutral/curious/serious/excited with sensitive facts always neutral and visible transcript plain.
 
 No duplicate meeting table, external availability query, calendar event/invite, or CRM record is introduced.
@@ -102,7 +102,7 @@ The placeholder above is not a real image. Never use `docker compose down -v`. K
 
 ## Paid smokes: explicit opt-in only
 
-Deployment, tests, readiness, and schema verification do not spend provider usage. Static greeting/reaction regeneration is administrator-only, paid, explicit opt-in, and overwrites tracked assets; the assets are already committed, so do not regenerate them for ordinary setup:
+Deployment, tests, readiness, and schema verification do not spend provider usage. Static greeting/reaction regeneration is administrator-only, paid, explicit opt-in, and overwrites tracked assets; the reaction generator additionally requires the exact `gemini_3_1_pcm` / `google/gemini-3.1-flash-tts-preview` / `Sulafat` / `pcm` production profile and publishes canonical WAV without format conversion. The assets are already committed, so do not regenerate them for ordinary setup:
 
 ```bash
 BOTAMIN_GENERATE_PROACTIVE_GREETING=1 \

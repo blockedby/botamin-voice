@@ -8,7 +8,10 @@ import {
 	encodeBinaryAudioFrame,
 	type InternalVirtualMeetingProjection,
 } from "@botamin/contracts";
-import { createDeterministicMp3Fixture } from "../../../../packages/test-fixtures/src";
+import {
+	createDeterministicMp3Fixture,
+	createDeterministicTtsWavFixture,
+} from "../../../../packages/test-fixtures/src";
 import {
 	type AudioPlaybackApis,
 	type CompletePlaybackSegment,
@@ -1680,6 +1683,7 @@ describe("production browser voice integration", () => {
 		};
 		const queues: PhrasePlaybackQueue<number>[] = [];
 		const fixture = createDeterministicMp3Fixture();
+		const reactionFixture = createDeterministicTtsWavFixture();
 		const value = await readySession(
 			harness({
 				createPlayback: (options) => {
@@ -1696,8 +1700,15 @@ describe("production browser voice integration", () => {
 						fetch: async () => ({
 							ok: true,
 							status: 200,
-							headers: { get: () => String(fixture.byteLength) },
-							arrayBuffer: async () => fixture.slice().buffer,
+							headers: {
+								get: (name: string) =>
+									name.toLowerCase() === "content-length"
+										? String(reactionFixture.byteLength)
+										: name.toLowerCase() === "content-type"
+											? "audio/wav"
+											: null,
+							},
+							arrayBuffer: async () => reactionFixture.slice().buffer,
 						}),
 					});
 					queues.push(playback);

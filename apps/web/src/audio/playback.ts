@@ -427,17 +427,30 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 				signal: abortController.signal,
 			});
 			if (!response.ok) return;
+			const declaredContentType = response.headers?.get("content-type");
+			if (
+				declaredContentType !== undefined &&
+				declaredContentType !== null &&
+				declaredContentType.split(";", 1)[0]?.trim().toLowerCase() !==
+					clip.contentType
+			) {
+				return;
+			}
 			const bytes = await readBoundedReactionBytes(
 				response,
 				clip.maxBytes,
 				abortController,
 			);
+			const validBytes =
+				clip.contentType === "audio/mpeg"
+					? MpegAudioBytesSchema.safeParse(bytes).success
+					: CanonicalTtsWavBytesSchema.safeParse(bytes).success;
 			if (
 				epoch !== this.reactionEpoch ||
 				this.reactionGenerationId !== generationId ||
 				this.generationId !== null ||
 				this.muted ||
-				!MpegAudioBytesSchema.safeParse(bytes).success
+				!validBytes
 			) {
 				return;
 			}

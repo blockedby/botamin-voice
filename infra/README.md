@@ -51,7 +51,7 @@ docker compose exec -T app bun /app/ops/db.js verify-rc4
 
 That check is PII-safe and verifies SQLite integrity, exact RC4 context columns/FK/check constraints, persisted JSON revision/timestamp consistency, foreign keys, and absence of duplicate fact/evidence/virtual-meeting tables.
 
-The default `.env.example` profile is `xai_mp3` / `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`. Browser playback is provider-neutral and bounded; output `AudioContext` is owned by the consent gesture. The 16 committed same-origin reaction assets make zero runtime provider calls and should not be regenerated during deployment.
+The default `.env.example` profile is `xai_mp3` / `x-ai/grok-voice-tts-1.0` / `eve` / `mp3`. Browser dynamic playback is provider-neutral and bounded; output `AudioContext` is owned by the consent gesture. The 16 committed same-origin reaction assets are Sulafat canonical mono PCM16LE 24 kHz WAVs, make zero runtime provider calls, and should not be regenerated during deployment.
 
 Caddy proxies WebSocket upgrades automatically. `docker compose down` preserves
 all named volumes; never use `down -v` on a host containing real bookings or

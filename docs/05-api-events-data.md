@@ -11,7 +11,7 @@
 - Binary WebSocket frames несут client PCM16 input или один полный provider-neutral server MP3/canonical-WAV phrase payload; raw provider PCM/network chunks никогда не публикуются как playable audio.
 - Tool handlers не доступны как публичные HTTP endpoints.
 - Proactive greeting не является API/session contract: page entry делает один same-origin GET/playback static MP3, без conversation REST/WS/mic/provider/session до обоих consents. Blocked/error fallback — `Включить приветствие`; session start прекращает static playback.
-- Committed proactive greeting и 16 reaction MP3s — same-origin static product assets without visitor data. Their generation is explicit paid admin opt-in; visitor runtime never synthesizes them, and reactions have no transcript/state/provider/business effect.
+- The committed proactive greeting MP3 and 16 Sulafat canonical mono PCM16LE 24 kHz reaction WAVs are same-origin static product assets without visitor data. Their generation is explicit paid admin opt-in; reaction regeneration also requires the exact Gemini PCM/Sulafat production profile. Visitor runtime never synthesizes them, and reactions have no transcript/state/provider/business effect.
 
 ## 2. REST endpoints
 

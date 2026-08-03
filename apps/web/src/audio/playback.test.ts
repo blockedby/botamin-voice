@@ -110,12 +110,23 @@ class ManualScheduler implements PlaybackScheduler {
 	}
 }
 
-function reactionResponse(bytes = createDeterministicMp3Fixture()) {
+function reactionResponse(
+	bytes: Uint8Array<ArrayBufferLike> = createDeterministicTtsWavFixture(),
+	contentType: string | null = "audio/wav",
+) {
 	return {
 		ok: true,
 		status: 200,
-		headers: { get: () => String(bytes.byteLength) },
-		arrayBuffer: async () => bytes.slice().buffer,
+		headers: {
+			get: (name: string) => {
+				if (name.toLowerCase() === "content-length") {
+					return String(bytes.byteLength);
+				}
+				if (name.toLowerCase() === "content-type") return contentType;
+				return null;
+			},
+		},
+		arrayBuffer: async () => Uint8Array.from(bytes).buffer,
 	};
 }
 
@@ -535,7 +546,7 @@ describe("bounded complete MP3 and WAV Web Audio playback", () => {
 		await Bun.sleep(0);
 		expect(fetches).toHaveLength(1);
 		expect(fetches[0]).toMatchObject({
-			input: "/assets/reactions/neutral-good.mp3",
+			input: "/assets/reactions/neutral-good.wav",
 			init: {
 				method: "GET",
 				credentials: "same-origin",
@@ -548,6 +559,56 @@ describe("bounded complete MP3 and WAV Web Audio playback", () => {
 		harness.sources[0]?.finish();
 		expect(dynamicStarts).toEqual([]);
 		expect(dynamicReleases).toEqual([]);
+	});
+
+	test("validates reaction response MIME and canonical WAV bytes before decode", async () => {
+		for (const response of [
+			reactionResponse(createDeterministicTtsWavFixture(), "audio/mpeg"),
+			reactionResponse(createRawTtsPcm16Fixture(), "audio/wav"),
+			reactionResponse(createMalformedMp3Fixture(), "audio/wav"),
+		]) {
+			const harness = playbackHarness();
+			const scheduler = new ManualScheduler();
+			const queue = new PhrasePlaybackQueue(
+				harness.apis,
+				{},
+				{ scheduler, fetch: async () => response },
+			);
+			expect(
+				queue.requestReaction({
+					turnId: "01J00000000000000000000003",
+					generationId,
+					clipId: "neutral-good",
+					delayMs: 350,
+				}),
+			).toBe(true);
+			scheduler.runNext();
+			await Bun.sleep(0);
+			expect(harness.decodedSizes).toEqual([]);
+			expect(harness.sources).toEqual([]);
+		}
+
+		const harness = playbackHarness();
+		const scheduler = new ManualScheduler();
+		const wav = createDeterministicTtsWavFixture();
+		const queue = new PhrasePlaybackQueue(
+			harness.apis,
+			{},
+			{
+				scheduler,
+				fetch: async () => reactionResponse(wav, null),
+			},
+		);
+		queue.requestReaction({
+			turnId: "01J00000000000000000000004",
+			generationId,
+			clipId: "neutral-good",
+			delayMs: 350,
+		});
+		scheduler.runNext();
+		await Bun.sleep(0);
+		expect(harness.decodedSizes).toEqual([wav.byteLength]);
+		expect(harness.sources).toHaveLength(1);
 	});
 
 	test("dynamic metadata preempts reaction synchronously with no source overlap", async () => {

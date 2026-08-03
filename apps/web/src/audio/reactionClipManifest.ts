@@ -37,11 +37,12 @@ export type ReactionClipTriggerIntent =
 
 export interface ReactionClipManifestEntry {
 	readonly id: ReactionClipId;
-	readonly path: `/assets/reactions/${string}.mp3`;
+	readonly path: `/assets/reactions/${string}.${"mp3" | "wav"}`;
+	readonly contentType: "audio/mpeg" | "audio/wav";
 	readonly semanticClass: ReactionClipSemanticClass;
 	readonly allowedStages: readonly ConversationStage[];
 	readonly triggerIntent: ReactionClipTriggerIntent;
-	readonly maxDurationMs: 1_250;
+	readonly maxDurationMs: 2_000;
 	readonly maxBytes: 128_000;
 }
 
@@ -57,14 +58,15 @@ const INTERACTIVE_STAGES = [
 ] as const satisfies readonly ConversationStage[];
 
 const CLIP_POLICY = {
-	maxDurationMs: 1_250,
+	contentType: "audio/wav",
+	maxDurationMs: 2_000,
 	maxBytes: 128_000,
 } as const;
 
 export const REACTION_CLIP_MANIFEST = [
 	{
 		id: "neutral-good",
-		path: "/assets/reactions/neutral-good.mp3",
+		path: "/assets/reactions/neutral-good.wav",
 		semanticClass: "neutral_thinking_backchannel",
 		allowedStages: INTERACTIVE_STAGES,
 		triggerIntent: "latency_backchannel_needed",
@@ -72,7 +74,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "neutral-accepted",
-		path: "/assets/reactions/neutral-accepted.mp3",
+		path: "/assets/reactions/neutral-accepted.wav",
 		semanticClass: "neutral_thinking_backchannel",
 		allowedStages: INTERACTIVE_STAGES,
 		triggerIntent: "latency_backchannel_needed",
@@ -80,7 +82,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "neutral-checking",
-		path: "/assets/reactions/neutral-checking.mp3",
+		path: "/assets/reactions/neutral-checking.wav",
 		semanticClass: "neutral_thinking_backchannel",
 		allowedStages: INTERACTIVE_STAGES,
 		triggerIntent: "latency_backchannel_needed",
@@ -88,7 +90,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "neutral-moment",
-		path: "/assets/reactions/neutral-moment.mp3",
+		path: "/assets/reactions/neutral-moment.wav",
 		semanticClass: "neutral_thinking_backchannel",
 		allowedStages: INTERACTIVE_STAGES,
 		triggerIntent: "latency_backchannel_needed",
@@ -96,7 +98,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "schedule-calculating-options",
-		path: "/assets/reactions/schedule-calculating-options.mp3",
+		path: "/assets/reactions/schedule-calculating-options.wav",
 		semanticClass: "scheduling_calculation",
 		allowedStages: ["BOOKING_OFFER", "COLLECT_BOOKING"],
 		triggerIntent: "scheduling_calculation_active",
@@ -104,7 +106,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "schedule-checking-intervals",
-		path: "/assets/reactions/schedule-checking-intervals.mp3",
+		path: "/assets/reactions/schedule-checking-intervals.wav",
 		semanticClass: "scheduling_calculation",
 		allowedStages: ["BOOKING_OFFER", "COLLECT_BOOKING"],
 		triggerIntent: "scheduling_calculation_active",
@@ -112,7 +114,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "schedule-matching-time",
-		path: "/assets/reactions/schedule-matching-time.mp3",
+		path: "/assets/reactions/schedule-matching-time.wav",
 		semanticClass: "scheduling_calculation",
 		allowedStages: ["BOOKING_OFFER", "COLLECT_BOOKING"],
 		triggerIntent: "scheduling_calculation_active",
@@ -120,7 +122,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "validation-checking-data",
-		path: "/assets/reactions/validation-checking-data.mp3",
+		path: "/assets/reactions/validation-checking-data.wav",
 		semanticClass: "data_validation",
 		allowedStages: [
 			"DISCOVERY",
@@ -132,7 +134,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "validation-checking-format",
-		path: "/assets/reactions/validation-checking-format.mp3",
+		path: "/assets/reactions/validation-checking-format.wav",
 		semanticClass: "data_validation",
 		allowedStages: [
 			"DISCOVERY",
@@ -144,7 +146,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "validation-checking-fields",
-		path: "/assets/reactions/validation-checking-fields.mp3",
+		path: "/assets/reactions/validation-checking-fields.wav",
 		semanticClass: "data_validation",
 		allowedStages: [
 			"DISCOVERY",
@@ -156,7 +158,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "objection-examine",
-		path: "/assets/reactions/objection-examine.mp3",
+		path: "/assets/reactions/objection-examine.wav",
 		semanticClass: "objection_transition",
 		allowedStages: ["OBJECTION"],
 		triggerIntent: "objection_detected",
@@ -164,7 +166,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "objection-more-detail",
-		path: "/assets/reactions/objection-more-detail.mp3",
+		path: "/assets/reactions/objection-more-detail.wav",
 		semanticClass: "objection_transition",
 		allowedStages: ["OBJECTION"],
 		triggerIntent: "objection_detected",
@@ -172,7 +174,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "objection-to-the-point",
-		path: "/assets/reactions/objection-to-the-point.mp3",
+		path: "/assets/reactions/objection-to-the-point.wav",
 		semanticClass: "objection_transition",
 		allowedStages: ["OBJECTION"],
 		triggerIntent: "objection_detected",
@@ -180,7 +182,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "clarification-one-point",
-		path: "/assets/reactions/clarification-one-point.mp3",
+		path: "/assets/reactions/clarification-one-point.wav",
 		semanticClass: "clarification",
 		allowedStages: [
 			"DISCOVERY",
@@ -195,7 +197,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "clarification-one-detail",
-		path: "/assets/reactions/clarification-one-detail.mp3",
+		path: "/assets/reactions/clarification-one-detail.wav",
 		semanticClass: "clarification",
 		allowedStages: [
 			"DISCOVERY",
@@ -210,7 +212,7 @@ export const REACTION_CLIP_MANIFEST = [
 	},
 	{
 		id: "clarification-meaning",
-		path: "/assets/reactions/clarification-meaning.mp3",
+		path: "/assets/reactions/clarification-meaning.wav",
 		semanticClass: "clarification",
 		allowedStages: [
 			"DISCOVERY",

@@ -14,7 +14,7 @@
 
 До этого pipeline существует отдельный pre-consent path: page entry делает одну `HTMLAudio` playback attempt committed same-origin `/assets/botamin-proactive-greeting.mp3`. Он не создаёт conversation, REST/WS, microphone, provider call или session; blocked/error переводит UI к `Включить приветствие`, а session start останавливает/release-ит audio.
 
-Действующий post-consent pipeline: **browser PCM16 chunks → gateway/utterance assembler emits one validated STT WAV → atomic `audio/wav` SttPort → OpenRouter final transcript → Codex/Luna → two-request ordered TTS prefetch → complete provider-neutral MP3 or canonical WAV segments → gapless scheduled playback**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint. Static proactive greeting/reaction MP3s не входят в provider runtime pipeline.
+Действующий post-consent pipeline: **browser PCM16 chunks → gateway/utterance assembler emits one validated STT WAV → atomic `audio/wav` SttPort → OpenRouter final transcript → Codex/Luna → two-request ordered TTS prefetch → complete provider-neutral MP3 or canonical WAV segments → gapless scheduled playback**. Один OpenRouter key остаётся только на backend и авторизует оба voice endpoint. The static proactive greeting MP3 and Sulafat canonical-WAV reactions не входят в provider runtime pipeline.
 
 Это отличается от end-to-end speech-to-speech: добавляется один orchestration layer, зато используется уже оплаченная Codex subscription и мозг можно заменить без переделки audio UI.
 
@@ -160,7 +160,7 @@ P0 adapter — fixed-schema non-PII console acknowledgment. P1 — signed HTTP w
 2. Autoplay block или media error не запускает alternate network/provider path: UI показывает `Включить приветствие`, и повтор возможен только по user action.
 3. До обоих consents не создаются conversation/WS/microphone/provider/session. При старте настоящей session greeting немедленно pause/reset/release.
 
-Assets создаются отдельно от visitor runtime. Admin explicitly opts in to the paid proactive-greeting or local-reaction generator; the 16 reaction MP3s and proactive greeting are already committed static same-origin assets. They contain no visitor data, and ordinary entry/turn handling never synthesizes them.
+Assets создаются отдельно от visitor runtime. Admin explicitly opts in to the paid proactive-greeting or local-reaction generator; the 16 Sulafat canonical mono PCM16LE 24 kHz reaction WAVs and proactive greeting MP3 are already committed static same-origin assets. Reaction regeneration additionally requires the exact Gemini PCM/Sulafat production profile. They contain no visitor data, and ordinary entry/turn handling never synthesizes them.
 
 ### Post-consent turn order
 

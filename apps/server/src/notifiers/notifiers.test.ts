@@ -47,15 +47,65 @@ afterEach(() => {
 });
 
 describe("lead notifiers and outbox", () => {
-	test("writes structured lead payload only to the dedicated console sink", async () => {
+	test("writes only the fixed non-PII console acknowledgment schema", async () => {
 		const lines: string[] = [];
-		const payload = event();
+		const payload = {
+			...event(),
+			rawSecret: "console-secret-sentinel",
+			transcript: "private transcript sentinel",
+			data: {
+				...event().data,
+				name: "Private Name Sentinel",
+				company: "Private Company Sentinel",
+				contacts: {
+					email: "private-console@example.invalid",
+					phone: "+19995550123",
+					telegram: "@private_console",
+				},
+				unknownLeadValue: "unknown-key-sentinel",
+			},
+		} as unknown as BookingDomainEvent;
 		await new ConsoleLeadNotifier((line) => lines.push(line)).publish(payload);
+
 		expect(lines).toHaveLength(1);
 		expect(JSON.parse(lines[0] ?? "{}")).toEqual({
 			channel: "lead-notifier",
-			event: payload,
+			status: "accepted",
+			eventKind: "booking.created",
 		});
+		const output = lines.join("\n");
+		for (const forbidden of [
+			payload.eventId,
+			payload.data.bookingId,
+			payload.data.conversationId,
+			"Private Name Sentinel",
+			"Private Company Sentinel",
+			"private-console@example.invalid",
+			"+19995550123",
+			"@private_console",
+			"private transcript sentinel",
+			"console-secret-sentinel",
+			"unknown-key-sentinel",
+		]) {
+			expect(output).not.toContain(forbidden);
+		}
+	});
+
+	test("maps an unrecognized runtime event kind to a bounded value", async () => {
+		const lines: string[] = [];
+		const payload = {
+			...event(),
+			type: "private-custom-event-kind",
+			privateKey: "private-unknown-event-value",
+		} as unknown as BookingDomainEvent;
+		await new ConsoleLeadNotifier((line) => lines.push(line)).publish(payload);
+
+		expect(JSON.parse(lines[0] ?? "{}")).toEqual({
+			channel: "lead-notifier",
+			status: "accepted",
+			eventKind: "unknown",
+		});
+		expect(lines.join("\n")).not.toContain("private");
 	});
 
 	test("signs the exact webhook body and supplies event deduplication headers", async () => {

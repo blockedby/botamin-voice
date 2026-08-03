@@ -28,6 +28,10 @@ export function App({ createSession = createBrowserVoiceSession }: AppProps) {
 		conversationStage: null,
 		textInputAvailable: false,
 		textSubmission: { status: "idle" },
+		bookingDraft: null,
+		internalMeeting: null,
+		bookingSubmission: { status: "idle" },
+		bookingInputAvailable: false,
 	}));
 	const [consent, setConsent] = useState<VoiceConsent>(INITIAL_CONSENT);
 
@@ -55,6 +59,10 @@ export function App({ createSession = createBrowserVoiceSession }: AppProps) {
 				conversationStage: snapshot.conversationStage,
 				textInputAvailable: snapshot.textInputAvailable,
 				textSubmission: snapshot.textSubmission,
+				bookingDraft: snapshot.bookingDraft,
+				internalMeeting: snapshot.internalMeeting,
+				bookingSubmission: snapshot.bookingSubmission,
+				bookingInputAvailable: snapshot.bookingInputAvailable,
 				onConsentChange: setConsent,
 				onStart: () => {
 					void session?.start(consent);
@@ -72,6 +80,10 @@ export function App({ createSession = createBrowserVoiceSession }: AppProps) {
 				onInterrupt: () => session?.interrupt(),
 				onReconnect: () => session?.reconnect(),
 				onTextSubmit: (text) => session?.submitText(text) ?? false,
+				onBookingSubmit: (submission) =>
+					session?.submitBookingForm(submission) ?? false,
+				onBookingConflictResolve: (selection) =>
+					session?.resolveBookingConflict(selection) ?? false,
 				onRestart: () => {
 					if (snapshot.state.kind === "error") {
 						void session?.retry();

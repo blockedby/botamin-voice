@@ -1,8 +1,11 @@
 import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
+import { FinalMeetingWidget } from "./FinalMeetingWidget";
 import { ProactiveGreeting, useProactiveGreeting } from "./ProactiveGreeting";
 import { TextChat } from "./TextChat";
 import type {
+	BookingConflictSelection,
+	BookingFormSubmission,
 	FinalTranscriptEntry,
 	VoiceCaptureProgress,
 	VoiceConsent,
@@ -11,6 +14,9 @@ import type {
 } from "./voiceTypes";
 
 export type {
+	BookingConflictSelection,
+	BookingFormSubmission,
+	BookingSubmissionState,
 	FinalTranscriptEntry,
 	TextSubmissionState,
 	VoiceCaptureProgress,
@@ -30,6 +36,8 @@ export interface VoiceDemoActions {
 	onReconnect: () => void;
 	onRestart: () => void;
 	onTextSubmit: (text: string) => boolean;
+	onBookingSubmit: (submission: BookingFormSubmission) => boolean;
+	onBookingConflictResolve: (selection: BookingConflictSelection) => boolean;
 }
 
 export interface VoiceDemoProps
@@ -105,24 +113,23 @@ export function getVoiceStatePresentation(
 			};
 		case "booked":
 			return {
-				label: "Следующий шаг записан",
-				detail: "Контакт и договорённость сохранены для команды Botamin.",
+				label: "Внутренняя виртуальная встреча создана",
+				detail: "Точный слот по Москве подтверждён сервером.",
 				tone: "success",
 			};
 		case "qualification":
 			return {
-				label: "Уточняем контекст",
+				label: "Уточняем недостающий контекст",
 				detail:
-					state.questionNumber && state.questionCount
-						? `Необязательный вопрос ${state.questionNumber} из ${state.questionCount}. Можно остановиться в любой момент.`
-						: "Два дополнительных вопроса необязательны. Можно остановиться в любой момент.",
+					"Уточнение необязательно: нужен только отсутствующий факт. Можно остановиться в любой момент.",
 				tone: "active",
 			};
 		case "complete":
 			return state.bookingOutcome === "committed"
 				? {
 						label: "Разговор завершён",
-						detail: "Спасибо. Лид и согласованный следующий шаг записаны.",
+						detail:
+							"Внутренняя виртуальная встреча создана на точный согласованный слот по Москве. Внешнее календарное событие и приглашение не создавались.",
 						tone: "success",
 					}
 				: {
@@ -316,7 +323,7 @@ export function getVoiceLiveStatusAnnouncement(
 ): string {
 	const presentation = getVoiceStatePresentation(state, muted);
 	if (state.kind === "booked") {
-		return "Лид и следующий шаг записаны. Это не календарная встреча.";
+		return "Внутренняя виртуальная встреча создана на точный согласованный слот по Москве. Внешнее календарное событие и приглашение не создавались.";
 	}
 	if (state.kind === "complete" && state.bookingOutcome === "committed") {
 		const qualification =
@@ -335,8 +342,10 @@ export function getLatestFinalTranscriptAnnouncement(
 ): string {
 	const latest = entries.at(-1);
 	if (!latest) return "";
-	const speaker = latest.speaker === "agent" ? "Botamin" : "Вы";
-	return `Финальная реплика, ${speaker}: ${latest.text}`;
+	const speaker = latest.speaker === "agent" ? "Botamin" : "вы";
+	// The visible transcript keeps the exact text. Live announcements deliberately
+	// omit it because a final spoken/typed turn may contain full contact PII.
+	return `Добавлена финальная реплика: ${speaker}.`;
 }
 
 export function getUtteranceCountdown(progress: VoiceCaptureProgress): {
@@ -463,8 +472,9 @@ function StateActions(props: VoiceDemoProps) {
 		return (
 			<div className="qualification-choice">
 				<p id="qualification-offer">
-					Лид уже записан. Два коротких дополнительных вопроса необязательны:
-					можно отказаться до первого или остановиться после него.
+					Внутренняя виртуальная встреча уже создана на точный согласованный
+					слот по Москве. Botamin уточнит только недостающий контекст; отвечать
+					необязательно, и разговор можно завершить в любой момент.
 				</p>
 				<ControlButton onClick={props.onStop}>Завершить разговор</ControlButton>
 			</div>
@@ -496,7 +506,6 @@ export function VoiceDemo(props: VoiceDemoProps) {
 	const presentation = getVoiceStatePresentation(props.state, props.muted);
 	const proactiveGreeting = useProactiveGreeting(props.state.kind !== "idle");
 	const isActive = ACTIVE_STATES.has(props.state.kind);
-	const bookingCommitted = hasCommittedBooking(props.state);
 	const showCountdown =
 		(props.state.kind === "listening" ||
 			props.state.kind === "qualification") &&
@@ -508,6 +517,19 @@ export function VoiceDemo(props: VoiceDemoProps) {
 		props.state.kind !== "booked";
 	const muteButtonRef = useRef<HTMLButtonElement>(null);
 	const statusRef = useRef<HTMLDivElement>(null);
+	const meetingWidgetRef = useRef<HTMLElement>(null);
+	const focusedMeetingId = useRef<string | null>(null);
+	useEffect(() => {
+		if (
+			props.internalMeeting &&
+			props.bookingSubmission.status === "committed" &&
+			props.bookingSubmission.bookingId === props.internalMeeting.bookingId &&
+			focusedMeetingId.current !== props.internalMeeting.bookingId
+		) {
+			focusedMeetingId.current = props.internalMeeting.bookingId;
+			meetingWidgetRef.current?.focus();
+		}
+	}, [props.internalMeeting, props.bookingSubmission]);
 	const focusTargets = () => ({
 		mute: muteButtonRef.current,
 		status: statusRef.current,
@@ -606,14 +628,11 @@ export function VoiceDemo(props: VoiceDemoProps) {
 				</>
 			) : null}
 
-			{bookingCommitted ? (
-				<div className="booking-confirmation">
-					<strong>Лид и следующий шаг записаны</strong>
-					<p>
-						Это не календарная встреча. Команда Botamin получила договорённость
-						и свяжется по оставленному контакту.
-					</p>
-				</div>
+			{props.internalMeeting ? (
+				<FinalMeetingWidget
+					meeting={props.internalMeeting}
+					widgetRef={meetingWidgetRef}
+				/>
 			) : null}
 
 			<Transcript entries={props.transcript} />
@@ -622,7 +641,12 @@ export function VoiceDemo(props: VoiceDemoProps) {
 				conversationStage={props.conversationStage}
 				textInputAvailable={props.textInputAvailable}
 				textSubmission={props.textSubmission}
+				bookingDraft={props.bookingDraft}
+				bookingSubmission={props.bookingSubmission}
+				bookingInputAvailable={props.bookingInputAvailable}
 				onTextSubmit={props.onTextSubmit}
+				onBookingSubmit={props.onBookingSubmit}
+				onBookingConflictResolve={props.onBookingConflictResolve}
 			/>
 
 			<div className="voice-actions">

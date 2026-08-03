@@ -2,6 +2,10 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import {
+	createBrowserBookingDraft,
+	createInternalMeeting,
+} from "../testFixtures/rc4";
 import type {
 	FinalTranscriptEntry,
 	VoiceDemoProps,
@@ -40,6 +44,10 @@ function renderVoice(
 			conversationStage={null}
 			textInputAvailable={false}
 			textSubmission={{ status: "idle" }}
+			bookingDraft={null}
+			internalMeeting={null}
+			bookingSubmission={{ status: "idle" }}
+			bookingInputAvailable={false}
 			onConsentChange={noop}
 			onStart={noop}
 			onCommit={noop}
@@ -50,6 +58,8 @@ function renderVoice(
 			onReconnect={noop}
 			onRestart={noop}
 			onTextSubmit={() => false}
+			onBookingSubmit={() => false}
+			onBookingConflictResolve={() => false}
 			{...overrides}
 		/>,
 	);
@@ -64,7 +74,7 @@ describe("VoiceDemo state semantics", () => {
 		[{ kind: "processing" }, "Обрабатываю реплику"],
 		[{ kind: "thinking" }, "Подбираю релевантный сценарий"],
 		[{ kind: "speaking" }, "AI-продавец отвечает"],
-		[{ kind: "booked" }, "Следующий шаг записан"],
+		[{ kind: "booked" }, "Внутренняя виртуальная встреча создана"],
 		[
 			{
 				kind: "qualification",
@@ -72,7 +82,7 @@ describe("VoiceDemo state semantics", () => {
 				questionNumber: 2,
 				questionCount: 2,
 			},
-			"Необязательный вопрос 2 из 2",
+			"Уточнение необязательно: нужен только отсутствующий факт",
 		],
 		[
 			{
@@ -323,17 +333,20 @@ describe("VoiceDemo controls and transcript", () => {
 				{
 					transcript: [],
 					conversationStage: "COLLECT_BOOKING",
+					bookingDraft: createBrowserBookingDraft(),
 				},
 			),
 		).toContain("booking-details-title");
 	});
 
-	test("booked confirms only the recorded lead and makes qualification optional", () => {
+	test("booked presentation goes directly to optional missing context without synthesizing a widget", () => {
 		const html = renderVoice({ kind: "booked" });
-		expect(html).toContain("Лид и следующий шаг записаны");
-		expect(html).toContain("Это не календарная встреча");
-		expect(html).toContain("дополнительных вопроса");
-		expect(html).toContain("необязательны");
+		expect(html).toContain("Внутренняя виртуальная встреча уже создана");
+		expect(html).not.toContain("final-meeting-widget");
+		expect(html).toContain("только недостающий контекст");
+		expect(html).toContain("отвечать необязательно");
+		expect(html).not.toContain("два коротких");
+		expect(html).not.toContain("дополнительных вопроса");
 		expect(html).toContain("Завершить разговор");
 	});
 
@@ -342,7 +355,7 @@ describe("VoiceDemo controls and transcript", () => {
 			{
 				id: "committed",
 				speaker: "agent" as const,
-				text: "Контакт и следующий шаг записаны.",
+				text: "Внутренняя виртуальная встреча создана на точный согласованный слот по Москве.",
 			},
 		];
 		const html = renderVoice({ kind: "booked" }, { transcript });
@@ -378,16 +391,39 @@ describe("VoiceDemo controls and transcript", () => {
 			expect(rendered.match(/aria-live="polite"/g)?.length).toBe(1);
 		}
 		const bookedLive = liveRegionContent(html);
-		expect(bookedLive.match(/Лид и следующий шаг записаны/g)?.length).toBe(1);
-		expect(bookedLive).toContain("Это не календарная встреча");
+		expect(
+			bookedLive.match(/Внутренняя виртуальная встреча создана/g)?.length,
+		).toBe(1);
+		expect(bookedLive).toContain("точный согласованный слот по Москве");
+		expect(bookedLive).toContain(
+			"Внешнее календарное событие и приглашение не создавались",
+		);
 		expect(liveRegionContent(qualification)).toContain(
-			"Необязательный вопрос 2 из 2",
+			"нужен только отсутствующий факт",
 		);
 		expect(liveRegionContent(disconnected)).toContain("Связь прервана");
 		expect(liveRegionContent(audioError)).toContain("Продолжаем текстом");
 		expect(liveRegionContent(audioError)).toContain(
-			"Финальная реплика, Botamin: Продолжим по видимому тексту.",
+			"Добавлена финальная реплика: Botamin.",
 		);
+		expect(liveRegionContent(audioError)).not.toContain(
+			"Продолжим по видимому тексту.",
+		);
+	});
+
+	test("renders a server meeting without a transcript claim and keeps full PII outside live regions", () => {
+		const meeting = createInternalMeeting();
+		const html = renderVoice(
+			{ kind: "listening", bookingOutcome: "committed" },
+			{ internalMeeting: meeting, transcript: [] },
+		);
+		expect(html).toContain("final-meeting-widget");
+		expect(html).toContain("Внутренняя виртуальная встреча создана");
+		expect(html).toContain("anna.long-contact@example.com");
+		const live = liveRegionContent(html);
+		expect(live).not.toContain("anna.long-contact@example.com");
+		expect(live).not.toContain("+7 999 123-45-67");
+		expect(live).not.toContain("@anna_botamin");
 	});
 
 	test("keeps visual booking status and transcript outside the sole live region", () => {
@@ -398,15 +434,16 @@ describe("VoiceDemo controls and transcript", () => {
 					{
 						id: "committed",
 						speaker: "agent",
-						text: "Контакт и следующий шаг записаны.",
+						text: "Внутренняя виртуальная встреча создана на точный согласованный слот по Москве.",
 					},
 				],
 			},
 		);
 		expect(html.match(/role="status"/g)?.length).toBe(1);
 		expect(html.match(/aria-live="polite"/g)?.length).toBe(1);
-		expect(html).toContain("Следующий шаг записан");
-		expect(html).toContain("Контакт и следующий шаг записаны.");
+		expect(html).toContain("Внутренняя виртуальная встреча создана");
+		expect(html).toContain("точный согласованный слот по Москве");
+		expect(html).not.toContain("Контакт и следующий шаг записаны.");
 	});
 
 	test("pre-booking completion is neutral and makes no saved-data claim", () => {
@@ -417,14 +454,19 @@ describe("VoiceDemo controls and transcript", () => {
 		expect(html).not.toContain("Это не календарная встреча");
 	});
 
-	test("committed completion keeps the no-calendar confirmation", () => {
+	test("committed completion confirms meeting truth without synthesizing authoritative details", () => {
 		const html = renderVoice({
 			kind: "complete",
 			bookingOutcome: "committed",
 			qualificationStatus: "skipped",
 		});
-		expect(html).toContain("Лид и следующий шаг записаны");
-		expect(html).toContain("Это не календарная встреча");
+		expect(html).not.toContain("final-meeting-widget");
+		expect(html).toContain(
+			"Внутренняя виртуальная встреча создана на точный согласованный слот по Москве",
+		);
+		expect(html).toContain(
+			"Внешнее календарное событие и приглашение не создавались",
+		);
 		expect(html).not.toContain("Лид и контакт не записывались");
 	});
 

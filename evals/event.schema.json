@@ -6,9 +6,16 @@
 	"additionalProperties": false,
 	"required": ["schemaVersion", "scenarioId", "sequence", "type"],
 	"properties": {
-		"schemaVersion": { "const": 1 },
-		"scenarioId": { "type": "string" },
-		"sequence": { "type": "integer", "minimum": 1 },
+		"schemaVersion": {
+			"const": 1
+		},
+		"scenarioId": {
+			"type": "string"
+		},
+		"sequence": {
+			"type": "integer",
+			"minimum": 1
+		},
 		"type": {
 			"enum": [
 				"stage",
@@ -18,12 +25,19 @@
 				"tool_result",
 				"domain_event",
 				"provider_event",
-				"transport"
+				"transport",
+				"server_event"
 			]
 		},
-		"stage": { "type": "string" },
-		"role": { "enum": ["user", "assistant", "system"] },
-		"text": { "type": "string" },
+		"stage": {
+			"type": "string"
+		},
+		"role": {
+			"enum": ["user", "assistant", "system"]
+		},
+		"text": {
+			"type": "string"
+		},
 		"semantics": {
 			"type": "array",
 			"uniqueItems": true,
@@ -34,34 +48,81 @@
 					"booking_accepted",
 					"contact_consent_granted",
 					"booking_confirmation",
-					"qualification_consent_request",
-					"qualification_consent_granted",
-					"qualification_consent_declined",
 					"qualification_question",
-					"clear_refusal"
+					"clear_refusal",
+					"qualification_leads_question",
+					"qualification_managers_question",
+					"daily_lead_basis_question"
 				]
 			}
 		},
 		"claimRefs": {
 			"type": "array",
 			"uniqueItems": true,
-			"items": { "type": "string" }
+			"items": {
+				"type": "string"
+			}
 		},
-		"name": { "type": "string" },
-		"callId": { "type": "string" },
-		"ok": { "type": "boolean" },
-		"replayed": { "type": "boolean" },
-		"bookingId": { "type": "string" },
-		"status": { "type": "string" },
-		"service": { "type": "string" },
+		"name": {
+			"type": "string"
+		},
+		"callId": {
+			"type": "string"
+		},
+		"ok": {
+			"type": "boolean"
+		},
+		"replayed": {
+			"type": "boolean"
+		},
+		"bookingId": {
+			"type": "string"
+		},
+		"status": {
+			"type": "string"
+		},
+		"service": {
+			"type": "string"
+		},
 		"payload": {},
-		"inputMode": { "enum": ["typed", "spoken"] }
+		"inputMode": {
+			"enum": ["typed", "spoken"]
+		},
+		"authorizationId": {
+			"type": "string",
+			"minLength": 1,
+			"maxLength": 128
+		},
+		"purpose": {
+			"enum": ["booking_contact_confirmation"]
+		},
+		"attestation": {
+			"enum": ["server_verified_draft_booking_match"]
+		},
+		"revision": {
+			"type": "integer",
+			"minimum": 0
+		},
+		"channels": {
+			"type": "array",
+			"uniqueItems": true,
+			"items": {
+				"enum": ["email", "phone", "telegram"]
+			}
+		},
+		"contactCount": {
+			"type": "integer",
+			"minimum": 0,
+			"maximum": 3
+		}
 	},
 	"$defs": {
 		"entityId": {
 			"type": "string",
 			"anyOf": [
-				{ "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+				{
+					"pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+				},
 				{
 					"pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 				}
@@ -82,8 +143,12 @@
 					"format": "date-time",
 					"pattern": "Z$"
 				},
-				"timeZone": { "const": "Europe/Moscow" },
-				"durationMinutes": { "const": 20 }
+				"timeZone": {
+					"const": "Europe/Moscow"
+				},
+				"durationMinutes": {
+					"const": 20
+				}
 			}
 		},
 		"contact": {
@@ -93,7 +158,9 @@
 					"additionalProperties": false,
 					"required": ["channel", "value"],
 					"properties": {
-						"channel": { "const": "email" },
+						"channel": {
+							"const": "email"
+						},
 						"value": {
 							"type": "string",
 							"format": "email",
@@ -106,8 +173,14 @@
 					"additionalProperties": false,
 					"required": ["channel", "value"],
 					"properties": {
-						"channel": { "const": "phone" },
-						"value": { "type": "string", "minLength": 5, "maxLength": 64 }
+						"channel": {
+							"const": "phone"
+						},
+						"value": {
+							"type": "string",
+							"minLength": 5,
+							"maxLength": 64
+						}
 					}
 				},
 				{
@@ -115,8 +188,14 @@
 					"additionalProperties": false,
 					"required": ["channel", "value"],
 					"properties": {
-						"channel": { "const": "telegram" },
-						"value": { "type": "string", "minLength": 2, "maxLength": 128 }
+						"channel": {
+							"const": "telegram"
+						},
+						"value": {
+							"type": "string",
+							"minLength": 2,
+							"maxLength": 128
+						}
 					}
 				}
 			]
@@ -134,22 +213,34 @@
 				"consentConfirmed"
 			],
 			"properties": {
-				"conversationId": { "$ref": "#/$defs/entityId" },
+				"conversationId": {
+					"$ref": "#/$defs/entityId"
+				},
 				"idempotencyKey": {
 					"type": "string",
 					"minLength": 10,
 					"maxLength": 128
 				},
-				"name": { "type": "string", "minLength": 1, "maxLength": 120 },
+				"name": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 120
+				},
 				"contacts": {
 					"type": "array",
 					"minItems": 2,
 					"maxItems": 3,
-					"items": { "$ref": "#/$defs/contact" },
+					"items": {
+						"$ref": "#/$defs/contact"
+					},
 					"allOf": [
 						{
 							"contains": {
-								"properties": { "channel": { "const": "email" } },
+								"properties": {
+									"channel": {
+										"const": "email"
+									}
+								},
 								"required": ["channel"]
 							},
 							"minContains": 1,
@@ -158,7 +249,9 @@
 						{
 							"contains": {
 								"properties": {
-									"channel": { "enum": ["phone", "telegram"] }
+									"channel": {
+										"enum": ["phone", "telegram"]
+									}
 								},
 								"required": ["channel"]
 							},
@@ -166,7 +259,11 @@
 						},
 						{
 							"contains": {
-								"properties": { "channel": { "const": "phone" } },
+								"properties": {
+									"channel": {
+										"const": "phone"
+									}
+								},
 								"required": ["channel"]
 							},
 							"minContains": 0,
@@ -174,7 +271,11 @@
 						},
 						{
 							"contains": {
-								"properties": { "channel": { "const": "telegram" } },
+								"properties": {
+									"channel": {
+										"const": "telegram"
+									}
+								},
 								"required": ["channel"]
 							},
 							"minContains": 0,
@@ -182,69 +283,340 @@
 						}
 					]
 				},
-				"company": { "type": "string", "minLength": 1, "maxLength": 200 },
-				"meetingSlot": { "$ref": "#/$defs/meetingSlot" },
-				"consentConfirmed": { "const": true }
+				"company": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 200
+				},
+				"meetingSlot": {
+					"$ref": "#/$defs/meetingSlot"
+				},
+				"consentConfirmed": {
+					"const": true
+				}
 			}
 		}
 	},
 	"allOf": [
 		{
-			"if": { "properties": { "type": { "const": "message" } } },
-			"then": { "required": ["role", "text"] }
-		},
-		{
-			"if": { "properties": { "type": { "const": "tts_input" } } },
-			"then": { "required": ["text"] }
-		},
-		{
-			"if": { "properties": { "type": { "const": "stage" } } },
-			"then": { "required": ["stage"] }
-		},
-		{
-			"if": { "properties": { "type": { "const": "tool_call" } } },
-			"then": { "required": ["name", "callId"] }
-		},
-		{
-			"if": { "properties": { "type": { "const": "tool_result" } } },
-			"then": { "required": ["name", "callId", "ok"] }
+			"if": {
+				"properties": {
+					"type": {
+						"const": "message"
+					}
+				}
+			},
+			"then": {
+				"required": ["role", "text"]
+			}
 		},
 		{
 			"if": {
 				"properties": {
-					"type": { "const": "tool_call" },
-					"name": { "const": "create_booking" }
+					"type": {
+						"const": "tts_input"
+					}
+				}
+			},
+			"then": {
+				"required": ["text"]
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"type": {
+						"const": "stage"
+					}
+				}
+			},
+			"then": {
+				"required": ["stage"]
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"type": {
+						"const": "tool_call"
+					}
+				}
+			},
+			"then": {
+				"required": ["name", "callId"]
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"type": {
+						"const": "tool_result"
+					}
+				}
+			},
+			"then": {
+				"required": ["name", "callId", "ok"]
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"type": {
+						"const": "tool_call"
+					},
+					"name": {
+						"const": "create_booking"
+					}
 				},
 				"required": ["type", "name"]
 			},
 			"then": {
 				"required": ["payload"],
 				"properties": {
-					"payload": { "$ref": "#/$defs/createBookingInput" }
+					"payload": {
+						"$ref": "#/$defs/createBookingInput"
+					}
 				}
 			}
 		},
 		{
 			"if": {
 				"properties": {
-					"type": { "const": "tool_call" },
-					"name": { "const": "append_booking_qualification" }
+					"type": {
+						"const": "tool_call"
+					},
+					"name": {
+						"const": "append_booking_qualification"
+					}
 				},
 				"required": ["type", "name"]
 			},
-			"then": { "required": ["bookingId"] }
+			"then": {
+				"required": ["bookingId"]
+			}
 		},
 		{
-			"if": { "properties": { "type": { "const": "domain_event" } } },
-			"then": { "required": ["name", "callId", "bookingId"] }
+			"if": {
+				"properties": {
+					"type": {
+						"const": "domain_event"
+					}
+				}
+			},
+			"then": {
+				"required": ["name", "callId", "bookingId"]
+			}
 		},
 		{
-			"if": { "properties": { "type": { "const": "provider_event" } } },
-			"then": { "required": ["service", "status"] }
+			"if": {
+				"properties": {
+					"type": {
+						"const": "provider_event"
+					}
+				}
+			},
+			"then": {
+				"required": ["service", "status"]
+			}
 		},
 		{
-			"if": { "properties": { "type": { "const": "transport" } } },
-			"then": { "required": ["status"] }
+			"if": {
+				"properties": {
+					"type": {
+						"const": "transport"
+					}
+				}
+			},
+			"then": {
+				"required": ["status"]
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"type": {
+						"const": "server_event"
+					}
+				}
+			},
+			"then": {
+				"required": ["name", "status"],
+				"properties": {
+					"name": {
+						"enum": [
+							"facts.snapshot",
+							"booking.draft.updated",
+							"booking.draft.confirmed",
+							"booking.conflict.resolved",
+							"booking.draft.committed",
+							"internal.meeting.published",
+							"tts.booking_contact.authorized"
+						]
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"type": {
+						"const": "server_event"
+					},
+					"name": {
+						"const": "facts.snapshot"
+					}
+				},
+				"required": ["type", "name"]
+			},
+			"then": {
+				"required": ["revision", "payload"],
+				"properties": {
+					"status": {
+						"const": "accepted"
+					},
+					"payload": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"knownQualificationFields",
+							"dailyLeadBasisStatus",
+							"qualificationValues"
+						],
+						"properties": {
+							"knownQualificationFields": {
+								"type": "array",
+								"uniqueItems": true,
+								"items": {
+									"enum": ["monthlyLeadVolume", "salesManagerCount"]
+								}
+							},
+							"dailyLeadBasisStatus": {
+								"enum": [
+									"not_applicable",
+									"unresolved",
+									"resolved_working_days",
+									"resolved_calendar_days"
+								]
+							},
+							"qualificationValues": {
+								"type": "object",
+								"additionalProperties": false,
+								"properties": {
+									"monthlyLeadVolume": {
+										"type": "string"
+									},
+									"salesManagerCount": {
+										"type": "integer",
+										"minimum": 0
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"type": {
+						"const": "server_event"
+					},
+					"name": {
+						"const": "internal.meeting.published"
+					}
+				},
+				"required": ["type", "name"]
+			},
+			"then": {
+				"required": ["bookingId", "payload"],
+				"properties": {
+					"status": {
+						"const": "scheduled"
+					},
+					"payload": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"kind",
+							"slotStartAt",
+							"contactChannels",
+							"contactCount",
+							"qualificationKnownFields",
+							"externalCalendarEventCreated",
+							"externalInviteSent"
+						],
+						"properties": {
+							"kind": {
+								"const": "internal_virtual"
+							},
+							"slotStartAt": {
+								"type": "string",
+								"format": "date-time"
+							},
+							"contactChannels": {
+								"type": "array",
+								"uniqueItems": true,
+								"items": {
+									"enum": ["email", "phone", "telegram"]
+								}
+							},
+							"contactCount": {
+								"type": "integer",
+								"minimum": 2,
+								"maximum": 3
+							},
+							"qualificationKnownFields": {
+								"type": "array",
+								"uniqueItems": true,
+								"items": {
+									"enum": ["monthlyLeadVolume", "salesManagerCount"]
+								}
+							},
+							"externalCalendarEventCreated": {
+								"const": false
+							},
+							"externalInviteSent": {
+								"const": false
+							}
+						}
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"type": {
+						"const": "server_event"
+					},
+					"name": {
+						"const": "tts.booking_contact.authorized"
+					}
+				},
+				"required": ["type", "name"]
+			},
+			"then": {
+				"required": [
+					"bookingId",
+					"authorizationId",
+					"purpose",
+					"attestation",
+					"channels",
+					"contactCount"
+				],
+				"properties": {
+					"status": {
+						"const": "authorized"
+					},
+					"purpose": {
+						"const": "booking_contact_confirmation"
+					},
+					"attestation": {
+						"const": "server_verified_draft_booking_match"
+					}
+				}
+			}
 		}
 	]
 }

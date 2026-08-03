@@ -1,8 +1,26 @@
+import {
+	phoneLikeNumericSeparatorOffsets,
+	phoneLikeStreamingRunPrefixEnd,
+	scanPhoneLikeText,
+	trailingPhoneLikeHoldbackStart,
+} from "@botamin/contracts";
+import {
+	type ApprovedSpeechContact,
+	MAX_APPROVED_SPEECH_CONTACTS,
+	markApprovedSpeechContacts,
+	redactPhoneLikeSpeechCandidates,
+	type SpeechContactChannel,
+} from "./speech-contacts";
+
+export type {
+	ApprovedSpeechContact,
+	SpeechContactChannel,
+} from "./speech-contacts";
+
 const MARKDOWN_LINK = /\[([^\x5d]+)\]\(\s*(?:https?:\/\/|www\.)[^)]+\)/giu;
 const RAW_URL = /(?:https?:\/\/|www\.)[^\s<>()]*[\p{L}\p{N}/#]/giu;
 const EMAIL =
 	/[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/giu;
-const PHONE = /(?<![\p{L}\p{N}])(?:\+?\d[\d\s().-]{5,}\d)(?![\p{L}\p{N}])/gu;
 const TELEGRAM = /(?<![\p{L}\p{N}])@[a-zA-Z][a-zA-Z0-9_]{3,31}\b/gu;
 const UUID =
 	/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/giu;
@@ -16,6 +34,7 @@ const TOOL_LINE =
 const ABBREVIATION_END =
 	/(?:\b(?:т\.\s?д|т\.\s?п|и\.\s?т|г|ул|стр|д|им|см)\.|(?:^|\s)[А-ЯA-Z]\.)$/iu;
 const CONTACT_REDACTION = "контакт скрыт";
+const MAX_PROVIDER_SPEECH_CHARS = 240;
 
 export interface SpeechChunkerOptions {
 	firstTarget?: number;
@@ -29,6 +48,28 @@ export interface SpeechBudgetOptions {
 	maxCharsPerSegment?: number;
 	maxCharsPerTurn?: number;
 	maxCharsPerSession?: number;
+}
+
+export interface PrepareSpeechOptions {
+	contactProcessing: boolean;
+	/** Server-approved contacts from a confirmed draft or committed booking. */
+	approvedContacts: readonly ApprovedSpeechContact[];
+}
+
+export interface ProtectedSpeechSpan {
+	/** UTF-16 offsets into spokenText; the end is exclusive. */
+	start: number;
+	end: number;
+}
+
+export interface PreparedSpeech {
+	spokenText: string;
+	/** Approved spoken contacts that must remain inside one provider request. */
+	protectedSpans: readonly ProtectedSpeechSpan[];
+	metadata: {
+		forwardedChannels: SpeechContactChannel[];
+		forwardedCount: number;
+	};
 }
 
 export type SpeechBudgetDecision =
@@ -173,9 +214,9 @@ function stripCodeAndEnvelopes(input: string): string {
 export function sanitizeSpeech(input: string): string {
 	let text = stripCodeAndEnvelopes(input.replace(/\r\n?/gu, "\n"));
 	text = text.replace(MARKDOWN_LINK, "$1");
+	text = redactPhoneLikeSpeechCandidates(text);
 	text = text.replace(RAW_URL, " ");
 	text = text.replace(EMAIL, CONTACT_REDACTION);
-	text = text.replace(PHONE, CONTACT_REDACTION);
 	text = text.replace(TELEGRAM, CONTACT_REDACTION);
 	text = text.replace(HIDDEN_ID, " ");
 	text = text.replace(UUID, " ");
@@ -199,6 +240,73 @@ export function sanitizeSpeech(input: string): string {
 	return /^[\p{P}\p{S}\s]*$/u.test(text) ? "" : text;
 }
 
+/**
+ * Produces TTS-only text and forwards exact approved contacts when consented.
+ * Protected offsets survive marker expansion for atomic provider chunking.
+ */
+export function prepareSpeech(
+	input: string,
+	options: PrepareSpeechOptions,
+): PreparedSpeech {
+	const approvedContacts =
+		options.contactProcessing &&
+		options.approvedContacts.length <= MAX_APPROVED_SPEECH_CONTACTS
+			? options.approvedContacts
+			: [];
+	const stripped = stripCodeAndEnvelopes(
+		input.replace(/\r\n?/gu, "\n").normalize("NFC"),
+	);
+	const incompleteApprovedStart = trailingApprovedContactPrefixStart(
+		stripped,
+		approvedStreamingPrefixes(
+			options.approvedContacts.length <= MAX_APPROVED_SPEECH_CONTACTS
+				? options.approvedContacts
+				: [],
+		),
+	);
+	const contactSafeInput =
+		incompleteApprovedStart === null
+			? stripped
+			: `${stripped.slice(0, incompleteApprovedStart)}${CONTACT_REDACTION}`;
+	const marked = markApprovedSpeechContacts(contactSafeInput, approvedContacts);
+	let spokenText = sanitizeSpeech(marked.text);
+	const protectedSpans: ProtectedSpeechSpan[] = [];
+	const forwardedChannels = new Set<SpeechContactChannel>();
+	let forwardedCount = 0;
+	for (const contact of marked.contacts) {
+		let markerStart = spokenText.indexOf(contact.marker);
+		while (markerStart !== -1) {
+			const replacement =
+				contact.spoken.length <= MAX_PROVIDER_SPEECH_CHARS
+					? contact.spoken
+					: CONTACT_REDACTION;
+			spokenText = `${spokenText.slice(0, markerStart)}${replacement}${spokenText.slice(markerStart + contact.marker.length)}`;
+			if (replacement !== CONTACT_REDACTION) {
+				protectedSpans.push({
+					start: markerStart,
+					end: markerStart + replacement.length,
+				});
+				forwardedChannels.add(contact.channel);
+				forwardedCount += 1;
+			}
+			markerStart = spokenText.indexOf(
+				contact.marker,
+				markerStart + replacement.length,
+			);
+		}
+	}
+	protectedSpans.sort((left, right) => left.start - right.start);
+	if (/^[\p{P}\p{S}\s]*$/u.test(spokenText)) spokenText = "";
+	return {
+		spokenText,
+		protectedSpans,
+		metadata: {
+			forwardedChannels: [...forwardedChannels],
+			forwardedCount,
+		},
+	};
+}
+
 function indexInside(pattern: RegExp, text: string, index: number): boolean {
 	pattern.lastIndex = 0;
 	for (const match of text.matchAll(pattern)) {
@@ -214,37 +322,121 @@ function indexInside(pattern: RegExp, text: string, index: number): boolean {
 	return false;
 }
 
-function punctuationProtected(text: string, index: number): boolean {
+function punctuationProtected(
+	text: string,
+	index: number,
+	numericSeparators: ReadonlySet<number> | null,
+): boolean {
 	if (indexInside(EMAIL, text, index) || indexInside(RAW_URL, text, index)) {
 		return true;
 	}
-	const previous = text[index - 1] ?? "";
-	const next = text[index + 1] ?? "";
-	if (/\d/u.test(previous) && /\d/u.test(next)) return true;
+	if (numericSeparators === null || numericSeparators.has(index)) return true;
 	return ABBREVIATION_END.test(text.slice(Math.max(0, index - 12), index + 1));
-}
-
-function isUnsafeNumberBoundary(text: string, index: number): boolean {
-	const left = text.slice(0, index).match(/\d[\d\s().+-]*$/u)?.[0] ?? "";
-	const right = text.slice(index).match(/^\s*[\d().-]/u)?.[0] ?? "";
-	return left.length > 0 && right.length > 0;
 }
 
 function boundaries(text: string): number[] {
 	const result: number[] = [];
+	const numericSeparators = phoneLikeNumericSeparatorOffsets(text);
 	for (let index = 0; index < text.length; index += 1) {
 		const character = text[index] ?? "";
-		if (/[.!?;]/u.test(character) && !punctuationProtected(text, index)) {
+		if (
+			/[.!?;]/u.test(character) &&
+			!punctuationProtected(text, index, numericSeparators)
+		) {
 			result.push(index + 1);
 		}
 	}
 	return result;
 }
 
+const NUMERIC_BOUNDARY_CONTEXT = 96;
+
+function splitsNumericExemption(
+	text: string,
+	index: number,
+	numericSeparators: ReadonlySet<number> | null,
+): boolean {
+	if (numericSeparators === null || numericSeparators.has(index)) return true;
+	const start = Math.max(0, index - NUMERIC_BOUNDARY_CONTEXT);
+	const end = Math.min(text.length, index + NUMERIC_BOUNDARY_CONTEXT);
+	const window = text.slice(start, end);
+	const localIndex = index - start;
+	const whole = scanPhoneLikeText(window);
+	if (whole.overflow || whole.regions.length > 0) return false;
+	const left = scanPhoneLikeText(window.slice(0, localIndex));
+	const right = scanPhoneLikeText(window.slice(localIndex));
+	return (
+		left.overflow ||
+		right.overflow ||
+		left.regions.length > 0 ||
+		right.regions.length > 0
+	);
+}
+
+function approvedStreamingPrefixes(
+	contacts: readonly ApprovedSpeechContact[],
+): string[] {
+	const prefixes: string[] = [];
+	for (const contact of contacts) {
+		const normalized = contact.value.normalize("NFKC").trim().toLowerCase();
+		if (contact.channel === "email" || contact.channel === "phone") {
+			prefixes.push(normalized);
+		}
+		if (contact.channel === "telegram") {
+			const username = normalized.startsWith("@")
+				? normalized.slice(1)
+				: normalized.match(/t\.me\/([a-z0-9_]+)/u)?.[1];
+			if (username) {
+				prefixes.push(
+					`@${username}`,
+					`t.me/${username}`,
+					`https://t.me/${username}`,
+					`http://t.me/${username}`,
+					`www.t.me/${username}`,
+				);
+			}
+		}
+	}
+	return prefixes;
+}
+
+function trailingApprovedContactPrefixStart(
+	text: string,
+	approvedPrefixes: readonly string[],
+): number | null {
+	if (approvedPrefixes.length === 0) return null;
+	const maximum = Math.max(...approvedPrefixes.map((value) => value.length));
+	const earliest = Math.max(0, text.length - maximum);
+	for (let start = earliest; start < text.length; start += 1) {
+		const previous = text[start - 1] ?? "";
+		if (previous && /[\p{L}\p{N}._+@/-]/u.test(previous)) continue;
+		const suffix = text.slice(start).normalize("NFKC").toLowerCase();
+		if (
+			suffix &&
+			approvedPrefixes.some(
+				(contact) => contact !== suffix && contact.startsWith(suffix),
+			)
+		) {
+			return start;
+		}
+	}
+	return null;
+}
+
 function safeWordBoundary(text: string, limit: number): number {
+	const phoneScan = scanPhoneLikeText(text);
+	const numericSeparators = phoneLikeNumericSeparatorOffsets(text);
 	for (let index = Math.min(limit, text.length); index > 0; index -= 1) {
 		if (!/\s/u.test(text[index] ?? "")) continue;
-		if (isUnsafeNumberBoundary(text, index)) continue;
+		if (
+			phoneScan.overflow ||
+			phoneScan.regions.some(
+				(region) => index > region.start && index < region.end,
+			) ||
+			splitsNumericExemption(text, index, numericSeparators)
+		) {
+			continue;
+		}
 		return index;
 	}
 	return Math.min(limit, text.length);
@@ -254,13 +446,18 @@ function safeWordBoundary(text: string, limit: number): number {
 export class StreamingSentenceChunker {
 	#buffer = "";
 	#first = true;
+	#redactingPhoneRun = false;
+	readonly #approvedContactPrefixes: readonly string[];
 	readonly #firstTarget: number;
 	readonly #firstMinimum: number;
 	readonly #softTarget: number;
 	readonly #hardLimit: number;
 	readonly #idleFlushMs: number;
 
-	constructor(options: number | SpeechChunkerOptions = {}) {
+	constructor(
+		options: number | SpeechChunkerOptions = {},
+		approvedContacts: readonly ApprovedSpeechContact[] = [],
+	) {
 		const normalized =
 			typeof options === "number" ? { hardLimit: options } : options;
 		this.#hardLimit = normalized.hardLimit ?? 240;
@@ -268,6 +465,7 @@ export class StreamingSentenceChunker {
 		this.#firstTarget = normalized.firstTarget ?? 100;
 		this.#firstMinimum = normalized.firstMinimum ?? 60;
 		this.#idleFlushMs = normalized.idleFlushMs ?? 350;
+		this.#approvedContactPrefixes = approvedStreamingPrefixes(approvedContacts);
 		if (
 			this.#firstMinimum < 1 ||
 			this.#firstMinimum > this.#firstTarget ||
@@ -300,11 +498,21 @@ export class StreamingSentenceChunker {
 
 	clear(): void {
 		this.#buffer = "";
+		this.#redactingPhoneRun = false;
 	}
 
 	#drain(flush: boolean, idle: boolean): string[] {
 		const chunks: string[] = [];
 		while (this.#buffer.trim()) {
+			if (this.#redactingPhoneRun) {
+				const protectedEnd = phoneLikeStreamingRunPrefixEnd(this.#buffer);
+				if (protectedEnd === this.#buffer.length) {
+					if (flush || this.#buffer.length > this.#hardLimit) this.#buffer = "";
+					break;
+				}
+				this.#buffer = this.#buffer.slice(protectedEnd);
+				this.#redactingPhoneRun = false;
+			}
 			this.#buffer = this.#buffer.trimStart();
 			const structured = findStructuredJson(this.#buffer);
 			if (structured) {
@@ -343,7 +551,71 @@ export class StreamingSentenceChunker {
 				if (end < this.#buffer.length)
 					end = safeWordBoundary(this.#buffer, end);
 			}
-			if (end === undefined || end <= 0) break;
+			const phoneScan = scanPhoneLikeText(this.#buffer);
+			let crossingPhoneStart: number | null = null;
+			if (end !== undefined) {
+				const proposedEnd = end;
+				const crossing = phoneScan.overflow
+					? { start: 0, end: this.#buffer.length }
+					: phoneScan.regions.find(
+							(region) =>
+								proposedEnd > region.start && proposedEnd < region.end,
+						);
+				if (crossing) {
+					crossingPhoneStart = crossing.start;
+					end =
+						crossing.start === 0 &&
+						crossing.end <= this.#hardLimit &&
+						crossing.end < this.#buffer.length
+							? crossing.end
+							: crossing.start;
+				}
+			}
+			const phoneHoldback = trailingPhoneLikeHoldbackStart(this.#buffer);
+			const approvedHoldback =
+				!flush || idle
+					? trailingApprovedContactPrefixStart(
+							this.#buffer,
+							this.#approvedContactPrefixes,
+						)
+					: null;
+			const contactHoldback =
+				phoneHoldback === null
+					? approvedHoldback
+					: approvedHoldback === null
+						? phoneHoldback
+						: Math.min(phoneHoldback, approvedHoldback);
+			if (
+				contactHoldback !== null &&
+				end !== undefined &&
+				end > contactHoldback
+			) {
+				end = contactHoldback;
+			}
+			if (end === undefined || end <= 0) {
+				if (phoneHoldback === 0 && flush && !idle) {
+					if (this.#buffer.length <= this.#hardLimit) end = this.#buffer.length;
+					else {
+						this.#buffer = "";
+						this.#redactingPhoneRun = true;
+						chunks.push(CONTACT_REDACTION);
+						this.#first = false;
+						break;
+					}
+				} else if (
+					(phoneHoldback === 0 ||
+						crossingPhoneStart === 0 ||
+						phoneScan.overflow) &&
+					this.#buffer.length > this.#hardLimit
+				) {
+					this.#buffer = "";
+					this.#redactingPhoneRun = true;
+					chunks.push(CONTACT_REDACTION);
+					this.#first = false;
+					break;
+				} else break;
+			}
+			if (end === undefined) break;
 			const chunk = this.#buffer.slice(0, end).trim();
 			this.#buffer = this.#buffer.slice(end);
 			if (chunk) {
@@ -429,7 +701,146 @@ export class SpeechPrefetchCoordinator {
 	}
 }
 
-/** Convenience function for completed model output. */
+interface NormalizedChunkerOptions {
+	firstTarget: number;
+	firstMinimum: number;
+	softTarget: number;
+	hardLimit: number;
+}
+
+function normalizedChunkerOptions(
+	options: number | SpeechChunkerOptions,
+): NormalizedChunkerOptions {
+	// Reuse the streaming constructor as the single target-validation contract.
+	new StreamingSentenceChunker(options);
+	const normalized =
+		typeof options === "number" ? { hardLimit: options } : options;
+	return {
+		firstTarget: normalized.firstTarget ?? 100,
+		firstMinimum: normalized.firstMinimum ?? 60,
+		softTarget: normalized.softTarget ?? 160,
+		hardLimit: normalized.hardLimit ?? MAX_PROVIDER_SPEECH_CHARS,
+	};
+}
+
+function redactOversizedProtectedSpans(
+	prepared: PreparedSpeech,
+	hardLimit: number,
+): { text: string; spans: ProtectedSpeechSpan[] } {
+	let text = "";
+	let cursor = 0;
+	const spans: ProtectedSpeechSpan[] = [];
+	for (const span of prepared.protectedSpans) {
+		if (
+			!Number.isSafeInteger(span.start) ||
+			!Number.isSafeInteger(span.end) ||
+			span.start < cursor ||
+			span.end <= span.start ||
+			span.end > prepared.spokenText.length
+		) {
+			return { text: CONTACT_REDACTION, spans: [] };
+		}
+		text += prepared.spokenText.slice(cursor, span.start);
+		if (span.end - span.start > hardLimit) text += CONTACT_REDACTION;
+		else {
+			const start = text.length;
+			text += prepared.spokenText.slice(span.start, span.end);
+			spans.push({ start, end: text.length });
+		}
+		cursor = span.end;
+	}
+	text += prepared.spokenText.slice(cursor);
+	return { text, spans };
+}
+
+function protectedChunkEnd(
+	text: string,
+	cursor: number,
+	proposedEnd: number,
+	spans: readonly ProtectedSpeechSpan[],
+	hardLimit: number,
+): number {
+	const crossing = spans.find(
+		(span) => proposedEnd > span.start && proposedEnd < span.end,
+	);
+	const endingSpan = crossing ?? spans.find((span) => proposedEnd === span.end);
+	if (!endingSpan) return proposedEnd;
+	let contactEnd = endingSpan.end;
+	while (/[,.!?;:)\]}]/u.test(text[contactEnd] ?? "")) contactEnd += 1;
+	if (contactEnd - cursor <= hardLimit) return contactEnd;
+	if (endingSpan.start > cursor) return endingSpan.start;
+	// The contact itself fits but adjacent punctuation does not. Keep the contact
+	// whole; punctuation can begin the next prose chunk without exposing it.
+	return endingSpan.end;
+}
+
+/**
+ * Chunks prepared speech while treating every approved spoken contact as one
+ * indivisible provider token. Oversized protected spans are redacted in full.
+ */
+export function chunkPreparedSpeech(
+	prepared: PreparedSpeech,
+	options: number | SpeechChunkerOptions = {},
+): string[] {
+	const targets = normalizedChunkerOptions(options);
+	const protectedSpeech = redactOversizedProtectedSpans(
+		prepared,
+		targets.hardLimit,
+	);
+	if (protectedSpeech.spans.length === 0) {
+		return chunkSpeech(protectedSpeech.text, options);
+	}
+
+	const chunks: string[] = [];
+	let cursor = 0;
+	let first = true;
+	while (cursor < protectedSpeech.text.length) {
+		while (/\s/u.test(protectedSpeech.text[cursor] ?? "")) cursor += 1;
+		if (cursor >= protectedSpeech.text.length) break;
+		const remaining = protectedSpeech.text.slice(cursor);
+		const minimum = first ? targets.firstMinimum : 1;
+		const target = first ? targets.firstTarget : targets.softTarget;
+		const stops = boundaries(remaining);
+		let relativeEnd = stops.find(
+			(value) => value >= minimum && value <= target,
+		);
+		if (relativeEnd === undefined && remaining.length >= target) {
+			relativeEnd = stops.find(
+				(value) => value > target && value <= targets.hardLimit,
+			);
+		}
+		if (relativeEnd === undefined && remaining.length > targets.hardLimit) {
+			relativeEnd = safeWordBoundary(remaining, targets.hardLimit);
+		}
+		if (relativeEnd === undefined) {
+			relativeEnd = Math.min(remaining.length, targets.hardLimit);
+			if (relativeEnd < remaining.length) {
+				relativeEnd = safeWordBoundary(remaining, relativeEnd);
+			}
+		}
+		const end = protectedChunkEnd(
+			protectedSpeech.text,
+			cursor,
+			cursor + relativeEnd,
+			protectedSpeech.spans,
+			targets.hardLimit,
+		);
+		if (end <= cursor) {
+			// A validated span at cursor always fits; this is a final fail-closed
+			// guard against malformed offset arithmetic.
+			return chunkSpeech(CONTACT_REDACTION, options);
+		}
+		const chunk = protectedSpeech.text.slice(cursor, end).trim();
+		cursor = end;
+		if (chunk && !/^[\p{P}\p{S}\s]*$/u.test(chunk)) {
+			chunks.push(chunk);
+			first = false;
+		}
+	}
+	return chunks;
+}
+
+/** Convenience function for completed model output without protected spans. */
 export function chunkSpeech(
 	text: string,
 	options: number | SpeechChunkerOptions = {},

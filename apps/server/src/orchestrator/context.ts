@@ -3,12 +3,14 @@ import {
 	type BrainActionName,
 	type BrainTurnInput,
 	BrainTurnInputSchema,
+	type ConcreteSchedulingInterpretation,
 	type KnownFacts,
 	type MeetingSlot,
 	type MeetingTimeBand,
 	type MeetingTimePreference,
 	SchedulingContextSchema,
 } from "@botamin/contracts";
+import type { ConcreteMeetingRequestParseResult } from "../domain/booking";
 
 const MAX_FACT_LENGTH = 300;
 
@@ -44,6 +46,7 @@ export interface BrainContextInput {
 	now: Date;
 	timeOfDayPreference: MeetingTimePreference;
 	rejectedTimeOfDayPreferences: readonly MeetingTimeBand[];
+	concreteRequest: ConcreteMeetingRequestParseResult;
 	candidateMeetingSlots: readonly [MeetingSlot, MeetingSlot];
 }
 
@@ -87,11 +90,54 @@ function displayLabel(slot: MeetingSlot): string {
 	return `${date}, ${WEEKDAYS[start.getUTCDay()]}, ${time(start)}–${time(end)} по Москве`;
 }
 
+function concreteInterpretation(
+	request: ConcreteMeetingRequestParseResult,
+	candidateMeetingSlots: readonly [MeetingSlot, MeetingSlot],
+): ConcreteSchedulingInterpretation {
+	if (request.kind === "none") return { kind: "none" };
+	if (request.kind === "invalid_or_ambiguous") {
+		return {
+			kind: "not_included",
+			reason: request.reason,
+			candidateIndex: null,
+		};
+	}
+
+	const requestedMoscowLocalTime = `${String(Math.floor(request.minuteOfDay / 60)).padStart(2, "0")}:${String(request.minuteOfDay % 60).padStart(2, "0")}`;
+	const candidateIndex = candidateMeetingSlots.findIndex(
+		(candidate) => candidate.startAt === request.startAt,
+	);
+	if (candidateIndex === 0 || candidateIndex === 1) {
+		return {
+			kind: "included",
+			requestedMoscowLocalDate: request.requestedMoscowDate,
+			requestedMoscowLocalTime,
+			reason: "exact_request_included",
+			candidateIndex,
+		};
+	}
+	const requestedDateSatisfied = candidateMeetingSlots.every(
+		(candidate) =>
+			inMoscow(new Date(candidate.startAt)).toISOString().slice(0, 10) ===
+			request.requestedMoscowDate,
+	);
+	return {
+		kind: "not_included",
+		requestedMoscowLocalDate: request.requestedMoscowDate,
+		requestedMoscowLocalTime,
+		reason: requestedDateSatisfied
+			? "exact_time_not_included"
+			: "requested_date_unsatisfied",
+		candidateIndex: null,
+	};
+}
+
 export function buildSchedulingContext(
 	now: Date,
 	timeOfDayPreference: MeetingTimePreference,
 	rejectedTimeOfDayPreferences: readonly MeetingTimeBand[],
 	candidateMeetingSlots: readonly [MeetingSlot, MeetingSlot],
+	concreteRequest: ConcreteMeetingRequestParseResult = { kind: "none" },
 ): BrainTurnInput["schedulingContext"] {
 	if (!Number.isFinite(now.getTime()))
 		throw new TypeError("Expected a valid runtime clock instant");
@@ -102,6 +148,10 @@ export function buildSchedulingContext(
 		moscowWeekday: WEEKDAYS[local.getUTCDay()],
 		timeOfDayPreference,
 		rejectedTimeOfDayPreferences,
+		concreteRequestInterpretation: concreteInterpretation(
+			concreteRequest,
+			candidateMeetingSlots,
+		),
 		candidateMeetingSlots: candidateMeetingSlots.map((meetingSlot) => ({
 			meetingSlot,
 			displayLabel: displayLabel(meetingSlot),
@@ -125,6 +175,7 @@ export function buildBrainContext(input: BrainContextInput): BrainTurnInput {
 			input.timeOfDayPreference,
 			input.rejectedTimeOfDayPreferences,
 			input.candidateMeetingSlots,
+			input.concreteRequest,
 		),
 		allowedActions: [...new Set(input.allowedActions)].sort(),
 		promptVersion: input.promptVersion,

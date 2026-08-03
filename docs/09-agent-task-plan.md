@@ -232,13 +232,13 @@ DoD:
 **Владелец:** A0 или release integrator  
 **Зависимости:** T31, T32.
 
-**Current label:** `0.5.0-local-rc.3`; keep `0.5.0-local-rc.2` as rollback image.
+**Current label:** `0.5.0-local-rc.4` recommended/pending; no previous immutable image name is assumed.
 
-- RC3 local P0 tests, spec validation, browser, deploy/readiness, and any approved provider smokes are candidate acceptance steps in docs 08/11, not inherited claims from RC2;
-- active docs describe committed proactive greeting, contextual two-candidate scheduling, and deterministic optional two-question qualification contracts;
-- parent records final counts/checksums/SHA and observations in release evidence after fresh execution;
-- release commit is prepared without creating or pushing a Git tag;
-- WebKit and target VPS/DNS/TLS/WSS remain later gates and are not claimed by the local RC.
+- RC4 local checks are fresh steps in docs 08/11; RC3 evidence is preserved separately and not inherited;
+- active docs describe the durable revisioned draft/fact/conflict model, structured form plus spoken/text parity, two concretely dated Moscow candidates, automatic internal meeting commit/widget, approved-contact TTS exception, and direct missing-only qualification;
+- release integrator records actual counts, commands, generated artifacts, and limitations after fresh execution;
+- release commit is prepared without inventing or creating a tag/PR/hash;
+- WebKit full journey, target VPS/DNS/TLS/WSS, and provider live booking remain external gates.
 
 ## 8. Merge gates
 

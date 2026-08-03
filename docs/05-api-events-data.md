@@ -134,7 +134,10 @@ Server:
 |---|---|---|
 | `client.hello` | audio config, resume token | handshake |
 | `audio.commit` | `{}` | закрыть bounded utterance и создать ровно один atomic final-transcription request |
-| `visitor.text.submit` | `{ sequence, text }` | отправить одну final typed turn до 2,000 chars без provider/tool fields |
+| `visitor.text.submit` | `{ sequence, text }` | one final typed turn; same durable fact path as spoken transcript |
+| `booking.form.submit` | `{ requestId, baseRevision, details, selectedCandidateId? }` | structured patch/current candidate against exact draft revision |
+| `booking.conflict.resolve` | `{ requestId, baseRevision, field, conflictOptionId }` | explicitly accept one current conflict option |
+| `booking.draft.confirm` | `{ requestId, revision }` | confirm exact ready revision and trigger automatic internal meeting commit |
 | `playback.started` | `generationId` | метрика |
 | `playback.interrupted` | `generationId`, reason | barge-in |
 | `session.stop` | reason | корректное завершение |
@@ -144,7 +147,9 @@ Server:
 
 После handshake PCM16 audio идёт binary frames без base64. Gateway/utterance assembler ограничивает accumulated input максимумом 60,000 ms и так, чтобы atomic WAV не превысил 2,000,000 bytes; при 16 kHz mono PCM16 default duration ceiling строже и даёт `maxPcmBytes=1,920,000`. После `audio.commit` gateway кодирует ровно один validated WAV и передаёт его atomic `SttPort`; только OpenRouter adapter выполняет base64 encoding уже готовых WAV bytes. Browser chunks не означают streaming transport до provider.
 
-`visitor.text.submit` — secure provider-neutral alternative input, а не tool endpoint. Payload strict: trimmed non-empty `text` до 2,000 символов и monotonic nonnegative `sequence`. Typed submit supersedes/clears uncommitted microphone bytes, запрещён при pending/active turn или terminal stage, и считается принятым только когда server эмитит соответствующий `transcript.final`. Duplicate/stale sequence получает idempotency conflict; gap — invalid event; recoverable rejection позволяет повторить тот же sequence. После acceptance typed и spoken text проходят идентичные Luna context, stage policy, domain tools, persistence, assistant text и optional TTS.
+`visitor.text.submit` is the provider-neutral alternative final input. After acceptance, typed and spoken turns use the same fact extractor, quoted Luna proposal boundary, durable draft merge, scheduling parser, state/persistence, assistant, and optional TTS path.
+
+The booking form is not encoded as visitor text in RC4. It sends strict revisioned commands. `details` may patch accepted/missing values; `selectedCandidateId` must identify one of exactly two current candidates. Stale revision, unresolved conflict, candidate mismatch, not-ready, or already-committed state returns a closed `booking.form.rejected` code without echoing PII. Every material change clears prior confirmation. `booking.draft.confirm` confirms only the exact ready revision and automatically runs the idempotent internal booking commit.
 
 ### Server → client events
 
@@ -158,8 +163,11 @@ Server:
 | `audio.segment` | generationId, segmentId, sequence, `contentType=audio/mpeg`, byteLength, `final=true`; immediately followed by one complete binary MP3 payload |
 | `assistant.audio.done` | generationId |
 | `assistant.interrupted` | generationId |
-| `booking.created` | safe booking summary |
-| `booking.updated` | qualification status |
+| `booking.draft.updated` | request correlation + browser-safe revisioned projection without provenance/evidence |
+| `booking.form.rejected` | closed safe error code/current revision; never reflects submitted PII |
+| `booking.created` | safe booking summary after durable commit |
+| `internal.meeting.updated` | server-derived scheduled internal-virtual meeting projection; external flags false |
+| `booking.updated` | qualification status/fields after durable patch |
 | `session.capacity_warning` | optional |
 | `error` | safe error object |
 | `server.pong` | timestamp |
@@ -329,7 +337,7 @@ type CreateBookingResult = {
 ### `append_booking_qualification`
 
 ```ts
-// Active write contract is exactly the two optional RC3 fields.
+// Active write contract remains exactly the two optional qualification fields.
 const QualificationPatchSchema = z.object({
   monthlyLeadVolume: z.string().trim().min(1).max(100).optional(),
   salesManagerCount: z.number().int().min(0).max(10000).optional(),
@@ -357,29 +365,28 @@ type AppendQualificationResult = {
 
 Server выводит status из persisted truth: оба поля → `complete`, одно → `partial`, zero-field explicit refusal → `skipped`. Model-provided `completion` не может объявить complete без обоих полей. Оба ответа могут прийти одним turn/patch. Legacy rows могут физически содержать старые qualification keys; read-normalization отбрасывает их, а active write schema выше их не принимает.
 
-## 6. Domain policy до tool execution
+## 6. Domain policy before durable commit
 
-```ts
-switch (tool.name) {
-  case "create_booking":
-    assert(state === "COLLECT_BOOKING");
-    assert(serverContactConsentConfirmed === true);
-    assert(currentBooking === null || currentBooking.conversationId === conversationId);
-    assert(candidateMeetingSlots.length === 2);
-    assert(candidateMeetingSlots.some((slot) => deepEqual(slot, args.meetingSlot)));
-    break;
-  case "append_booking_qualification":
-    assert(["BOOKED", "POST_BOOKING_QUALIFICATION"].includes(state));
-    assert(currentBooking?.id === args.bookingId);
-    assert(bookingConfirmationDelivered === true);
-    assert(qualificationConsent === "granted");
-    break;
-}
+`create_booking` is reached only through server-owned exact-revision confirmation, not directly from browser/model payload:
+
+```text
+assert stage == COLLECT_BOOKING and contact consent is confirmed
+load draft at confirmation.revision
+assert draft.readiness == ready and draft.confirmationStatus can be confirmed
+assert all required facts are accepted and conflicts are resolved
+assert selectedCandidate exactly matches one of two current candidates
+mark draft committing
+idempotently create booking from accepted facts + selected slot
+verify persisted booking matches confirmed draft
+mark draft committed with bookingId
+publish booking.created and internal.meeting.updated
 ```
 
-LLM-provided `conversationId`, `bookingId`, slot и consent сверяются с server-side session; нельзя доверять им как единственному источнику. После booking commit и delivered confirmation server задаёт точный consent-вопрос `Можно задать два коротких вопроса?`; grant возможен только из последующей explicit user turn. Затем server задаёт monthly leads первым и manager count вторым, по одному; отказ завершает как `skipped` или сохраняет `partial`, не меняя `booking.status=booked`.
+Any material fact/candidate change clears confirmation; stale revision and non-current candidate fail closed. The durable booking is the only meeting entity. Its browser projection says `kind=internal_virtual`, `status=scheduled`, `externalCalendarEventCreated=false`, and `externalInviteSent=false`.
 
-Server перед каждым Luna turn строит `schedulingContext` из собственного clock: canonical `currentInstant`, `moscowLocalDate`, `moscowWeekday`, `timeOfDayPreference`, максимум один `rejectedTimeOfDayPreferences` и tuple ровно из двух `{ meetingSlot, displayLabel }`. Bounded Russian parser одинаково применяет typed/spoken morning/day/second-half/evening wording. Default tuple — morning + evening; selected preference даёт два in-band starts примерно через час и переносит пару на следующий weekday, если текущий band occupied; rejection исключает band. Каждый slot — 20 минут, weekday, не сегодня, start на 20-minute grid 09:00–17:00 MSK. Tuple — текущие internal alternatives, не all/global availability. Tool execution повторно отвергает slot вне tuple; BookingService повторно отвергает now-non-bookable или internally occupied start.
+After truthful meeting confirmation, optional qualification begins directly. There is no separate consent phrase/turn. Server asks only a missing authoritative field: volume first when both are missing, otherwise only the missing field, and none when both are known. Generic daily volume requires basis clarification before server normalization. Refusal yields skipped/partial without changing `booking.status=booked`.
+
+Before each Luna turn the server builds scheduling context from its own clock and exactly two concrete Moscow candidates. Typed/spoken time-band, rejection, and supported concrete date/time expressions use the same parser. Exact permitted requests return exact+alternative; otherwise nearest internal candidates or clarification/unavailable status. Every proposed slot is a non-today weekday 20-minute start on the 09:00–17:00 Moscow grid and is only a current internal alternative.
 
 ## 7. SQLite model
 
@@ -399,6 +406,17 @@ Server перед каждым Luna turn строит `schedulingContext` из �
 | `started_at` | text | timestamp |
 | `ended_at` | text nullable | timestamp |
 | `last_error_code` | text nullable | safe code |
+
+### `conversation_contexts` (migration 0004)
+
+| Column | Contract |
+|---|---|
+| `conversation_id` | PK/FK → `conversations.id`, `ON DELETE CASCADE` |
+| `revision` | nonnegative integer used for expected-revision CAS |
+| `draft_json` | valid JSON object; contains internal fact registry/provenance/conflicts, exactly two candidate IDs/slots, selected candidate, readiness, confirmation/commit status, booking ID and timestamps |
+| `updated_at` | must equal `draft_json.updatedAt` |
+
+SQLite checks require `draft_json.revision == revision`, `draft_json.factRegistry.revision == revision`, and matching timestamps. Store writes use `BEGIN IMMEDIATE`; form/conflict/confirm commands also use scoped idempotency keys. Browser projections strip `conversationId`, provenance, and evidence text. No separate facts, evidence, or virtual-meeting table is created.
 
 ### `turns`
 
@@ -482,13 +500,13 @@ BEGIN IMMEDIATE
 COMMIT
 ```
 
-После commit:
+After exact-revision commit:
 
-1. отправить WS `booking.created`;
-2. notifier worker публикует payload;
-3. assistant получает safe tool result;
-4. server-authored confirmation сообщает, что calendar event не создан, и точно спрашивает `Можно задать два коротких вопроса?`;
-5. только subsequent explicit consent открывает qualification и первый deterministic leads question; booking остаётся committed при skip/partial/failure.
+1. mark draft `committed` with the same durable `bookingId`;
+2. send `booking.created` and server-derived `internal.meeting.updated`;
+3. notifier worker publishes the booking payload;
+4. truthfully confirm the internal virtual meeting and that no external event/invite exists;
+5. ask only the first missing qualification field, or nothing if both are known; booking remains committed under skip/partial/failure.
 
 ## 9. Notification payloads
 
@@ -562,8 +580,9 @@ Webhook P1 подписывается `HMAC-SHA256(timestamp + '.' + rawBody)` �
 ## 11. Retention
 
 - raw audio: не хранить;
-- transcript: `TRANSCRIPT_RETENTION_DAYS`, default 30 дней; startup и hourly runner удаляют bounded batches из `turns` по durable timestamp, не удаляя conversation/booking;
-- bookings: до ручного удаления/экспорта и никогда не каскадно из transcript purge;
-- events: минимум срок отладки и аудита, configurable;
+- transcript and active-draft PII: `TRANSCRIPT_RETENTION_DAYS`, default 30 days; startup/hourly bounded purge deletes expired `turns` and `conversation_contexts` but preserves conversations/bookings;
+- bookings: retained until explicit deletion/export and never cascaded by transcript/context retention;
+- explicit privacy deletion by conversation transactionally removes booking, draft context, turns, idempotency rows, related outbox entries, and the conversation; existing append-only domain events are already redacted and remain, and one additional count-only `privacy.deleted` audit event is appended;
+- append-only redacted events remain for audit; their configurable expiry is not implemented by the transcript-retention worker;
 - Codex thread state: stop/expiry прерывает turn, вызывает `thread/delete`, очищает process-local maps; TTS session budgets также reset;
-- backups наследуют срок хранения и шифруются.
+- local protected backups are mode-0600 SQLite files with SHA-256 sidecars; encryption/retention is a host-owner requirement, not implemented by the repository wrapper.

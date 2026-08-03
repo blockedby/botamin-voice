@@ -9,6 +9,7 @@ import {
 	type BrainDelta,
 	type BrainPort,
 	type BrainTurnInput,
+	type ConcreteMeetingCandidateRequest,
 	CreateBookingInputSchema,
 	type CreateBookingResult,
 	collectedQualificationFields,
@@ -232,6 +233,7 @@ export interface FakeBookingOptions {
 	candidateMeetingSlots?: (
 		preference?: MeetingTimePreference,
 		rejectedPreferences?: readonly MeetingTimeBand[],
+		concreteRequest?: ConcreteMeetingCandidateRequest,
 	) => [MeetingSlot, MeetingSlot] | Promise<[MeetingSlot, MeetingSlot]>;
 }
 
@@ -269,8 +271,13 @@ export class FakeBookingService implements BookingService {
 	async candidateMeetingSlots(
 		preference: MeetingTimePreference = "none",
 		rejectedPreferences: readonly MeetingTimeBand[] = [],
+		concreteRequest?: ConcreteMeetingCandidateRequest,
 	): Promise<[MeetingSlot, MeetingSlot]> {
-		return this.#options.candidateMeetingSlots(preference, rejectedPreferences);
+		return this.#options.candidateMeetingSlots(
+			preference,
+			rejectedPreferences,
+			concreteRequest,
+		);
 	}
 
 	async createBooking(input: unknown): Promise<CreateBookingResult> {

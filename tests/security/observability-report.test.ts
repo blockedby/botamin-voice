@@ -66,6 +66,9 @@ describe("saved safe observability report", () => {
 				openrouterStt: { statuses: { other: 0 } },
 				openrouterTts: { circuitTransitions: { unknown: 0 } },
 			},
+			business: {
+				orphanRecovery: { runs: 0, pending: false },
+			},
 		});
 	});
 
@@ -129,6 +132,11 @@ describe("saved safe observability report", () => {
 		recordAt(dynamicState, "providers", "openrouterStt").currentCircuitState =
 			"conversation-id";
 		invalidSnapshots.push(dynamicState);
+
+		const invalidRecoveryPending = structuredClone(safeSnapshot());
+		recordAt(invalidRecoveryPending, "business", "orphanRecovery").pending =
+			"conversation-id";
+		invalidSnapshots.push(invalidRecoveryPending);
 
 		for (const invalid of invalidSnapshots) {
 			await writeFile(path, JSON.stringify(invalid));

@@ -15,7 +15,7 @@ MVP должен выглядеть как небольшой реальный �
 | Посетитель | потенциальный B2B-клиент Botamin |
 | Голосовой AI-продавец | ведёт разговор и достигает целевого действия |
 | Backend | владеет состоянием, tools, транзакциями и аудитом |
-| Получатель лида | в MVP читает console/webhook/push payload |
+| Получатель лида | в MVP получает PII-bearing payload через webhook/push |
 | Владелец проекта | редактирует Markdown prompts в Git |
 
 ## 3. В scope
@@ -30,10 +30,11 @@ MVP должен выглядеть как небольшой реальный �
 - interruption/barge-in на базовом уровне;
 - управляемая state machine разговора;
 - product knowledge из Botamin-сайта и Telegram-кейсов;
-- создание внутренней брони на одном из двух server-supplied structured 20-minute Moscow slots;
-- необязательная квалификация после брони и отдельного согласия, только по monthly inbound leads и integer sales-manager count;
-- SQLite persistence;
-- console notifier и интерфейс для webhook/push;
+- durable revisioned conversation draft with facts/provenance/conflicts shared by spoken, typed, and structured-form input;
+- automatic internal virtual meeting commit after exact confirmation of one of two concretely dated server-supplied 20-minute Moscow slots;
+- direct optional missing-only qualification after truthful meeting confirmation, limited to monthly lead/contact volume and integer sales-manager count;
+- SQLite persistence and server-derived final meeting widget;
+- non-PII console acknowledgment и интерфейс PII handoff для webhook/push;
 - transcript/event audit;
 - local-first Docker Compose, health checks and backup; VPS TLS/WSS is a later deployment gate;
 - тесты контрактов, компонентов, E2E и conversation evals.
@@ -66,7 +67,7 @@ MVP должен выглядеть как небольшой реальный �
 | Backend | Bun + TypeScript, Hono как лёгкий HTTP/WS слой |
 | Frontend | React + TypeScript + Vite |
 | Storage | SQLite в WAL-режиме, Drizzle migrations |
-| Notifications | console обязательно; webhook — адаптер |
+| Notifications | console — только non-PII acknowledgment; webhook — PII-bearing handoff |
 | Calendar | отсутствует |
 | Prompts | Markdown в Git |
 | Deployment | local-first Compose project on one trusted machine; app + Caddy only. One target VPS with TLS/WSS is the later production-shaped gate |

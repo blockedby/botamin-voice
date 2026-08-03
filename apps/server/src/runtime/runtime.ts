@@ -18,6 +18,9 @@ import {
 	openDomainDatabase,
 } from "../db";
 import { SqliteBookingService } from "../domain/booking";
+import { createEntityId } from "../domain/booking/support";
+import { OrphanBookingRecoveryWorker } from "../domain/booking-draft/recovery";
+import { SqliteBookingDraftStore } from "../domain/booking-draft/store";
 import { TranscriptRetentionWorker } from "../domain/privacy";
 import { SessionRegistry } from "../gateway/registry";
 import { GatewaySession, type SessionPersistence } from "../gateway/session";
@@ -88,6 +91,9 @@ export interface ProductionRuntimeOverrides {
 	monotonicNow?: () => number;
 	outboxPollIntervalMs?: number;
 	retentionIntervalMs?: number;
+	orphanRecoveryBatchSize?: number;
+	orphanRecoveryMaxPerSweep?: number;
+	orphanRecoveryIntervalMs?: number;
 }
 
 export class SqliteSessionPersistence implements SessionPersistence {
@@ -177,12 +183,33 @@ export async function createProductionRuntime(
 		closeDomainDatabase(database);
 		throw new Error("Notifier override kind does not match runtime config");
 	}
+	const idFactory = createEntityId;
 	const bookings =
 		overrides.bookings ??
 		new SqliteBookingService(database, {
 			notifierKind: notifier.kind,
 			now,
+			idFactory,
 		});
+	const draftStore = new SqliteBookingDraftStore(database, { now, idFactory });
+	const recoveryWorker = new OrphanBookingRecoveryWorker(
+		database,
+		draftStore,
+		bookings,
+		{
+			batchSize:
+				overrides.orphanRecoveryBatchSize ?? config.orphanRecovery.batchSize,
+			maxPerSweep:
+				overrides.orphanRecoveryMaxPerSweep ??
+				config.orphanRecovery.maxPerSweep,
+			intervalMs:
+				overrides.orphanRecoveryIntervalMs ?? config.orphanRecovery.intervalMs,
+			onSweep: (result) => metrics.recordOrphanRecovery(result),
+		},
+	);
+	// Migrations and durable stores are ready, but no provider/session worker has
+	// started. Readiness cannot exist until this bounded scan has settled.
+	await recoveryWorker.runStartup();
 	const outboxWorker = new PollingNotificationWorker(database, notifier, {
 		pollIntervalMs: overrides.outboxPollIntervalMs ?? 1_000,
 		workerOptions: { now, metrics },
@@ -269,6 +296,7 @@ export async function createProductionRuntime(
 				brain,
 				bookings,
 				tts,
+				draftStore,
 				initialState,
 				qualificationEnabled:
 					request.qualificationEnabled && config.qualificationEnabled,
@@ -302,6 +330,7 @@ export async function createProductionRuntime(
 				expiresAt,
 				orchestrator,
 				bookings,
+				draftStore,
 				persistence,
 				brainModel: config.brain.model,
 				maxUtteranceMs: config.voice.stt.maxUtteranceMs,
@@ -320,6 +349,7 @@ export async function createProductionRuntime(
 		},
 	});
 	outboxWorker.start();
+	recoveryWorker.start();
 
 	let disposed = false;
 	return {
@@ -386,6 +416,23 @@ export async function createProductionRuntime(
 					...(outboxWorker.ready ? {} : { code: "OUTBOX_WORKER_UNAVAILABLE" }),
 				},
 				{
+					name: "recovery",
+					status: !recoveryWorker.startupComplete
+						? "unready"
+						: recoveryWorker.latest.pending ||
+								recoveryWorker.latest.invalid > 0 ||
+								recoveryWorker.latest.transientFailures > 0
+							? "degraded"
+							: "ready",
+					...(!recoveryWorker.startupComplete
+						? { code: "ORPHAN_RECOVERY_STARTING" }
+						: recoveryWorker.latest.pending ||
+								recoveryWorker.latest.invalid > 0 ||
+								recoveryWorker.latest.transientFailures > 0
+							? { code: "ORPHAN_RECOVERY_DEGRADED" }
+							: {}),
+				},
+				{
 					name: "capacity",
 					status:
 						registry.hasCapacity && registry.hasTurnCapacity
@@ -407,6 +454,7 @@ export async function createProductionRuntime(
 			if (disposed) return;
 			disposed = true;
 			await registry.dispose();
+			await recoveryWorker.stop();
 			await outboxWorker.stop();
 			retentionWorker.stop();
 			await brain.close?.();

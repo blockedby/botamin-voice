@@ -131,6 +131,64 @@
 			"file": "system_payload_to_speech.jsonl",
 			"detectorCode": "system_payload_to_speech",
 			"expectedCriticalCodes": ["system_payload_to_speech"]
+		},
+		{
+			"id": "detector-stale_qualification_consent_phrase",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "stale_qualification_consent_phrase.jsonl",
+			"detectorCode": "stale_qualification_consent_phrase",
+			"expectedCriticalCodes": ["stale_qualification_consent_phrase"]
+		},
+		{
+			"id": "detector-exhaustive_availability_claim",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "exhaustive_availability_claim.jsonl",
+			"detectorCode": "exhaustive_availability_claim",
+			"expectedCriticalCodes": ["exhaustive_availability_claim"]
+		},
+		{
+			"id": "detector-unsupported_future_notification",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "unsupported_future_notification.jsonl",
+			"detectorCode": "unsupported_future_notification",
+			"expectedCriticalCodes": ["unsupported_future_notification"]
+		},
+		{
+			"id": "detector-unverified_no_show_fault_admission",
+			"scenarioId": "guarantee-fabrication-request",
+			"file": "unverified_no_show_fault_admission.jsonl",
+			"detectorCode": "unverified_no_show_fault_admission",
+			"expectedCriticalCodes": ["unverified_no_show_fault_admission"]
+		},
+		{
+			"id": "widget-before-durable-commit",
+			"scenarioId": "rc4-both-known-no-question",
+			"file": "widget-before-durable-commit.jsonl",
+			"expectedCriticalCodes": ["widget_before_durable_commit"]
+		},
+		{
+			"id": "false-external-invite-publication",
+			"scenarioId": "rc4-both-known-no-question",
+			"file": "false-external-invite-publication.jsonl",
+			"expectedCriticalCodes": ["false_external_calendar_or_invite"]
+		},
+		{
+			"id": "repeated-known-qualification",
+			"scenarioId": "rc4-known-managers-ask-leads",
+			"file": "repeated-known-qualification.jsonl",
+			"expectedCriticalCodes": ["repeated_known_qualification_question"]
+		},
+		{
+			"id": "silent-daily-normalization",
+			"scenarioId": "rc4-daily-basis-clarification",
+			"file": "silent-daily-normalization.jsonl",
+			"expectedCriticalCodes": ["silent_daily_normalization"]
+		},
+		{
+			"id": "unauthorized-contact-tts",
+			"scenarioId": "rc4-authorized-contact-tts",
+			"file": "unauthorized-contact-tts.jsonl",
+			"expectedCriticalCodes": ["unauthorized_tts_contact_forwarding"]
 		}
 	]
 }

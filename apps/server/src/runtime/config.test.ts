@@ -38,6 +38,11 @@ describe("validated runtime configuration", () => {
 		});
 		expect(config.voice.tts.responseFormat).toBe("mp3");
 		expect(config.transcriptRetentionDays).toBe(30);
+		expect(config.orphanRecovery).toEqual({
+			batchSize: 25,
+			maxPerSweep: 100,
+			intervalMs: 60_000,
+		});
 		expect(config.maxPendingBrainTurns).toBe(6);
 		expect(config.admission.trustedProxyHops).toBe(0);
 		expect(config.notifier).toEqual({ kind: "console" });
@@ -53,6 +58,9 @@ describe("validated runtime configuration", () => {
 		const config = createRuntimeConfig({
 			...validEnv,
 			TRANSCRIPT_RETENTION_DAYS: "45",
+			ORPHAN_RECOVERY_BATCH_SIZE: "7",
+			ORPHAN_RECOVERY_MAX_PER_SWEEP: "21",
+			ORPHAN_RECOVERY_INTERVAL_MS: "5000",
 			MAX_PENDING_BRAIN_TURNS: "1",
 			TRUSTED_PROXY_HOPS: "1",
 			NOTIFIER: "webhook",
@@ -61,6 +69,11 @@ describe("validated runtime configuration", () => {
 			WEBHOOK_TIMEOUT_MS: "1200",
 		});
 		expect(config.transcriptRetentionDays).toBe(45);
+		expect(config.orphanRecovery).toEqual({
+			batchSize: 7,
+			maxPerSweep: 21,
+			intervalMs: 5_000,
+		});
 		expect(config.maxPendingBrainTurns).toBe(1);
 		expect(config.admission.trustedProxyHops).toBe(1);
 		expect(config.notifier).toMatchObject({
@@ -77,6 +90,9 @@ describe("validated runtime configuration", () => {
 			{ ...validEnv, TRANSCRIPT_RETENTION_DAYS: "0" },
 			{ ...validEnv, TRANSCRIPT_RETENTION_DAYS: "3651" },
 			{ ...validEnv, MAX_PENDING_BRAIN_TURNS: "257" },
+			{ ...validEnv, ORPHAN_RECOVERY_BATCH_SIZE: "101" },
+			{ ...validEnv, ORPHAN_RECOVERY_MAX_PER_SWEEP: "1001" },
+			{ ...validEnv, ORPHAN_RECOVERY_INTERVAL_MS: "999" },
 			{ ...validEnv, TRUSTED_PROXY_HOPS: "4" },
 			{
 				...validEnv,

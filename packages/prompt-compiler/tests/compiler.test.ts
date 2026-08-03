@@ -1,3 +1,4 @@
+import { afterAll as after, test } from "bun:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -15,15 +16,16 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
 	ATTRIBUTED_REVENUE_CLAIM_LINES,
 	BOOKING_ORDER_SENTENCE,
 	compilePromptBundle,
+	FORBIDDEN_POLICY_PHRASES,
 	MAX_FILE_BYTES,
 	PROMPT_ORDER,
 	REQUIRED_POLICY_SENTENCES,
+	SYNCHRONIZED_DIALOG_POLICY_RULES,
 } from "../src/index.js";
 
 const testRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -319,7 +321,42 @@ test("requires the booking-before-qualification rule in system and booking promp
 	}
 });
 
-test("requires proactive cadence, refusal, supplied-slot, contact, qualification, and concise-speech rules", async () => {
+test("forbids stale qualification-permission wording in active and starter prompts", async () => {
+	const promptPaths = PROMPT_ORDER.filter((path) =>
+		path.startsWith("prompts/"),
+	);
+	for (const relativePath of promptPaths) {
+		for (const prefix of ["", "starter"]) {
+			const source = await readFile(
+				join(sourceRoot, prefix, relativePath),
+				"utf8",
+			);
+			for (const phrase of FORBIDDEN_POLICY_PHRASES) {
+				assert.ok(
+					!source.toLocaleLowerCase("ru-RU").includes(phrase),
+					`${join(prefix, relativePath)} contains forbidden phrase: ${phrase}`,
+				);
+			}
+		}
+	}
+
+	for (const phrase of FORBIDDEN_POLICY_PHRASES) {
+		const fixture = await fixtureRoot((relativePath, source) =>
+			relativePath === "prompts/system.md"
+				? `${source.toString("utf8")}\n${phrase}\n`
+				: source,
+		);
+		await assert.rejects(
+			compilePromptBundle({
+				sourceRoot: fixture,
+				runtimeDir: await runtimeDirectory(),
+			}),
+			/forbidden qualification-permission wording/i,
+		);
+	}
+});
+
+test("requires proactive cadence, direct missing-only qualification, supplied-slot, contact, and concise-speech rules", async () => {
 	for (const [relativePath, sentences] of Object.entries(
 		REQUIRED_POLICY_SENTENCES,
 	)) {
@@ -335,11 +372,40 @@ test("requires proactive cadence, refusal, supplied-slot, contact, qualification
 					runtimeDir: await runtimeDirectory(),
 				}),
 				new RegExp(
-					`${relativePath.replace(/[./]/g, "\\$&")}.*required policy sentence`,
+					`${relativePath.replace(/[./]/g, "\\$&")}.*(?:required policy sentence|synchronized dialogue policy rule)`,
 					"i",
 				),
 			);
 		}
+	}
+});
+
+test("requires synchronized active and starter dialogue truth and persona rules", async () => {
+	for (const rule of SYNCHRONIZED_DIALOG_POLICY_RULES) {
+		const starter = await readFile(
+			join(sourceRoot, "starter", rule.starterPath),
+			"utf8",
+		);
+		assert.ok(
+			starter.includes(rule.starterSentence),
+			`starter ${rule.starterPath} is missing ${rule.name}`,
+		);
+
+		const fixture = await fixtureRoot((path, source) =>
+			path === rule.activePath
+				? source.toString("utf8").replace(rule.activeSentence, "")
+				: source,
+		);
+		await assert.rejects(
+			compilePromptBundle({
+				sourceRoot: fixture,
+				runtimeDir: await runtimeDirectory(),
+			}),
+			new RegExp(
+				`${rule.activePath.replace(/[./]/g, "\\$&")}.*synchronized dialogue policy rule.*${rule.name}`,
+				"i",
+			),
+		);
 	}
 });
 

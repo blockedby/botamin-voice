@@ -20,6 +20,7 @@ export function createTestSchedulingContext(): SchedulingContext {
 		moscowWeekday: "четверг",
 		timeOfDayPreference: "none",
 		rejectedTimeOfDayPreferences: [],
+		concreteRequestInterpretation: { kind: "none" },
 		candidateMeetingSlots: [
 			{
 				meetingSlot: createTestMeetingSlot(),

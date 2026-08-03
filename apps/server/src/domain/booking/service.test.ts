@@ -142,6 +142,37 @@ describe("SQLite booking transaction", () => {
 		closeDomainDatabase(database);
 	});
 
+	test("uses committed starts when proposing a concrete requested time", async () => {
+		const { database, input } = fixture();
+		const now = new Date("2026-08-02T09:00:00.000Z");
+		const service = new SqliteBookingService(database, { now: () => now });
+		const concreteRequest = {
+			userText: "4 августа в 11",
+			currentInstant: now.toISOString(),
+		};
+		const initial = await service.candidateMeetingSlots(
+			"none",
+			[],
+			concreteRequest,
+		);
+		expect(initial.map((slot) => slot.startAt)).toEqual([
+			"2026-08-04T07:40:00.000Z",
+			"2026-08-04T08:00:00.000Z",
+		]);
+
+		await service.createBooking({ ...input, meetingSlot: initial[1] });
+		const afterCommit = await service.candidateMeetingSlots(
+			"none",
+			[],
+			concreteRequest,
+		);
+		expect(afterCommit.map((slot) => slot.startAt)).toEqual([
+			"2026-08-04T07:40:00.000Z",
+			"2026-08-04T08:20:00.000Z",
+		]);
+		closeDomainDatabase(database);
+	});
+
 	test("rejects incomplete leads and clock-invalid slots without creating a booking", async () => {
 		const { database, input } = fixture();
 		const now = new Date(timestamp);

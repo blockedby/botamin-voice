@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
+import { ConsoleLeadNotifier } from "../../apps/server/src/notifiers/notifier";
 import { ObservabilityMetrics } from "../../apps/server/src/observability";
 import { OpenRouterSttAdapter } from "../../apps/server/src/providers/openrouter/stt";
 import { loadOpenRouterVoiceConfig } from "../../apps/server/src/providers/openrouter/stt/config";
@@ -80,6 +81,14 @@ describe("T32 source, bundle, runtime-log and snapshot leakage guard", () => {
 		const contactMarker = ["visitor", "t32", "example.com"].join("@");
 		const spokenMarker = ["private", "spoken", "phrase", "t32"].join(" ");
 		const providerBodyMarker = ["provider", "body", "private", "t32"].join("-");
+		const nameMarker = ["private", "name", "t32"].join(" ");
+		const companyMarker = ["private", "company", "t32"].join(" ");
+		const eventIdMarker = ["event", "id", "private", "t32"].join("-");
+		const bookingIdMarker = ["booking", "id", "private", "t32"].join("-");
+		const conversationIdMarker = ["conversation", "id", "private", "t32"].join(
+			"-",
+		);
+		const unknownMarker = ["unknown", "lead", "private", "t32"].join("-");
 		const wav = createDeterministicWavFixture();
 		const mp3 = createDeterministicMp3Fixture();
 		const base64Wav = Buffer.from(wav).toString("base64");
@@ -109,6 +118,12 @@ describe("T32 source, bundle, runtime-log and snapshot leakage guard", () => {
 			contactMarker,
 			spokenMarker,
 			providerBodyMarker,
+			nameMarker,
+			companyMarker,
+			eventIdMarker,
+			bookingIdMarker,
+			conversationIdMarker,
+			unknownMarker,
 			base64Wav,
 			base64Mp3,
 		].map((value) => Buffer.from(value));
@@ -133,6 +148,26 @@ describe("T32 source, bundle, runtime-log and snapshot leakage guard", () => {
 			STT_RETRY_BASE_MS: "0",
 		});
 		const capturedLogs: string[] = [];
+		await new ConsoleLeadNotifier((line) => capturedLogs.push(line)).publish({
+			v: 1,
+			type: "booking.created",
+			eventId: eventIdMarker,
+			occurredAt: "2026-08-03T00:00:00.000Z",
+			unknownKey: unknownMarker,
+			data: {
+				bookingId: bookingIdMarker,
+				conversationId: conversationIdMarker,
+				name: nameMarker,
+				company: companyMarker,
+				contacts: [{ channel: "email", value: contactMarker }],
+				transcript: transcriptMarker,
+			},
+		} as unknown as Parameters<ConsoleLeadNotifier["publish"]>[0]);
+		expect(JSON.parse(capturedLogs[0] ?? "{}")).toEqual({
+			channel: "lead-notifier",
+			status: "accepted",
+			eventKind: "booking.created",
+		});
 		const adapter = new OpenRouterSttAdapter({
 			config,
 			fetch: async () =>

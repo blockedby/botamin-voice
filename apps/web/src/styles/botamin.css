@@ -666,7 +666,7 @@ button {
 
 .text-composer > label,
 .booking-details-form label > span,
-.contact-channel legend {
+.booking-slots legend {
 	display: block;
 	margin-bottom: 0.35rem;
 	font-size: 0.7rem;
@@ -778,7 +778,7 @@ button {
 }
 
 .booking-details-form input {
-	min-height: 2.65rem;
+	min-height: 2.75rem;
 	padding: 0.55rem 0.6rem;
 }
 
@@ -786,40 +786,88 @@ button {
 	border-color: var(--danger);
 }
 
-.booking-details-form small {
-	display: block;
-	min-height: 0.9rem;
-	margin-top: 0.15rem;
-	color: var(--danger);
+.booking-field {
+	min-width: 0;
 }
 
-.contact-channel {
+.booking-conflict {
+	min-width: 0;
+	margin-top: 0.35rem;
+	padding: 0.55rem;
+	border-inline-start: 0.25rem solid var(--warning);
+	background: #f5e6cf;
+}
+
+.booking-conflict p {
+	margin: 0;
+	font-size: 0.7rem;
+	line-height: 1.45;
+	overflow-wrap: anywhere;
+}
+
+.booking-conflict > div {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+	margin-top: 0.45rem;
+}
+
+.booking-conflict button {
+	min-height: 2.75rem;
+	padding: 0.45rem 0.6rem;
+	border: 1px solid var(--ink);
+	background: var(--paper-light);
+	font-size: 0.68rem;
+	font-weight: 750;
+	cursor: pointer;
+	overflow-wrap: anywhere;
+}
+
+.booking-slots {
+	display: grid;
+	gap: 0.4rem;
+	min-width: 0;
 	margin: 0;
 	padding: 0;
 	border: 0;
 }
 
-.contact-channel > div {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0.5rem 1rem;
-	min-height: 2.65rem;
-	align-items: center;
+.booking-slots legend {
+	margin-bottom: 0.35rem;
 }
 
-.contact-channel label {
-	display: inline-flex;
-	gap: 0.4rem;
+.booking-slots label {
+	display: grid;
+	grid-template-columns: 1.25rem minmax(0, 1fr);
+	gap: 0.55rem;
 	align-items: center;
-	font-size: 0.75rem;
-	font-weight: 700;
+	min-height: 2.75rem;
+	padding: 0.45rem 0.55rem;
+	border: 1px solid var(--line);
+	cursor: pointer;
 }
 
-.contact-channel input {
-	width: 1rem;
-	min-height: 1rem;
+.booking-slots input {
+	width: 1.1rem;
+	min-height: 1.1rem;
 	margin: 0;
 	accent-color: var(--accent-dark);
+}
+
+.booking-slots span {
+	min-width: 0;
+	font-size: 0.74rem;
+	font-weight: 700;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.booking-submit-message {
+	min-height: 0.9rem;
+	margin: 0;
+	color: var(--danger);
+	font-size: 0.68rem;
+	line-height: 1.45;
 }
 
 .booking-details-submit {
@@ -827,21 +875,67 @@ button {
 	padding: 0.6rem 0.8rem;
 }
 
-.booking-confirmation {
+.final-meeting-widget {
+	min-width: 0;
 	margin-top: 1rem;
-	padding: 0.8rem 0.9rem;
-	border-inline-start: 0.3rem solid var(--success);
+	padding: 0.9rem;
+	border: 1px solid var(--success);
+	border-inline-start-width: 0.35rem;
 	background: #e6f1e7;
 }
 
-.booking-confirmation strong {
-	font-size: 0.86rem;
+.final-meeting-widget:focus {
+	outline: 3px solid var(--accent-dark);
+	outline-offset: 3px;
 }
 
-.booking-confirmation p {
-	margin: 0.2rem 0 0;
+.final-meeting-widget .section-index {
+	margin-bottom: 0.3rem;
+	color: var(--success);
+	font-size: 0.61rem;
+}
+
+.final-meeting-widget h3 {
+	margin: 0;
+	font-size: 1.08rem;
+	letter-spacing: -0.025em;
+}
+
+.final-meeting-widget dl {
+	display: grid;
+	gap: 0;
+	margin: 0.8rem 0 0;
+	border-top: 1px solid #a8bba9;
+}
+
+.final-meeting-widget dl > div {
+	display: grid;
+	grid-template-columns: minmax(7rem, 0.7fr) minmax(0, 1.3fr);
+	gap: 0.65rem;
+	padding-block: 0.45rem;
+	border-bottom: 1px solid #c3d2c4;
+}
+
+.final-meeting-widget dt {
+	color: var(--ink-soft);
+	font-size: 0.67rem;
+	font-weight: 750;
+}
+
+.final-meeting-widget dd {
+	min-width: 0;
+	margin: 0;
 	font-size: 0.74rem;
+	font-weight: 680;
 	line-height: 1.45;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+
+.final-meeting-truth-note {
+	margin: 0.75rem 0 0;
+	font-size: 0.7rem;
+	line-height: 1.5;
 }
 
 .voice-actions {
@@ -1347,7 +1441,7 @@ button {
 
 	.proactive-greeting,
 	.consent-panel,
-	.booking-confirmation {
+	.final-meeting-widget {
 		order: 3;
 	}
 
@@ -1407,6 +1501,11 @@ button {
 	.composer-row,
 	.booking-fields-grid {
 		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.final-meeting-widget dl > div {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 0.15rem;
 	}
 
 	.text-submit {
@@ -1557,7 +1656,9 @@ button {
 	.voice-demo,
 	.primary-voice-cta,
 	.demo-badge,
-	.voice-control {
+	.voice-control,
+	.final-meeting-widget,
+	.booking-conflict button {
 		box-shadow: none;
 	}
 

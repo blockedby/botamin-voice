@@ -6,7 +6,7 @@
 
 **Spec version:** `0.5-demo`
 
-**Local release candidate:** `0.5.0-local-rc.3`
+**Local release candidate:** `0.5.0-local-rc.4` (recommended; tag pending)
 
 **Current release scope:** local hosting first; target VPS, public TLS/WSS, and WebKit acceptance are later gates.
 
@@ -16,9 +16,11 @@ Botamin is a full-stack landing page with a browser voice AI seller. On page ent
 
 After consent, the browser sends bounded PCM16 chunks to the backend; after `audio.commit`, the gateway creates one validated WAV for an atomic OpenRouter STT request. A secure provider-neutral `visitor.text.submit` path also accepts a final typed turn and sends it through the same transcript, Luna, policy, tool, and persistence flow as speech. One final transcript goes to Codex app-server with `gpt-5.6-luna`; OpenRouter TTS returns complete MP3 phrase segments. Each voice utterance is capped at 60 seconds and the atomic WAV request at 2,000,000 bytes. The active circular countdown is derived from accepted 16 kHz PCM16 samples and the stricter server-advertised duration/byte ceiling, not a wall-clock timer.
 
-The backend always supplies exactly two structured internal 20-minute `Europe/Moscow` candidates. With no preference the pair defaults to one morning and one evening option. A bounded Russian parser applies typed or spoken morning/day/second-half/evening preferences to the next context refresh; a selected band yields two in-band options roughly one hour apart, rolling to a later weekday if the band is occupied, while an explicit rejection excludes that band. Every option is a non-today weekday start on the 20-minute grid from 09:00 through 17:00 Moscow time. These are two current internal alternatives—not all global availability—and already committed internal starts are excluded without querying or creating a real calendar/CRM event or invitation.
+The backend always supplies exactly two structured internal 20-minute `Europe/Moscow` candidates with a concrete date and time. With no preference the pair defaults to one morning and one evening option. A bounded Russian parser applies typed or spoken morning/day/second-half/evening preferences, rejections, and supported concrete Moscow date/time requests; the server returns either the exact permitted start plus one alternative or the nearest two internal starts. Every option is a non-today weekday start on the 20-minute grid from 09:00 through 17:00 Moscow time. These are two current internal alternatives—not all global availability—and already committed internal starts are excluded without querying or creating a real calendar/CRM event or invitation.
 
-A booking is created only after name, company, working email, phone or Telegram, one current candidate, and consent are present. After commit and user-facing confirmation, the server asks exactly `Можно задать два коротких вопроса?`. Only explicit consent starts deterministic optional qualification: monthly inbound leads first, then integer `salesManagerCount`, one question at a time. Both answers in one turn complete it; refusal with no answer is `skipped`, refusal after one answer remains `partial`, and the booking remains `booked`.
+RC4 persists one versioned `conversation_contexts.draft_json` object per conversation. It contains the fact registry, provenance, bounded conflicts, exactly two candidate identities, selection, readiness, exact-revision confirmation, commit state, and booking identity. Spoken turns, typed turns, and the structured in-chat form update the same server-owned draft; stale revisions and conflicting facts fail closed until explicitly resolved. When name, company, working email, phone or Telegram, and one current candidate are accepted, the visitor confirms the exact revision and the server automatically commits one internal virtual meeting. Only the resulting durable booking can publish the final server-projected meeting widget.
+
+After truthful confirmation of that internal meeting, optional qualification starts directly—there is no separate permission question. The server asks only the first missing field: monthly lead/contact volume first when both are absent, otherwise only the missing `salesManagerCount` or volume field, and nothing when both are already known. Both answers in one turn complete it; refusal with no answer is `skipped`, refusal after one answer remains `partial`, and the meeting remains scheduled. TTS redacts contacts by default; the only exception is an exact server-approved contact from accepted durable draft facts or the committed booking when contact-processing consent is active.
 
 ## Local-first start
 
@@ -32,7 +34,8 @@ chmod 600 .env
 # Interactive Codex device login into the persistent botamin-codex-home volume:
 ./scripts/device-auth.sh
 
-# Materializes mode-0600 file secrets, builds, migrates, starts app+Caddy,
+# Materializes mode-0600 file secrets, builds, protects any existing DB,
+# drains/stops the app, migrates through normal startup, verifies RC4 invariants,
 # and waits for dependency-aware readiness. It does not run paid smokes.
 ./scripts/deploy-local.sh
 
@@ -66,18 +69,19 @@ Never use `docker compose down -v` on a host with bookings or Codex auth. Restor
 
 ## Fixed invariants
 
-1. `booking.created` happens before optional post-booking qualification.
-2. Refusal, disconnect, or qualification failure after booking does not remove it.
-3. Retried `create_booking` returns the same booking rather than a duplicate.
+1. `booking.created` and committed draft state happen before optional post-booking qualification or final-widget publication.
+2. Refusal, disconnect, or qualification failure after booking does not remove the internal virtual meeting.
+3. Retried draft confirmation/booking commit returns the same booking rather than a duplicate.
 4. OpenRouter and Codex credentials never reach the browser.
 5. Raw audio is not retained by default.
-6. The agent never claims that a calendar event was created.
+6. The UI and agent distinguish the scheduled internal virtual meeting from an external calendar event or invitation.
 7. OpenRouter is the only STT/TTS gateway; Codex subscription + GPT-5.6 Luna is the brain.
 8. Phrase-level STT adds accepted end-of-turn latency; local synthetic timings are not a hosting benchmark.
 9. Typed and spoken final turns have the same semantic authority; neither exposes provider or tool controls.
-10. A booking uses exactly one of the two current server-supplied internal Moscow slots; a non-candidate slot is rejected.
+10. A booking uses exactly one of the two current server-supplied, concretely dated internal Moscow slots; stale revisions and non-candidate slots are rejected.
 11. The pre-consent proactive greeting is one static same-origin MP3 attempt and cannot create a session or invoke microphone/provider capabilities.
-12. The two candidates are current internal alternatives, never a claim of exhaustive global availability; booking remains committed across skipped or partial optional qualification.
+12. The two candidates are current internal alternatives, never a claim of exhaustive global availability; the meeting remains committed across skipped or partial optional qualification.
+13. Browser draft projections exclude provenance/evidence; arbitrary contacts remain redacted from TTS.
 
 ## Documentation map
 

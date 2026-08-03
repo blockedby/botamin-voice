@@ -84,7 +84,6 @@ describe("conservative negative intent", () => {
 			stage: "POST_BOOKING_QUALIFICATION" as const,
 			booking,
 			bookingConfirmationDelivered: true,
-			qualificationConsent: "granted" as const,
 		};
 		expect(
 			classifyConservativeNegativeIntent(

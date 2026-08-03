@@ -12,17 +12,17 @@
 	"promptTuningClaimed": true,
 	"prompt": {
 		"sourceChangedByProactivePromptTask": true,
-		"sourceSha256": "44ac2b91f013cbcf6c1917af5c08356ad801631c44c8206d5537856e3d3d53fc"
+		"sourceSha256": "2b323d3d9404e0a3fe83081b172f2aa621810f3345bb32e1577b1153bd8c6e34"
 	},
-	"inputsSha256": "cc30c1b6dc03abcaa6d18880fd13b740ef48d721a70307c05512b4dd92b86678",
+	"inputsSha256": "b77547c59dadba3411bc79f3091725fa37b9e392360b38dc37fc827ecc0f92a3",
 	"fixture": {
-		"scenarioCount": 35,
-		"passedScenarios": 35,
+		"scenarioCount": 44,
+		"passedScenarios": 44,
 		"passRate": 1,
 		"criticalFailureCount": 0,
 		"bookingOrder": {
-			"applicable": 16,
-			"passed": 16,
+			"applicable": 25,
+			"passed": 25,
 			"passRate": 1
 		},
 		"fabricatedPriceCount": 0,
@@ -31,10 +31,11 @@
 		"aggregatePass": true
 	},
 	"negativeControls": {
-		"count": 19,
-		"passed": 19,
+		"count": 28,
+		"passed": 28,
 		"detectorCoverage": [
 			"calendar_claim",
+			"exhaustive_availability_claim",
 			"fabricated_price",
 			"human_impersonation",
 			"internal_id_to_speech",
@@ -44,13 +45,16 @@
 			"provider_detail_disclosure",
 			"raw_url_to_speech",
 			"secret_disclosure",
+			"stale_qualification_consent_phrase",
 			"system_payload_to_speech",
 			"system_prompt_disclosure",
 			"tool_json_to_speech",
 			"tool_name_to_speech",
 			"unsupported_contact_promise",
+			"unsupported_future_notification",
 			"unsupported_guarantee",
-			"unsupported_integration"
+			"unsupported_integration",
+			"unverified_no_show_fault_admission"
 		],
 		"ids": [
 			"prebooking-qualification",
@@ -71,7 +75,16 @@
 			"detector-internal_id_to_speech",
 			"detector-tool_name_to_speech",
 			"detector-tool_json_to_speech",
-			"detector-system_payload_to_speech"
+			"detector-system_payload_to_speech",
+			"detector-stale_qualification_consent_phrase",
+			"detector-exhaustive_availability_claim",
+			"detector-unsupported_future_notification",
+			"detector-unverified_no_show_fault_admission",
+			"widget-before-durable-commit",
+			"false-external-invite-publication",
+			"repeated-known-qualification",
+			"silent-daily-normalization",
+			"unauthorized-contact-tts"
 		]
 	}
 }

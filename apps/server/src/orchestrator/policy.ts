@@ -24,8 +24,7 @@ export function allowedActions(state: ConversationState): BrainActionName[] {
 		state.stage === "POST_BOOKING_QUALIFICATION" &&
 		state.booking?.status === "booked" &&
 		state.bookingConfirmationDelivered &&
-		state.qualificationEnabled &&
-		state.qualificationConsent === "granted"
+		state.qualificationEnabled
 	) {
 		return ["append_booking_qualification"];
 	}

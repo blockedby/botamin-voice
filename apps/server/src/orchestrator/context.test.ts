@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { BrainTurnInputSchema } from "@botamin/contracts";
-import { generateCandidateMeetingSlots } from "../domain/booking/support";
+import {
+	generateCandidateMeetingSlots,
+	generateMeetingSlotProposal,
+	parseConcreteMeetingRequest,
+} from "../domain/booking/support";
 import { buildBrainContext, buildSchedulingContext } from "./context";
 
 const conversationId = "01J00000000000000000000000";
@@ -21,6 +25,7 @@ function contextAt(now: Date) {
 		now,
 		timeOfDayPreference: "none",
 		rejectedTimeOfDayPreferences: [],
+		concreteRequest: { kind: "none" },
 		candidateMeetingSlots: generateCandidateMeetingSlots(now),
 	});
 }
@@ -37,6 +42,7 @@ describe("server-owned Moscow brain context", () => {
 			moscowWeekday: "четверг",
 			timeOfDayPreference: "none",
 			rejectedTimeOfDayPreferences: [],
+			concreteRequestInterpretation: { kind: "none" },
 		});
 		expect(context.schedulingContext.candidateMeetingSlots).toEqual([
 			{
@@ -57,6 +63,35 @@ describe("server-owned Moscow brain context", () => {
 				},
 				displayLabel: "10 января 2025 года, пятница, 16:00–16:20 по Москве",
 			},
+		]);
+	});
+
+	test("represents an exact request with deterministic Moscow labels and candidate index", () => {
+		const now = new Date("2026-08-02T09:00:00.000Z");
+		const text = "4 августа в 11";
+		const proposal = generateMeetingSlotProposal(now, text);
+		const scheduling = buildSchedulingContext(
+			now,
+			"none",
+			[],
+			proposal.slots,
+			parseConcreteMeetingRequest(text, now),
+		);
+
+		expect(scheduling.concreteRequestInterpretation).toEqual({
+			kind: "included",
+			requestedMoscowLocalDate: "2026-08-04",
+			requestedMoscowLocalTime: "11:00",
+			reason: "exact_request_included",
+			candidateIndex: 1,
+		});
+		expect(
+			scheduling.candidateMeetingSlots.map(
+				(candidate) => candidate.displayLabel,
+			),
+		).toEqual([
+			"04 августа 2026 года, вторник, 10:40–11:00 по Москве",
+			"04 августа 2026 года, вторник, 11:00–11:20 по Москве",
 		]);
 	});
 

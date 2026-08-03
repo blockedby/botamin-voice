@@ -1,13 +1,10 @@
 import type { BookingSnapshot, ConversationStage } from "@botamin/contracts";
 
-export type QualificationConsent = "unknown" | "granted" | "declined";
-
 export interface ConversationState {
 	stage: ConversationStage;
 	booking: BookingSnapshot | null;
 	contactConsentConfirmed: boolean;
 	qualificationEnabled: boolean;
-	qualificationConsent: QualificationConsent;
 	bookingConfirmationDelivered: boolean;
 	/** Stage restored after a transport reconnect. */
 	resumeStage: ConversationStage | null;
@@ -25,8 +22,7 @@ export type ConversationEvent =
 	| { type: "contact_consent_confirmed" }
 	| { type: "booking_committed"; booking: BookingSnapshot }
 	| { type: "booking_confirmation_delivered" }
-	| { type: "qualification_consent_granted" }
-	| { type: "qualification_consent_declined"; booking?: BookingSnapshot }
+	| { type: "qualification_refused"; booking?: BookingSnapshot }
 	| { type: "qualification_updated"; booking: BookingSnapshot }
 	| { type: "qualification_completed" }
 	| { type: "complete" }
@@ -44,8 +40,7 @@ export interface TransitionError {
 		| "BOOKING_REQUIRED"
 		| "BOOKING_MISMATCH"
 		| "CONSENT_REQUIRED"
-		| "CONFIRMATION_REQUIRED"
-		| "QUALIFICATION_DISABLED";
+		| "CONFIRMATION_REQUIRED";
 	message: string;
 }
 
@@ -110,7 +105,6 @@ export function createInitialConversationState(options?: {
 		booking: null,
 		contactConsentConfirmed: false,
 		qualificationEnabled: options?.qualificationEnabled ?? true,
-		qualificationConsent: "unknown",
 		bookingConfirmationDelivered: false,
 		resumeStage: null,
 	};
@@ -223,78 +217,79 @@ export function transition(
 	}
 
 	if (event.type === "booking_confirmation_delivered") {
-		if (state.stage !== "BOOKED" || !state.booking) {
+		const retainedWhileDisconnected =
+			state.stage === "DISCONNECTED" && state.resumeStage === "BOOKED";
+		if (
+			(state.stage !== "BOOKED" && !retainedWhileDisconnected) ||
+			!state.booking
+		) {
 			return failure(
 				"BOOKING_REQUIRED",
 				"Booking confirmation requires a committed booking",
 			);
 		}
-		return {
-			ok: true,
-			state: { ...state, bookingConfirmationDelivered: true },
-		};
-	}
-
-	if (event.type === "qualification_consent_granted") {
-		if (!state.qualificationEnabled) {
-			return failure(
-				"QUALIFICATION_DISABLED",
-				"Post-booking qualification is disabled",
-			);
-		}
-		if (state.stage !== "BOOKED" || !state.booking) {
-			return failure(
-				"BOOKING_REQUIRED",
-				"Qualification requires a committed booking",
-			);
-		}
-		if (!state.bookingConfirmationDelivered) {
-			return failure(
-				"CONFIRMATION_REQUIRED",
-				"Booking must be confirmed before qualification consent",
-			);
-		}
+		const confirmedStage = state.qualificationEnabled
+			? "POST_BOOKING_QUALIFICATION"
+			: "BOOKED";
 		return {
 			ok: true,
 			state: {
 				...state,
-				stage: "POST_BOOKING_QUALIFICATION",
-				qualificationConsent: "granted",
+				stage: retainedWhileDisconnected ? "DISCONNECTED" : confirmedStage,
+				bookingConfirmationDelivered: true,
+				resumeStage: retainedWhileDisconnected
+					? confirmedStage
+					: state.resumeStage,
 			},
 		};
 	}
 
 	if (event.type === "qualification_completed") {
+		const retainedWhileDisconnected =
+			state.stage === "DISCONNECTED" &&
+			state.resumeStage === "POST_BOOKING_QUALIFICATION";
 		if (
-			state.stage !== "POST_BOOKING_QUALIFICATION" ||
+			(state.stage !== "POST_BOOKING_QUALIFICATION" &&
+				!retainedWhileDisconnected) ||
 			!state.booking ||
+			!state.bookingConfirmationDelivered ||
 			(state.booking.qualificationStatus !== "complete" &&
 				state.booking.qualificationStatus !== "skipped")
 		) {
 			return failure(
 				"INVALID_TRANSITION",
-				"Qualification cannot complete until both fields are stored or it is skipped",
+				"Qualification cannot complete until confirmation is retained and both fields are stored or skipped",
 			);
 		}
-		return withStage(state, "COMPLETE");
+		return retainedWhileDisconnected
+			? {
+					ok: true,
+					state: { ...state, resumeStage: "COMPLETE" },
+				}
+			: withStage(state, "COMPLETE");
 	}
 
 	if (event.type === "qualification_updated") {
+		const retainedWhileDisconnected =
+			state.stage === "DISCONNECTED" &&
+			state.resumeStage === "POST_BOOKING_QUALIFICATION";
 		if (
-			state.stage !== "POST_BOOKING_QUALIFICATION" ||
+			(state.stage !== "POST_BOOKING_QUALIFICATION" &&
+				!retainedWhileDisconnected) ||
 			!state.booking ||
+			!state.bookingConfirmationDelivered ||
 			event.booking.id !== state.booking.id ||
 			event.booking.conversationId !== state.booking.conversationId
 		) {
 			return failure(
 				"BOOKING_MISMATCH",
-				"Qualification update must preserve the committed booking identity",
+				"Qualification update requires retained confirmation and must preserve the committed booking identity",
 			);
 		}
 		return { ok: true, state: { ...state, booking: event.booking } };
 	}
 
-	if (event.type === "qualification_consent_declined") {
+	if (event.type === "qualification_refused") {
 		if (
 			(state.stage !== "BOOKED" &&
 				state.stage !== "POST_BOOKING_QUALIFICATION") ||
@@ -327,8 +322,21 @@ export function transition(
 				...state,
 				stage: "COMPLETE",
 				booking: event.booking ?? state.booking,
-				qualificationConsent: "declined",
 			},
+		};
+	}
+
+	if (
+		event.type === "complete" &&
+		state.stage === "DISCONNECTED" &&
+		state.resumeStage === "BOOKED" &&
+		state.booking &&
+		state.bookingConfirmationDelivered &&
+		!state.qualificationEnabled
+	) {
+		return {
+			ok: true,
+			state: { ...state, resumeStage: "COMPLETE" },
 		};
 	}
 

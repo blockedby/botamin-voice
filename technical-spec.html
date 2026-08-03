@@ -235,6 +235,8 @@ Conversation value map</a></li>
 <li><a href="#openroutersttadapter" id="toc-openroutersttadapter">OpenRouterSttAdapter</a></li>
 <li><a href="#openrouterttsadapter" id="toc-openrouterttsadapter">OpenRouterTtsAdapter</a></li>
 <li><a href="#bookingservice" id="toc-bookingservice">BookingService</a></li>
+<li><a href="#conversationcontext-bookingdraftstore" id="toc-conversationcontext-bookingdraftstore">ConversationContext /
+BookingDraftStore</a></li>
 <li><a href="#notifier" id="toc-notifier">Notifier</a></li>
 </ul></li>
 <li><a href="#критический-путь-turn" id="toc-критический-путь-turn">3.
@@ -360,11 +362,13 @@ contracts</a>
 <li><a href="#create_booking-1" id="toc-create_booking-1"><code>create_booking</code></a></li>
 <li><a href="#append_booking_qualification-1" id="toc-append_booking_qualification-1"><code>append_booking_qualification</code></a></li>
 </ul></li>
-<li><a href="#domain-policy-до-tool-execution" id="toc-domain-policy-до-tool-execution">6. Domain policy до tool
-execution</a></li>
+<li><a href="#domain-policy-before-durable-commit" id="toc-domain-policy-before-durable-commit">6. Domain policy before
+durable commit</a></li>
 <li><a href="#sqlite-model" id="toc-sqlite-model">7. SQLite model</a>
 <ul>
 <li><a href="#conversations" id="toc-conversations"><code>conversations</code></a></li>
+<li><a href="#conversation_contexts-migration-0004" id="toc-conversation_contexts-migration-0004"><code>conversation_contexts</code>
+(migration 0004)</a></li>
 <li><a href="#turns" id="toc-turns"><code>turns</code></a></li>
 <li><a href="#bookings" id="toc-bookings"><code>bookings</code></a></li>
 <li><a href="#idempotency_keys" id="toc-idempotency_keys"><code>idempotency_keys</code></a></li>
@@ -418,8 +422,8 @@ protection</a></li>
 </ul></li>
 <li><a href="#health-model" id="toc-health-model">8. Health
 model</a></li>
-<li><a href="#backup-and-restore" id="toc-backup-and-restore">9. Backup
-and restore</a></li>
+<li><a href="#migration-backup-restore-and-rollback-boundaries" id="toc-migration-backup-restore-and-rollback-boundaries">9. Migration,
+backup, restore, and rollback boundaries</a></li>
 <li><a href="#capacity-guard" id="toc-capacity-guard">10. Capacity
 guard</a></li>
 <li><a href="#failure-and-degraded-modes" id="toc-failure-and-degraded-modes">11. Failure and degraded
@@ -541,10 +545,11 @@ Latency/load test</a>
 tests</a></li>
 <li><a href="#acceptance-checklist-p0" id="toc-acceptance-checklist-p0">10. Acceptance checklist P0</a>
 <ul>
-<li><a href="#local-release-candidate-0.5.0-local-rc.3" id="toc-local-release-candidate-0.5.0-local-rc.3">Local release
-candidate <code>0.5.0-local-rc.3</code></a></li>
-<li><a href="#later-target-release-gates-not-closed-by-local-rc" id="toc-later-target-release-gates-not-closed-by-local-rc">Later target
-release gates — not closed by local RC</a></li>
+<li><a href="#local-release-candidate-0.5.0-local-rc.4-recommended-tag-pending" id="toc-local-release-candidate-0.5.0-local-rc.4-recommended-tag-pending">Local
+release candidate <code>0.5.0-local-rc.4</code> (recommended; tag
+pending)</a></li>
+<li><a href="#externalnot-run-gates-not-closed-by-rc4-handoff" id="toc-externalnot-run-gates-not-closed-by-rc4-handoff">External/not-run
+gates — not closed by RC4 handoff</a></li>
 </ul></li>
 <li><a href="#candidate-evidence-bundle" id="toc-candidate-evidence-bundle">11. Candidate evidence
 bundle</a></li>
@@ -651,22 +656,21 @@ subscription на продукт</a></li>
 <li><a href="#финальный-вывод" id="toc-финальный-вывод">8. Финальный
 вывод</a></li>
 </ul></li>
-<li><a href="#local-release-candidate-and-handoff" id="toc-local-release-candidate-and-handoff">11. Local release candidate
-and handoff</a>
+<li><a href="#rc4-local-release-handoff" id="toc-rc4-local-release-handoff">11. RC4 local release handoff</a>
 <ul>
-<li><a href="#rc3-scope" id="toc-rc3-scope">RC3 scope</a></li>
-<li><a href="#local-p0-candidate-checklist" id="toc-local-p0-candidate-checklist">Local P0 candidate
-checklist</a></li>
+<li><a href="#rc4-behavior-being-handed-off" id="toc-rc4-behavior-being-handed-off">RC4 behavior being handed
+off</a></li>
+<li><a href="#evidence-status" id="toc-evidence-status">Evidence
+status</a></li>
 <li><a href="#prerequisites-and-secure-bootstrap" id="toc-prerequisites-and-secure-bootstrap">Prerequisites and secure
 bootstrap</a></li>
-<li><a href="#health-readiness-and-metrics" id="toc-health-readiness-and-metrics">Health, readiness, and
-metrics</a></li>
+<li><a href="#health-and-durable-invariant-checks" id="toc-health-and-durable-invariant-checks">Health and durable
+invariant checks</a></li>
+<li><a href="#migration-0004-and-rollback-boundary" id="toc-migration-0004-and-rollback-boundary">Migration 0004 and
+rollback boundary</a></li>
 <li><a href="#paid-smokes-explicit-opt-in-only" id="toc-paid-smokes-explicit-opt-in-only">Paid smokes: explicit opt-in
 only</a></li>
-<li><a href="#backup-restore-rotation-stop-and-rollback" id="toc-backup-restore-rotation-stop-and-rollback">Backup, restore,
-rotation, stop, and rollback</a></li>
-<li><a href="#known-limitations-and-next-gates" id="toc-known-limitations-and-next-gates">Known limitations and next
-gates</a></li>
+<li><a href="#explicit-remaining-gates" id="toc-explicit-remaining-gates">Explicit remaining gates</a></li>
 </ul></li>
 <li><a href="#источники" id="toc-источники">Источники</a>
 <ul>
@@ -732,6 +736,10 @@ booking-данные, после чего backend фиксирует бронь 
 несвязанных API-примеров.</p>
 <h2 id="участники">2. Участники</h2>
 <table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
 <thead>
 <tr>
 <th>Участник</th>
@@ -753,7 +761,7 @@ booking-данные, после чего backend фиксирует бронь 
 </tr>
 <tr>
 <td>Получатель лида</td>
-<td>в MVP читает console/webhook/push payload</td>
+<td>в MVP получает PII-bearing payload через webhook/push</td>
 </tr>
 <tr>
 <td>Владелец проекта</td>
@@ -778,12 +786,18 @@ turns;</li>
 <li>interruption/barge-in на базовом уровне;</li>
 <li>управляемая state machine разговора;</li>
 <li>product knowledge из Botamin-сайта и Telegram-кейсов;</li>
-<li>создание внутренней брони на одном из двух server-supplied
-structured 20-minute Moscow slots;</li>
-<li>необязательная квалификация после брони и отдельного согласия,
-только по monthly inbound leads и integer sales-manager count;</li>
-<li>SQLite persistence;</li>
-<li>console notifier и интерфейс для webhook/push;</li>
+<li>durable revisioned conversation draft with
+facts/provenance/conflicts shared by spoken, typed, and structured-form
+input;</li>
+<li>automatic internal virtual meeting commit after exact confirmation
+of one of two concretely dated server-supplied 20-minute Moscow
+slots;</li>
+<li>direct optional missing-only qualification after truthful meeting
+confirmation, limited to monthly lead/contact volume and integer
+sales-manager count;</li>
+<li>SQLite persistence and server-derived final meeting widget;</li>
+<li>non-PII console acknowledgment и интерфейс PII handoff для
+webhook/push;</li>
 <li>transcript/event audit;</li>
 <li>local-first Docker Compose, health checks and backup; VPS TLS/WSS is
 a later deployment gate;</li>
@@ -861,7 +875,8 @@ tier не предполагается</td>
 </tr>
 <tr>
 <td>Notifications</td>
-<td>console обязательно; webhook — адаптер</td>
+<td>console — только non-PII acknowledgment; webhook — PII-bearing
+handoff</td>
 </tr>
 <tr>
 <td>Calendar</td>
@@ -1051,31 +1066,31 @@ discovery-вопроса до мягкого предложения следую
 <tr>
 <td>US-008</td>
 <td>Я соглашаюсь на встречу</td>
-<td>агент предлагает ровно два текущих server-supplied слота, не выдавая
-их за всю глобальную доступность; предпочтение части дня обновляет пару,
-после чего агент собирает обязательные данные и вызывает
-<code>create_booking</code> с выбранным кандидатом</td>
+<td>server предлагает ровно два concretely dated current Moscow slots,
+не выдавая их за глобальную доступность; spoken/text/form заполняют один
+durable revisioned draft, а exact-revision confirmation автоматически
+commit-ит выбранный вариант</td>
 </tr>
 <tr>
 <td>US-009</td>
-<td>После брони я могу ответить на два доп. вопроса</td>
-<td>после commit, confirmation и точного вопроса
-<code>Можно задать два коротких вопроса?</code> explicit consent
-запускает monthly inbound volume, затем integer
-<code>salesManagerCount</code>; оба ответа одной репликой тоже
-допустимы</td>
+<td>После встречи я могу ответить на два доп. вопроса</td>
+<td>после durable commit и truthful confirmation server без отдельного
+permission turn спрашивает только первый missing fact: monthly
+lead/contact volume, затем integer <code>salesManagerCount</code>; known
+facts не повторяются, оба ответа одной репликой допустимы</td>
 </tr>
 <tr>
 <td>US-010</td>
 <td>Я могу отказаться от квалификации</td>
 <td>без ответов статус <code>skipped</code>, после одного ответа
-<code>partial</code>; бронь в обоих случаях остаётся
-<code>booked</code>, диалог корректно завершается</td>
+<code>partial</code>; scheduled internal virtual meeting в обоих случаях
+остаётся <code>booked</code>, диалог корректно завершается</td>
 </tr>
 <tr>
 <td>US-011</td>
 <td>Получатель видит данные</td>
-<td>console/webhook получает структурированный payload со слотом</td>
+<td>webhook получает структурированный PII-bearing payload со слотом;
+console пишет только non-PII acknowledgment</td>
 </tr>
 <tr>
 <td>US-012</td>
@@ -1171,8 +1186,8 @@ privileges, кроме явно зарегистрированных домен�
 который проходит quality evals.</li>
 <li><strong>FR-BRAIN-009:</strong> каждый turn получает server-owned
 <code>currentInstant</code>, текущую московскую дату и день недели,
-parsed time-of-day preference/rejection и ровно два structured meeting
-candidates с server-generated Russian <code>displayLabel</code>.</li>
+parsed time-of-day/concrete-date-time request и ровно два structured
+meeting candidates с concrete Moscow date/time labels.</li>
 <li><strong>FR-BRAIN-010:</strong> cadence умеренно проактивен: один
 вопрос за раз, не более двух discovery-вопросов до мягкого demo/meeting
 offer, без повторного давления после ясного отказа.</li>
@@ -1185,17 +1200,18 @@ Telegram, <code>consentConfirmed=true</code> и structured
 <code>meetingSlot</code>.</li>
 <li><strong>FR-BOOK-002:</strong> server всегда выдаёт ровно два
 уникальных внутренних кандидата длительностью 20 минут в
-<code>Europe/Moscow</code>: будни, дата строго позже server-owned
-московского today, старты по 20-минутной сетке от 09:00 до 17:00
-включительно. Без preference это одна утренняя и одна вечерняя
-альтернатива.</li>
+<code>Europe/Moscow</code>, каждый с конкретной датой и временем: будни,
+дата строго позже server-owned московского today, старты по 20-минутной
+сетке от 09:00 до 17:00 включительно. Без preference это одна утренняя и
+одна вечерняя альтернатива.</li>
 <li><strong>FR-BOOK-003:</strong> bounded Russian parser одинаково
 обрабатывает typed/spoken явные предпочтения <code>morning</code>,
-<code>daytime</code>, <code>second_half</code>, <code>evening</code> и
-одно явное rejection. Выбранная часть дня даёт два in-band варианта
-примерно в часе друг от друга; если пара занята, server ищет ближайшую
-in-band пару и при необходимости переносит предложение на следующий
-подходящий будний день. Rejection исключает отклонённую часть дня.</li>
+<code>daytime</code>, <code>second_half</code>, <code>evening</code>,
+одно явное rejection и поддерживаемые конкретные московские дату+время.
+Time band даёт два in-band варианта; concrete request даёт exact
+permitted start и одну alternative либо два ближайших internal starts.
+Missing/ambiguous date or time asks for clarification;
+same-day/past/out-of-hours requests fail closed.</li>
 <li><strong>FR-BOOK-004:</strong> два candidates — только текущие
 внутренние альтернативы, не exhaustive/global availability claim. Они
 исключают committed internal starts без external availability API.</li>
@@ -1204,47 +1220,56 @@ in-band пару и при необходимости переносит пре�
 <code>meetingSlot</code> обязан byte-for-field совпасть с одним из двух
 candidates активного turn. Non-candidate, stale, occupied или уже не
 bookable slot отклоняется.</li>
-<li><strong>FR-BOOK-006:</strong> <code>create_booking</code> атомарен и
-идемпотентен по <code>conversationId</code>/<code>idempotencyKey</code>;
-уникальны conversation и non-null internal
-<code>meeting_start_at</code>.</li>
-<li><strong>FR-BOOK-007:</strong> успешный tool всегда возвращает
-стабильный <code>bookingId</code>.</li>
-<li><strong>FR-BOOK-008:</strong> committed <code>booking.created</code>
-и user-facing confirmation с точным consent-вопросом
-<code>Можно задать два коротких вопроса?</code> предшествуют consent на
-qualification и первому qualification question.</li>
-<li><strong>FR-BOOK-009:</strong> backend сохраняет внутреннюю бронь и
-outbox event, но не создаёт внешнее calendar event/invitation, не
-вызывает external availability API и не создаёт CRM record.</li>
+<li><strong>FR-BOOK-006:</strong> одна durable draft projection хранится
+в <code>conversation_contexts</code> как revisioned JSON
+facts/provenance/conflicts/lifecycle. Mutations используют expected
+revision, compare-and-swap, bounded conflicts и idempotent request IDs;
+stale revisions fail closed.</li>
+<li><strong>FR-BOOK-007:</strong> exact-revision draft confirmation
+переводит draft через <code>committing</code> и автоматически вызывает
+идемпотентный booking create; стабильный <code>bookingId</code>
+записывается и в durable draft, и в единственный booking.</li>
+<li><strong>FR-BOOK-008:</strong> committed
+<code>booking.created</code>, committed draft и server-derived internal
+meeting projection предшествуют final widget и первому qualification
+question.</li>
+<li><strong>FR-BOOK-009:</strong> backend сохраняет booking/outbox и
+публикует <code>kind=internal_virtual</code>,
+<code>status=scheduled</code>,
+<code>externalCalendarEventCreated=false</code>,
+<code>externalInviteSent=false</code>; отдельной meeting table, external
+availability API, calendar event/invitation или CRM record нет.</li>
 <li><strong>FR-BOOK-010:</strong> in-chat form показывается только по
-server-owned <code>COLLECT_BOOKING</code>, валидирует
-name/company/working email/phone-or-Telegram и сериализует данные как
-обычную visitor typed turn; форма не вызывает tool и не подтверждает
-бронь.</li>
+server-owned <code>COLLECT_BOOKING</code>, редактирует browser-safe
+projection без provenance/evidence и отправляет structured field
+patch/current candidate identity. Spoken, typed, and form inputs merge
+into one authoritative draft; conflicts require explicit resolution and
+changed candidates require reselection.</li>
 </ul>
 <h3 id="post-booking-qualification">4.4 Post-booking qualification</h3>
 <ul>
-<li><strong>FR-QUAL-001:</strong> запускается только при committed
-<code>booking.status=booked</code> и после user-facing booking
-confirmation.</li>
-<li><strong>FR-QUAL-002:</strong> пользователь отдельно и явно
-соглашается на дополнительные вопросы; booking action envelope того же
-turn не может выдать это согласие.</li>
-<li><strong>FR-QUAL-003:</strong> server детерминированно спрашивает по
-одному: сначала месячный объём входящих лидов
-(<code>monthlyLeadVolume</code>), затем число менеджеров продаж
-(<code>salesManagerCount</code>) как integer <code>0..10000</code>.
-Модель не может изменить порядок или досрочно объявить completion.</li>
-<li><strong>FR-QUAL-004:</strong> оба поля необязательны для booking и
-могут сохраняться partial patch-операцией; qualification получает
-<code>complete</code> только при наличии обоих. Если пользователь
-сообщает оба одновременно, оба сохраняются и flow завершается. Остальные
-legacy schema fields не являются вопросами текущего flow.</li>
+<li><strong>FR-QUAL-001:</strong> запускается только после committed
+booking, committed draft, durable internal meeting publication и
+truthful user-facing confirmation; отдельного qualification-permission
+turn нет.</li>
+<li><strong>FR-QUAL-002:</strong> server спрашивает только missing
+authoritative fact: при двух missing сначала контекстный месячный объём
+лидов/обрабатываемых контактов (<code>monthlyLeadVolume</code>), затем
+integer <code>salesManagerCount</code>; при одном known спрашивается
+только второе, при обоих known — ничего.</li>
+<li><strong>FR-QUAL-003:</strong> server не повторяет known facts.
+Generic daily volume требует clarification
+<code>рабочие или календарные дни</code>; только затем server может
+нормализовать. Model не вычисляет 22/30 и не может изменить persisted
+truth.</li>
+<li><strong>FR-QUAL-004:</strong> оба поля необязательны для meeting и
+могут сохраняться partial patch-операцией; <code>complete</code> только
+при обоих. Если пользователь сообщает оба missing значения одновременно,
+оба сохраняются и flow завершается.</li>
 <li><strong>FR-QUAL-005:</strong> explicit refusal без ответов даёт
 <code>skipped</code>; refusal после одного ответа сохраняет
-<code>partial</code>; disconnect/failure не отменяет committed booking,
-которая остаётся <code>booked</code>.</li>
+<code>partial</code>; disconnect/failure не отменяет scheduled internal
+meeting.</li>
 <li><strong>FR-QUAL-006:</strong> повторный patch идемпотентен.</li>
 </ul>
 <h3 id="landing-and-ux">4.5 Landing and UX</h3>
@@ -1266,10 +1291,15 @@ effects; blocked/error показывает native button
 <li><strong>FR-WEB-004:</strong> текстовая копия реплик и stage-gated
 multiline composer доступны в активных visitor-turn stages; Enter
 отправляет, Shift+Enter добавляет строку.</li>
-<li><strong>FR-WEB-005:</strong> booking details form существует внутри
-chat и видима только в <code>COLLECT_BOOKING</code>, полученном через
-server <code>state.changed</code>/<code>session.ready</code>, а не из
-transcript wording.</li>
+<li><strong>FR-WEB-005:</strong> booking form существует внутри chat и
+видима только в server-owned <code>COLLECT_BOOKING</code>. Она
+показывает auto-filled durable facts, five contact/identity fields,
+conflicts, exactly two concretely dated candidates, exact-revision
+confirmation, and safe rejection/retry state.</li>
+<li><strong>FR-WEB-005A:</strong> final meeting widget appears only from
+<code>session.ready.internalMeeting</code> or
+<code>internal.meeting.updated</code> derived from the durable booking;
+legacy UI state or transcript wording cannot synthesize it.</li>
 <li><strong>FR-WEB-006:</strong> mobile viewport поддерживается.</li>
 <li><strong>FR-WEB-007:</strong> при voice failure пользователю не
 показываются stack traces/provider details.</li>
@@ -1416,14 +1446,16 @@ degradation;</li>
 <p>Метрики качества продаж нельзя интерпретировать без объёма трафика и
 human review выборки.</p>
 <h2 id="release-sequencing-boundary">9. Release sequencing boundary</h2>
-<p><code>0.5.0-local-rc.3</code> is a local-only candidate for one
-trusted owner machine. Candidate acceptance still requires the fresh
-steps in docs 08/11; prior RC2 observations are not evidence that RC3
-browser, deploy, or provider gates ran. Local Chrome/Compose evidence,
-when freshly collected, cannot close WebKit, target-VPS resource
-behavior, DNS, public TLS/WSS, or target-host paid-smoke gates. The
-internal booking remains deliberately different from a real calendar
-event.</p>
+<p><code>0.5.0-local-rc.4</code> is the recommended, still-untagged
+local candidate for one trusted owner machine. RC3 evidence is preserved
+as history, not reused as RC4 proof. Chromium desktop/mobile landing
+smoke is not a full voice journey. WebKit has a downloaded browser
+binary but the current host is missing <code>libicu74</code>,
+<code>libxml2</code>, and <code>libflite1</code>; WebKit full journey
+therefore remains not run. Target-VPS resources, DNS, public TLS/WSS,
+and target-host provider live booking are also external gates. The
+internal virtual meeting remains deliberately different from an external
+calendar event.</p>
 <div class="page-break">
 
 </div>
@@ -1614,8 +1646,8 @@ autoplay заблокирован или media не загрузилось, по
 <ul>
 <li>данные не попадают в публичный чат;</li>
 <li>разговор можно остановить;</li>
-<li>реальная встреча в этом MVP не создаётся, данные только
-фиксируются.</li>
+<li>создаётся только внутренняя виртуальная встреча Botamin на точный
+московский слот; внешнее calendar event/invite не создаётся.</li>
 </ul>
 <h2 id="воронка">6. Воронка</h2>
 <figure>
@@ -1671,23 +1703,26 @@ autoplay заблокирован или media не загрузилось, по
 </tr>
 <tr>
 <td>Booking</td>
-<td>сохранить полный обязательный набор и один из двух внутренних
-slots</td>
+<td>свести spoken/text/form facts в один revisioned draft, разрешить
+conflicts и подтвердить один из двух concretely dated slots</td>
 <td><code>booking.created</code></td>
-<td>не собраны name/company/email/phone-or-Telegram/consent/slot</td>
+<td>missing/conflicted facts, stale revision или нет current
+selection</td>
 </tr>
 <tr>
 <td>Qualification</td>
-<td>после commit, confirmation и consent спросить inbound volume и
-manager count</td>
+<td>после durable internal meeting и truthful confirmation спросить
+только missing volume/manager fact</td>
 <td><code>qualification.updated</code></td>
-<td>пользователь устал</td>
+<td>пользователь отказался; meeting сохраняется</td>
 </tr>
 <tr>
 <td>Handoff</td>
-<td>вывести структурированный результат</td>
-<td><code>notification.sent</code></td>
-<td>provider/output error</td>
+<td>показать server-derived internal meeting widget и структурированный
+notifier result</td>
+<td><code>internal.meeting.updated</code> /
+<code>notification.sent</code></td>
+<td>widget запрещён до durable commit</td>
 </tr>
 </tbody>
 </table>
@@ -1743,31 +1778,30 @@ manager count</td>
 <p>Текущий funnel умеренно проактивен: агент задаёт по одному вопросу и
 не более двух discovery-вопросов до краткого мягкого предложения
 demo/встречи. После ясного отказа предложение не повторяется.</p>
-<p>После согласия агент предлагает ровно два labeled candidates из
-server context и не называет их всей доступностью. Без предпочтения
-server даёт одну утреннюю и одну вечернюю альтернативу. Typed и spoken
-русские формулировки про утро, день, вторую половину дня или вечер
-обновляют контекст: выбранная часть дня даёт два in-band варианта
-примерно в часе друг от друга, occupied band переносится на следующий
-подходящий будний день, а явный rejection исключает отклонённую часть.
-Все варианты — 20 минут, будни, не сегодня, старты 09:00–17:00 по
-Москве. Новая внутренняя бронь требует name, company, working email,
-phone or Telegram, consent и один текущий candidate. Внешний календарь и
-external availability API отсутствуют.</p>
-<p>Квалификация начинается только после committed booking и user-facing
-confirmation с точным вопросом
-<code>Можно задать два коротких вопроса?</code>. После отдельного явного
-consent server задаёт по одному и в фиксированном порядке:</p>
-<ol type="1">
-<li>месячный объём <strong>входящих</strong> лидов
-(<code>monthlyLeadVolume</code>);</li>
-<li>явное целое число менеджеров продаж
-(<code>salesManagerCount</code>).</li>
-</ol>
-<p><code>complete</code> возможен только при обоих значениях; ответ на
-оба сразу допустим. Отказ без ответов даёт <code>skipped</code>, после
-одного — <code>partial</code>; внутренняя бронь остаётся
-<code>booked</code>.</p>
+<p>После согласия agent/server предлагает ровно два labeled candidates с
+конкретной московской датой и временем и не называет их всей
+доступностью. Без предпочтения server даёт одну утреннюю и одну вечернюю
+альтернативу. Typed и spoken русские формулировки про часть дня,
+rejection и поддерживаемую конкретную дату+время проходят один parser:
+для concrete request server предлагает exact permitted start и
+alternative либо два nearest internal starts. Все варианты — 20 минут,
+будни, не сегодня, старты 09:00–17:00 по Москве.</p>
+<p>Name, company, working email, phone or Telegram, qualification facts
+и candidate selection сходятся в одном durable revisioned draft
+независимо от spoken, typed или structured-form origin. Conflicting
+values не затираются молча; browser показывает bounded options, а stale
+revision/replaced candidate требует resync/reselection. Exact-revision
+confirmation автоматически создаёт одну внутреннюю виртуальную встречу и
+только после durable commit публикует final widget. Внешний календарь,
+invite и availability API отсутствуют.</p>
+<p>После truthful confirmation qualification не запрашивает отдельного
+разрешения. Server задаёт только first missing field: monthly
+lead/contact volume first, если оба отсутствуют; otherwise only missing
+volume or integer <code>salesManagerCount</code>; если оба известны —
+ничего. <code>complete</code> возможен только при обоих значениях; ответ
+на оба сразу допустим. Отказ без ответов даёт <code>skipped</code>,
+после одного — <code>partial</code>; внутренняя встреча остаётся
+scheduled.</p>
 <h2 id="контентные-риски">9. Контентные риски</h2>
 <ul>
 <li>Сайт и Telegram — маркетинговые источники; кейсы нуждаются в
@@ -1836,8 +1870,9 @@ server-advertised PCM byte cap, производный от 2,000,000-byte WAV
 cap;</li>
 <li>circular countdown по принятым samples, а не wall clock, с effective
 duration по stricter duration/byte ceiling;</li>
-<li>secure <code>visitor.text.submit</code> для bounded final typed turn
-и in-chat form только в server-owned <code>COLLECT_BOOKING</code>;</li>
+<li>secure <code>visitor.text.submit</code> for bounded final typed
+turns plus structured revisioned booking form commands only in
+server-owned <code>COLLECT_BOOKING</code>;</li>
 <li>UI states
 <code>listening → processing → transcript.final</code>;</li>
 <li>ordered playback queue для полных MP3 phrase segments;</li>
@@ -1871,21 +1906,23 @@ suppression;</li>
 <h3 id="conversationorchestrator">ConversationOrchestrator</h3>
 <p>Источник истины для:</p>
 <ul>
-<li>текущего stage;</li>
-<li>server-owned current Moscow date/day, bounded typed/spoken Russian
-time-of-day preference/rejection и ровно двух structured/labeled
-internal meeting candidates;</li>
-<li>refresh candidate context при выборе
-<code>morning</code>/<code>daytime</code>/<code>second_half</code>/<code>evening</code>
-или explicit rejection;</li>
-<li>разрешённых actions, включая rejection любого create-booking slot
-вне active candidate tuple;</li>
-<li>qualification gating по committed booking, delivered confirmation и
-отдельному consent;</li>
-<li>booking lifecycle;</li>
-<li>prompt context;</li>
-<li>retry/cancellation;</li>
-<li>post-booking qualification policy.</li>
+<li>current stage and accepted visitor-turn origin
+(<code>voice_transcript</code> or <code>typed_message</code>);</li>
+<li>durable RC4 draft lifecycle in one
+<code>conversation_contexts</code> JSON row: revision, fact
+registry/provenance/conflicts, exactly two candidate identities,
+selection, readiness, confirmation/commit state and booking ID;</li>
+<li>server-owned Moscow date/day and bounded typed/spoken time-band,
+rejection, and concrete date/time interpretation;</li>
+<li>expected-revision CAS, idempotent form/conflict/confirmation
+commands, explicit conflict resolution, and candidate
+refresh/reselection;</li>
+<li>automatic internal booking commit only from a ready, exactly
+confirmed draft;</li>
+<li>direct missing-only qualification after durable booking
+confirmation;</li>
+<li>prompt context, retry/cancellation, and publication of browser-safe
+projections.</li>
 </ul>
 <p>LLM предлагает действие, но backend валидирует, разрешено ли оно в
 текущем состоянии.</p>
@@ -1977,18 +2014,15 @@ safe IDs, но не spoken text, PII, key или audio.</li>
 </ul>
 <h3 id="bookingservice">BookingService</h3>
 <ul>
-<li>генерирует ровно два deterministic internal 20-minute candidates
-после текущей московской даты, только по будням и по 20-minute grid с
-09:00 до 17:00 starts;</li>
-<li>без preference выбирает одну утреннюю и одну вечернюю
-альтернативу;</li>
-<li>для selected
-<code>morning</code>/<code>daytime</code>/<code>second_half</code>/<code>evening</code>
-выбирает две in-band точки примерно в часе друг от друга; если occupied
-starts не оставляют такую пару, ищет ближайшую допустимую пару и при
-необходимости переносит обе на следующий будний день;</li>
-<li>для одного explicit rejection исключает rejected band и формирует
-две альтернативы из оставшихся policy bands;</li>
+<li>generates exactly two deterministic internal 20-minute candidates
+with concrete Moscow dates/times after current Moscow date, weekdays
+only, on the 09:00–17:00 20-minute grid;</li>
+<li>without preference chooses one morning and one evening
+alternative;</li>
+<li>handles selected time bands/rejection and supported concrete
+date+time requests; concrete requests return exact permitted +
+alternative or the nearest two internal starts, while
+missing/ambiguous/out-of-policy requests fail closed;</li>
 <li>исключает уже committed internal start times без external
 calendar/availability API и никогда не представляет tuple как
 exhaustive/global availability;</li>
@@ -2000,23 +2034,41 @@ active-candidate membership до вызова сервиса проверяет
 orchestrator/tool policy;</li>
 <li>создаёт/находит booking в одной <code>BEGIN IMMEDIATE</code>
 transaction;</li>
-<li>обновляет qualification patch для существующей committed booking;
-confirmation/consent gating до вызова сервиса принадлежит
-orchestrator/tool policy;</li>
-<li>вычисляет qualification truth из сохранённых полей:
+<li>updates qualification patch only after durable meeting confirmation;
+missing-field selection and refusal gating belong to orchestrator
+policy;</li>
+<li>computes qualification truth from saved fields:
 zero+refusal=<code>skipped</code>, one=<code>partial</code>,
-both=<code>complete</code>; booking status остаётся
-<code>booked</code>;</li>
+both=<code>complete</code>; only a missing field is asked and booking
+remains <code>booked</code>;</li>
 <li>пишет event outbox;</li>
 <li>никогда не удаляет booking из-за incomplete qualification.</li>
 </ul>
+<h3 id="conversationcontext-bookingdraftstore">ConversationContext /
+BookingDraftStore</h3>
+<p>Migration <code>0004_conversation_contexts.sql</code> adds exactly
+one compact table, not separate fact/evidence/meeting tables. Its PK/FK
+is <code>conversation_id</code> with cascade deletion; SQLite checks
+require a nonnegative row revision, valid object JSON, and matching
+draft/fact-registry revisions and <code>updatedAt</code>. Store
+mutations run in <code>BEGIN IMMEDIATE</code>, compare the expected
+revision in the update predicate, and use scoped idempotency keys for
+form, conflict-resolution, and confirmation commands.
+Provenance/evidence remains internal; browser events expose only
+required/status/value/conflict-option projections.</p>
+<p>A confirmed current revision is the authorization boundary for
+automatic internal meeting commit. The durable booking remains the only
+meeting entity; <code>InternalVirtualMeetingProjection</code> is derived
+from it for <code>session.ready</code> /
+<code>internal.meeting.updated</code> and explicitly carries both
+external flags as false.</p>
 <h3 id="notifier">Notifier</h3>
 <p>Интерфейс:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">export</span> <span class="kw">interface</span> LeadNotifier {</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">publish</span>(event<span class="op">:</span> BookingCreatedEvent <span class="op">|</span> BookingUpdatedEvent)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<p>P0 adapter — structured console JSON. P1 — signed HTTP webhook с
-retry/outbox.</p>
+<p>P0 adapter — fixed-schema non-PII console acknowledgment. P1 — signed
+HTTP webhook с полным lead payload и retry/outbox.</p>
 <h2 id="критический-путь-turn">3. Критический путь turn</h2>
 <figure>
 <img role="img" aria-label="Turn sequence" src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+CjwhRE9DVFlQRSBzdmcgUFVCTElDICItLy9XM0MvL0RURCBTVkcgMS4xLy9FTiIKICJodHRwOi8vd3d3LnczLm9yZy9HcmFwaGljcy9TVkcvMS4xL0RURC9zdmcxMS5kdGQiPgo8IS0tIEdlbmVyYXRlZCBieSBncmFwaHZpeiB2ZXJzaW9uIDEzLjEuMiAoMjAyNTA4MDguMjMyMCkKIC0tPgo8IS0tIFRpdGxlOiBHIFBhZ2VzOiAxIC0tPgo8c3ZnIHdpZHRoPSIxMTI4cHQiIGhlaWdodD0iNDY5cHQiCiB2aWV3Qm94PSIwLjAwIDAuMDAgMTEyOC4wMCA0NjkuMDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgeG1sbnM6eGxpbms9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkveGxpbmsiPgo8ZyBpZD0iZ3JhcGgwIiBjbGFzcz0iZ3JhcGgiIHRyYW5zZm9ybT0ic2NhbGUoMSAxKSByb3RhdGUoMCkgdHJhbnNsYXRlKDE4IDQ1MC44OCkiPgo8dGl0bGU+RzwvdGl0bGU+Cjxwb2x5Z29uIGZpbGw9IndoaXRlIiBzdHJva2U9Im5vbmUiIHBvaW50cz0iLTE4LDE4IC0xOCwtNDUwLjg4IDExMDkuNjMsLTQ1MC44OCAxMTA5LjYzLDE4IC0xOCwxOCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1NDUuODEiIHk9Ii00MTAuODgiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIyMC4wMCI+0JrRgNC40YLQuNGH0LXRgdC60LjQuSDQv9GD0YLRjCDQvtC00L3QvtCz0L4g0LPQvtC70L7RgdC+0LLQvtCz0L4gdHVybjwvdGV4dD4KPCEtLSBiIC0tPgo8ZyBpZD0ibm9kZTEiIGNsYXNzPSJub2RlIj4KPHRpdGxlPmI8L3RpdGxlPgo8cGF0aCBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjMzAzNDNiIiBkPSJNNzkuNzMsLTI0NS4wN0M3OS43MywtMjQ1LjA3IDEyLC0yNDUuMDcgMTIsLTI0NS4wNyA2LC0yNDUuMDcgMCwtMjM5LjA3IDAsLTIzMy4wNyAwLC0yMzMuMDcgMCwtMjIwLjExIDAsLTIyMC4xMSAwLC0yMTQuMTEgNiwtMjA4LjExIDEyLC0yMDguMTEgMTIsLTIwOC4xMSA3OS43MywtMjA4LjExIDc5LjczLC0yMDguMTEgODUuNzMsLTIwOC4xMSA5MS43MywtMjE0LjExIDkxLjczLC0yMjAuMTEgOTEuNzMsLTIyMC4xMSA5MS43MywtMjMzLjA3IDkxLjczLC0yMzMuMDcgOTEuNzMsLTIzOS4wNyA4NS43MywtMjQ1LjA3IDc5LjczLC0yNDUuMDciLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNDUuODYiIHk9Ii0yMjkuNTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+QnJvd3NlcjwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNDUuODYiIHk9Ii0yMTcuNTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+TWljIC8gcGxheWJhY2s8L3RleHQ+CjwvZz4KPCEtLSBnIC0tPgo8ZyBpZD0ibm9kZTIiIGNsYXNzPSJub2RlIj4KPHRpdGxlPmc8L3RpdGxlPgo8cGF0aCBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjMzAzNDNiIiBkPSJNNDA2Ljg2LC0zMDYuMDdDNDA2Ljg2LC0zMDYuMDcgMzY3LjkyLC0zMDYuMDcgMzY3LjkyLC0zMDYuMDcgMzYxLjkyLC0zMDYuMDcgMzU1LjkyLC0zMDAuMDcgMzU1LjkyLC0yOTQuMDcgMzU1LjkyLC0yOTQuMDcgMzU1LjkyLC0yODEuMTEgMzU1LjkyLC0yODEuMTEgMzU1LjkyLC0yNzUuMTEgMzYxLjkyLC0yNjkuMTEgMzY3LjkyLC0yNjkuMTEgMzY3LjkyLC0yNjkuMTEgNDA2Ljg2LC0yNjkuMTEgNDA2Ljg2LC0yNjkuMTEgNDEyLjg2LC0yNjkuMTEgNDE4Ljg2LC0yNzUuMTEgNDE4Ljg2LC0yODEuMTEgNDE4Ljg2LC0yODEuMTEgNDE4Ljg2LC0yOTQuMDcgNDE4Ljg2LC0yOTQuMDcgNDE4Ljg2LC0zMDAuMDcgNDEyLjg2LC0zMDYuMDcgNDA2Ljg2LC0zMDYuMDciLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzg3LjM5IiB5PSItMjkwLjU5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPkJ1biBXUzwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzg3LjM5IiB5PSItMjc4LjU5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPmdhdGV3YXk8L3RleHQ+CjwvZz4KPCEtLSBiJiM0NTsmZ3Q7ZyAtLT4KPGcgaWQ9ImVkZ2UxIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5iJiM0NTsmZ3Q7ZzwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik04My42NSwtMjQ1LjQzQzk2LjM2LC0yNTEuMTggMTEwLjg5LC0yNTYuOTUgMTI0LjczLC0yNjAuNTkgMjAxLjc2LC0yODAuODUgMjk1LjI4LC0yODYuMDQgMzQ3LjA3LC0yODcuMjgiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIzNDYuNzEsLTI4OS44IDM1My45NiwtMjg3LjQzIDM0Ni44MiwtMjg0Ljc2IDM0Ni43MSwtMjg5LjgiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMjEzLjgyIiB5PSItMjg3LjY0IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+MSDCtyBib3VuZGVkIFBDTTE2IGNodW5rcyArIGF1ZGlvLmNvbW1pdDwvdGV4dD4KPC9nPgo8IS0tIG8gLS0+CjxnIGlkPSJub2RlNCIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+bzwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik03MzcuNiwtMTIyLjU5QzczNy42LC0xMjIuNTkgNjc3Ljk1LC0xMjIuNTkgNjc3Ljk1LC0xMjIuNTkgNjcxLjk1LC0xMjIuNTkgNjY1Ljk1LC0xMTYuNTkgNjY1Ljk1LC0xMTAuNTkgNjY1Ljk1LC0xMTAuNTkgNjY1Ljk1LC05OC41OSA2NjUuOTUsLTk4LjU5IDY2NS45NSwtOTIuNTkgNjcxLjk1LC04Ni41OSA2NzcuOTUsLTg2LjU5IDY3Ny45NSwtODYuNTkgNzM3LjYsLTg2LjU5IDczNy42LC04Ni41OSA3NDMuNiwtODYuNTkgNzQ5LjYsLTkyLjU5IDc0OS42LC05OC41OSA3NDkuNiwtOTguNTkgNzQ5LjYsLTExMC41OSA3NDkuNiwtMTEwLjU5IDc0OS42LC0xMTYuNTkgNzQzLjYsLTEyMi41OSA3MzcuNiwtMTIyLjU5Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjcwNy43NyIgeT0iLTEwMS41OSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5PcmNoZXN0cmF0b3I8L3RleHQ+CjwvZz4KPCEtLSBiJiM0NTsmZ3Q7byAtLT4KPGcgaWQ9ImVkZ2UxNCIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+YiYjNDU7Jmd0O288L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBzdHJva2UtZGFzaGFycmF5PSIxLDUiIGQ9Ik05Mi4xNSwtMjI4LjYzQzEwMi44MywtMjI5LjAzIDExNC4xOCwtMjI5LjM4IDEyNC43MywtMjI5LjU5IDM0MC4xMiwtMjMzLjczIDQwMy4xMSwtMjM3LjA3IDYwNC41LC0xNjAuNTkgNjI3LjQ2LC0xNTEuODcgNjUxLjYyLC0xMzguODQgNjcwLjY5LC0xMjcuNTUiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSI2NzEuOTcsLTEyOS43MiA2NzYuODQsLTEyMy44NSA2NjkuMzcsLTEyNS40IDY3MS45NywtMTI5LjcyIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjM4Ny4zOSIgeT0iLTIzMC44NiIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjguMDAiPmJhcmdlJiM0NTtpbjogc3RvcCArIGludGVycnVwdDwvdGV4dD4KPC9nPgo8IS0tIGcmIzQ1OyZndDtiIC0tPgo8ZyBpZD0iZWRnZTkiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPmcmIzQ1OyZndDtiPC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTM1Ni42NywtMjY4LjczQzM0MS4yNCwtMjU5LjkyIDMyMS43MiwtMjUwLjIzIDMwMi45MSwtMjQ0Ljk5IDIzNS4xMywtMjI2LjEgMTUzLjU4LC0yMjMuNTEgMTAxLjAxLC0yMjQuMyIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjEwMS4wMSwtMjIxLjc4IDkzLjg1LC0yMjQuNDQgMTAxLjEsLTIyNi44MiAxMDEuMDEsLTIyMS43OCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIyMTMuODIiIHk9Ii0yNDcuMzkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj45IMK3IGdlbmVyYXRpb25JZCArIG9yZGVyZWQgTVAzPC90ZXh0Pgo8L2c+CjwhLS0gcyAtLT4KPGcgaWQ9Im5vZGUzIiBjbGFzcz0ibm9kZSI+Cjx0aXRsZT5zPC90aXRsZT4KPHBhdGggZmlsbD0id2hpdGUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTc0OC45OCwtMzcwLjA3Qzc0OC45OCwtMzcwLjA3IDY2Ni41NywtMzcwLjA3IDY2Ni41NywtMzcwLjA3IDY2MC41NywtMzcwLjA3IDY1NC41NywtMzY0LjA3IDY1NC41NywtMzU4LjA3IDY1NC41NywtMzU4LjA3IDY1NC41NywtMzQ1LjExIDY1NC41NywtMzQ1LjExIDY1NC41NywtMzM5LjExIDY2MC41NywtMzMzLjExIDY2Ni41NywtMzMzLjExIDY2Ni41NywtMzMzLjExIDc0OC45OCwtMzMzLjExIDc0OC45OCwtMzMzLjExIDc1NC45OCwtMzMzLjExIDc2MC45OCwtMzM5LjExIDc2MC45OCwtMzQ1LjExIDc2MC45OCwtMzQ1LjExIDc2MC45OCwtMzU4LjA3IDc2MC45OCwtMzU4LjA3IDc2MC45OCwtMzY0LjA3IDc1NC45OCwtMzcwLjA3IDc0OC45OCwtMzcwLjA3Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjcwNy43NyIgeT0iLTM1NC41OSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5PcGVuUm91dGVyIFNUVDwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNzA3Ljc3IiB5PSItMzQyLjU5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPmNoYXQvY29tcGxldGlvbnM8L3RleHQ+CjwvZz4KPCEtLSBnJiM0NTsmZ3Q7cyAtLT4KPGcgaWQ9ImVkZ2UyIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5nJiM0NTsmZ3Q7czwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0zOTkuMDgsLTMwNi4zM0M0MTIuNzUsLTMyOC4xNiA0MzguNjcsLTM2My4xIDQ3MS44OCwtMzc3LjU5IDUyOS4yOSwtNDAyLjY0IDYwMS43NiwtMzg4LjU3IDY1MC45MiwtMzczLjEyIi8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNjUxLjU1LC0zNzUuNTYgNjU3LjYyLC0zNzAuOTUgNjUwLC0zNzAuNzcgNjUxLjU1LC0zNzUuNTYiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTM4LjE5IiB5PSItMzkzLjY4IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+MiDCtyBvbmUgYmFzZTY0IFdBViBpbnB1dF9hdWRpbzwvdGV4dD4KPC9nPgo8IS0tIGcmIzQ1OyZndDtzIC0tPgo8ZyBpZD0iZWRnZTE2IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5nJiM0NTsmZ3Q7czwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHN0cm9rZS1kYXNoYXJyYXk9IjEsNSIgZD0iTTQxMi44MiwtMzA2LjUzQzQyOC43MSwtMzE3LjcyIDQ1MC40MSwtMzMwLjk2IDQ3MS44OCwtMzM3LjU5IDUyOC44MywtMzU1LjE4IDU5Ny4xOCwtMzU3LjI3IDY0NS40MiwtMzU1LjgxIi8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNjQ1LjQyLC0zNTguMzMgNjUyLjUyLC0zNTUuNTUgNjQ1LjI0LC0zNTMuMjkgNjQ1LjQyLC0zNTguMzMiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTM4LjE5IiB5PSItMzU4LjQiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj5BYm9ydFNpZ25hbCArIHN0YWxlJiM0NTt0dXJuIGRyb3A8L3RleHQ+CjwvZz4KPCEtLSBnJiM0NTsmZ3Q7byAtLT4KPGcgaWQ9ImVkZ2U0IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5nJiM0NTsmZ3Q7bzwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik00MTguOTgsLTI3NC41OEM0MzQuNjQsLTI2OC4xOSA0NTQuMDksLTI2MC42NyA0NzEuODgsLTI1NC45OSA1MjkuNzcsLTIzNi40NyA1NTIuNjcsLTI1My4zNCA2MDQuNSwtMjIxLjU5IDY0Mi4zNiwtMTk4LjQgNjczLjgsLTE1Ni42OSA2OTEuNDMsLTEyOS44NCIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjY5My4zNiwtMTMxLjUxIDY5NS4xMywtMTI0LjA5IDY4OS4xMiwtMTI4Ljc4IDY5My4zNiwtMTMxLjUxIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjUzOC4xOSIgeT0iLTI1Ny4zOSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjguMDAiPjQgwrcgY3VycmVudCBmaW5hbCB1c2VyIHR1cm48L3RleHQ+CjwvZz4KPCEtLSBzJiM0NTsmZ3Q7ZyAtLT4KPGcgaWQ9ImVkZ2UzIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5zJiM0NTsmZ3Q7ZzwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik02NTQuMDksLTMzOC4zMkM2MzguMTksLTMzNC40OCA2MjAuNjcsLTMzMC40IDYwNC41LC0zMjYuOTkgNTQzLjA2LC0zMTQuMDEgNDcxLjI1LC0zMDEuNDIgNDI3LjgzLC0yOTQuMSIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjQyOC40MywtMjkxLjY0IDQyMC45MiwtMjkyLjk0IDQyNy42LC0yOTYuNjEgNDI4LjQzLC0yOTEuNjQiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTM4LjE5IiB5PSItMzI5LjM5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+MyDCtyBvbmUgZmluYWwgdHJhbnNjcmlwdDwvdGV4dD4KPC9nPgo8IS0tIGwgLS0+CjxnIGlkPSJub2RlNSIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+bDwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0xMDczLjY2LC05My41OUMxMDczLjY2LC05My41OSAxMDA2Ljg3LC05My41OSAxMDA2Ljg3LC05My41OSAxMDAwLjg3LC05My41OSA5OTQuODcsLTg3LjU5IDk5NC44NywtODEuNTkgOTk0Ljg3LC04MS41OSA5OTQuODcsLTY5LjU5IDk5NC44NywtNjkuNTkgOTk0Ljg3LC02My41OSAxMDAwLjg3LC01Ny41OSAxMDA2Ljg3LC01Ny41OSAxMDA2Ljg3LC01Ny41OSAxMDczLjY2LC01Ny41OSAxMDczLjY2LC01Ny41OSAxMDc5LjY2LC01Ny41OSAxMDg1LjY2LC02My41OSAxMDg1LjY2LC02OS41OSAxMDg1LjY2LC02OS41OSAxMDg1LjY2LC04MS41OSAxMDg1LjY2LC04MS41OSAxMDg1LjY2LC04Ny41OSAxMDc5LjY2LC05My41OSAxMDczLjY2LC05My41OSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIxMDQwLjI3IiB5PSItNzIuNTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+Q29kZXggKyBMdW5hPC90ZXh0Pgo8L2c+CjwhLS0gbyYjNDU7Jmd0O2wgLS0+CjxnIGlkPSJlZGdlNSIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+byYjNDU7Jmd0O2w8L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBkPSJNNzQ5Ljk2LC0xMDAuOTdDODA5LjU4LC05NS43NCA5MTkuOTYsLTg2LjA2IDk4NS43OSwtODAuMjgiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSI5ODUuNzcsLTgyLjgxIDk5Mi43MiwtNzkuNjcgOTg1LjMzLC03Ny43OSA5ODUuNzcsLTgyLjgxIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9Ijg4My40OCIgeT0iLTk3LjYxIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+NSDCtyB0dXJuL3N0YXJ0ICsgY29tcGFjdCBzdGF0ZTwvdGV4dD4KPC9nPgo8IS0tIG8mIzQ1OyZndDtsIC0tPgo8ZyBpZD0iZWRnZTEzIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5vJiM0NTsmZ3Q7bDwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHN0cm9rZS1kYXNoYXJyYXk9IjUsMiIgZD0iTTcxNy41NiwtMTIzLjAxQzczMi4yOSwtMTUxLjQ3IDc2NC45NiwtMjA1LjA4IDgxMS4wNCwtMjI2LjU5IDg2OS4zOSwtMjUzLjgxIDkwMC40NiwtMjU5LjMxIDk1NS45MSwtMjI2LjU5IDEwMDEuNDMsLTE5OS43MiAxMDIzLjgxLC0xMzguMSAxMDMzLjMyLC0xMDIuNDMiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIxMDM1LjczLC0xMDMuMTcgMTAzNS4wNSwtOTUuNTggMTAzMC44NCwtMTAxLjk0IDEwMzUuNzMsLTEwMy4xNyIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI4ODMuNDgiIHk9Ii0yNTEuNTEiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj50b29sIHJlc3VsdDwvdGV4dD4KPC9nPgo8IS0tIG8mIzQ1OyZndDtsIC0tPgo8ZyBpZD0iZWRnZTE1IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5vJiM0NTsmZ3Q7bDwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHN0cm9rZS1kYXNoYXJyYXk9IjEsNSIgZD0iTTcyNC4yNiwtMTIyLjg2Qzc0Mi41OSwtMTQyLjkzIDc3NS4xOSwtMTczLjk5IDgxMS4wNCwtMTg2LjU5IDg3MS43OSwtMjA3LjkzIDg5OC4zMSwtMjE1LjM2IDk1NS45MSwtMTg2LjU5IDk5MS4wOCwtMTY5LjAyIDEwMTUuMjcsLTEyOC43NyAxMDI4LjIsLTEwMS44OCIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjEwMzAuNDEsLTEwMy4xIDEwMzEuMTUsLTk1LjUxIDEwMjUuODMsLTEwMC45OCAxMDMwLjQxLC0xMDMuMSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI4ODMuNDgiIHk9Ii0yMDcuODgiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj50dXJuL2ludGVycnVwdDwvdGV4dD4KPC9nPgo8IS0tIGQgLS0+CjxnIGlkPSJub2RlNiIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+ZDwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik04NC45OSwtMTc0LjMxQzg0Ljk5LC0xNzYuMTIgNjcuNDUsLTE3Ny41OSA0NS44NiwtMTc3LjU5IDI0LjI3LC0xNzcuNTkgNi43NCwtMTc2LjEyIDYuNzQsLTE3NC4zMSA2Ljc0LC0xNzQuMzEgNi43NCwtMTQ0Ljg2IDYuNzQsLTE0NC44NiA2Ljc0LC0xNDMuMDUgMjQuMjcsLTE0MS41OSA0NS44NiwtMTQxLjU5IDY3LjQ1LC0xNDEuNTkgODQuOTksLTE0My4wNSA4NC45OSwtMTQ0Ljg2IDg0Ljk5LC0xNDQuODYgODQuOTksLTE3NC4zMSA4NC45OSwtMTc0LjMxIi8+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTg0Ljk5LC0xNzQuMzFDODQuOTksLTE3Mi41MSA2Ny40NSwtMTcxLjA0IDQ1Ljg2LC0xNzEuMDQgMjQuMjcsLTE3MS4wNCA2Ljc0LC0xNzIuNTEgNi43NCwtMTc0LjMxIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjQ1Ljg2IiB5PSItMTU2LjU5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPkJvb2tpbmcgREI8L3RleHQ+CjwvZz4KPCEtLSBvJiM0NTsmZ3Q7ZCAtLT4KPGcgaWQ9ImVkZ2UxMSIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+byYjNDU7Jmd0O2Q8L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBzdHJva2UtZGFzaGFycmF5PSI1LDIiIGQ9Ik02NjUuNzcsLTEwNi44OUM1NzAuNTcsLTExMi40MyAzMjcuMjYsLTEyNy42NyAxMjQuNzMsLTE0OS41OSAxMTQuNzcsLTE1MC42NiAxMDQuMTIsLTE1MS45NSA5My45OCwtMTUzLjIzIi8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iOTMuNzIsLTE1MC43MiA4Ni44OSwtMTU0LjE0IDk0LjM2LC0xNTUuNzIgOTMuNzIsLTE1MC43MiIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzODcuMzkiIHk9Ii0xMzIuMDgiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj4xMCDCtyBjcmVhdGUgLyBwYXRjaDwvdGV4dD4KPC9nPgo8IS0tIHQgLS0+CjxnIGlkPSJub2RlNyIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+dDwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0xMDc5LjYzLC0yNDguMDdDMTA3OS42MywtMjQ4LjA3IDEwMDAuOTEsLTI0OC4wNyAxMDAwLjkxLC0yNDguMDcgOTk0LjkxLC0yNDguMDcgOTg4LjkxLC0yNDIuMDcgOTg4LjkxLC0yMzYuMDcgOTg4LjkxLC0yMzYuMDcgOTg4LjkxLC0yMjMuMTEgOTg4LjkxLC0yMjMuMTEgOTg4LjkxLC0yMTcuMTEgOTk0LjkxLC0yMTEuMTEgMTAwMC45MSwtMjExLjExIDEwMDAuOTEsLTIxMS4xMSAxMDc5LjYzLC0yMTEuMTEgMTA3OS42MywtMjExLjExIDEwODUuNjMsLTIxMS4xMSAxMDkxLjYzLC0yMTcuMTEgMTA5MS42MywtMjIzLjExIDEwOTEuNjMsLTIyMy4xMSAxMDkxLjYzLC0yMzYuMDcgMTA5MS42MywtMjM2LjA3IDEwOTEuNjMsLTI0Mi4wNyAxMDg1LjYzLC0yNDguMDcgMTA3OS42MywtMjQ4LjA3Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjEwNDAuMjciIHk9Ii0yMzIuNTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+T3BlblJvdXRlciBUVFM8L3RleHQ+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjEwNDAuMjciIHk9Ii0yMjAuNTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+bmF0aXZlIEJ1biBmZXRjaDwvdGV4dD4KPC9nPgo8IS0tIG8mIzQ1OyZndDt0IC0tPgo8ZyBpZD0iZWRnZTciIGNsYXNzPSJlZGdlIj4KPHRpdGxlPm8mIzQ1OyZndDt0PC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTc0OC40NSwtMTIyLjk0Qzc2Ny4xNCwtMTMxLjA0IDc4OS45MiwtMTQwLjE3IDgxMS4wNCwtMTQ2LjU5IDg3My45LC0xNjUuNjggODk1LjA0LC0xNTEuMjYgOTU1LjkxLC0xNzUuOTkgOTc0LjQsLTE4My41IDk5My4yNSwtMTk1LjIxIDEwMDguMzQsLTIwNS43NyIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjEwMDYuNzUsLTIwNy43MyAxMDE0LjA3LC0yMDkuODcgMTAwOS42OCwtMjAzLjYzIDEwMDYuNzUsLTIwNy43MyIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI4ODMuNDgiIHk9Ii0xNzguMzkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj43IMK3IHNhbml0aXplZCBwaHJhc2UgwrcgSFRUUCBQT1NUPC90ZXh0Pgo8L2c+CjwhLS0gbyYjNDU7Jmd0O3QgLS0+CjxnIGlkPSJlZGdlMTciIGNsYXNzPSJlZGdlIj4KPHRpdGxlPm8mIzQ1OyZndDt0PC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgc3Ryb2tlLWRhc2hhcnJheT0iMSw1IiBkPSJNNzUwLjA2LC0xMDYuMzRDODEwLjg3LC0xMDkuNTEgOTIxLjA4LC0xMTcuNjUgOTU1LjkxLC0xMzUuOTkgOTg1LjE4LC0xNTEuNDEgMTAwOS4wOSwtMTgxLjU0IDEwMjMuNjgsLTIwMy40NiIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjEwMjEuNTIsLTIwNC43NSAxMDI3LjU0LC0yMDkuNDMgMTAyNS43NSwtMjAyLjAyIDEwMjEuNTIsLTIwNC43NSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI4ODMuNDgiIHk9Ii0xMzguMzkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI4LjAwIj5BYm9ydFNpZ25hbCArIHN0YWxlJiM0NTtnZW5lcmF0aW9uIGRyb3A8L3RleHQ+CjwvZz4KPCEtLSBsJiM0NTsmZ3Q7byAtLT4KPGcgaWQ9ImVkZ2U2IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5sJiM0NTsmZ3Q7bzwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0xMDIwLjk4LC01Ny4zQzEwMDUuMjUsLTQyLjk0IDk4MS4xNSwtMjQuMDggOTU1LjkxLC0xNS45OSA4OTQuNiwzLjY4IDg3MS4zNyw2LjUxIDgxMS4wNCwtMTUuOTkgNzc3LjA4LC0yOC42NSA3NDYuOTEsLTU4LjI0IDcyOC4yOSwtNzkuNzUiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSI3MjYuNDYsLTc4LjAxIDcyMy43NCwtODUuMTQgNzMwLjMxLC04MS4yNiA3MjYuNDYsLTc4LjAxIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9Ijg4My40OCIgeT0iLTE4LjM5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+NiDCtyBhZ2VudE1lc3NhZ2UgZGVsdGE8L3RleHQ+CjwvZz4KPCEtLSBsJiM0NTsmZ3Q7byAtLT4KPGcgaWQ9ImVkZ2UxMCIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+bCYjNDU7Jmd0O288L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBzdHJva2UtZGFzaGFycmF5PSI1LDIiIGQ9Ik05OTQuNzIsLTY4Ljc3Qzk0OC40NCwtNjIuOTMgODc0LjEzLC01Ny4wNCA4MTEuMDQsLTY3Ljk5IDc5My4xNiwtNzEuMDkgNzc0LjI3LC03Ny4wMyA3NTcuNjUsLTgzLjI0Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNzU3LjA2LC04MC43NyA3NTEuMjUsLTg1LjcgNzU4Ljg3LC04NS40NyA3NTcuMDYsLTgwLjc3Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9Ijg4My40OCIgeT0iLTcwLjM5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+dG9vbCByZXF1ZXN0PC90ZXh0Pgo8L2c+CjwhLS0gZCYjNDU7Jmd0O28gLS0+CjxnIGlkPSJlZGdlMTIiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPmQmIzQ1OyZndDtvPC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgc3Ryb2tlLWRhc2hhcnJheT0iNSwyIiBkPSJNODUuNDEsLTE2MC45OEMxNzYuNDYsLTE2My41OSA0MTEuNzIsLTE2Ni4yNyA2MDQuNSwtMTMzLjU5IDYyMi4wMSwtMTMwLjYyIDY0MC44MSwtMTI1Ljc4IDY1Ny40NSwtMTIwLjkxIi8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNjU4LjE3LC0xMjMuMzIgNjY0LjM0LC0xMTguODQgNjU2LjcyLC0xMTguNDkgNjU4LjE3LC0xMjMuMzIiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzg3LjM5IiB5PSItMTYxLjU0IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOC4wMCI+dG9vbCByZXN1bHQgKyBldmVudDwvdGV4dD4KPC9nPgo8IS0tIHQmIzQ1OyZndDtnIC0tPgo8ZyBpZD0iZWRnZTgiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPnQmIzQ1OyZndDtnPC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTEwMDIuNDQsLTI0OC4zOEM5ODguMjYsLTI1NC43MiA5NzEuNjksLTI2MS4wNyA5NTUuOTEsLTI2NC41OSA3NjEuOTIsLTMwNy43NiA1MjEuNjQsLTI5Ny4yMSA0MjguMTgsLTI5MC43NyIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjQyOC4zNiwtMjg4LjI2IDQyMSwtMjkwLjI2IDQyOCwtMjkzLjI4IDQyOC4zNiwtMjg4LjI2Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjcwNy43NyIgeT0iLTI5OC45MSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjguMDAiPjggwrcgY29tcGxldGUgYXVkaW8vbXBlZyBzZWdtZW50PC90ZXh0Pgo8L2c+CjwvZz4KPC9zdmc+Cg==" alt="Turn sequence" />
@@ -2048,27 +2100,32 @@ Gateway/utterance assembler проверяет duration/bytes, создаёт и
 <li>Gateway передаёт WAV атомарному <code>SttPort</code>; OpenRouter STT
 adapter повторно валидирует/bounds already-WAV request, base64-кодирует
 его и отправляет один <code>input_audio</code> chat completion.</li>
-<li>Только валидный неустаревший final transcript становится user turn и
-публикуется как <code>transcript.final</code>. Альтернативно, monotonic
-<code>visitor.text.submit</code> очищает uncommitted microphone bytes и
-создаёт такой же final turn без STT; до server
-<code>transcript.final</code> typed input не считается принятым.</li>
-<li>Orchestrator одинаково парсит typed/spoken final text на bounded
-Russian time-of-day preference/rejection, refresh-ит candidates, затем
-добавляет stage, known facts, booking status, server-owned current
-Moscow date/day, preference state и ровно два structured candidates с
-generated <code>displayLabel</code>; Codex thread получает
-<code>turn/start</code> ровно один раз независимо от input origin.</li>
-<li>Text deltas проходят PII-safe sanitizer и bounded phrase
-chunker.</li>
-<li>Законченная короткая фраза отправляется в OpenRouter TTS; один
-request соответствует одному segment.</li>
-<li>После проверки один полный <code>audio/mpeg</code> segment идёт в
-browser ordered playback queue.</li>
-<li>Tool call исполняется транзакционно и результат возвращается brain
-независимо от audio path.</li>
-<li>Voice retries повторяют только соответствующий pure provider request
-и никогда не повторяют Luna turn, notifier или business tools.</li>
+<li>Only a valid current final transcript becomes a user turn. Monotonic
+<code>visitor.text.submit</code> creates the same accepted final-turn
+path without STT.</li>
+<li>Orchestrator parses typed/spoken input identically, extracts quoted
+fact proposals, and merges them into the revisioned durable draft;
+conflicting values become bounded explicit options rather than
+overwrite.</li>
+<li>Structured form commands patch the same draft at
+<code>baseRevision</code>; exact-revision confirmation automatically
+commits the booking through
+<code>uncommitted → committing → committed</code>.</li>
+<li>Before readiness and then periodically, a bounded DB-only sweeper
+recovers orphaned <code>committing</code> drafts idempotently without
+Luna/STT/TTS or an in-memory session; confirmation and qualification
+remain pending for the visitor reconnect.</li>
+<li>Text deltas pass the sanitizer. Contacts are redacted unless they
+exactly match server-approved contacts and contact-processing consent is
+active.</li>
+<li>Complete bounded phrases go to OpenRouter TTS and then the ordered
+browser queue.</li>
+<li>Only a durable booking publishes
+<code>internal.meeting.updated</code>; the final widget cannot be
+synthesized from transcript/stage alone.</li>
+<li>After truthful meeting confirmation, server qualification asks only
+missing facts. Provider retries never repeat Luna, notifier, draft
+mutation, or booking effects.</li>
 </ol>
 <h2 id="latency-design">4. Latency design</h2>
 <h3 id="целевой-budget">Целевой budget</h3>
@@ -2229,10 +2286,12 @@ contract.</p>
 <p>Backend transition function должна быть чистой и покрытой
 table-driven tests:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">transition</span>(currentState<span class="op">,</span> domainEvent) <span class="kw">=&gt;</span> nextState <span class="op">|</span> TransitionError</span></code></pre></div>
-<p>LLM не может напрямую записать произвольный next state. Он предлагает
-intent/action, orchestrator применяет допустимый transition. Typed
-composer/form visibility также проецируется только из server stage;
-transcript wording не может открыть booking form или разрешить tool.</p>
+<p>LLM cannot directly write state or durable facts. It may propose
+quoted current-turn facts; the server validates origin, quote, schema,
+expected revision, conflicts, and transitions. Typed composer/form
+visibility comes only from server stage. Browser draft projection strips
+provenance/evidence, and the final meeting widget comes only from a
+server-derived durable booking projection.</p>
 <h2 id="barge-in">10. Barge-in</h2>
 <p>При детекции начала пользовательской речи во время
 <code>speaking</code>:</p>
@@ -2386,8 +2445,11 @@ TTS_MAX_CHARS_PER_SESSION=8000
 
 # Booking and qualification
 POST_BOOKING_QUALIFICATION_ENABLED=true
+ORPHAN_RECOVERY_BATCH_SIZE=25
+ORPHAN_RECOVERY_MAX_PER_SWEEP=100
+ORPHAN_RECOVERY_INTERVAL_MS=60000
 
-# Notifications: console is sufficient for local development
+# Notifications: console safely acknowledges and discards the lead payload
 NOTIFIER=console
 WEBHOOK_URL=
 WEBHOOK_SIGNING_SECRET=
@@ -2442,18 +2504,19 @@ flow;</li>
 <li>при неизвестном факте честно предложить передать вопрос
 коллеге;</li>
 <li>не читать технические идентификаторы и JSON вслух;</li>
-<li>контакт повторять для подтверждения только при низкой уверенности
-STT;</li>
-<li>печатный и голосовой final input равнозначны по смыслу и проходят
-один state/tool flow;</li>
-<li>booking confirmation произносить только после committed tool
-success;</li>
-<li>после confirmation задать точно
-<code>Можно задать два коротких вопроса?</code> и не считать booking
-action envelope согласием;</li>
-<li>qualification начинается только после отдельного явного согласия:
-server спрашивает leads, затем manager count, по одному; completion
-только при обоих.</li>
+<li>контакты по умолчанию не отправлять в TTS; exact server-approved
+contact можно озвучить только при contact-processing consent и accepted
+durable draft fact/booking;</li>
+<li>печатный и голосовой final input равнозначны и обновляют один
+durable fact/draft flow; structured form обновляет тот же draft через
+revisioned commands;</li>
+<li>conflicting facts требуют explicit resolution, а любое material
+change сбрасывает exact-revision confirmation;</li>
+<li>meeting confirmation и final widget допустимы только после durable
+booking + committed draft;</li>
+<li>qualification starts directly after truthful confirmation: ask only
+first missing field, never repeat known fields, and ask nothing when
+both are known.</li>
 </ul>
 <h2 id="conversation-policy-по-stages">3. Conversation policy по
 stages</h2>
@@ -2510,62 +2573,55 @@ demo/встречи. Если intent очевиден раньше, перехо
 процесса. Записать?</p>
 </blockquote>
 <h3 id="collect_booking">COLLECT_BOOKING</h3>
-<p>После согласия назвать ровно два
-<code>schedulingContext.candidateMeetingSlots</code> по их
-server-generated <code>displayLabel</code>. Это две текущие внутренние
-альтернативы, а не вся глобальная доступность. Не вычислять и не
-переформатировать дату, день недели, время или доступность.</p>
-<p>Без предпочтения server даёт один morning и один evening candidate.
-Явная typed/spoken русская формулировка про утро, день, вторую половину
-дня или вечер обновляет context и даёт два in-band варианта примерно в
-часе друг от друга; при занятости server переносит пару на следующий
-подходящий будний день. Явный отказ от части дня исключает эту часть.
-Все варианты: 20 минут, будни, не сегодня, starts 09:00–17:00 по
-Москве.</p>
-<p>Обязательный набор:</p>
-<ol type="1">
-<li>имя;</li>
-<li>компания;</li>
-<li>рабочий email;</li>
-<li>телефон или Telegram;</li>
-<li>один выбранный structured 20-minute <code>Europe/Moscow</code>
-candidate;</li>
-<li>server-confirmed consent.</li>
-</ol>
-<p>Если пользователь дал несколько полей одной spoken или typed
-репликой, не переспрашивать их по одному. In-chat form показывается
-только по server stage <code>COLLECT_BOOKING</code>, валидирует четыре
-пользовательских поля и передаёт их как обычный typed turn; она не
-вызывает tool и не подтверждает бронь.</p>
+<p>После согласия использовать ровно два current candidates из server
+draft; каждый содержит concrete Moscow date/time. Это текущие внутренние
+alternatives, а не global availability. Без preference это
+morning+evening. Typed/spoken time-band, rejection и supported concrete
+date+time requests проходят один bounded parser; concrete request
+получает exact permitted + alternative либо two nearest internal starts.
+Missing/ambiguous date or time требует clarification.</p>
+<p>Обязательный набор: accepted name, company, working email, phone or
+Telegram, one current candidate, and contact consent. Spoken and typed
+turns merge quoted fact proposals into the same durable
+<code>conversation_contexts.draft_json</code>. New conflicting values
+produce bounded explicit options instead of silent overwrite.</p>
+<p>In-chat form видима только в server stage
+<code>COLLECT_BOOKING</code>. Она auto-fills browser-safe facts,
+показывает пять полей and exactly two dated candidates, submits a
+structured patch/current <code>candidateId</code> at
+<code>baseRevision</code>, and resolves server conflicts by option
+identity. It does not serialize as visitor text and does not call
+<code>create_booking</code> directly. After the draft is ready, visitor
+confirms the exact current revision; stale revisions or candidate
+refresh require resync/reselection.</p>
 <h3 id="booked">BOOKED</h3>
-<p>После <code>create_booking</code>:</p>
+<p>После exact-revision confirmation server automatically commits the
+booking, then confirms truthfully:</p>
 <blockquote>
-<p>Всё получила и зафиксировала. Календарная встреча пока не создана:
-коллега свяжется по указанному контакту. Можно задать два коротких
-вопроса?</p>
+<p>Внутренняя виртуальная встреча создана на согласованный слот по
+Москве. Внешнее календарное событие и приглашение не создавались.</p>
 </blockquote>
-<p>Последнее предложение — точный consent-вопрос current server
-contract. Формулировку про отсутствие календаря можно сделать менее
-технической только вместе с изменением server-authored contract/tests;
-нельзя утверждать, что external event уже создан.</p>
+<p>Only then may <code>internal.meeting.updated</code> publish the final
+widget. The projection is derived from the durable booking
+(<code>kind=internal_virtual</code>, <code>status=scheduled</code>,
+external flags false); transcript wording or legacy UI state cannot
+create it.</p>
 <h3 id="post_booking_qualification">POST_BOOKING_QUALIFICATION</h3>
-<p>Только после committed booking, user-facing confirmation и точного
-consent-вопроса <code>Можно задать два коротких вопроса?</code>
-отдельное явное согласие открывает qualification. Server, а не модель,
-детерминированно задаёт по одному:</p>
+<p>After durable commit and truthful meeting confirmation, qualification
+starts directly without a separate permission question. Server asks
+exactly one missing fact:</p>
 <ol type="1">
-<li><code>Сколько входящих лидов приходит за месяц?</code> →
-<code>monthlyLeadVolume</code>;</li>
-<li><code>Сколько менеджеров по продажам работает в вашей команде?</code>
-→ integer <code>salesManagerCount</code>.</li>
+<li>monthly lead/contact volume, adapted to known inbound/outbound
+context, when it is missing;</li>
+<li>integer <code>salesManagerCount</code> when it is missing.</li>
 </ol>
-<p>В обычном ходе второй вопрос появляется только после первого ответа.
-Если пользователь сразу сообщает оба значения, сохранить оба и
-завершить. <code>complete</code> разрешён только при обоих полях; отказ
-без ответов даёт <code>skipped</code>, после одного — сохраняет
-<code>partial</code>. Оба поля необязательны для уже committed booking,
-которая всегда остаётся <code>booked</code>. Другие поля расширенной
-legacy schema не входят в текущий conversational flow.</p>
+<p>If both are missing, volume goes first. If one is already accepted in
+durable facts/booking qualification, ask only the other. If both are
+known, ask nothing and complete. Generic per-day volume first requires
+working-vs-calendar-day clarification; the model does not silently
+multiply. Both missing values in one turn may be stored together.
+Refusal with zero answers is <code>skipped</code>; after one answer it
+remains <code>partial</code>; the internal meeting stays scheduled.</p>
 <h3 id="complete">COMPLETE</h3>
 <p>Коротко повторить результат и завершить без нового CTA.</p>
 <h2 id="lifecycle-брони">4. Lifecycle брони</h2>
@@ -2574,9 +2630,9 @@ legacy schema не входят в текущий conversational flow.</p>
 <figcaption aria-hidden="true">Booking lifecycle</figcaption>
 </figure>
 <p>Жёсткое правило prompt + backend policy:</p>
-<pre class="text"><code>Квалификация не является условием брони.
-Никогда не откладывай create_booking ради дополнительных вопросов.
-После tool success сначала подтверди сохранение, затем запроси согласие на qualification.</code></pre>
+<pre class="text"><code>Квалификация не является условием встречи.
+Никогда не откладывай exact-revision commit ради дополнительных вопросов.
+После durable commit сначала правдиво подтверди внутреннюю встречу, затем спроси только first missing qualification fact без отдельного permission turn.</code></pre>
 <h2 id="объекты-памяти">5. Объекты памяти</h2>
 <p>В каждый turn передаётся compact state, а не полный внутренний
 лог:</p>
@@ -2621,17 +2677,23 @@ legacy schema не входят в текущий conversational flow.</p>
 <span id="cb11-39"><a href="#cb11-39" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;allowedActions&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;create_booking&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
 <span id="cb11-40"><a href="#cb11-40" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;userText&quot;</span><span class="fu">:</span> <span class="st">&quot;Подойдёт первый вариант&quot;</span></span>
 <span id="cb11-41"><a href="#cb11-41" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
-<p>Codex thread сохраняет естественную историю; compact state страхует
-от drift и упрощает resume.</p>
+<p>Codex thread сохраняет естественную историю, but RC4 durable truth
+lives separately in <code>conversation_contexts</code>:
+<code>revision</code>, fact registry with provenance/conflicts, two
+candidate identities, selection, readiness, confirmation/commit status,
+timestamps, and optional booking ID. The browser receives only a
+projection with values/status/options; conversation ownership, evidence
+text, and provenance are stripped. Compact prompt state is derived from
+that server truth rather than used as persistence.</p>
 <h2 id="prompt-files">6. Prompt files</h2>
 <pre class="text"><code>prompts/
   system.md                 # идентичность, цель, security boundary
   product.md                # concise Botamin proposition
   conversation-policy.md    # stages, turn length, refusal behavior
   objections.md             # patterns, не жёсткие скрипты
-  booking.md                # tool timing, minimum data, confirmation
-  qualification.md          # optional fields and stopping rules
-  speech-style.md            # spoken Russian, no markdown
+  booking.md                # exact-revision draft confirmation and internal meeting truth
+  qualification.md          # direct missing-only optional facts and stopping rules
+  speech-style.md           # spoken Russian, TTS redaction and approved-contact exception
 knowledge/
   botamin-overview.md
   use-cases.md
@@ -2653,10 +2715,11 @@ knowledge-файлы; исходный repository туда не монтируе
 <code>instructionSources</code> содержит ожидаемый
 <code>AGENTS.md</code>;</li>
 <li>перед каждым <code>turn/start</code> одинаково разбирает
-typed/spoken preference/rejection и добавляет compact machine-generated
-context envelope: stage, known facts, booking snapshot, server-owned
-current Moscow date/day, preference state, ровно два structured/labeled
-current candidates, allowed actions и финальный текст пользователя;</li>
+typed/spoken time-band/concrete requests and adds compact
+machine-generated context from the durable draft: stage, accepted facts,
+conflicts, booking snapshot, server-owned Moscow date/day, exactly two
+concretely dated current candidates, allowed actions, and final user
+text;</li>
 <li>логирует только version/hash, не весь prompt;</li>
 <li>поддерживает hot reload только в development: новый prompt version
 применяется к новым conversations, а активные сохраняют исходную
@@ -2668,7 +2731,9 @@ current candidates, allowed actions и финальный текст польз�
 <li>убрать Markdown headings, bullets, code fences, raw URLs и tool
 envelopes;</li>
 <li>исключить hidden IDs, system messages и structured payloads;</li>
-<li>redact phone, email и Telegram handle до отправки provider-у;</li>
+<li>redact phone, email and Telegram by default; restore only exact
+server-approved contacts from accepted durable draft facts or a
+committed booking when contact-processing consent is active;</li>
 <li>заменить технические аббревиатуры на произносимый вариант при
 необходимости;</li>
 <li>не отправлять незакрытые JSON/Markdown fragments или
@@ -2682,29 +2747,25 @@ configured hard limit 240 chars. Он не режет число, abbreviation, 
 MP3 response; cross-model fallback в P0 отсутствует.</p>
 <h2 id="tools">8. Tools</h2>
 <h3 id="create_booking"><code>create_booking</code></h3>
-<p>LLM вызывает только когда:</p>
-<ul>
-<li>stage равен <code>COLLECT_BOOKING</code> и пользователь
-согласился;</li>
-<li>известны имя и компания;</li>
-<li>есть валидный рабочий email и телефон или Telegram;</li>
-<li>выбран один из ровно двух candidates активного server context;</li>
-<li>consent подтверждён server-side.</li>
-</ul>
-<p>Backend сверяет выбранный <code>meetingSlot</code> с обоими active
-candidates и отклоняет любой non-candidate/stale/occupied slot. Tuple не
-означает exhaustive availability: preference/rejection refresh заменяет
-обе текущие альтернативы. Это внутренняя 20-minute бронь без external
-calendar event, invitation или availability API.</p>
+<p>In RC4 the visitor does not invoke this tool directly. When the
+server-owned draft is ready and the visitor confirms its exact revision,
+orchestrator marks it <code>committing</code>, builds input only from
+accepted durable facts and the selected current candidate, performs
+idempotent <code>create_booking</code>, verifies the durable booking
+matches the draft, then marks the draft <code>committed</code>. Stale
+revision, unresolved conflict, changed/non-current candidate, missing
+field, or booking mismatch fails closed. This creates one internal
+20-minute meeting without another meeting table, external calendar
+event, invite, or availability API.</p>
 <h3 id="append_booking_qualification"><code>append_booking_qualification</code></h3>
-<p>LLM вызывает только после committed <code>bookingId</code>,
-user-facing confirmation и отдельного explicit qualification consent.
-Server задаёт monthly leads первым и manager count вторым, а status
-выводит из фактически сохранённых полей, не из заявления модели:
+<p>After durable meeting confirmation, accepted missing facts are
+patched into the same booking. No separate qualification consent is
+required. Server asks volume first only when both are missing, otherwise
+only the missing field, and derives status from persisted truth:
 one=<code>partial</code>, both=<code>complete</code>; empty
-refusal=<code>skipped</code>. Текущий flow патчит только
-<code>monthlyLeadVolume</code> и integer <code>salesManagerCount</code>;
-оба значения одной репликой разрешены.</p>
+refusal=<code>skipped</code>. The active fields remain
+<code>monthlyLeadVolume</code> and integer
+<code>salesManagerCount</code>; both may arrive in one turn.</p>
 <p>Backend возвращает safe result:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;ok&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
@@ -2796,19 +2857,22 @@ path</h2>
 <li>Пользователь: отвечает и спрашивает про CRM.</li>
 <li>Агент: описывает integration layer без обещания конкретного срока;
 предлагает demo.</li>
-<li>Агент: называет ровно два server-supplied Moscow candidates.</li>
-<li>Пользователь: typed form/репликой даёт имя, компанию, рабочий email,
-Telegram и выбирает первый slot; consent уже подтверждён server
-context.</li>
-<li>Backend: валидирует candidate и commit-ит
-<code>booking.created</code> без внешнего календарного события.</li>
-<li>Server-authored confirmation: подтверждает внутреннюю бронь и точно
-спрашивает <code>Можно задать два коротких вопроса?</code>.</li>
-<li>Пользователь: явно соглашается; server задаёт вопрос про месячный
-объём входящих лидов. Пользователь может сразу сообщить и целое число
-менеджеров продаж, тогда оба поля сохраняются за один turn.</li>
-<li>Backend: <code>booking.updated</code>.</li>
-<li>Агент: кратко суммирует и завершает.</li>
+<li>Server/agent names exactly two concretely dated Moscow
+candidates.</li>
+<li>Spoken/text turns and/or structured form fill one durable revisioned
+draft; conflicts are resolved and one current candidate is
+selected.</li>
+<li>Visitor confirms the exact ready revision; backend automatically
+commits <code>booking.created</code>, marks the draft committed, and
+publishes the server-derived internal meeting widget.</li>
+<li>Server truthfully confirms the internal virtual meeting and states
+that no external calendar event/invite was created.</li>
+<li>Server immediately asks only the first missing qualification fact.
+If both facts were already captured, it asks nothing; if the user gives
+both missing values, both persist in one turn.</li>
+<li>Backend publishes <code>booking.updated</code> / refreshed
+<code>internal.meeting.updated</code> as applicable.</li>
+<li>Agent briefly summarizes and ends.</li>
 </ol>
 <h2 id="eval-rubric-для-каждой-реплики">12. Eval rubric для каждой
 реплики</h2>
@@ -2988,8 +3052,24 @@ final-transcription request</td>
 <tr>
 <td><code>visitor.text.submit</code></td>
 <td><code>{ sequence, text }</code></td>
-<td>отправить одну final typed turn до 2,000 chars без provider/tool
-fields</td>
+<td>one final typed turn; same durable fact path as spoken
+transcript</td>
+</tr>
+<tr>
+<td><code>booking.form.submit</code></td>
+<td><code>{ requestId, baseRevision, details, selectedCandidateId? }</code></td>
+<td>structured patch/current candidate against exact draft revision</td>
+</tr>
+<tr>
+<td><code>booking.conflict.resolve</code></td>
+<td><code>{ requestId, baseRevision, field, conflictOptionId }</code></td>
+<td>explicitly accept one current conflict option</td>
+</tr>
+<tr>
+<td><code>booking.draft.confirm</code></td>
+<td><code>{ requestId, revision }</code></td>
+<td>confirm exact ready revision and trigger automatic internal meeting
+commit</td>
 </tr>
 <tr>
 <td><code>playback.started</code></td>
@@ -3028,17 +3108,21 @@ gateway кодирует ровно один validated WAV и передаёт �
 <code>SttPort</code>; только OpenRouter adapter выполняет base64
 encoding уже готовых WAV bytes. Browser chunks не означают streaming
 transport до provider.</p>
-<p><code>visitor.text.submit</code> — secure provider-neutral
-alternative input, а не tool endpoint. Payload strict: trimmed non-empty
-<code>text</code> до 2,000 символов и monotonic nonnegative
-<code>sequence</code>. Typed submit supersedes/clears uncommitted
-microphone bytes, запрещён при pending/active turn или terminal stage, и
-считается принятым только когда server эмитит соответствующий
-<code>transcript.final</code>. Duplicate/stale sequence получает
-idempotency conflict; gap — invalid event; recoverable rejection
-позволяет повторить тот же sequence. После acceptance typed и spoken
-text проходят идентичные Luna context, stage policy, domain tools,
-persistence, assistant text и optional TTS.</p>
+<p><code>visitor.text.submit</code> is the provider-neutral alternative
+final input. After acceptance, typed and spoken turns use the same fact
+extractor, quoted Luna proposal boundary, durable draft merge,
+scheduling parser, state/persistence, assistant, and optional TTS
+path.</p>
+<p>The booking form is not encoded as visitor text in RC4. It sends
+strict revisioned commands. <code>details</code> may patch
+accepted/missing values; <code>selectedCandidateId</code> must identify
+one of exactly two current candidates. Stale revision, unresolved
+conflict, candidate mismatch, not-ready, or already-committed state
+returns a closed <code>booking.form.rejected</code> code without echoing
+PII. Every material change clears prior confirmation.
+<code>booking.draft.confirm</code> confirms only the exact ready
+revision and automatically runs the idempotent internal booking
+commit.</p>
 <h3 id="server-client-events">Server → client events</h3>
 <table>
 <colgroup>
@@ -3089,12 +3173,27 @@ payload</td>
 <td>generationId</td>
 </tr>
 <tr>
+<td><code>booking.draft.updated</code></td>
+<td>request correlation + browser-safe revisioned projection without
+provenance/evidence</td>
+</tr>
+<tr>
+<td><code>booking.form.rejected</code></td>
+<td>closed safe error code/current revision; never reflects submitted
+PII</td>
+</tr>
+<tr>
 <td><code>booking.created</code></td>
-<td>safe booking summary</td>
+<td>safe booking summary after durable commit</td>
+</tr>
+<tr>
+<td><code>internal.meeting.updated</code></td>
+<td>server-derived scheduled internal-virtual meeting projection;
+external flags false</td>
 </tr>
 <tr>
 <td><code>booking.updated</code></td>
-<td>qualification status</td>
+<td>qualification status/fields after durable patch</td>
 </tr>
 <tr>
 <td><code>session.capacity_warning</code></td>
@@ -3372,7 +3471,7 @@ or notifier.</p>
 <span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>  createdAt<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
 <span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>}<span class="op">;</span></span></code></pre></div>
 <h3 id="append_booking_qualification-1"><code>append_booking_qualification</code></h3>
-<div class="sourceCode" id="cb23"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Active write contract is exactly the two optional RC3 fields.</span></span>
+<div class="sourceCode" id="cb23"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Active write contract remains exactly the two optional qualification fields.</span></span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> QualificationPatchSchema <span class="op">=</span> z<span class="op">.</span><span class="fu">object</span>({</span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>  monthlyLeadVolume<span class="op">:</span> z<span class="op">.</span><span class="fu">string</span>()<span class="op">.</span><span class="fu">trim</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">1</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">100</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
 <span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  salesManagerCount<span class="op">:</span> z<span class="op">.</span><span class="fu">number</span>()<span class="op">.</span><span class="fu">int</span>()<span class="op">.</span><span class="fu">min</span>(<span class="dv">0</span>)<span class="op">.</span><span class="fu">max</span>(<span class="dv">10000</span>)<span class="op">.</span><span class="fu">optional</span>()<span class="op">,</span></span>
@@ -3399,46 +3498,42 @@ refusal → <code>skipped</code>. Model-provided <code>completion</code>
 одним turn/patch. Legacy rows могут физически содержать старые
 qualification keys; read-normalization отбрасывает их, а active write
 schema выше их не принимает.</p>
-<h2 id="domain-policy-до-tool-execution">6. Domain policy до tool
-execution</h2>
-<div class="sourceCode" id="cb25"><pre class="sourceCode ts"><code class="sourceCode typescript"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="cf">switch</span> (tool<span class="op">.</span><span class="at">name</span>) {</span>
-<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>  <span class="cf">case</span> <span class="st">&quot;create_booking&quot;</span><span class="op">:</span></span>
-<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(state <span class="op">===</span> <span class="st">&quot;COLLECT_BOOKING&quot;</span>)<span class="op">;</span></span>
-<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(serverContactConsentConfirmed <span class="op">===</span> <span class="kw">true</span>)<span class="op">;</span></span>
-<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(currentBooking <span class="op">===</span> <span class="kw">null</span> <span class="op">||</span> currentBooking<span class="op">.</span><span class="at">conversationId</span> <span class="op">===</span> conversationId)<span class="op">;</span></span>
-<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(candidateMeetingSlots<span class="op">.</span><span class="at">length</span> <span class="op">===</span> <span class="dv">2</span>)<span class="op">;</span></span>
-<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(candidateMeetingSlots<span class="op">.</span><span class="fu">some</span>((slot) <span class="kw">=&gt;</span> <span class="fu">deepEqual</span>(slot<span class="op">,</span> args<span class="op">.</span><span class="at">meetingSlot</span>)))<span class="op">;</span></span>
-<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">break</span><span class="op">;</span></span>
-<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">case</span> <span class="st">&quot;append_booking_qualification&quot;</span><span class="op">:</span></span>
-<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>([<span class="st">&quot;BOOKED&quot;</span><span class="op">,</span> <span class="st">&quot;POST_BOOKING_QUALIFICATION&quot;</span>]<span class="op">.</span><span class="fu">includes</span>(state))<span class="op">;</span></span>
-<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(currentBooking<span class="op">?.</span><span class="at">id</span> <span class="op">===</span> args<span class="op">.</span><span class="at">bookingId</span>)<span class="op">;</span></span>
-<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(bookingConfirmationDelivered <span class="op">===</span> <span class="kw">true</span>)<span class="op">;</span></span>
-<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>    <span class="fu">assert</span>(qualificationConsent <span class="op">===</span> <span class="st">&quot;granted&quot;</span>)<span class="op">;</span></span>
-<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">break</span><span class="op">;</span></span>
-<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
-<p>LLM-provided <code>conversationId</code>, <code>bookingId</code>,
-slot и consent сверяются с server-side session; нельзя доверять им как
-единственному источнику. После booking commit и delivered confirmation
-server задаёт точный consent-вопрос
-<code>Можно задать два коротких вопроса?</code>; grant возможен только
-из последующей explicit user turn. Затем server задаёт monthly leads
-первым и manager count вторым, по одному; отказ завершает как
-<code>skipped</code> или сохраняет <code>partial</code>, не меняя
+<h2 id="domain-policy-before-durable-commit">6. Domain policy before
+durable commit</h2>
+<p><code>create_booking</code> is reached only through server-owned
+exact-revision confirmation, not directly from browser/model
+payload:</p>
+<pre class="text"><code>assert stage == COLLECT_BOOKING and contact consent is confirmed
+load draft at confirmation.revision
+assert draft.readiness == ready and draft.confirmationStatus can be confirmed
+assert all required facts are accepted and conflicts are resolved
+assert selectedCandidate exactly matches one of two current candidates
+mark draft committing
+idempotently create booking from accepted facts + selected slot
+verify persisted booking matches confirmed draft
+mark draft committed with bookingId
+publish booking.created and internal.meeting.updated</code></pre>
+<p>Any material fact/candidate change clears confirmation; stale
+revision and non-current candidate fail closed. The durable booking is
+the only meeting entity. Its browser projection says
+<code>kind=internal_virtual</code>, <code>status=scheduled</code>,
+<code>externalCalendarEventCreated=false</code>, and
+<code>externalInviteSent=false</code>.</p>
+<p>After truthful meeting confirmation, optional qualification begins
+directly. There is no separate consent phrase/turn. Server asks only a
+missing authoritative field: volume first when both are missing,
+otherwise only the missing field, and none when both are known. Generic
+daily volume requires basis clarification before server normalization.
+Refusal yields skipped/partial without changing
 <code>booking.status=booked</code>.</p>
-<p>Server перед каждым Luna turn строит <code>schedulingContext</code>
-из собственного clock: canonical <code>currentInstant</code>,
-<code>moscowLocalDate</code>, <code>moscowWeekday</code>,
-<code>timeOfDayPreference</code>, максимум один
-<code>rejectedTimeOfDayPreferences</code> и tuple ровно из двух
-<code>{ meetingSlot, displayLabel }</code>. Bounded Russian parser
-одинаково применяет typed/spoken morning/day/second-half/evening
-wording. Default tuple — morning + evening; selected preference даёт два
-in-band starts примерно через час и переносит пару на следующий weekday,
-если текущий band occupied; rejection исключает band. Каждый slot — 20
-минут, weekday, не сегодня, start на 20-minute grid 09:00–17:00 MSK.
-Tuple — текущие internal alternatives, не all/global availability. Tool
-execution повторно отвергает slot вне tuple; BookingService повторно
-отвергает now-non-bookable или internally occupied start.</p>
+<p>Before each Luna turn the server builds scheduling context from its
+own clock and exactly two concrete Moscow candidates. Typed/spoken
+time-band, rejection, and supported concrete date/time expressions use
+the same parser. Exact permitted requests return exact+alternative;
+otherwise nearest internal candidates or clarification/unavailable
+status. Every proposed slot is a non-today weekday 20-minute start on
+the 09:00–17:00 Moscow grid and is only a current internal
+alternative.</p>
 <h2 id="sqlite-model">7. SQLite model</h2>
 <h3 id="conversations"><code>conversations</code></h3>
 <table>
@@ -3512,6 +3607,49 @@ execution повторно отвергает slot вне tuple; BookingService 
 </tr>
 </tbody>
 </table>
+<h3 id="conversation_contexts-migration-0004"><code>conversation_contexts</code>
+(migration 0004)</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Column</th>
+<th>Contract</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>conversation_id</code></td>
+<td>PK/FK → <code>conversations.id</code>,
+<code>ON DELETE CASCADE</code></td>
+</tr>
+<tr>
+<td><code>revision</code></td>
+<td>nonnegative integer used for expected-revision CAS</td>
+</tr>
+<tr>
+<td><code>draft_json</code></td>
+<td>valid JSON object; contains internal fact
+registry/provenance/conflicts, exactly two candidate IDs/slots, selected
+candidate, readiness, confirmation/commit status, booking ID and
+timestamps</td>
+</tr>
+<tr>
+<td><code>updated_at</code></td>
+<td>must equal <code>draft_json.updatedAt</code></td>
+</tr>
+</tbody>
+</table>
+<p>SQLite checks require <code>draft_json.revision == revision</code>,
+<code>draft_json.factRegistry.revision == revision</code>, and matching
+timestamps. Store writes use <code>BEGIN IMMEDIATE</code>;
+form/conflict/confirm commands also use scoped idempotency keys. Browser
+projections strip <code>conversationId</code>, provenance, and evidence
+text. No separate facts, evidence, or virtual-meeting table is
+created.</p>
 <h3 id="turns"><code>turns</code></h3>
 <ul>
 <li><code>id</code> PK;</li>
@@ -3655,16 +3793,17 @@ updates обязаны удовлетворять triggers.</p>
   insert notification_outbox
   persist idempotency result
 COMMIT</code></pre>
-<p>После commit:</p>
+<p>After exact-revision commit:</p>
 <ol type="1">
-<li>отправить WS <code>booking.created</code>;</li>
-<li>notifier worker публикует payload;</li>
-<li>assistant получает safe tool result;</li>
-<li>server-authored confirmation сообщает, что calendar event не создан,
-и точно спрашивает <code>Можно задать два коротких вопроса?</code>;</li>
-<li>только subsequent explicit consent открывает qualification и первый
-deterministic leads question; booking остаётся committed при
-skip/partial/failure.</li>
+<li>mark draft <code>committed</code> with the same durable
+<code>bookingId</code>;</li>
+<li>send <code>booking.created</code> and server-derived
+<code>internal.meeting.updated</code>;</li>
+<li>notifier worker publishes the booking payload;</li>
+<li>truthfully confirm the internal virtual meeting and that no external
+event/invite exists;</li>
+<li>ask only the first missing qualification field, or nothing if both
+are known; booking remains committed under skip/partial/failure.</li>
 </ol>
 <h2 id="notification-payloads">9. Notification payloads</h2>
 <h3 id="created">Created</h3>
@@ -3790,16 +3929,26 @@ skip/partial/failure.</li>
 <h2 id="retention">11. Retention</h2>
 <ul>
 <li>raw audio: не хранить;</li>
-<li>transcript: <code>TRANSCRIPT_RETENTION_DAYS</code>, default 30 дней;
-startup и hourly runner удаляют bounded batches из <code>turns</code> по
-durable timestamp, не удаляя conversation/booking;</li>
-<li>bookings: до ручного удаления/экспорта и никогда не каскадно из
-transcript purge;</li>
-<li>events: минимум срок отладки и аудита, configurable;</li>
+<li>transcript and active-draft PII:
+<code>TRANSCRIPT_RETENTION_DAYS</code>, default 30 days; startup/hourly
+bounded purge deletes expired <code>turns</code> and
+<code>conversation_contexts</code> but preserves
+conversations/bookings;</li>
+<li>bookings: retained until explicit deletion/export and never cascaded
+by transcript/context retention;</li>
+<li>explicit privacy deletion by conversation transactionally removes
+booking, draft context, turns, idempotency rows, related outbox entries,
+and the conversation; existing append-only domain events are already
+redacted and remain, and one additional count-only
+<code>privacy.deleted</code> audit event is appended;</li>
+<li>append-only redacted events remain for audit; their configurable
+expiry is not implemented by the transcript-retention worker;</li>
 <li>Codex thread state: stop/expiry прерывает turn, вызывает
 <code>thread/delete</code>, очищает process-local maps; TTS session
 budgets также reset;</li>
-<li>backups наследуют срок хранения и шифруются.</li>
+<li>local protected backups are mode-0600 SQLite files with SHA-256
+sidecars; encryption/retention is a host-owner requirement, not
+implemented by the repository wrapper.</li>
 </ul>
 <div class="page-break">
 
@@ -3811,12 +3960,11 @@ operations</h1>
 <img role="img" aria-label="Deployment" src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+CjwhRE9DVFlQRSBzdmcgUFVCTElDICItLy9XM0MvL0RURCBTVkcgMS4xLy9FTiIKICJodHRwOi8vd3d3LnczLm9yZy9HcmFwaGljcy9TVkcvMS4xL0RURC9zdmcxMS5kdGQiPgo8IS0tIEdlbmVyYXRlZCBieSBncmFwaHZpeiB2ZXJzaW9uIDEzLjEuMiAoMjAyNTA4MDguMjMyMCkKIC0tPgo8IS0tIFRpdGxlOiBHIFBhZ2VzOiAxIC0tPgo8c3ZnIHdpZHRoPSI5MzFwdCIgaGVpZ2h0PSI2MThwdCIKIHZpZXdCb3g9IjAuMDAgMC4wMCA5MzEuMDAgNjE4LjAwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIj4KPGcgaWQ9ImdyYXBoMCIgY2xhc3M9ImdyYXBoIiB0cmFuc2Zvcm09InNjYWxlKDEgMSkgcm90YXRlKDApIHRyYW5zbGF0ZSgxOCA2MDAuMTYpIj4KPHRpdGxlPkc8L3RpdGxlPgo8cG9seWdvbiBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSJub25lIiBwb2ludHM9Ii0xOCwxOCAtMTgsLTYwMC4xNiA5MTIuNjEsLTYwMC4xNiA5MTIuNjEsMTggLTE4LDE4Ii8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjQ0Ny4zIiB5PSItNTYwLjE2IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMjAuMDAiPkRlcGxveW1lbnQgdG9wb2xvZ3kgwrcg0L7QtNC90LAgVlBTPC90ZXh0Pgo8ZyBpZD0iY2x1c3QxIiBjbGFzcz0iY2x1c3RlciI+Cjx0aXRsZT5jbHVzdGVyX3ZwczwvdGl0bGU+CjxwYXRoIGZpbGw9IiNmOGZhZmMiIHN0cm9rZT0iIzljYTNhZiIgc3Ryb2tlLWRhc2hhcnJheT0iNSwyIiBkPSJNMjAsLThDMjAsLTggNDQwLC04IDQ0MCwtOCA0NDYsLTggNDUyLC0xNCA0NTIsLTIwIDQ1MiwtMjAgNDUyLC00NTguMDMgNDUyLC00NTguMDMgNDUyLC00NjQuMDMgNDQ2LC00NzAuMDMgNDQwLC00NzAuMDMgNDQwLC00NzAuMDMgMjAsLTQ3MC4wMyAyMCwtNDcwLjAzIDE0LC00NzAuMDMgOCwtNDY0LjAzIDgsLTQ1OC4wMyA4LC00NTguMDMgOCwtMjAgOCwtMjAgOCwtMTQgMTQsLTggMjAsLTgiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMjMwIiB5PSItNDQ4LjAzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMjAuMDAiPlRydXN0ZWQgVlBTIMK3IGRvY2tlciBjb21wb3NlPC90ZXh0Pgo8L2c+CjwhLS0gaW50ZXJuZXQgLS0+CjxnIGlkPSJub2RlMSIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+aW50ZXJuZXQ8L3RpdGxlPgo8ZWxsaXBzZSBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjMzAzNDNiIiBjeD0iMzA2IiBjeT0iLTUzMS41IiByeD0iNzkuODIiIHJ5PSIxOC42NyIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzMDYiIHk9Ii01MjguNSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5JbnRlcm5ldCAvIGJyb3dzZXI8L3RleHQ+CjwvZz4KPCEtLSBjYWRkeSAtLT4KPGcgaWQ9Im5vZGUyIiBjbGFzcz0ibm9kZSI+Cjx0aXRsZT5jYWRkeTwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0zNDUuOTIsLTQzMC4wM0MzNDUuOTIsLTQzMC4wMyAyNjYuMDgsLTQzMC4wMyAyNjYuMDgsLTQzMC4wMyAyNjAuMDgsLTQzMC4wMyAyNTQuMDgsLTQyNC4wMyAyNTQuMDgsLTQxOC4wMyAyNTQuMDgsLTQxOC4wMyAyNTQuMDgsLTQwMy42MyAyNTQuMDgsLTQwMy42MyAyNTQuMDgsLTM5Ny42MyAyNjAuMDgsLTM5MS42MyAyNjYuMDgsLTM5MS42MyAyNjYuMDgsLTM5MS42MyAzNDUuOTIsLTM5MS42MyAzNDUuOTIsLTM5MS42MyAzNTEuOTIsLTM5MS42MyAzNTcuOTIsLTM5Ny42MyAzNTcuOTIsLTQwMy42MyAzNTcuOTIsLTQwMy42MyAzNTcuOTIsLTQxOC4wMyAzNTcuOTIsLTQxOC4wMyAzNTcuOTIsLTQyNC4wMyAzNTEuOTIsLTQzMC4wMyAzNDUuOTIsLTQzMC4wMyIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzMDYiIHk9Ii00MTMuODMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+Y2FkZHkgY29udGFpbmVyPC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzMDYiIHk9Ii00MDEuODMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+OjgwLzo0NDMgwrcgVExTPC90ZXh0Pgo8L2c+CjwhLS0gaW50ZXJuZXQmIzQ1OyZndDtjYWRkeSAtLT4KPGcgaWQ9ImVkZ2U3IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5pbnRlcm5ldCYjNDU7Jmd0O2NhZGR5PC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTMwNiwtNTEyLjQ3QzMwNiwtNDkzLjA3IDMwNiwtNDYxLjk3IDMwNiwtNDM5LjQ3Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iMzA4LjYzLC00MzkuNTggMzA2LC00MzIuMDggMzAzLjM4LC00MzkuNTggMzA4LjYzLC00MzkuNTgiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzMyLjEzIiB5PSItNDgwLjczIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOS4wMCI+SFRUUFMvV1NTPC90ZXh0Pgo8L2c+CjwhLS0gYXBwIC0tPgo8ZyBpZD0ibm9kZTMiIGNsYXNzPSJub2RlIj4KPHRpdGxlPmFwcDwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0zMjAuNzEsLTMyNS42M0MzMjAuNzEsLTMyNS42MyAxOTMuMjksLTMyNS42MyAxOTMuMjksLTMyNS42MyAxODcuMjksLTMyNS42MyAxODEuMjksLTMxOS42MyAxODEuMjksLTMxMy42MyAxODEuMjksLTMxMy42MyAxODEuMjksLTI5OS4yMyAxODEuMjksLTI5OS4yMyAxODEuMjksLTI5My4yMyAxODcuMjksLTI4Ny4yMyAxOTMuMjksLTI4Ny4yMyAxOTMuMjksLTI4Ny4yMyAzMjAuNzEsLTI4Ny4yMyAzMjAuNzEsLTI4Ny4yMyAzMjYuNzEsLTI4Ny4yMyAzMzIuNzEsLTI5My4yMyAzMzIuNzEsLTI5OS4yMyAzMzIuNzEsLTI5OS4yMyAzMzIuNzEsLTMxMy42MyAzMzIuNzEsLTMxMy42MyAzMzIuNzEsLTMxOS42MyAzMjYuNzEsLTMyNS42MyAzMjAuNzEsLTMyNS42MyIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIyNTciIHk9Ii0zMDkuNDMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+YXBwIGNvbnRhaW5lcjwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMjU3IiB5PSItMjk3LjQzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPkJ1biBzZXJ2ZXIgKyBzdGF0aWMgUmVhY3Q8L3RleHQ+CjwvZz4KPCEtLSBjYWRkeSYjNDU7Jmd0O2FwcCAtLT4KPGcgaWQ9ImVkZ2UxIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5jYWRkeSYjNDU7Jmd0O2FwcDwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0yOTcuMjQsLTM5MS41MkMyODkuNTUsLTM3NS40NiAyNzguMjgsLTM1MS45IDI2OS42MiwtMzMzLjgxIi8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iMjcyLjE3LC0zMzMuMDYgMjY2LjU3LC0zMjcuNDIgMjY3LjQ0LC0zMzUuMzIgMjcyLjE3LC0zMzMuMDYiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzA3LjcxIiB5PSItMzU5LjUzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOS4wMCI+SFRUUC9XU1M8L3RleHQ+CjwvZz4KPCEtLSBjYWRkeWRhdGEgLS0+CjxnIGlkPSJub2RlOCIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+Y2FkZHlkYXRhPC90aXRsZT4KPHBhdGggZmlsbD0id2hpdGUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTQ0My43MSwtMzI4LjAzQzQ0My43MSwtMzMwLjY4IDQyNS45MSwtMzMyLjgzIDQwNCwtMzMyLjgzIDM4Mi4wOSwtMzMyLjgzIDM2NC4yOSwtMzMwLjY4IDM2NC4yOSwtMzI4LjAzIDM2NC4yOSwtMzI4LjAzIDM2NC4yOSwtMjg0LjgzIDM2NC4yOSwtMjg0LjgzIDM2NC4yOSwtMjgyLjE4IDM4Mi4wOSwtMjgwLjAzIDQwNCwtMjgwLjAzIDQyNS45MSwtMjgwLjAzIDQ0My43MSwtMjgyLjE4IDQ0My43MSwtMjg0LjgzIDQ0My43MSwtMjg0LjgzIDQ0My43MSwtMzI4LjAzIDQ0My43MSwtMzI4LjAzIi8+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTQ0My43MSwtMzI4LjAzQzQ0My43MSwtMzI1LjM4IDQyNS45MSwtMzIzLjIzIDQwNCwtMzIzLjIzIDM4Mi4wOSwtMzIzLjIzIDM2NC4yOSwtMzI1LjM4IDM2NC4yOSwtMzI4LjAzIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjQwNCIgeT0iLTMwOS40MyIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5jYWRkeSYjNDU7ZGF0YTwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNDA0IiB5PSItMjk3LjQzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPmNlcnRpZmljYXRlczwvdGV4dD4KPC9nPgo8IS0tIGNhZGR5JiM0NTsmZ3Q7Y2FkZHlkYXRhIC0tPgo8ZyBpZD0iZWRnZTYiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPmNhZGR5JiM0NTsmZ3Q7Y2FkZHlkYXRhPC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTMyOS43MSwtMzg1LjA2QzM0Mi44MiwtMzcxLjM1IDM1OS4yNywtMzU0LjE3IDM3My4zNSwtMzM5LjQ1Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iMzI3Ljk2LC0zODMuMDkgMzI0LjY3LC0zOTAuMzIgMzMxLjc1LC0zODYuNzIgMzI3Ljk2LC0zODMuMDkiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIzNzUuMiwtMzQxLjMyIDM3OC40OSwtMzM0LjA5IDM3MS40LC0zMzcuNjkgMzc1LjIsLTM0MS4zMiIvPgo8L2c+CjwhLS0gY29kZXggLS0+CjxnIGlkPSJub2RlNCIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+Y29kZXg8L3RpdGxlPgo8cG9seWdvbiBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjMzAzNDNiIiBwb2ludHM9IjEyNi4xNywtMTgzLjE5IDE1LjgzLC0xODMuMTkgMTUuODMsLTE3OS4xOSAxMS44MywtMTc5LjE5IDExLjgzLC0xNzUuMTkgMTUuODMsLTE3NS4xOSAxNS44MywtMTUyLjc5IDExLjgzLC0xNTIuNzkgMTEuODMsLTE0OC43OSAxNS44MywtMTQ4Ljc5IDE1LjgzLC0xNDQuNzkgMTI2LjE3LC0xNDQuNzkgMTI2LjE3LC0xODMuMTkiLz4KPHBvbHlsaW5lIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMwMzQzYiIgcG9pbnRzPSIxNS44MywtMTc5LjE5IDE5LjgzLC0xNzkuMTkgMTkuODMsLTE3NS4xOSAxNS44MywtMTc1LjE5Ii8+Cjxwb2x5bGluZSBmaWxsPSJub25lIiBzdHJva2U9IiMzMDM0M2IiIHBvaW50cz0iMTUuODMsLTE1Mi43OSAxOS44MywtMTUyLjc5IDE5LjgzLC0xNDguNzkgMTUuODMsLTE0OC43OSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI3MSIgeT0iLTE2Ni45OSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5jaGlsZCBwcm9jZXNzPC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI3MSIgeT0iLTE1NC45OSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5jb2RleCBhcHAmIzQ1O3NlcnZlcjwvdGV4dD4KPC9nPgo8IS0tIGFwcCYjNDU7Jmd0O2NvZGV4IC0tPgo8ZyBpZD0iZWRnZTIiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPmFwcCYjNDU7Jmd0O2NvZGV4PC90aXRsZT4KPHBhdGggZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgZD0iTTIwOC42NywtMjgyLjY5QzE5NC4xMywtMjc1LjAxIDE3OC40NywtMjY1Ljg3IDE2NSwtMjU2LjAzIDEzOC4yNiwtMjM2LjQ4IDExMS40OCwtMjA5LjY3IDkzLjM5LC0xOTAuMjEiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIyMDcuMjcsLTI4NC45MiAyMTUuMTQsLTI4Ni4wNCAyMDkuNjgsLTI4MC4yNiAyMDcuMjcsLTI4NC45MiIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9Ijk1LjUsLTE4OC42MyA4OC40OSwtMTg0Ljg4IDkxLjY0LC0xOTIuMTggOTUuNSwtMTg4LjYzIi8+Cjx0ZXh0IHhtbDpzcGFjZT0icHJlc2VydmUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIHg9IjE5MSIgeT0iLTIzNy4xMyIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjkuMDAiPkpTT05MIHN0ZGlvPC90ZXh0Pgo8L2c+CjwhLS0gc3FsaXRlIC0tPgo8ZyBpZD0ibm9kZTUiIGNsYXNzPSJub2RlIj4KPHRpdGxlPnNxbGl0ZTwvdGl0bGU+CjxwYXRoIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0yMzkuNTgsLTE4NS41OUMyMzkuNTgsLTE4OC4yNCAyMjEuMzksLTE5MC4zOSAxOTksLTE5MC4zOSAxNzYuNjEsLTE5MC4zOSAxNTguNDIsLTE4OC4yNCAxNTguNDIsLTE4NS41OSAxNTguNDIsLTE4NS41OSAxNTguNDIsLTE0Mi4zOSAxNTguNDIsLTE0Mi4zOSAxNTguNDIsLTEzOS43NCAxNzYuNjEsLTEzNy41OSAxOTksLTEzNy41OSAyMjEuMzksLTEzNy41OSAyMzkuNTgsLTEzOS43NCAyMzkuNTgsLTE0Mi4zOSAyMzkuNTgsLTE0Mi4zOSAyMzkuNTgsLTE4NS41OSAyMzkuNTgsLTE4NS41OSIvPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiMzMDM0M2IiIGQ9Ik0yMzkuNTgsLTE4NS41OUMyMzkuNTgsLTE4Mi45NCAyMjEuMzksLTE4MC43OSAxOTksLTE4MC43OSAxNzYuNjEsLTE4MC43OSAxNTguNDIsLTE4Mi45NCAxNTguNDIsLTE4NS41OSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIxOTkiIHk9Ii0xNjYuOTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+L2FwcC9kYXRhPC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIxOTkiIHk9Ii0xNTQuOTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+U1FMaXRlIFdBTDwvdGV4dD4KPC9nPgo8IS0tIGFwcCYjNDU7Jmd0O3NxbGl0ZSAtLT4KPGcgaWQ9ImVkZ2UzIiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5hcHAmIzQ1OyZndDtzcWxpdGU8L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBkPSJNMjQ1Ljg0LC0yNzguNEMyMzYuNTEsLTI1NS44MiAyMjMuMTcsLTIyMy41MSAyMTMuMSwtMTk5LjE0Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iMjQzLjM3LC0yNzkuMzEgMjQ4LjY2LC0yODUuMjQgMjQ4LjIzLC0yNzcuMzEgMjQzLjM3LC0yNzkuMzEiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIyMTUuNjIsLTE5OC4zNSAyMTAuMzMsLTE5Mi40MiAyMTAuNzcsLTIwMC4zNiAyMTUuNjIsLTE5OC4zNSIvPgo8L2c+CjwhLS0gcHJvbXB0cyAtLT4KPGcgaWQ9Im5vZGU2IiBjbGFzcz0ibm9kZSI+Cjx0aXRsZT5wcm9tcHRzPC90aXRsZT4KPHBvbHlnb24gZmlsbD0id2hpdGUiIHN0cm9rZT0iIzMwMzQzYiIgcG9pbnRzPSI0NDQuMywtMTgzLjE5IDQ0MS4zLC0xODcuMTkgNDIwLjMsLTE4Ny4xOSA0MTcuMywtMTgzLjE5IDI3MS43LC0xODMuMTkgMjcxLjcsLTE0NC43OSA0NDQuMywtMTQ0Ljc5IDQ0NC4zLC0xODMuMTkiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzU4IiB5PSItMTY2Ljk5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPmJ1bmRsZWQgcHJvbXB0cyAvIGtub3dsZWRnZTwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iMzU4IiB5PSItMTU0Ljk5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPnJlYWQmIzQ1O29ubHk8L3RleHQ+CjwvZz4KPCEtLSBhcHAmIzQ1OyZndDtwcm9tcHRzIC0tPgo8ZyBpZD0iZWRnZTQiIGNsYXNzPSJlZGdlIj4KPHRpdGxlPmFwcCYjNDU7Jmd0O3Byb21wdHM8L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBkPSJNMjcwLjQxLC0yODYuNzhDMjg4LjE3LC0yNjIuMDkgMzE5LjU2LC0yMTguNDUgMzM5LjU0LC0xOTAuNjYiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIzNDEuNjMsLTE5Mi4yNCAzNDMuODgsLTE4NC42MiAzMzcuMzcsLTE4OS4xOCAzNDEuNjMsLTE5Mi4yNCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzMjMuNzgiIHk9Ii0yMzcuMTMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI5LjAwIj5yZWFkPC90ZXh0Pgo8L2c+CjwhLS0gb3BlbnJvdXRlciAtLT4KPGcgaWQ9Im5vZGU5IiBjbGFzcz0ibm9kZSI+Cjx0aXRsZT5vcGVucm91dGVyPC90aXRsZT4KPGVsbGlwc2UgZmlsbD0id2hpdGUiIHN0cm9rZT0iIzMwMzQzYiIgY3g9IjU4OSIgY3k9Ii0xNjMuOTkiIHJ4PSIxMTIuMzgiIHJ5PSIzNS42NCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1ODkiIHk9Ii0xNzIuOTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+T3BlblJvdXRlciB2b2ljZSBnYXRld2F5PC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1ODkiIHk9Ii0xNjAuOTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+b25lIGJhY2tlbmQmIzQ1O29ubHkga2V5PC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1ODkiIHk9Ii0xNDguOTkiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+cGFpZCBIVFRQUyB1c2FnZTwvdGV4dD4KPC9nPgo8IS0tIGFwcCYjNDU7Jmd0O29wZW5yb3V0ZXIgLS0+CjxnIGlkPSJlZGdlOCIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+YXBwJiM0NTsmZ3Q7b3BlbnJvdXRlcjwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0zMDkuMzMsLTI4My4yOUMzNjQuNTMsLTI1OS45NCA0NTEuOTgsLTIyMi45NSA1MTQuMzksLTE5Ni41NSIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjMwOC41MSwtMjgwLjc5IDMwMi42MiwtMjg2LjEzIDMxMC41NSwtMjg1LjYzIDMwOC41MSwtMjgwLjc5Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNTE1LjIyLC0xOTkuMDUgNTIxLjExLC0xOTMuNzEgNTEzLjE3LC0xOTQuMjIgNTE1LjIyLC0xOTkuMDUiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTIzLjI5IiB5PSItMjQ3LjkzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOS4wMCI+U1RUOiBjaGF0L2NvbXBsZXRpb25zPC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1MjMuMjkiIHk9Ii0yMzcuMTMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI5LjAwIj5iYXNlNjQgV0FWIOKGkiBmaW5hbCB0cmFuc2NyaXB0PC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI1MjMuMjkiIHk9Ii0yMjYuMzMiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSI5LjAwIj5UVFM6IGF1ZGlvL3NwZWVjaCDihpIgY29tcGxldGUgTVAzPC90ZXh0Pgo8L2c+CjwhLS0gd2ViaG9vayAtLT4KPGcgaWQ9Im5vZGUxMSIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+d2ViaG9vazwvdGl0bGU+Cjxwb2x5Z29uIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIHBvaW50cz0iODk0LjYxLC0xODEuOTkgODkxLjYxLC0xODUuOTkgODcwLjYxLC0xODUuOTkgODY3LjYxLC0xODEuOTkgNzMzLjM5LC0xODEuOTkgNzMzLjM5LC0xNDUuOTkgODk0LjYxLC0xNDUuOTkgODk0LjYxLC0xODEuOTkiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iODE0IiB5PSItMTYwLjk5IiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iMTAuMDAiPkNvbnNvbGUgLyBvcHRpb25hbCB3ZWJob29rPC90ZXh0Pgo8L2c+CjwhLS0gYXBwJiM0NTsmZ3Q7d2ViaG9vayAtLT4KPGcgaWQ9ImVkZ2UxMCIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+YXBwJiM0NTsmZ3Q7d2ViaG9vazwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0zMTcuODMsLTI4Ni44MUMzMjcuODQsLTI4NC4yMiAzMzguMTYsLTI4MS44MyAzNDgsLTI4MC4wMyA0NjMuODgsLTI1OC43NyA0OTguMDUsLTI4NS45OCA2MTIsLTI1Ni4wMyA2NzIuMTYsLTI0MC4yMSA3MzYuOTMsLTIwOC4wNSA3NzYuNDcsLTE4Ni41Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNzc3LjI2LC0xODkuMDYgNzgyLjU3LC0xODMuMTUgNzc0LjczLC0xODQuNDYgNzc3LjI2LC0xODkuMDYiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNzMyLjE1IiB5PSItMjM3LjEzIiBmb250LWZhbWlseT0iRGVqYVZ1IFNhbnMiIGZvbnQtc2l6ZT0iOS4wMCI+Ym9va2luZyBldmVudHM8L3RleHQ+CjwvZz4KPCEtLSBjb2RleGhvbWUgLS0+CjxnIGlkPSJub2RlNyIgY2xhc3M9Im5vZGUiPgo8dGl0bGU+Y29kZXhob21lPC90aXRsZT4KPHBhdGggZmlsbD0id2hpdGUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTE4Mi4yMywtNjRDMTgyLjIzLC02Ni42NSAxNDQuOTMsLTY4LjggOTksLTY4LjggNTMuMDcsLTY4LjggMTUuNzcsLTY2LjY1IDE1Ljc3LC02NCAxNS43NywtNjQgMTUuNzcsLTIwLjggMTUuNzcsLTIwLjggMTUuNzcsLTE4LjE1IDUzLjA3LC0xNiA5OSwtMTYgMTQ0LjkzLC0xNiAxODIuMjMsLTE4LjE1IDE4Mi4yMywtMjAuOCAxODIuMjMsLTIwLjggMTgyLjIzLC02NCAxODIuMjMsLTY0Ii8+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMwMzQzYiIgZD0iTTE4Mi4yMywtNjRDMTgyLjIzLC02MS4zNSAxNDQuOTMsLTU5LjIgOTksLTU5LjIgNTMuMDcsLTU5LjIgMTUuNzcsLTYxLjM1IDE1Ljc3LC02NCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI5OSIgeT0iLTQ1LjQiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+L2NvZGV4JiM0NTtob21lPC90ZXh0Pgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSI5OSIgeT0iLTMzLjQiIGZvbnQtZmFtaWx5PSJEZWphVnUgU2FucyIgZm9udC1zaXplPSIxMC4wMCI+YXV0aC5qc29uIMK3IHBlcnNpc3RlbnQgc2VjcmV0PC90ZXh0Pgo8L2c+CjwhLS0gY29kZXgmIzQ1OyZndDtjb2RleGhvbWUgLS0+CjxnIGlkPSJlZGdlNSIgY2xhc3M9ImVkZ2UiPgo8dGl0bGU+Y29kZXgmIzQ1OyZndDtjb2RleGhvbWU8L3RpdGxlPgo8cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBkPSJNNzcuNCwtMTM1LjY1QzgxLjQxLC0xMTguNTMgODYuNjEsLTk2LjMxIDkwLjksLTc3Ljk4Ii8+Cjxwb2x5Z29uIGZpbGw9IiM0YjU1NjMiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIHBvaW50cz0iNzQuOTEsLTEzNC43OCA3NS43NSwtMTQyLjY4IDgwLjAyLC0xMzUuOTggNzQuOTEsLTEzNC43OCIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjkzLjQ2LC03OC41OCA5Mi42MSwtNzAuNjggODguMzUsLTc3LjM4IDkzLjQ2LC03OC41OCIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIxMTEuNzUiIHk9Ii05Ni4yNSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjkuMDAiPmF1dGgvY2FjaGU8L3RleHQ+CjwvZz4KPCEtLSBvcGVuYWkgLS0+CjxnIGlkPSJub2RlMTAiIGNsYXNzPSJub2RlIj4KPHRpdGxlPm9wZW5haTwvdGl0bGU+CjxlbGxpcHNlIGZpbGw9IndoaXRlIiBzdHJva2U9IiMzMDM0M2IiIGN4PSI1NTQiIGN5PSItNDIuNCIgcng9Ijk0LjM1IiByeT0iMjcuMTUiLz4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTU0IiB5PSItNDUuNCIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5PcGVuQUkvQ29kZXggc2VydmljZTwvdGV4dD4KPHRleHQgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgeD0iNTU0IiB5PSItMzMuNCIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjEwLjAwIj5MdW5hIHZpYSBzdWJzY3JpcHRpb248L3RleHQ+CjwvZz4KPCEtLSBjb2RleCYjNDU7Jmd0O29wZW5haSAtLT4KPGcgaWQ9ImVkZ2U5IiBjbGFzcz0iZWRnZSI+Cjx0aXRsZT5jb2RleCYjNDU7Jmd0O29wZW5haTwvdGl0bGU+CjxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRiNTU2MyIgc3Ryb2tlLXdpZHRoPSIxLjEiIGQ9Ik0xMTIuNjMsLTE0MC4zOEMxMjIuMDksLTEzNS45IDEzMi4yMywtMTMxLjU4IDE0MiwtMTI4LjM1IDI3Ni44LC04My43NiAzMTcuNTMsLTEwMC45NSA0NTYsLTY5LjU1IDQ2My4yOCwtNjcuOSA0NzAuODQsLTY2LjA4IDQ3OC4zOSwtNjQuMTkiLz4KPHBvbHlnb24gZmlsbD0iIzRiNTU2MyIgc3Ryb2tlPSIjNGI1NTYzIiBzdHJva2Utd2lkdGg9IjEuMSIgcG9pbnRzPSIxMTEuNjEsLTEzNy45NiAxMDYuMDIsLTE0My42MSAxMTMuOTEsLTE0Mi42OCAxMTEuNjEsLTEzNy45NiIvPgo8cG9seWdvbiBmaWxsPSIjNGI1NTYzIiBzdHJva2U9IiM0YjU1NjMiIHN0cm9rZS13aWR0aD0iMS4xIiBwb2ludHM9IjQ3OC45OCwtNjYuNzUgNDg1LjYsLTYyLjM1IDQ3Ny42OSwtNjEuNjYgNDc4Ljk4LC02Ni43NSIvPgo8dGV4dCB4bWw6c3BhY2U9InByZXNlcnZlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiB4PSIzNDQuOTkiIHk9Ii05Ni4yNSIgZm9udC1mYW1pbHk9IkRlamFWdSBTYW5zIiBmb250LXNpemU9IjkuMDAiPmF1dGhlbnRpY2F0ZWQgSFRUUFM8L3RleHQ+CjwvZz4KPC9nPgo8L3N2Zz4K" alt="Deployment" />
 <figcaption aria-hidden="true">Deployment</figcaption>
 </figure>
-<p>Candidate <code>0.5.0-local-rc.3</code> uses this topology on one
-trusted local machine at <code>http://localhost:5173</code>; prior
-<code>0.5.0-local-rc.2</code> remains the rollback image. RC3
-deploy/readiness must be freshly accepted per docs 08/11. A target VPS,
-DNS, public TLS/WSS and target-host smokes are later gates and are not
-implied by local readiness.</p>
+<p>Candidate <code>0.5.0-local-rc.4</code> is recommended but untagged
+for one trusted local machine at <code>http://localhost:5173</code>. RC3
+evidence is preserved separately and is not RC4 proof. A target VPS,
+DNS, public TLS/WSS, target-host provider live booking, and WebKit full
+journey are external gates and are not implied by local readiness.</p>
 <p>Один <code>docker-compose.yml</code>, ровно два application-path
 сервиса рекомендуются:</p>
 <ol type="1">
@@ -3843,12 +3991,15 @@ read-only files under <code>/run/secrets</code>.</p>
 <p>Do not use <code>env_file: .env</code>, source <code>.env</code>, or
 invoke raw <code>docker compose up</code> as the documented bootstrap.
 <code>scripts/deploy-local.sh</code> parses dotenv data, materializes
-mode-<code>0600</code> sources below <code>.runtime/secrets</code>,
-exports the three <code>*_FILE</code> paths, builds, migrates,
-force-recreates app, starts Caddy, and requires readiness. Raw
-<code>docker compose config</code> remains safe with
-<code>/dev/null</code> defaults but does not constitute a configured
-deploy.</p>
+mode-<code>0600</code> secret files, renders/scans Compose config, and
+builds first. If the app is live it takes a protected online backup and
+then uses Compose’s 30-second graceful stop before any schema mutation;
+if the app is stopped but <code>/data/app.db</code> exists it takes a
+protected no-migration backup. A fresh volume needs no backup. The
+replacement app is started with <code>AUTO_MIGRATE=true</code>, so
+migration runs through the normal entrypoint before the server; bounded
+<code>/health/ready</code> and then <code>db.js verify-rc4</code> must
+pass. The script never runs a one-off migration against a live app.</p>
 <h2 id="docker-image">3. Docker image</h2>
 <p>Multi-stage:</p>
 <ol type="1">
@@ -3880,15 +4031,18 @@ checks login status, and stores the result in the fixed persistent
 <h3 id="readiness-and-optional-deeper-preflight">Readiness and optional
 deeper preflight</h3>
 <p><code>scripts/deploy-local.sh</code> waits for
-<code>/health/ready</code>. The automatic readiness path verifies the
-isolated Codex runtime configuration and app-server handshake, ChatGPT
-account/auth state, requested model/effort availability, the compiled
-prompt file, SQLite read/write, queue capacity, notifier state, and
-local STT/TTS configuration and circuit health. It does
-<strong>not</strong> run <code>thread/start</code>, inspect
-<code>instructionSources</code> from a created thread, execute a
-synthetic turn, wait for a streamed delta, or send
-<code>turn/interrupt</code>. Failed required checks make
+<code>/health/ready</code>. Before readiness, a bounded DB-only recovery
+scan processes orphaned <code>committing</code> drafts without
+Luna/STT/TTS or an in-memory session; safe aggregate failures keep
+orphan-recovery health degraded and rows eligible for a later bounded
+sweep. The automatic readiness path also verifies the isolated Codex
+runtime configuration and app-server handshake, ChatGPT account/auth
+state, requested model/effort availability, the compiled prompt file,
+SQLite read/write, queue capacity, notifier state, and local STT/TTS
+configuration and circuit health. It does <strong>not</strong> run
+<code>thread/start</code>, inspect <code>instructionSources</code> from
+a created thread, execute a synthetic turn, wait for a streamed delta,
+or send <code>turn/interrupt</code>. Failed required checks make
 <code>/health/ready</code> return <code>503</code> and prevent new voice
 sessions.</p>
 <p>The standalone <code>scripts/codex-preflight.ts</code> is a separate,
@@ -3972,16 +4126,23 @@ compiled <code>AGENTS.md</code> и allowlisted knowledge;</li>
 <ul>
 <li>raw audio не сохраняется;</li>
 <li>PII redaction в общих логах;</li>
-<li>contact values доступны только booking payload и защищённому
-storage;</li>
+<li>contact values are stored in the durable draft/booking and exposed
+to the browser only in stage-gated projections; TTS receives only an
+exact server-approved contact when contact-processing consent is active,
+otherwise it is redacted;</li>
 <li><code>.env</code>, единственный OpenRouter key, webhook secret,
 Codex auth, WAV/base64 audio и transcript PII не попадают в logs;</li>
 <li>browser bundle и events не содержат OpenRouter key или direct
 provider URL;</li>
 <li>DB volume и backup с ограниченными permissions;</li>
 <li>privacy/consent copy перед микрофоном;</li>
-<li>deletion runbook по
-<code>conversationId</code>/<code>bookingId</code>;</li>
+<li>implemented conversation deletion transaction removes booking,
+context, turns, idempotency, related outbox entries, and conversation;
+existing redacted append-only domain events remain and a count-only
+<code>privacy.deleted</code> event is appended;</li>
+<li>transcript retention also purges expired
+<code>conversation_contexts</code> in bounded batches while preserving
+conversations and bookings;</li>
 <li>финальная юридическая формулировка требует отдельной проверки
 владельцем продукта.</li>
 </ul>
@@ -4103,17 +4264,34 @@ thresholds</td>
 <code>TTS_TEXT_ONLY_FALLBACK=true</code>; readiness must expose degraded
 state rather than pretending OpenRouter is ready. Healthchecks never
 spend OpenRouter usage.</p>
-<h2 id="backup-and-restore">9. Backup and restore</h2>
+<h2 id="migration-backup-restore-and-rollback-boundaries">9. Migration,
+backup, restore, and rollback boundaries</h2>
 <ul>
-<li>SQLite online backup или <code>VACUUM INTO</code>, не простой copy
-активного WAL-файла;</li>
-<li>ежедневный encrypted snapshot;</li>
-<li>retention configurable;</li>
-<li>регулярный restore test в временный файл;</li>
-<li><code>codex-home</code> backup отдельно и только если необходим;
-auth backup шифруется;</li>
-<li>prompts восстанавливаются из Git/image;</li>
-<li>runbook фиксирует RPO/RTO после выбора хостинга.</li>
+<li>RC4 migration <code>0004</code> only adds
+<code>conversation_contexts</code>; it does not backfill existing RC3
+conversations and creates no duplicate fact/evidence/meeting table.
+Existing RC3 bookings remain unchanged.</li>
+<li>Local cutover takes <code>VACUUM INTO</code> backup plus
+mode-<code>0600</code> SHA-256 sidecar before stopping/migrating an
+existing DB. The server is gracefully stopped before normal startup
+applies schema changes.</li>
+<li>Post-start acceptance requires <code>/health/ready</code>,
+<code>PRAGMA integrity_check</code>, exact context columns/FK/check
+constraints, persisted JSON revision/timestamp consistency,
+<code>foreign_key_check</code>, and absence of duplicate RC4
+tables.</li>
+<li>Migrations are forward-only. Code/image rollback without a DB
+restore is allowed only if the older image is proven compatible with the
+forward schema. Otherwise stop the app and use the matching pre-cutover
+backup; never try to reverse <code>0004</code> in place.</li>
+<li>Restore verifies sidecar permissions/digest/integrity before stop,
+verifies again, migrates a temporary copy, atomically swaps it, retains
+a protected pre-restore backup, and requires readiness.</li>
+<li>Repository backups are protected/checksummed but not encrypted and
+have no automatic retention policy. Host-owner encrypted snapshots,
+retention, RPO/RTO and restore drills remain operations
+responsibilities. <code>codex-home</code> auth is separate and excluded
+from ordinary DB backups.</li>
 </ul>
 <h2 id="capacity-guard">10. Capacity guard</h2>
 <p>Первый релиз должен ограничивать concurrency, потому что:</p>
@@ -4234,7 +4412,9 @@ Luna/tools</td>
 <span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Fill the backend-only OPENROUTER_API_KEY without sourcing .env.</span></span>
 <span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/device-auth.sh</span></span>
 <span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/deploy-local.sh</span></span>
-<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/ready</span></code></pre></div>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/ready</span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a><span class="co"># deploy-local already runs this after readiness; manual recheck:</span></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose exec <span class="at">-T</span> app bun /app/ops/db.js verify-rc4</span></code></pre></div>
 <p>The wrapper does not run paid provider smokes. Recovery and
 observability commands are maintained in <a href="infra/README.md"><code>../infra/README.md</code></a> and the
 release checklist in <a href="docs/11-local-release-handoff.md"><code>11-local-release-handoff.md</code></a>.</p>
@@ -4254,15 +4434,13 @@ health checks or ordinary deployment.</p>
 <h3 id="inspect-last-booking-events">Inspect last booking events</h3>
 <div class="sourceCode" id="cb35"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose logs app <span class="at">--since</span> 30m <span class="kw">|</span> <span class="fu">grep</span> <span class="st">&#39;booking\.&#39;</span></span></code></pre></div>
 <h3 id="restore">Restore</h3>
-<ol type="1">
-<li>stop app;</li>
-<li>verify backup checksum;</li>
-<li>restore into a new DB path;</li>
-<li>run integrity check and migrations;</li>
-<li>point <code>DATABASE_URL</code> to restored file;</li>
-<li>start and validate <code>/health/ready</code>;</li>
-<li>retain old file until manual confirmation.</li>
-</ol>
+<p>Use <code>./scripts/restore.sh /data/backups/NAME.db</code>. The
+wrapper verifies the protected backup before stopping, verifies again
+after stop, migrates a temporary copy, atomically swaps it, restarts the
+app, requires <code>/health/ready</code>, and retains a protected
+pre-restore backup. For image rollback, use
+<code>scripts/rollback.sh</code> with an owner-retained immutable image
+reference; no RC4 predecessor image/tag is invented by this handoff.</p>
 <div class="page-break">
 
 </div>
@@ -4395,9 +4573,12 @@ protocol drift.</p>
 <h2 id="adr-005.-backend-owned-state-machine">ADR-005. Backend-owned
 state machine</h2>
 <p><strong>Статус:</strong> accepted.</p>
-<p>Prompt-only state считается недостаточным. LLM может предложить
-action, но transition и side effects разрешает deterministic policy. Это
-особенно важно для порядка booking → qualification.</p>
+<p>Prompt-only state считается недостаточным. RC4 persists a revisioned
+JSON draft/fact/conflict projection in
+<code>conversation_contexts</code>; LLM may only propose quoted
+current-turn facts, while deterministic policy owns CAS, conflict
+resolution, exact confirmation, booking commit, and booking →
+qualification order.</p>
 <h2 id="adr-006.-prompts-в-markdown-без-онлайн-редактора">ADR-006.
 Prompts в Markdown, без онлайн-редактора</h2>
 <p><strong>Статус:</strong> accepted.</p>
@@ -4417,15 +4598,18 @@ Compose project, modular monolith</h2>
 <h2 id="adr-009.-бронь-внутренняя-сущность-не-календарь">ADR-009. Бронь
 — внутренняя сущность, не календарь</h2>
 <p><strong>Статус:</strong> accepted.</p>
-<p>Это сокращает scope и позволяет проверить conversation/tool design.
-UI и voice copy обязаны не создавать ложного ожидания calendar
-event.</p>
+<p>The durable booking is the only meeting entity. UI derives an
+<code>internal_virtual</code>/<code>scheduled</code> projection and must
+state that external calendar event/invite flags are false; no second
+meeting table is introduced.</p>
 <h2 id="adr-010.-qualification-только-после-booking">ADR-010.
 Qualification только после booking</h2>
 <p><strong>Статус:</strong> accepted, non-negotiable.</p>
-<p>Плюсы: меньше потерянных лидов и ясная транзакционная граница.
-Минусы: booking может быть менее подробно квалифицирована. Этот минус
-ожидаем и допустим.</p>
+<p>After truthful durable meeting confirmation, qualification starts
+directly and asks only missing volume/manager facts; there is no
+separate permission bridge. Плюсы: меньше потерянных лидов и ясная
+транзакционная граница. Минусы: booking может быть менее подробно
+квалифицирована. Этот минус ожидаем и допустим.</p>
 <h2 id="adr-011.-pcm-speech-output-path">ADR-011. PCM speech output
 path</h2>
 <p><strong>Статус:</strong> rejected for P0 / superseded by ADR-015.</p>
@@ -4695,11 +4879,11 @@ script requires opt-in and is not part of visitor runtime.</li>
 <p>Table-driven cases:</p>
 <ul>
 <li>все допустимые transitions;</li>
-<li>запрещён <code>append_booking_qualification</code> до committed
-booking, user-facing confirmation и отдельного consent;</li>
-<li><code>create_booking</code> разрешён только из
-<code>COLLECT_BOOKING</code>, при server contact consent и с одним из
-двух candidates активного turn;</li>
+<li>qualification forbidden before committed booking/draft, internal
+meeting publication, and truthful confirmation; no separate permission
+bridge exists;</li>
+<li>automatic booking commit allowed only from a ready exact-confirmed
+revision, with contact consent and one of two current candidates;</li>
 <li>disconnect после booking → booking stays;</li>
 <li>clear refusal → declined;</li>
 <li>retry не меняет domain effect;</li>
@@ -4747,10 +4931,17 @@ never exhaustive global availability;</li>
 not invent slots; modern snapshot use fails closed;</li>
 <li>same idempotency key/same payload → same result;</li>
 <li>same key/different payload → conflict;</li>
-<li>exact post-confirmation consent question precedes qualification and
-same-turn booking envelope cannot grant consent;</li>
-<li>deterministic question order is monthly inbound leads then integer
-<code>salesManagerCount</code>, one at a time;</li>
+<li>one <code>conversation_contexts</code> JSON row preserves fact
+provenance/conflicts, lifecycle and revisions; malformed
+JSON/revision/timestamp mismatch fails closed;</li>
+<li>form, typed, and spoken facts converge on the same draft; stale
+revision, bounded conflict resolution, candidate reselection, idempotent
+confirmation, and reconnect/resume are covered;</li>
+<li>exact-revision confirmation automatically commits once and the
+widget cannot publish before durable booking/draft commit;</li>
+<li>direct qualification asks only missing facts: volume before managers
+only when both are absent, one known asks the other, both known asks
+nothing; generic daily volume requires basis clarification;</li>
 <li>qualification patch merges either field; both-at-once completes, one
 field remains partial, and model completion claims cannot override
 persisted truth;</li>
@@ -4759,7 +4950,8 @@ partial; booking remains booked;</li>
 <li>empty patch rejected except server-owned explicit-refusal skip
 operation;</li>
 <li>notifier failure не rolls back booking;</li>
-<li>PII redaction.</li>
+<li>PII redaction plus the sole exact-server-approved-contact TTS
+exception under contact-processing consent.</li>
 </ul>
 <h2 id="provider-contract-tests">3. Provider contract tests</h2>
 <h3 id="gateway-wav-encoder-and-openrouter-stt">Gateway WAV encoder and
@@ -4864,23 +5056,25 @@ once;</li>
 uncommitted audio, suppresses pending duplicates, retains sequence on
 rejection, emits server final once, and follows the same
 brain/state/tool/persistence path as speech;</li>
-<li>typed composer is stage-gated, and booking form renders only from
-server-owned <code>COLLECT_BOOKING</code>, never transcript
-wording;</li>
-<li>real SQLite transaction + fake notifier;</li>
-<li>Luna receives server-owned current Moscow date/day, parsed
-preference/rejection and exactly two structured candidates with
-validated labels;</li>
-<li>typed and spoken preference turns produce matching refreshed
-context; rejected band is absent;</li>
-<li>booking tool call accepts only one active candidate inside brain
-turn;</li>
-<li>booking event and user-facing confirmation with exact
-<code>Можно задать два коротких вопроса?</code> appear before
-qualification consent/question/audio;</li>
-<li>explicit consent bypasses a model turn and deterministically asks
-leads first; partial then asks manager count; both-at-once completes;
-zero/one-answer refusal preserves skipped/partial booking truth;</li>
+<li>typed composer is stage-gated; structured booking form renders only
+from server-owned <code>COLLECT_BOOKING</code> and submits revisioned
+patches, never transcript-triggered tools;</li>
+<li>real SQLite RC3→RC4 migration, durable context CAS/conflicts,
+booking transaction, and fake notifier;</li>
+<li>Luna receives server-owned current Moscow date/day and exactly two
+structured candidates with concrete dates; typed/spoken time-band and
+concrete date/time requests have parity;</li>
+<li>spoken/text/form facts complete the same draft; first/second spoken
+selection and spoken confirmation use the same exact-revision commit
+path;</li>
+<li>booking event, committed draft, and
+<code>internal.meeting.updated</code> precede final widget and
+qualification;</li>
+<li>server asks only missing qualification facts; both-at-once,
+both-known, daily-basis clarification, and zero/one-answer refusal
+preserve booking truth;</li>
+<li>reconnect restores durable draft/meeting; stale projections cannot
+replace a newer revision;</li>
 <li>reconnect with same conversation;</li>
 <li>barge-in while OpenRouter requests/complete segments are in
 flight;</li>
@@ -4903,20 +5097,20 @@ greeting;</li>
 <li>receive assistant text and ordered complete MP3 segment events;</li>
 <li>verify the circular countdown is sample-derived and reaches the
 60-second limit without wall-clock drift;</li>
-<li>submit typed and spoken time-of-day preferences and verify refreshed
-pairs: default morning+evening, selected in-band roughly hour-apart,
-rejected band absent;</li>
-<li>use the in-chat booking form only at <code>COLLECT_BOOKING</code>,
-choose one of exactly two server-labeled current Moscow alternatives,
-and complete required name/company/email/phone-or-Telegram/consent
-data;</li>
-<li>see booked UI and verify no external calendar/invitation or
-exhaustive availability claim;</li>
-<li>verify exact two-question consent, deterministic leads→manager
-order, both-at-once completion, and zero/one-answer refusal
-outcomes;</li>
-<li>verify backend DB/event payload keeps booking
-<code>booked</code>.</li>
+<li>submit typed and spoken time-band plus supported concrete date/time
+requests and verify exactly two concretely dated current Moscow
+candidates;</li>
+<li>use the structured form only at <code>COLLECT_BOOKING</code>; verify
+auto-filled facts, explicit conflicts, stale revision/reselection, and
+exact-revision confirmation;</li>
+<li>verify automatic durable booking commit precedes the server-derived
+final widget, whose external calendar/invite flags remain false;</li>
+<li>verify missing-only qualification matrix: neither known → volume
+first; one known → only other; both known → no question; daily count →
+basis clarification; refusal preserves scheduled meeting;</li>
+<li>verify DB/event payload keeps booking <code>booked</code>, draft
+<code>committed</code>, and widget projection tied to the same booking
+ID.</li>
 </ol>
 <p>Browser voice acceptance additionally proves ordered playback of at
 least three complete MP3 phrase segments, immediate stop/queue clear on
@@ -4929,7 +5123,10 @@ barge-in, late-segment rejection, and visible text when audio fails.</p>
 </ul>
 <p>Mobile viewport and slow network profiles included.</p>
 <h2 id="conversation-eval-suite">6. Conversation eval suite</h2>
-<p>Минимум 24 сценария:</p>
+<p>The committed RC4 fixture catalog has <strong>44 scenarios</strong>.
+It is deterministic and credential-free; it does not run Luna/providers
+and therefore is not model-quality evidence. The scenario groups below
+describe its minimum behavioral surface:</p>
 <h3 id="happy-paths">Happy paths</h3>
 <ol type="1">
 <li>входящие ночью;</li>
@@ -4998,14 +5195,20 @@ offer;</li>
 <li>spoken-language quality;</li>
 <li>final structured handoff.</li>
 </ul>
-<p>Release thresholds:</p>
+<p>Release thresholds and current fixture baseline:</p>
 <ul>
-<li>100% invariant tests;</li>
-<li>≥ 90% scripted scenarios без critical failure;</li>
-<li>0 fabricated price/guarantee in eval suite;</li>
-<li>0 duplicate bookings;</li>
-<li>0 pre-booking qualification tool calls;</li>
-<li>0 exposed secrets/stack traces.</li>
+<li>at least 24 scenarios and ≥90% without critical failure;</li>
+<li>100% booking-order/scheduled-payload checks among booking-required
+scenarios;</li>
+<li>zero fabricated prices, guarantees, secrets, duplicate bookings,
+pre-booking qualification, widget-before-commit, external invite claims,
+repeated-known qualification, silent daily normalization, or
+unauthorized contact TTS;</li>
+<li>committed artifact: <strong>44/44 scenarios</strong>, <strong>25/25
+applicable booking-order checks</strong>, <strong>28/28 negative
+controls</strong>, zero critical failures;</li>
+<li>evidence mode is <code>fixture-only</code>, provider calls are
+<code>0</code>, and real Luna is explicitly <code>not-run</code>.</li>
 </ul>
 <h2 id="latencyload-test">8. Latency/load test</h2>
 <h3 id="measurements">Measurements</h3>
@@ -5048,88 +5251,81 @@ directly;</li>
 <li>auth volume not world-readable.</li>
 </ul>
 <h2 id="acceptance-checklist-p0">10. Acceptance checklist P0</h2>
-<h3 id="local-release-candidate-0.5.0-local-rc.3">Local release
-candidate <code>0.5.0-local-rc.3</code></h3>
-<p>RC3 local acceptance is recorded in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>. RC2 remains the
-prior rollback candidate; local evidence does not close WebKit or
-target-host gates.</p>
+<h3 id="local-release-candidate-0.5.0-local-rc.4-recommended-tag-pending">Local
+release candidate <code>0.5.0-local-rc.4</code> (recommended; tag
+pending)</h3>
+<p>Fresh RC4 command evidence is recorded in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>. The prior RC3
+report is preserved separately under <code>evidence/</code>; it is
+historical and not reused as proof.</p>
 <ul class="task-list">
-<li><label><input type="checkbox" checked></input>Fresh credential-free
-deterministic suite: 510 tests passed across 58 files with 4,265
-assertions and no failures.</label></li>
-<li><label><input type="checkbox" checked></input>Typecheck, lint/format,
-production build, deterministic eval baseline,
-<code>scripts/build-spec.sh</code>,
-<code>scripts/validate-spec.py</code>, and <code>git diff --check</code>
-passed.</label></li>
-<li><label><input type="checkbox" checked></input>Docs and generated
-specification match proactive greeting, contextual candidates, and
-deterministic two-question qualification contracts.</label></li>
-<li><label><input type="checkbox" checked></input>Disposable Chrome
-exercised automatic static greeting success, blocked/unavailable
-fallback, zero pre-consent conversation REST/WS/mic/provider calls,
-session-start cleanup, 780/390 px layouts, and a real typed evening
-request that received two server-supplied evening candidates.
-Deterministic gateway/orchestrator coverage proves typed/spoken
-equivalence plus skipped/partial/complete qualification. Firefox
-headless rendered 390×844 without CSP/runtime errors; WebKit was not
+<li><label><input type="checkbox" checked></input>Credential-free fixture
+baseline is current: 44/44 scenarios, 25/25 applicable booking-order
+checks, 28/28 negative controls, zero provider calls; real Luna not
 run.</label></li>
-<li><label><input type="checkbox" checked></input><code>scripts/deploy-local.sh</code> completed from the RC3
-tree; migration, app/Caddy health, dependency readiness, file-secret
-boundaries, and 60-second/2 MB limits passed.</label></li>
-<li><label><input type="checkbox" checked></input>Explicit bounded paid
-checks passed: static greeting generation through OpenRouter TTS, one
-real typed Luna/TTS evening-slot turn, and one OpenRouter STT → Luna →
-OpenRouter TTS voice smoke with two decoder-accepted MP3
-segments.</label></li>
-<li><label><input type="checkbox" checked></input>Fresh protected backup
-succeeded; deterministic restore/rollback tests passed.
-<code>botamin-voice:0.5.0-local-rc.2</code> remains the prior rollback
-tag.</label></li>
-<li><label><input type="checkbox" checked></input>Parent regenerated
-<code>MANIFEST.txt</code> and <code>CHECKSUMS.sha256</code> and recorded
-final evidence in <code>VALIDATION.md</code>.</label></li>
+<li><label><input type="checkbox" checked></input>Chromium desktop/mobile
+Playwright landing smoke passed through the shared Chromium harness.
+This proves responsive/pre-consent transport boundaries only, not a full
+voice booking journey.</label></li>
+<li><label><input type="checkbox" checked></input>Focused cutover tests
+prove protected backup precedes graceful stop, existing stopped DB is
+protected, migration is delegated to normal startup, readiness precedes
+<code>verify-rc4</code>, and RC3 schema upgrades to migration 0004
+without a duplicate meeting table.</label></li>
+<li><label><input type="checkbox" checked></input>The provider-independent
+repository suite is green: 715 tests across 68 files, including the RC4
+provider-contract and production-component journeys.</label></li>
+<li><label><input type="checkbox" checked></input>Typecheck, build, Biome,
+generated spec validation, release artifact regeneration, and
+<code>git diff --check</code> are reported with actual fresh outputs in
+<code>VALIDATION.md</code>.</label></li>
+<li><label><input type="checkbox"></input>Docker Compose cutover against an
+owner-configured live local volume and credentials was not run by the
+documentation handoff; the wrapper is covered statically/fake-Docker and
+DB tests.</label></li>
+<li><label><input type="checkbox"></input>Full local voice booking journey was
+not run; do not infer it from Chromium landing smoke or fixture
+evals.</label></li>
 </ul>
-<h3 id="later-target-release-gates-not-closed-by-local-rc">Later target
-release gates — not closed by local RC</h3>
+<h3 id="externalnot-run-gates-not-closed-by-rc4-handoff">External/not-run
+gates — not closed by RC4 handoff</h3>
 <ul class="task-list">
-<li><label><input type="checkbox"></input>Complete MP3 playback and voice
-journey accepted in WebKit.</label></li>
-<li><label><input type="checkbox"></input>Clean target-VPS deploy accepted
-under target CPU/RAM/storage/network conditions.</label></li>
-<li><label><input type="checkbox"></input>Public DNS and TLS/WSS accepted on
-the target host.</label></li>
-<li><label><input type="checkbox"></input>Explicitly approved target-host
-Russian STT/TTS smokes accepted with current model/voice/account
-configuration.</label></li>
-<li><label><input type="checkbox"></input>Target-host latency/load evidence
-establishes a release profile; local synthetic timings are not reused as
-a benchmark.</label></li>
-<li><label><input type="checkbox"></input>Owner reviews Codex/OpenRouter plan
-suitability, current rates, capacity, privacy copy, and public
-commercial operation.</label></li>
+<li><label><input type="checkbox"></input>WebKit complete-MP3/full voice
+journey. The browser binary is downloaded locally, but host libraries
+<code>libicu74</code>, <code>libxml2</code>, and <code>libflite1</code>
+are missing.</label></li>
+<li><label><input type="checkbox"></input>Clean target-VPS deploy under target
+CPU/RAM/storage/network conditions.</label></li>
+<li><label><input type="checkbox"></input>Public DNS and TLS/WSS on the target
+host.</label></li>
+<li><label><input type="checkbox"></input>Explicitly approved target-host live
+provider booking through OpenRouter STT/TTS + Codex Luna, including the
+final internal-meeting widget.</label></li>
+<li><label><input type="checkbox"></input>Target-host latency/load release
+profile and owner review of provider plan/rates/capacity/privacy
+copy.</label></li>
 </ul>
-<p>A real calendar event is intentionally out of scope rather than an
-unchecked release gate. The product stores an internal booking and
-notification outbox event only.</p>
+<p>External calendar creation is intentionally absent, not a release
+gate. The product creates one durable internal booking and derives an
+internal virtual meeting projection; it never creates a second meeting
+table or claims an external event/invite.</p>
 <h2 id="candidate-evidence-bundle">11. Candidate evidence bundle</h2>
-<p>The RC3 evidence bundle contains:</p>
+<p>The RC4 handoff bundle contains:</p>
 <ul>
-<li>final candidate SHA and <code>v0.5.0-local-rc.3</code>
-recommendation;</li>
-<li>deterministic test/type/lint/build/spec/validator and regenerated
-checksum evidence;</li>
-<li>Compose migration, file-secret, health, readiness, and backup
-observations;</li>
-<li>Chrome and Firefox results labeled by engine and viewport;</li>
-<li>safe aggregate results from explicitly approved bounded provider
-checks;</li>
-<li>preserved RC2 rollback tag and matching DB-backup guidance;</li>
-<li>known limitations and explicit WebKit/VPS/TLS blockers.</li>
+<li>integrated RC4 implementation plus recorded closure fixes; no PR/tag
+is invented;</li>
+<li>recommended/pending <code>v0.5.0-local-rc.4</code> label;</li>
+<li>source docs plus regenerated <code>FULL_SPEC.md</code>,
+<code>technical-spec.html</code>, <code>MANIFEST.txt</code>, and
+<code>CHECKSUMS.sha256</code>;</li>
+<li>deterministic migration/cutover, contracts, app, web, privacy, eval,
+type, and Biome evidence as actually run;</li>
+<li>Chromium desktop/mobile smoke clearly labeled as a landing
+smoke;</li>
+<li>preserved RC3 historical report and explicit
+WebKit/VPS/TLS/WSS/provider-live-booking gates.</li>
 </ul>
-<p>Target-VPS compose/health/preflight/provider evidence and
-benchmark-grade latency remain a later evidence bundle; they must not be
-inferred from this local release candidate.</p>
+<p>Target-host and full-journey evidence must not be inferred from this
+local handoff.</p>
 <div class="page-break">
 
 </div>
@@ -5448,21 +5644,22 @@ guards;</li>
 <h3 id="t40-local-release-candidate">T40 — Local release candidate</h3>
 <p><strong>Владелец:</strong> A0 или release integrator<br />
 <strong>Зависимости:</strong> T31, T32.</p>
-<p><strong>Current label:</strong> <code>0.5.0-local-rc.3</code>; keep
-<code>0.5.0-local-rc.2</code> as rollback image.</p>
+<p><strong>Current label:</strong> <code>0.5.0-local-rc.4</code>
+recommended/pending; no previous immutable image name is assumed.</p>
 <ul>
-<li>RC3 local P0 tests, spec validation, browser, deploy/readiness, and
-any approved provider smokes are candidate acceptance steps in docs
-08/11, not inherited claims from RC2;</li>
-<li>active docs describe committed proactive greeting, contextual
-two-candidate scheduling, and deterministic optional two-question
-qualification contracts;</li>
-<li>parent records final counts/checksums/SHA and observations in
-release evidence after fresh execution;</li>
-<li>release commit is prepared without creating or pushing a Git
-tag;</li>
-<li>WebKit and target VPS/DNS/TLS/WSS remain later gates and are not
-claimed by the local RC.</li>
+<li>RC4 local checks are fresh steps in docs 08/11; RC3 evidence is
+preserved separately and not inherited;</li>
+<li>active docs describe the durable revisioned draft/fact/conflict
+model, structured form plus spoken/text parity, two concretely dated
+Moscow candidates, automatic internal meeting commit/widget,
+approved-contact TTS exception, and direct missing-only
+qualification;</li>
+<li>release integrator records actual counts, commands, generated
+artifacts, and limitations after fresh execution;</li>
+<li>release commit is prepared without inventing or creating a
+tag/PR/hash;</li>
+<li>WebKit full journey, target VPS/DNS/TLS/WSS, and provider live
+booking remain external gates.</li>
 </ul>
 <h2 id="merge-gates">8. Merge gates</h2>
 <h3 id="gate-g0-contracts-frozen">Gate G0 — Contracts frozen</h3>
@@ -5931,70 +6128,76 @@ booking/qualification проверяемыми и оставляет путь к
 <div class="page-break">
 
 </div>
-<h1 id="local-release-candidate-and-handoff">11. Local release candidate
-and handoff</h1>
-<p><strong>Release label:</strong> <code>0.5.0-local-rc.3</code></p>
+<h1 id="rc4-local-release-handoff">11. RC4 local release handoff</h1>
+<p><strong>Release label:</strong> <code>0.5.0-local-rc.4</code></p>
 <p><strong>Recommended Git tag after owner acceptance:</strong>
-<code>v0.5.0-local-rc.3</code></p>
-<p><strong>Tag state:</strong> recommendation only until the validated
-candidate is merged.</p>
+<code>v0.5.0-local-rc.4</code></p>
+<p><strong>Tag state:</strong> pending/recommendation only. No tag, PR,
+registry digest, or predecessor image is asserted by this handoff.</p>
+<p><strong>Implementation baseline:</strong> integrated RC4 code through
+<code>58aa9ee</code>, followed by recorded review-closure,
+integration-harness, and release-handoff commits on the candidate
+branch.</p>
 <p><strong>Scope:</strong> local hosting on one trusted machine. This is
-not a target-VPS or public TLS release.</p>
-<h2 id="rc3-scope">RC3 scope</h2>
+not target-VPS or public TLS/WSS acceptance.</p>
+<h2 id="rc4-behavior-being-handed-off">RC4 behavior being handed
+off</h2>
 <ul>
-<li>committed product-owned same-origin proactive MP3 attempts playback
-once immediately on entry, with no conversation
-REST/WS/mic/provider/session before consent; blocked/error fallback is
-<code>Включить приветствие</code>, and real session start stops it;</li>
-<li>explicit admin-only opt-in OpenRouter script generates the fixed
-no-visitor-data asset before commit; visitor runtime never synthesizes
-it;</li>
-<li>server always offers exactly two current internal Moscow candidates:
-default morning+evening, contextual typed/spoken Russian
-preference/rejection refresh, selected in-band roughly hour-apart pair
-with weekday rollover, and no exhaustive global-availability claim;</li>
-<li>after committed booking and confirmation, exact consent question
-<code>Можно задать два коротких вопроса?</code> gates deterministic
-monthly-leads-then-manager-count collection; both-at-once, skipped, and
-partial outcomes preserve booking.</li>
+<li>one durable <code>conversation_contexts</code> JSON projection per
+conversation stores nonnegative revision, fact
+registry/provenance/bounded conflicts, exactly two current candidate
+identities, selected candidate, readiness, exact-revision confirmation,
+commit state, booking ID and matching timestamps;</li>
+<li>spoken and typed final turns use the same fact/scheduling/draft
+path; the structured form patches the same authoritative draft with
+expected revision and idempotent request ID rather than pretending to be
+visitor text;</li>
+<li>every scheduling offer contains exactly two 20-minute internal
+Moscow candidates with concrete dates/times; supported concrete
+date/time requests return the exact permitted start plus an alternative
+or the nearest two internal starts;</li>
+<li>a ready draft must be confirmed at its exact current revision;
+server orchestration then automatically commits one booking and
+publishes one server-derived
+<code>internal_virtual</code>/<code>scheduled</code> meeting
+projection;</li>
+<li>the final widget appears only after durable commit and states that
+no external calendar event or invitation exists;</li>
+<li>optional qualification starts directly after truthful meeting
+confirmation and asks only missing facts: volume first when neither is
+known, only the other field when one is known, and nothing when both are
+known;</li>
+<li>TTS redacts contacts by default. The only exception is an exact
+server-approved contact from accepted durable draft facts or a committed
+booking while contact-processing consent is active.</li>
 </ul>
-<h2 id="local-p0-candidate-checklist">Local P0 candidate checklist</h2>
-<p>Fresh RC3 local evidence is recorded in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>; RC2 observations
-were not reused as proof.</p>
-<ul class="task-list">
-<li><label><input type="checkbox" checked></input>Credential-free suite
-passed 510 tests across 58 files with 4,265 assertions and no
-failures.</label></li>
-<li><label><input type="checkbox" checked></input>Typecheck, lint/format,
-production build, deterministic eval/spec generation, validator, and
-<code>git diff --check</code> passed.</label></li>
-<li><label><input type="checkbox" checked></input>Chrome exercised
-proactive greeting success and fallback, zero pre-consent conversation
-calls, session-start cleanup, responsive layouts, and a real contextual
-evening request. Gateway/orchestrator tests cover typed/spoken
-preferences and qualification skipped/partial/complete. Firefox headless
-rendered 390×844 without CSP/runtime errors.</label></li>
-<li><label><input type="checkbox" checked></input><code>scripts/deploy-local.sh</code> completed from the RC3
-tree; migration, app/Caddy health/readiness, 60-second/2 MB limits, and
-file-secret boundaries passed.</label></li>
-<li><label><input type="checkbox" checked></input>Explicit paid checks
-passed: static OpenRouter TTS greeting generation, one typed Luna/TTS
-evening-slot turn, and one OpenRouter STT → Luna → OpenRouter TTS smoke
-with two decoder-accepted MP3 segments.</label></li>
-<li><label><input type="checkbox" checked></input>Fresh protected backup
-and deterministic restore/rollback tests passed; RC2 remains the
-rollback tag shown below.</label></li>
-<li><label><input type="checkbox" checked></input>Final evidence was
-recorded in <code>VALIDATION.md</code>; <code>MANIFEST.txt</code> and
-<code>CHECKSUMS.sha256</code> were regenerated separately.</label></li>
-<li><label><input type="checkbox"></input>WebKit playback and complete journey
-acceptance — later gate, unobserved.</label></li>
-<li><label><input type="checkbox"></input>Target VPS deploy, DNS, TLS/WSS, and
-target-host paid smokes — later gate, unobserved.</label></li>
+<p>No duplicate meeting table, external availability query, calendar
+event/invite, or CRM record is introduced.</p>
+<h2 id="evidence-status">Evidence status</h2>
+<p>Fresh RC4 results are recorded in <a href="VALIDATION.md"><code>../VALIDATION.md</code></a>. The RC3 report
+is preserved separately as historical evidence; it does not close RC4
+gates.</p>
+<ul>
+<li>Chromium desktop/mobile Playwright <strong>landing smoke</strong>
+passed through the shared harness. It covers responsive/pre-consent
+boundaries, not a full voice booking journey.</li>
+<li>Fixture-only eval baseline is 44/44 scenarios, 25/25 applicable
+booking-order checks, and 28/28 negative controls with zero provider
+calls; real Luna was not run.</li>
+<li>Migration/cutover wrappers and RC3→RC4 schema compatibility are
+covered by deterministic tests.</li>
+<li>The provider-independent repository suite is green: 715 tests across
+68 files; exact evidence is in <code>VALIDATION.md</code>.</li>
+<li>WebKit full journey is not run. Its browser binary is present, but
+this host lacks <code>libicu74</code>, <code>libxml2</code>, and
+<code>libflite1</code>.</li>
+<li>Full voice booking, owner-configured live Compose cutover, target
+VPS, public TLS/WSS, and target-host provider live booking remain
+explicit gates.</li>
 </ul>
 <p>The committed <a href="evidence/T30-observed-local-voice-smoke-2026-07-31.md">T30
-owner-observed artifact</a> remains historical evidence only; it does
-not close RC3 acceptance.</p>
+owner-observed artifact</a> and the preserved RC3 report remain
+historical evidence only.</p>
 <h2 id="prerequisites-and-secure-bootstrap">Prerequisites and secure
 bootstrap</h2>
 <ul>
@@ -6002,11 +6205,10 @@ bootstrap</h2>
 tooling.</li>
 <li>Docker Engine and Docker Compose v2 for the supported local
 runtime.</li>
-<li><code>ffmpeg</code> on <code>PATH</code> only for
-<code>scripts/local-voice-e2e-smoke.ts</code>; ordinary deployment does
-not need host decoding.</li>
-<li>A paid OpenRouter account/key and an authorized Codex subscription
-for real voice use.</li>
+<li><code>ffmpeg</code> only for the explicit integrated voice
+smoke.</li>
+<li>Paid OpenRouter access and authorized Codex subscription for real
+voice use.</li>
 </ul>
 <div class="sourceCode" id="cb43"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> .env.example .env</span>
 <span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a><span class="fu">chmod</span> 600 .env</span>
@@ -6015,113 +6217,97 @@ for real voice use.</li>
 <span id="cb43-5"><a href="#cb43-5" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/device-auth.sh</span></span>
 <span id="cb43-6"><a href="#cb43-6" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/deploy-local.sh</span></span>
 <span id="cb43-7"><a href="#cb43-7" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/ready</span></code></pre></div>
-<p>Open <a href="http://localhost:5173" class="uri">http://localhost:5173</a>. Device auth is interactive and
-persists in the fixed <code>botamin-codex-home</code> Docker volume.
-Protect Docker access and the underlying disk; do not include Codex
-<code>auth.json</code> in ordinary backups. The <code>CODEX_HOME</code>
-value in <code>.env</code> is for direct host Bun operation; Compose
-uses <code>/codex-home</code> backed by that named volume.</p>
-<p><code>deploy-local.sh</code> parses <code>.env</code> without shell
-evaluation, atomically materializes <code>.runtime/secrets</code> as
-directory mode <code>0700</code> and files mode <code>0600</code>,
-exports only the <code>*_FILE</code> paths, builds, migrates,
-force-recreates the app, starts Caddy, and waits for readiness. The
-files are mounted under <code>/run/secrets</code>; key values are not
-build args or browser configuration.</p>
-<h2 id="health-readiness-and-metrics">Health, readiness, and
-metrics</h2>
+<p>Open <a href="http://localhost:5173" class="uri">http://localhost:5173</a>. Device auth persists in the fixed
+<code>botamin-codex-home</code> volume. Protect Docker access and disk;
+ordinary DB backups do not include Codex auth.</p>
+<p><code>deploy-local.sh</code> does not change <code>.env</code>. It
+atomically materializes mode-<code>0600</code> file secrets,
+renders/scans Compose config, and builds the image. For an existing DB
+it creates a protected backup before schema mutation. A running app is
+then gracefully stopped with a 30-second timeout; a stopped existing DB
+is backed up through a no-migration one-off container. The replacement
+starts with <code>AUTO_MIGRATE=true</code>, so migrations run through
+the normal entrypoint before the server. Success requires bounded
+readiness followed by the PII-safe RC4 invariant check.</p>
+<h2 id="health-and-durable-invariant-checks">Health and durable
+invariant checks</h2>
 <div class="sourceCode" id="cb44"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose ps</span>
 <span id="cb44-2"><a href="#cb44-2" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/live</span>
 <span id="cb44-3"><a href="#cb44-3" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-fsS</span> http://localhost:5173/health/ready</span>
-<span id="cb44-4"><a href="#cb44-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb44-5"><a href="#cb44-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Safe aggregate metrics are intentionally direct-loopback only.</span></span>
-<span id="cb44-6"><a href="#cb44-6" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose exec <span class="at">-T</span> app bun <span class="at">-e</span> <span class="dt">\</span></span>
-<span id="cb44-7"><a href="#cb44-7" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;const r=await fetch(&#39;http://127.0.0.1:3000/metrics&#39;);if(!r.ok)process.exit(1);console.log(await r.text())&quot;</span></span></code></pre></div>
-<p>Caddy/public access to <code>/metrics</code> is denied. Readiness is
-dependency-aware and may return <code>503</code> for Codex auth/model,
-DB, prompt, voice configuration, capacity, or worker failures; health
-checks never spend OpenRouter usage.</p>
+<span id="cb44-4"><a href="#cb44-4" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose exec <span class="at">-T</span> app bun /app/ops/db.js verify-rc4</span></code></pre></div>
+<p><code>verify-rc4</code> checks SQLite integrity, exact
+<code>conversation_contexts</code> columns and cascade FK, migration
+check constraints, persisted JSON/revision/timestamp consistency,
+foreign keys, and absence of duplicate fact/evidence/virtual-meeting
+tables. It prints no row values.</p>
+<p>Safe aggregate metrics remain loopback-only:</p>
+<div class="sourceCode" id="cb45"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose exec <span class="at">-T</span> app bun <span class="at">-e</span> <span class="dt">\</span></span>
+<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;const r=await fetch(&#39;http://127.0.0.1:3000/metrics&#39;);if(!r.ok)process.exit(1);console.log(await r.text())&quot;</span></span></code></pre></div>
+<h2 id="migration-0004-and-rollback-boundary">Migration 0004 and
+rollback boundary</h2>
+<p><code>0004_conversation_contexts.sql</code> adds one empty context
+table to an RC3 database. It does not rewrite existing
+conversations/bookings, invent fact history, or create a separate
+virtual-meeting table. New/resumed RC4 sessions initialize their own
+durable draft through normal server behavior.</p>
+<p>Migrations are forward-only. Do not reverse <code>0004</code> in
+place. Image-only rollback is acceptable only after the owner proves the
+older image tolerates the forward schema. Otherwise stop the app and
+restore the matching protected pre-cutover backup. This handoff does not
+invent an immutable previous image name; supply an owner-retained image
+reference explicitly.</p>
+<div class="sourceCode" id="cb46"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Online backup while app is running</span></span>
+<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span></span>
+<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span> /data/backups/before-rc4.db</span>
+<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb46-5"><a href="#cb46-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Verified atomic restore; requires readiness before success</span></span>
+<span id="cb46-6"><a href="#cb46-6" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/restore.sh</span> /data/backups/before-rc4.db</span>
+<span id="cb46-7"><a href="#cb46-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb46-8"><a href="#cb46-8" aria-hidden="true" tabindex="-1"></a><span class="co"># Owner supplies a real retained immutable image reference.</span></span>
+<span id="cb46-9"><a href="#cb46-9" aria-hidden="true" tabindex="-1"></a><span class="va">PREVIOUS_IMAGE</span><span class="op">=</span>registry.example.invalid/botamin@sha256:OWNER_RETAINED_DIGEST</span>
+<span id="cb46-10"><a href="#cb46-10" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/rollback.sh</span> <span class="st">&quot;</span><span class="va">$PREVIOUS_IMAGE</span><span class="st">&quot;</span> /data/backups/before-rc4.db</span></code></pre></div>
+<p>The placeholder above is not a real image. Never use
+<code>docker compose down -v</code>. Keep each <code>.db</code> with its
+mode-<code>0600</code> <code>.sha256</code> sidecar. Repository wrappers
+checksum/protect backups but do not encrypt or automatically expire
+them; encrypted snapshots, retention, RPO/RTO, and restore drills are
+host-owner duties.</p>
 <h2 id="paid-smokes-explicit-opt-in-only">Paid smokes: explicit opt-in
 only</h2>
-<p>Deployment, tests, health checks, and this release procedure do not
-call paid providers. The proactive asset is regenerated only by an
-administrator’s explicit paid opt-in; this command overwrites the
-tracked static MP3 from fixed product copy, never visitor data, so
-inspect the result before committing:</p>
-<div class="sourceCode" id="cb45"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a><span class="va">BOTAMIN_GENERATE_PROACTIVE_GREETING</span><span class="op">=</span>1 <span class="dt">\</span></span>
-<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>  <span class="ex">bun</span> run scripts/generate-proactive-greeting.ts</span></code></pre></div>
-<p>This is not a deploy/startup/visitor command. Against an
-already-ready local server, an owner may deliberately run the integrated
-smoke; it spends OpenRouter STT/TTS and Codex subscription usage:</p>
-<div class="sourceCode" id="cb46"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="va">BOTAMIN_EXTERNAL_VOICE_E2E</span><span class="op">=</span>1 <span class="ex">bun</span> run scripts/local-voice-e2e-smoke.ts <span class="dt">\</span></span>
-<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--server-url</span> http://localhost:5173 <span class="dt">\</span></span>
-<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--origin</span> http://localhost:5173 <span class="dt">\</span></span>
-<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--fixture-turns</span> 1</span></code></pre></div>
-<p><code>ffmpeg</code> is mandatory for this non-browser decoder check.
-Use real bounded PCM files rather than <code>--fixture-turns</code> when
-synthetic input is not appropriate. Isolated STT/TTS image probes are
-also paid; export the deployed file paths first and run them only with
-explicit approval:</p>
-<div class="sourceCode" id="cb47"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="va">compose_secret_operation</span><span class="op">=</span>paid-smoke</span>
-<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a><span class="bu">.</span> ./scripts/compose-secret-files.sh</span>
-<span id="cb47-3"><a href="#cb47-3" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh stt</span>
-<span id="cb47-4"><a href="#cb47-4" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh tts</span></code></pre></div>
-<h2 id="backup-restore-rotation-stop-and-rollback">Backup, restore,
-rotation, stop, and rollback</h2>
-<div class="sourceCode" id="cb48"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Online SQLite VACUUM INTO backup plus protected checksum sidecar</span></span>
-<span id="cb48-2"><a href="#cb48-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span></span>
-<span id="cb48-3"><a href="#cb48-3" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/backup.sh</span> /data/backups/before-release.db</span>
-<span id="cb48-4"><a href="#cb48-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb48-5"><a href="#cb48-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Restore verifies permissions, checksum, integrity, migration, and readiness</span></span>
-<span id="cb48-6"><a href="#cb48-6" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/restore.sh</span> /data/backups/before-release.db</span>
-<span id="cb48-7"><a href="#cb48-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb48-8"><a href="#cb48-8" aria-hidden="true" tabindex="-1"></a><span class="co"># Stop while retaining named volumes</span></span>
-<span id="cb48-9"><a href="#cb48-9" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose stop</span>
-<span id="cb48-10"><a href="#cb48-10" aria-hidden="true" tabindex="-1"></a><span class="co"># Remove containers/network while retaining named volumes</span></span>
-<span id="cb48-11"><a href="#cb48-11" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose down</span>
-<span id="cb48-12"><a href="#cb48-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb48-13"><a href="#cb48-13" aria-hidden="true" tabindex="-1"></a><span class="co"># Keep RC2 as the existing/pullable immutable rollback image for RC3.</span></span>
-<span id="cb48-14"><a href="#cb48-14" aria-hidden="true" tabindex="-1"></a><span class="co"># Use the exact immutable registry reference/digest retained by the owner if available.</span></span>
-<span id="cb48-15"><a href="#cb48-15" aria-hidden="true" tabindex="-1"></a><span class="va">PREVIOUS_IMAGE</span><span class="op">=</span>botamin-voice:0.5.0-local-rc.2</span>
-<span id="cb48-16"><a href="#cb48-16" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/rollback.sh</span> <span class="st">&quot;</span><span class="va">$PREVIOUS_IMAGE</span><span class="st">&quot;</span></span>
-<span id="cb48-17"><a href="#cb48-17" aria-hidden="true" tabindex="-1"></a><span class="ex">./scripts/rollback.sh</span> <span class="st">&quot;</span><span class="va">$PREVIOUS_IMAGE</span><span class="st">&quot;</span> /data/backups/before-release.db</span></code></pre></div>
-<p>Never use <code>docker compose down -v</code>. SQLite migrations are
-forward-only; use the matching pre-release backup if an older image
-cannot read the current schema.</p>
-<p>For OpenRouter/webhook key rotation: revoke or schedule revocation at
-the provider, replace the value in mode-<code>0600</code>
-<code>.env</code>, then rerun <code>./scripts/deploy-local.sh</code>.
-Its forced app recreation remounts the new secret inode. For Codex auth
-refresh, stop the app, rerun <code>./scripts/device-auth.sh</code>, then
-rerun <code>./scripts/deploy-local.sh</code>. Never print old/new values
-or copy auth into the repository.</p>
-<h2 id="known-limitations-and-next-gates">Known limitations and next
-gates</h2>
+<p>Deployment, tests, readiness, and schema verification do not spend
+provider usage. Static greeting regeneration is administrator-only and
+overwrites a tracked asset, so inspect it before commit:</p>
+<div class="sourceCode" id="cb47"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="va">BOTAMIN_GENERATE_PROACTIVE_GREETING</span><span class="op">=</span>1 <span class="dt">\</span></span>
+<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a>  <span class="ex">bun</span> run scripts/generate-proactive-greeting.ts</span></code></pre></div>
+<p>Against an already-ready local server, an owner may deliberately run
+the integrated voice smoke:</p>
+<div class="sourceCode" id="cb48"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a><span class="va">BOTAMIN_EXTERNAL_VOICE_E2E</span><span class="op">=</span>1 <span class="ex">bun</span> run scripts/local-voice-e2e-smoke.ts <span class="dt">\</span></span>
+<span id="cb48-2"><a href="#cb48-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--server-url</span> http://localhost:5173 <span class="dt">\</span></span>
+<span id="cb48-3"><a href="#cb48-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--origin</span> http://localhost:5173 <span class="dt">\</span></span>
+<span id="cb48-4"><a href="#cb48-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--fixture-turns</span> 1</span></code></pre></div>
+<p>This is not a browser full journey and does not close WebKit or
+target-host gates. Isolated paid image probes likewise require explicit
+approval:</p>
+<div class="sourceCode" id="cb49"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb49-1"><a href="#cb49-1" aria-hidden="true" tabindex="-1"></a><span class="va">compose_secret_operation</span><span class="op">=</span>paid-smoke</span>
+<span id="cb49-2"><a href="#cb49-2" aria-hidden="true" tabindex="-1"></a><span class="bu">.</span> ./scripts/compose-secret-files.sh</span>
+<span id="cb49-3"><a href="#cb49-3" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh stt</span>
+<span id="cb49-4"><a href="#cb49-4" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose run <span class="at">--rm</span> <span class="at">-e</span> AUTO_MIGRATE=false app /app/scripts/run-openrouter-smoke.sh tts</span></code></pre></div>
+<h2 id="explicit-remaining-gates">Explicit remaining gates</h2>
 <ul>
-<li>STT is phrase-level and nonstreaming at the provider boundary:
-transcription starts after <code>audio.commit</code> and one complete
-bounded WAV.</li>
-<li>T30 local synthetic timings prove functional sequencing only; they
-are not a benchmark or target-host SLO.</li>
-<li>WebKit complete-MP3 playback and journey acceptance remain
-unobserved.</li>
-<li>Target VPS resource behavior, DNS, public TLS/WSS, and target-host
-provider smokes remain unobserved.</li>
-<li>The proactive greeting is a committed static product MP3. Browser
-autoplay remains policy-dependent; failure must leave the explicit
-<code>Включить приветствие</code> control. Regeneration is
-paid/admin-only and not a visitor-runtime action.</li>
-<li>The booking is an internal SQLite record plus notifier outbox event.
-The scheduler always returns two current alternatives, not all global
-availability; it excludes committed starts, but no real calendar event,
-external availability check, CRM record, or meeting invitation is
-created.</li>
-<li>Optional qualification is complete only with both monthly inbound
-leads and integer sales-manager count. Skip/partial/failure never
-removes the booking.</li>
-<li>OpenRouter model/voice availability, paid rates, Codex subscription
-limits, and plan suitability are runtime/owner checks, not release
-guarantees.</li>
+<li>WebKit complete-MP3 and full voice booking journey after installing
+<code>libicu74</code>, <code>libxml2</code>, and <code>libflite1</code>
+on a compatible host.</li>
+<li>Full Chromium voice booking journey; desktop/mobile landing smoke is
+not sufficient.</li>
+<li>Owner-configured live local Compose cutover/restore drill with
+retained backup path.</li>
+<li>Clean target-VPS deploy and resource behavior.</li>
+<li>Public DNS, TLS, and WSS.</li>
+<li>Explicitly approved target-host OpenRouter STT/TTS + Codex Luna live
+booking through final widget.</li>
+<li>Target-host latency/load profile and owner review of provider rates,
+model availability, subscription capacity, privacy copy, backup
+encryption/retention, and commercial operation.</li>
 </ul>
 <div class="page-break">
 

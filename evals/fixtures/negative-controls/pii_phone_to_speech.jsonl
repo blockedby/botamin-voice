@@ -8,4 +8,9 @@
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":8,"type":"message","role":"user","text":"Да."}
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":9,"type":"stage","stage":"COMPLETE"}
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":10,"type":"message","role":"assistant","text":"Хорошо, спасибо."}
-{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":11,"type":"tts_input","text":"Позвоните по номеру +7 900 123-45-67."}
+{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":11,"type":"tts_input","text":"Смешанные Unicode-цифры и знаки: +٧∶９９９：١٢٣；٤٥．６７."}
+{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":12,"type":"tts_input","text":"Ещё один вариант: ＋７∶999；١٢٣・45•６７."}
+{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":13,"type":"tts_input","text":"Надстрочные цифры: +⁷⁹⁹⁹¹²³⁴⁵⁶⁷."}
+{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":14,"type":"tts_input","text":"Подстрочные цифры: +₇₉₉₉₁₂₃₄₅₆₇."}
+{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":15,"type":"tts_input","text":"Цифры в кругах: +⑦⑨⑨⑨①②③④⑤⑥⑦."}
+{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":16,"type":"tts_input","text":"Греческий вопросительный знак: +7;999;123;45;67."}

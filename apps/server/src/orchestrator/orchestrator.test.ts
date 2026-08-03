@@ -18,6 +18,7 @@ import type {
 	TtsPort,
 	TtsSynthesisRequest,
 } from "@botamin/contracts";
+import { containsPhoneLikeText } from "@botamin/contracts";
 import {
 	createDeterministicMp3Fixture,
 	createTestBookingContacts,
@@ -28,11 +29,15 @@ import {
 	FakeStt,
 	FakeTts,
 } from "../../../../packages/test-fixtures/src";
-import { generateCandidateMeetingSlots } from "../domain/booking";
+import {
+	generateCandidateMeetingSlots,
+	generateMeetingSlotProposal,
+} from "../domain/booking";
 import {
 	ConversationOrchestrator,
 	type OrchestratorEvent,
 } from "./orchestrator";
+import { prepareSpeech, type SpeechChunkerOptions } from "./speech";
 import {
 	type ConversationState,
 	createInitialConversationState,
@@ -155,6 +160,7 @@ function fixture(
 		tts?: TtsPort | null;
 		initialState?: ConversationState;
 		now?: () => Date;
+		speechChunker?: SpeechChunkerOptions;
 	} = {},
 ) {
 	const stt = options.stt ?? new FakeStt({ text: "Да, сохраните данные" });
@@ -170,6 +176,7 @@ function fixture(
 		tts,
 		initialState: options.initialState ?? collectionState(),
 		...(options.now ? { now: options.now } : {}),
+		...(options.speechChunker ? { speechChunker: options.speechChunker } : {}),
 	});
 	return { orchestrator, stt, brain, bookings, tts };
 }
@@ -506,6 +513,250 @@ describe("atomic transcript intake", () => {
 				rejectedTimeOfDayPreferences: [],
 			});
 		}
+	});
+
+	test("typed and spoken exact Moscow requests refresh the same candidates before Luna", async () => {
+		const now = new Date("2026-08-02T09:00:00.000Z");
+		const text = "4 августа в 11";
+		const contexts: BrainTurnInput["schedulingContext"][] = [];
+		for (const spoken of [false, true]) {
+			const brain = new FakeBrain([]);
+			const harness = fixture({
+				brain,
+				...(spoken ? { stt: new FakeStt({ text }) } : {}),
+				bookings: new FakeBookingService({
+					candidateMeetingSlots: (
+						preference = "none",
+						rejected = [],
+						request,
+					) => {
+						if (!request) throw new Error("missing concrete request input");
+						return generateMeetingSlotProposal(
+							new Date(request.currentInstant),
+							request.userText,
+							[],
+							preference,
+							rejected,
+						).slots;
+					},
+				}),
+				now: () => now,
+			});
+			if (spoken) {
+				await collect(harness.orchestrator.acceptAudioCommit(commit()));
+			} else {
+				await collect(
+					harness.orchestrator.acceptTextSubmit({
+						turnId: turn1,
+						generationId: generation1,
+						text,
+						knownFacts: facts,
+					}),
+				);
+			}
+			const scheduling = brain.turns[0]?.schedulingContext;
+			if (!scheduling) throw new Error("missing scheduling context");
+			contexts.push(scheduling);
+		}
+
+		expect(contexts[0]).toEqual(contexts[1]);
+		expect(contexts[0]).toMatchObject({
+			currentInstant: "2026-08-02T09:00:00.000Z",
+			timeOfDayPreference: "none",
+			rejectedTimeOfDayPreferences: [],
+			concreteRequestInterpretation: {
+				kind: "included",
+				requestedMoscowLocalDate: "2026-08-04",
+				requestedMoscowLocalTime: "11:00",
+				reason: "exact_request_included",
+				candidateIndex: 1,
+			},
+		});
+		expect(
+			contexts[0]?.candidateMeetingSlots.map(
+				(candidate) => candidate.meetingSlot.startAt,
+			),
+		).toEqual(["2026-08-04T07:40:00.000Z", "2026-08-04T08:00:00.000Z"]);
+	});
+
+	test("occupied exact time stays on date and a full requested date rolls forward", async () => {
+		const now = new Date("2026-08-02T09:00:00.000Z");
+		const moscowStartAt = (date: string, minute: number): string => {
+			const [year, month, day] = date.split("-").map(Number);
+			return new Date(
+				Date.UTC(
+					year as number,
+					(month as number) - 1,
+					day,
+					Math.floor(minute / 60) - 3,
+					minute % 60,
+				),
+			).toISOString();
+		};
+		const occupiedCases = [
+			{
+				occupied: [moscowStartAt("2026-08-04", 11 * 60)],
+				expectedStarts: [
+					moscowStartAt("2026-08-04", 10 * 60 + 40),
+					moscowStartAt("2026-08-04", 11 * 60 + 20),
+				],
+				expectedReason: "exact_time_not_included",
+			},
+			{
+				occupied: Array.from({ length: 25 }, (_, index) =>
+					moscowStartAt("2026-08-04", 9 * 60 + index * 20),
+				),
+				expectedStarts: [
+					moscowStartAt("2026-08-05", 10 * 60 + 40),
+					moscowStartAt("2026-08-05", 11 * 60),
+				],
+				expectedReason: "requested_date_unsatisfied",
+			},
+		] as const;
+
+		for (const testCase of occupiedCases) {
+			const brain = new FakeBrain([]);
+			const { orchestrator } = fixture({
+				brain,
+				bookings: new FakeBookingService({
+					candidateMeetingSlots: (
+						preference = "none",
+						rejected = [],
+						request,
+					) => {
+						if (!request) throw new Error("missing concrete request input");
+						return generateMeetingSlotProposal(
+							new Date(request.currentInstant),
+							request.userText,
+							testCase.occupied,
+							preference,
+							rejected,
+						).slots;
+					},
+				}),
+				now: () => now,
+			});
+			await collect(
+				orchestrator.acceptTextSubmit({
+					turnId: turn1,
+					generationId: generation1,
+					text: "4 августа в 11",
+					knownFacts: facts,
+				}),
+			);
+
+			const scheduling = brain.turns[0]?.schedulingContext;
+			expect(
+				scheduling?.candidateMeetingSlots.map(
+					(candidate) => candidate.meetingSlot.startAt,
+				),
+			).toEqual([...testCase.expectedStarts]);
+			expect(scheduling?.concreteRequestInterpretation).toEqual({
+				kind: "not_included",
+				requestedMoscowLocalDate: "2026-08-04",
+				requestedMoscowLocalTime: "11:00",
+				reason: testCase.expectedReason,
+				candidateIndex: null,
+			});
+		}
+	});
+
+	test("same-day and invalid concrete requests clear stale bands without becoming broad preferences", async () => {
+		const now = new Date("2026-08-02T09:00:00.000Z");
+		for (const [text, reason] of [
+			["сегодня в 11:00", "same_day"],
+			["4 августа в 11:10", "off_grid"],
+		] as const) {
+			const requested: MeetingTimePreference[] = [];
+			const brain = new FakeBrain([], []);
+			const { orchestrator } = fixture({
+				brain,
+				bookings: new FakeBookingService({
+					candidateMeetingSlots: (
+						preference = "none",
+						rejected = [],
+						request,
+					) => {
+						requested.push(preference);
+						return request
+							? generateMeetingSlotProposal(
+									new Date(request.currentInstant),
+									request.userText,
+									[],
+									preference,
+									rejected,
+								).slots
+							: generateCandidateMeetingSlots(now, [], preference, rejected);
+					},
+				}),
+				now: () => now,
+			});
+			await collect(
+				orchestrator.acceptTextSubmit({
+					turnId: turn1,
+					generationId: generation1,
+					text: "Давайте вечером",
+					knownFacts: facts,
+				}),
+			);
+			await collect(
+				orchestrator.acceptTextSubmit({
+					turnId: turn2,
+					generationId: generation2,
+					text,
+					knownFacts: facts,
+				}),
+			);
+
+			expect(requested).toEqual(["evening", "none"]);
+			expect(brain.turns[1]?.schedulingContext).toMatchObject({
+				timeOfDayPreference: "none",
+				rejectedTimeOfDayPreferences: [],
+				concreteRequestInterpretation: {
+					kind: "not_included",
+					reason,
+					candidateIndex: null,
+				},
+			});
+			expect(
+				brain.turns[1]?.schedulingContext.candidateMeetingSlots.map(
+					(candidate) => candidate.meetingSlot.startAt,
+				),
+			).toEqual(["2026-08-03T06:00:00.000Z", "2026-08-03T13:00:00.000Z"]);
+		}
+	});
+
+	test("a turn without a concrete mention retains the current broad preference", async () => {
+		const now = new Date("2026-08-02T09:00:00.000Z");
+		const brain = new FakeBrain([], []);
+		const { orchestrator } = fixture({
+			brain,
+			bookings: new FakeBookingService({
+				candidateMeetingSlots: (preference = "none", rejected = []) =>
+					generateCandidateMeetingSlots(now, [], preference, rejected),
+			}),
+			now: () => now,
+		});
+		for (const [turnId, generationId, text] of [
+			[turn1, generation1, "Давайте утром"],
+			[turn2, generation2, "Это подходит"],
+		] as const) {
+			await collect(
+				orchestrator.acceptTextSubmit({
+					turnId,
+					generationId,
+					text,
+					knownFacts: facts,
+				}),
+			);
+		}
+
+		expect(
+			brain.turns.map((turn) => turn.schedulingContext.timeOfDayPreference),
+		).toEqual(["morning", "morning"]);
+		expect(
+			brain.turns[1]?.schedulingContext.concreteRequestInterpretation,
+		).toEqual({ kind: "none" });
 	});
 
 	test("a later out-of-hours preference refreshes Luna data with evening policy slots", async () => {
@@ -967,7 +1218,6 @@ describe("terminal and transport lifecycle fencing", () => {
 			booking,
 			contactConsentConfirmed: true,
 			bookingConfirmationDelivered: true,
-			qualificationConsent: "granted",
 		};
 		const { orchestrator } = fixture({
 			stt,
@@ -1013,14 +1263,15 @@ describe("booking and tool timeline", () => {
 		expect(bookings.domainEvents.map((event) => event.type)).toEqual([
 			"booking.created",
 		]);
-		expect(spoken).toContain("Всё получила и зафиксировала");
-		expect(spoken).toContain("Календарная встреча пока не создана");
+		expect(spoken).toContain("Внутренняя виртуальная встреча создана");
+		expect(spoken).toContain(
+			"Внешнее календарное событие и приглашение не создавались",
+		);
 		expect(spoken).not.toMatch(/CRM|объём лидов/u);
 		expect(orchestrator.state).toMatchObject({
-			stage: "BOOKED",
+			stage: "POST_BOOKING_QUALIFICATION",
 			booking: { status: "booked" },
 			bookingConfirmationDelivered: true,
-			qualificationConsent: "unknown",
 		});
 		expect((brain as FakeBrain).turns).toHaveLength(1);
 		expect(tts.inputs[0]).toMatchObject({
@@ -1029,40 +1280,20 @@ describe("booking and tool timeline", () => {
 		});
 	});
 
-	test("booking confirmation asks exact consent and explicit consent deterministically asks leads first", async () => {
+	test("booking confirmation starts by asking only the first missing qualification field", async () => {
 		const brain = new FakeBrain(bookingScript());
 		const { orchestrator } = fixture({ brain });
 		const bookingEvents = await collect(
 			orchestrator.acceptAudioCommit(commit()),
 		);
-		expect(
-			bookingEvents
-				.filter((event) => event.type === "text.delta")
-				.map((event) => event.text)
-				.join(" "),
-		).toContain("Можно задать два коротких вопроса?");
-
-		const consentEvents = await collect(
-			orchestrator.acceptTextSubmit({
-				turnId: turn2,
-				generationId: generation2,
-				text: "Да, можно.",
-				knownFacts: facts,
-			}),
-		);
+		const confirmation = bookingEvents
+			.filter((event) => event.type === "text.delta")
+			.map((event) => event.text)
+			.join(" ");
+		expect(confirmation).toContain("Сколько входящих лидов приходит за месяц?");
+		expect(confirmation).not.toContain("Можно задать два коротких вопроса?");
 		expect(brain.turns).toHaveLength(1);
 		expect(orchestrator.state.stage).toBe("POST_BOOKING_QUALIFICATION");
-		expect(consentEvents).toContainEqual(
-			expect.objectContaining({
-				type: "state.changed",
-				reason: "explicit_qualification_consent",
-			}),
-		);
-		expect(
-			consentEvents
-				.filter((event) => event.type === "text.delta")
-				.map((event) => event.text),
-		).toEqual(["Сколько входящих лидов приходит за месяц?"]);
 	});
 
 	for (const scenario of [
@@ -1104,7 +1335,6 @@ describe("booking and tool timeline", () => {
 				booking,
 				contactConsentConfirmed: true,
 				bookingConfirmationDelivered: true,
-				qualificationConsent: "granted",
 			};
 			const brain = new FakeBrain([
 				{
@@ -1220,7 +1450,6 @@ describe("booking and tool timeline", () => {
 				booking: partialBooking,
 				contactConsentConfirmed: true,
 				bookingConfirmationDelivered: true,
-				qualificationConsent: "granted",
 			},
 		});
 		const updatesBeforeRefusal = partialBookings.domainEvents.length;
@@ -1337,8 +1566,10 @@ describe("booking and tool timeline", () => {
 		expect(
 			events.map((event) => event.type).indexOf("booking.committed"),
 		).toBeLessThan(events.map((event) => event.type).indexOf("text.delta"));
-		expect(spoken).toContain("Всё получила и зафиксировала");
-		expect(spoken).not.toContain("календарь создан");
+		expect(spoken).toContain("Внутренняя виртуальная встреча создана");
+		expect(spoken).toContain(
+			"Внешнее календарное событие и приглашение не создавались",
+		);
 		expect(brain.turns).toHaveLength(1);
 	});
 
@@ -1353,7 +1584,6 @@ describe("booking and tool timeline", () => {
 			booking,
 			contactConsentConfirmed: true,
 			bookingConfirmationDelivered: true,
-			qualificationConsent: "granted",
 		};
 		const brain = new FakeBrain([
 			{
@@ -1510,7 +1740,7 @@ describe("booking and tool timeline", () => {
 describe("speech, TTS degradation, and generation fencing", () => {
 	test("PII remains visible but sanitized bounded text alone enters TTS", async () => {
 		const visible =
-			"Напишите на name@example.com, в Telegram @private_sales или +7 (999) 123-45-67. Подробности: https://example.com/path.";
+			"Напишите на name@example.com, в Telegram @private_sales или +7:999:123:45:67 и +7•999·123/45,67. Подробности: https://example.com/path.";
 		const brain = new FakeBrain(speechScript(visible));
 		const tts = new FakeTts();
 		const { orchestrator } = fixture({
@@ -1526,6 +1756,433 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			expect(input.text.length).toBeLessThanOrEqual(240);
 			expect(input.text).not.toMatch(/@|999|example\.com|https/u);
 		}
+	});
+
+	test("keeps every allowed numeric form intact at provider-bound delta and hard boundaries", async () => {
+		const controls = [
+			"Обычная вводная Дело № 1234567.",
+			"Дата 10.08.2026.",
+			"Время 16:00.",
+			"Доля 1234567 %.",
+			"Значение 1234567,89.",
+			"Диапазон 1000000 - 2000000.",
+			"Обработано 1 000 000 заявок.",
+		] as const;
+		for (const control of controls) {
+			const firstDigit = control.search(/\p{N}/u);
+			if (firstDigit <= 0) throw new Error("numeric control is malformed");
+			const hardPadding = "текст ".repeat(
+				Math.max(1, Math.ceil((116 - firstDigit) / 6)),
+			);
+			const hardSource = `${hardPadding}${control}`;
+			const scenarios = [
+				{ name: "trailing", source: control, deltas: [control] },
+				{
+					name: "delta",
+					source: control,
+					deltas: [control.slice(0, firstDigit), control.slice(firstDigit)],
+				},
+				{ name: "hard", source: hardSource, deltas: [hardSource] },
+			] as const;
+			for (const scenario of scenarios) {
+				const brain = new FakeBrain([
+					...scenario.deltas.map(
+						(text): BrainDelta => ({
+							type: "speech.delta",
+							turnId: turn1,
+							generationId: generation1,
+							text,
+						}),
+					),
+					{
+						type: "turn.completed",
+						turnId: turn1,
+						generationId: generation1,
+					},
+				]);
+				const tts = new FakeTts();
+				const { orchestrator } = fixture({
+					brain,
+					tts,
+					initialState: valueState(),
+					speechChunker: {
+						firstMinimum: 1,
+						firstTarget: 20,
+						softTarget: 120,
+						hardLimit: 120,
+					},
+				});
+				const events = await collect(orchestrator.acceptAudioCommit(commit()));
+				const providerBound = tts.inputs.map((input) => input.text).join(" ");
+				expect(
+					events.find((event) => event.type === "text.done"),
+				).toMatchObject({ text: scenario.source });
+				expect(providerBound, `${control} at ${scenario.name}`).toBe(
+					scenario.source,
+				);
+				expect(providerBound).not.toContain("контакт скрыт");
+				expect(tts.inputs.every((input) => input.text.length <= 120)).toBe(
+					true,
+				);
+				if (scenario.name === "hard") {
+					expect(tts.inputs.length).toBeGreaterThan(1);
+				}
+			}
+		}
+	});
+
+	test("never reconstructs the reviewer Unicode phone across provider calls or retries", async () => {
+		const source = "Телефон +⁷.⁹⁹⁹.¹²³.⁴⁵.⁶⁷";
+		const twoDeltaSplits = Array.from(
+			{ length: source.length - 1 },
+			(_, index) => [source.slice(0, index + 1), source.slice(index + 1)],
+		);
+		const permutations: readonly (readonly string[])[] = [
+			[source],
+			...twoDeltaSplits,
+			["Телефон +⁷.", "⁹⁹⁹.", "¹²³.", "⁴⁵.", "⁶⁷"],
+			["Телефон ", "+", "⁷", ".", "⁹⁹", "⁹.¹", "²³.⁴⁵.⁶", "⁷"],
+			[...source],
+		];
+
+		for (const deltas of permutations) {
+			const brain = new FakeBrain([
+				...deltas.map(
+					(text): BrainDelta => ({
+						type: "speech.delta",
+						turnId: turn1,
+						generationId: generation1,
+						text,
+					}),
+				),
+				{ type: "turn.completed", turnId: turn1, generationId: generation1 },
+			]);
+			const tts = new RetryTts();
+			const { orchestrator } = fixture({
+				brain,
+				tts,
+				initialState: valueState(),
+				speechChunker: {
+					firstMinimum: 1,
+					firstTarget: 20,
+					softTarget: 120,
+					hardLimit: 120,
+				},
+			});
+			const events = await collect(orchestrator.acceptAudioCommit(commit()));
+			const providerBound = tts.inputs.map((input) => input.text).join(" ");
+			const normalizedDigits = providerBound
+				.normalize("NFKC")
+				.replace(/\D/gu, "");
+
+			expect(events.find((event) => event.type === "text.done")).toMatchObject({
+				text: source,
+			});
+			expect(tts.inputs.length).toBeGreaterThan(0);
+			expect(tts.attempts).toBe(tts.inputs.length * 2);
+			expect(tts.inputs.every((input) => input.text.length <= 120)).toBe(true);
+			expect(providerBound).toContain("контакт скрыт");
+			expect(providerBound).not.toContain(source);
+			expect(containsPhoneLikeText(providerBound)).toBe(false);
+			expect(normalizedDigits).not.toMatch(/\d{8}/u);
+		}
+	});
+
+	test("actual TTS speaks an exact committed phone atomically across model deltas", async () => {
+		const approvedPhone = "+79555678955";
+		const bookings = new FakeBookingService();
+		await bookings.createBooking({
+			...bookingInput,
+			contacts: [
+				{ channel: "email", value: "fixture@example.com" },
+				{ channel: "phone", value: approvedPhone },
+			],
+		});
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const visible = "Телефон +7 955 567-89-55.";
+		const brain = new FakeBrain([
+			...["Телефон +7 ", "955 ", "567-", "89-", "55."].map(
+				(text): BrainDelta => ({
+					type: "speech.delta",
+					turnId: turn2,
+					generationId: generation2,
+					text,
+				}),
+			),
+			{ type: "turn.completed", turnId: turn2, generationId: generation2 },
+		]);
+		const tts = new FakeTts();
+		const { orchestrator } = fixture({
+			bookings,
+			brain,
+			tts,
+			initialState: {
+				...createInitialConversationState(),
+				stage: "POST_BOOKING_QUALIFICATION",
+				booking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered: true,
+			},
+			speechChunker: {
+				firstMinimum: 1,
+				firstTarget: 20,
+				softTarget: 120,
+				hardLimit: 120,
+			},
+		});
+		const events = await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn2,
+				generationId: generation2,
+				text: "Продолжайте.",
+				knownFacts: facts,
+			}),
+		);
+		expect(events.find((event) => event.type === "text.done")).toMatchObject({
+			text: visible,
+		});
+		expect(tts.inputs).toHaveLength(1);
+		expect(tts.inputs[0]?.text).toBe(
+			"Телефон плюс семь, девятьсот пятьдесят пять, пятьсот шестьдесят семь, восемьдесят девять, пятьдесят пять.",
+		);
+		expect(tts.inputs[0]?.text).not.toMatch(/7955|контакт скрыт/u);
+	});
+
+	test("recording TTS keeps approved contacts atomic across provider placements", async () => {
+		const approvedContacts = [
+			{ channel: "email", value: "atomic.contact@example.com" },
+			{ channel: "phone", value: "+79555678955" },
+			{ channel: "telegram", value: "@Atomic_Sales" },
+		] as const;
+		const bookings = new FakeBookingService();
+		await bookings.createBooking({
+			...bookingInput,
+			contacts: [...approvedContacts],
+		});
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const initialState: ConversationState = {
+			...createInitialConversationState(),
+			stage: "POST_BOOKING_QUALIFICATION",
+			booking,
+			contactConsentConfirmed: true,
+			bookingConfirmationDelivered: true,
+		};
+		const broadPlacements = Array.from(
+			{ length: 14 },
+			(_, index) => index * 20,
+		);
+		for (const contact of approvedContacts) {
+			const contactOnly = prepareSpeech(contact.value, {
+				contactProcessing: true,
+				approvedContacts: [contact],
+			}).spokenText;
+			const placements =
+				contact.channel === "phone"
+					? [
+							...new Set([
+								...broadPlacements,
+								...Array.from({ length: 71 }, (_, index) => 140 + index),
+							]),
+						]
+					: broadPlacements;
+			for (const position of placements) {
+				const prefix = "обычная фраза "
+					.repeat(Math.ceil((position + 1) / "обычная фраза ".length))
+					.slice(0, position);
+				const visible = `${prefix}${prefix ? " " : ""}${contact.value}, затем продолжение ответа.`;
+				const tts = new FakeTts();
+				const { orchestrator } = fixture({
+					bookings,
+					brain: new FakeBrain(speechScript(visible, turn2, generation2)),
+					tts,
+					initialState,
+				});
+				await collect(
+					orchestrator.acceptTextSubmit({
+						turnId: turn2,
+						generationId: generation2,
+						text: "Продолжайте.",
+						knownFacts: facts,
+					}),
+				);
+				expect(
+					tts.inputs.filter((input) => input.text.includes(contactOnly)),
+					`${contact.channel} at ${position}`,
+				).toHaveLength(1);
+				expect(tts.inputs.every((input) => [...input.text].length <= 240)).toBe(
+					true,
+				);
+			}
+		}
+	});
+
+	test("recording TTS preserves approved contacts across every model split", async () => {
+		const approvedContacts = [
+			{ channel: "email", value: "atomic.contact@example.com" },
+			{ channel: "phone", value: "+79555678955" },
+			{ channel: "telegram", value: "@Atomic_Sales" },
+		] as const;
+		const bookings = new FakeBookingService();
+		await bookings.createBooking({
+			...bookingInput,
+			contacts: [...approvedContacts],
+		});
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		for (const contact of approvedContacts) {
+			const contactOnly = prepareSpeech(contact.value, {
+				contactProcessing: true,
+				approvedContacts: [contact],
+			}).spokenText;
+			for (let split = 1; split < contact.value.length; split += 1) {
+				const prefix = "обычная вводная ".repeat(11);
+				const brain = new FakeBrain([
+					{
+						type: "speech.delta",
+						turnId: turn2,
+						generationId: generation2,
+						text: `${prefix}${contact.value.slice(0, split)}`,
+					},
+					{
+						type: "speech.delta",
+						turnId: turn2,
+						generationId: generation2,
+						text: `${contact.value.slice(split)}. Продолжение.`,
+					},
+					{ type: "turn.completed", turnId: turn2, generationId: generation2 },
+				]);
+				const tts = new FakeTts();
+				const { orchestrator } = fixture({
+					bookings,
+					brain,
+					tts,
+					initialState: {
+						...createInitialConversationState(),
+						stage: "POST_BOOKING_QUALIFICATION",
+						booking,
+						contactConsentConfirmed: true,
+						bookingConfirmationDelivered: true,
+					},
+				});
+				await collect(
+					orchestrator.acceptTextSubmit({
+						turnId: turn2,
+						generationId: generation2,
+						text: "Продолжайте.",
+						knownFacts: facts,
+					}),
+				);
+				expect(
+					tts.inputs.filter((input) => input.text.includes(contactOnly)),
+					`${contact.channel} split ${split}`,
+				).toHaveLength(1);
+			}
+		}
+	});
+
+	test("recording retry TTS keeps multiple approved contacts ordered and atomic", async () => {
+		const approvedContacts = [
+			{ channel: "email", value: "atomic.contact@example.com" },
+			{ channel: "phone", value: "+79555678955" },
+			{ channel: "telegram", value: "@Atomic_Sales" },
+		] as const;
+		const bookings = new FakeBookingService();
+		await bookings.createBooking({
+			...bookingInput,
+			contacts: [...approvedContacts],
+		});
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const visible = `${"вводная ".repeat(31)}${approvedContacts[0].value}; телефон ${approvedContacts[1].value}, Telegram ${approvedContacts[2].value}. ${"суффикс ".repeat(20)}`;
+		const tts = new RetryTts();
+		const { orchestrator } = fixture({
+			bookings,
+			brain: new FakeBrain(speechScript(visible, turn2, generation2)),
+			tts,
+			initialState: {
+				...createInitialConversationState(),
+				stage: "POST_BOOKING_QUALIFICATION",
+				booking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered: true,
+			},
+		});
+		await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn2,
+				generationId: generation2,
+				text: "Продолжайте.",
+				knownFacts: facts,
+			}),
+		);
+		const spokenContacts = approvedContacts.map(
+			(contact) =>
+				prepareSpeech(contact.value, {
+					contactProcessing: true,
+					approvedContacts: [contact],
+				}).spokenText,
+		);
+		for (const spokenContact of spokenContacts) {
+			expect(
+				tts.inputs.filter((input) => input.text.includes(spokenContact)),
+			).toHaveLength(1);
+		}
+		const providerText = tts.inputs.map((input) => input.text).join(" ");
+		expect(
+			spokenContacts.map((contact) => providerText.indexOf(contact)),
+		).toEqual(
+			[...spokenContacts]
+				.map((contact) => providerText.indexOf(contact))
+				.sort((left, right) => left - right),
+		);
+		expect(tts.inputs.every((input) => [...input.text].length <= 240)).toBe(
+			true,
+		);
+		expect(tts.attempts).toBe(tts.inputs.length * 2);
+	});
+
+	test("actual TTS forwards only committed contacts and redacts an unknown model contact", async () => {
+		const bookings = new FakeBookingService();
+		await bookings.createBooking(bookingInput);
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const approvedEmail = booking.contacts.find(
+			(contact) => contact.channel === "email",
+		)?.value;
+		if (!approvedEmail) throw new Error("approved email missing");
+		const visible = `Контакты ${approvedEmail}, unknown@example.com и +7;999•123/45,67.`;
+		const tts = new FakeTts();
+		const brain = new FakeBrain(speechScript(visible, turn2, generation2));
+		const { orchestrator } = fixture({
+			bookings,
+			brain,
+			tts,
+			initialState: {
+				...createInitialConversationState(),
+				stage: "POST_BOOKING_QUALIFICATION",
+				booking,
+				contactConsentConfirmed: true,
+				bookingConfirmationDelivered: true,
+			},
+		});
+		const events = await collect(
+			orchestrator.acceptTextSubmit({
+				turnId: turn2,
+				generationId: generation2,
+				text: "Продолжайте.",
+				knownFacts: facts,
+			}),
+		);
+		expect(events.find((event) => event.type === "text.done")).toMatchObject({
+			text: visible,
+		});
+		const spoken = tts.inputs.map((input) => input.text).join(" ");
+		expect(spoken).toContain("собака");
+		expect(spoken).toContain("контакт скрыт");
+		expect(spoken).not.toContain("unknown@example.com");
+		expect(spoken).not.toMatch(/999|123\/45/u);
 	});
 
 	test("complete nested JSON envelope stays visible but no nested PII reaches TTS", async () => {

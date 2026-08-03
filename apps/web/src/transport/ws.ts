@@ -1,5 +1,8 @@
 import {
 	type AudioSegmentMetadata,
+	type BookingConflictResolution,
+	type BookingFormDetails,
+	type BookingRevisionConfirmation,
 	type ClientWsEvent,
 	ClientWsEventSchema,
 	CONTRACT_VERSION,
@@ -43,6 +46,27 @@ export type VoiceTransportStatus =
 	| "closed"
 	| "error";
 
+export type PendingBookingCommand = Extract<
+	ClientWsEvent,
+	{
+		type:
+			| "booking.form.submit"
+			| "booking.draft.confirm"
+			| "booking.conflict.resolve";
+	}
+>;
+
+export type BookingReplayResult =
+	| "replayed"
+	| "already-sent"
+	| "unavailable"
+	| "no-pending";
+
+interface PendingBookingCommandState {
+	readonly event: PendingBookingCommand;
+	lastSentConnectionEpoch: number;
+}
+
 export interface VoiceTransportOptions {
 	conversationId: string;
 	url: string;
@@ -59,6 +83,10 @@ export interface VoiceTransportOptions {
 	onAudio?(metadata: AudioSegmentMetadata, bytes: Uint8Array): void;
 	onStatus?(status: VoiceTransportStatus): void;
 	onProtocolError?(error: Error): void;
+	onBookingRequestCancelled?(
+		requestId: string,
+		reason: "reconnect_exhausted" | "reconnect_disabled",
+	): void;
 }
 
 const browserScheduler: ReconnectScheduler = {
@@ -73,6 +101,7 @@ export class VoiceTransport {
 	private clientSequence = 0;
 	private textSequence = 0;
 	private textSubmissionPending = false;
+	private pendingBookingCommand: PendingBookingCommandState | null = null;
 	private lastServerSequence = 0;
 	private pendingSegment: PendingServerSegment | null = null;
 	private readonly incompleteAudioSequences = new Set<number>();
@@ -146,7 +175,8 @@ export class VoiceTransport {
 
 	/** Begin a fresh local utterance after the prior final transcript. */
 	beginUtterance(): boolean {
-		if (this.utteranceCommitted) return false;
+		if (this.utteranceCommitted || this.pendingBookingCommand !== null)
+			return false;
 		this.utteranceHasAudio = false;
 		this.utteranceNeedsRestart = false;
 		return true;
@@ -157,6 +187,7 @@ export class VoiceTransport {
 			!this.canSend() ||
 			this.muted ||
 			this.utteranceCommitted ||
+			this.pendingBookingCommand !== null ||
 			this.utteranceNeedsRestart ||
 			!(pcm16 instanceof Uint8Array) ||
 			pcm16.byteLength === 0 ||
@@ -182,7 +213,8 @@ export class VoiceTransport {
 			!this.canSend() ||
 			!this.utteranceHasAudio ||
 			this.utteranceCommitted ||
-			this.textSubmissionPending
+			this.textSubmissionPending ||
+			this.pendingBookingCommand !== null
 		) {
 			return false;
 		}
@@ -196,7 +228,8 @@ export class VoiceTransport {
 		if (
 			!this.canSend() ||
 			this.utteranceCommitted ||
-			this.textSubmissionPending
+			this.textSubmissionPending ||
+			this.pendingBookingCommand !== null
 		) {
 			return false;
 		}
@@ -212,6 +245,18 @@ export class VoiceTransport {
 		this.utteranceHasAudio = false;
 		this.utteranceNeedsRestart = false;
 		return true;
+	}
+
+	submitBookingForm(payload: BookingFormDetails): boolean {
+		return this.sendBookingCommand("booking.form.submit", payload);
+	}
+
+	confirmBookingRevision(payload: BookingRevisionConfirmation): boolean {
+		return this.sendBookingCommand("booking.draft.confirm", payload);
+	}
+
+	resolveBookingConflict(payload: BookingConflictResolution): boolean {
+		return this.sendBookingCommand("booking.conflict.resolve", payload);
 	}
 
 	playbackStarted(generationId: string): boolean {
@@ -238,12 +283,57 @@ export class VoiceTransport {
 		this.muted = muted;
 	}
 
+	get currentPendingBookingCommand(): Readonly<PendingBookingCommand> | null {
+		return this.pendingBookingCommand?.event ?? null;
+	}
+
+	/** Replay only the retained immutable command, once per authenticated socket. */
+	replayPendingBookingCommand(requestId: string): BookingReplayResult {
+		const pending = this.pendingBookingCommand;
+		if (!pending || pending.event.payload.requestId !== requestId) {
+			return "no-pending";
+		}
+		if (
+			this.stopped ||
+			this.outboundDisabled ||
+			this.terminalFallbackOnly ||
+			!this.sessionReady ||
+			!this.canSendSocket()
+		) {
+			return "unavailable";
+		}
+		if (pending.lastSentConnectionEpoch === this.connectionEpoch) {
+			return "already-sent";
+		}
+		if (!this.sendValidatedEvent(pending.event)) return "unavailable";
+		pending.lastSentConnectionEpoch = this.connectionEpoch;
+		return "replayed";
+	}
+
+	/** Settle or explicitly cancel only the correlated retained command. */
+	settleBookingRequest(requestId?: string): boolean {
+		const pending = this.pendingBookingCommand;
+		if (
+			!pending ||
+			(requestId && pending.event.payload.requestId !== requestId)
+		) {
+			return false;
+		}
+		this.pendingBookingCommand = null;
+		return true;
+	}
+
+	cancelBookingRequest(requestId: string): boolean {
+		return this.settleBookingRequest(requestId);
+	}
+
 	/** Keep the socket readable for terminal fallback text; only session.stop may send. */
 	disableReconnect(): void {
 		if (this.stopped) return;
 		this.reconnectDisabled = true;
 		this.terminalFallbackOnly = true;
 		this.cancelReconnect();
+		this.cancelPendingBookingForReconnect("reconnect_disabled");
 	}
 
 	stop(
@@ -262,6 +352,7 @@ export class VoiceTransport {
 		this.outboundDisabled = true;
 		this.terminalFallbackOnly = false;
 		this.sessionReady = false;
+		this.pendingBookingCommand = null;
 		this.pendingSegment = null;
 		this.incompleteAudioSequences.clear();
 		this.cancelReconnect();
@@ -342,6 +433,8 @@ export class VoiceTransport {
 		if (event.type === "session.ready") {
 			this.resumeToken = event.payload.resumeToken;
 			this.sessionReady = true;
+			// Keep an in-flight request fenced across reconnect. The session settles
+			// it only after accepting a matching durable meeting projection.
 			this.reconnectAttempt = 0;
 			this.options.onStatus?.("ready");
 		}
@@ -357,6 +450,14 @@ export class VoiceTransport {
 		if (event.type === "error" && this.textSubmissionPending) {
 			// A rejected sequence is retried with the same number.
 			this.textSubmissionPending = false;
+		}
+		if (
+			(event.type === "booking.draft.updated" ||
+				event.type === "booking.form.rejected") &&
+			event.payload.requestId ===
+				this.pendingBookingCommand?.event.payload.requestId
+		) {
+			this.pendingBookingCommand = null;
 		}
 		this.options.onEvent?.(event);
 	}
@@ -407,32 +508,83 @@ export class VoiceTransport {
 		type: ClientWsEvent["type"],
 		payload: Record<string, unknown>,
 	): boolean {
+		const event = this.createClientEvent(type, payload);
+		return event !== null && this.sendValidatedEvent(event);
+	}
+
+	private createClientEvent(
+		type: ClientWsEvent["type"],
+		payload: Record<string, unknown>,
+	): ClientWsEvent | null {
+		const bookingCommand =
+			type === "booking.form.submit" ||
+			type === "booking.draft.confirm" ||
+			type === "booking.conflict.resolve";
+		const result = ClientWsEventSchema.safeParse({
+			v: CONTRACT_VERSION,
+			...(bookingCommand
+				? {}
+				: { conversationId: this.options.conversationId }),
+			at: this.nowIso(),
+			type,
+			payload,
+		});
+		if (!result.success) {
+			this.reportProtocolError(new Error(`Invalid client event: ${type}`));
+			return null;
+		}
+		return result.data;
+	}
+
+	private sendValidatedEvent(event: ClientWsEvent): boolean {
 		if (
 			this.outboundDisabled ||
-			(this.terminalFallbackOnly && type !== "session.stop") ||
+			(this.terminalFallbackOnly && event.type !== "session.stop") ||
 			!this.canSendSocket()
 		) {
 			return false;
 		}
-		const candidate = {
-			v: CONTRACT_VERSION,
-			conversationId: this.options.conversationId,
-			at: this.nowIso(),
-			type,
-			payload,
-		};
-		const result = ClientWsEventSchema.safeParse(candidate);
-		if (!result.success) {
-			this.reportProtocolError(new Error(`Invalid client event: ${type}`));
-			return false;
-		}
 		try {
-			this.socket?.send(JSON.stringify(result.data));
+			this.socket?.send(JSON.stringify(event));
 			return true;
 		} catch (error) {
-			this.reportProtocolError(toError(error, `Failed to send ${type}`));
+			this.reportProtocolError(toError(error, `Failed to send ${event.type}`));
 			return false;
 		}
+	}
+
+	private sendBookingCommand(
+		type:
+			| "booking.form.submit"
+			| "booking.draft.confirm"
+			| "booking.conflict.resolve",
+		payload:
+			| BookingFormDetails
+			| BookingRevisionConfirmation
+			| BookingConflictResolution,
+	): boolean {
+		if (
+			!this.canSend() ||
+			this.pendingBookingCommand !== null ||
+			this.textSubmissionPending ||
+			this.utteranceCommitted
+		) {
+			return false;
+		}
+		const event = this.createClientEvent(
+			type,
+			payload as Record<string, unknown>,
+		);
+		if (!event || !isBookingCommand(event) || !this.sendValidatedEvent(event)) {
+			return false;
+		}
+		this.pendingBookingCommand = {
+			event: deepFreeze(event),
+			lastSentConnectionEpoch: this.connectionEpoch,
+		};
+		this.utteranceHasAudio = false;
+		this.utteranceNeedsRestart = false;
+		return true;
 	}
 
 	private canSend(): boolean {
@@ -461,6 +613,7 @@ export class VoiceTransport {
 			return;
 		const maxAttempts = this.options.reconnect?.maxAttempts ?? 5;
 		if (this.reconnectAttempt >= maxAttempts) {
+			this.cancelPendingBookingForReconnect("reconnect_exhausted");
 			this.options.onStatus?.("error");
 			return;
 		}
@@ -482,6 +635,15 @@ export class VoiceTransport {
 		this.reconnectHandle = null;
 	}
 
+	private cancelPendingBookingForReconnect(
+		reason: "reconnect_exhausted" | "reconnect_disabled",
+	): void {
+		const requestId = this.pendingBookingCommand?.event.payload.requestId;
+		if (!requestId) return;
+		this.pendingBookingCommand = null;
+		this.options.onBookingRequestCancelled?.(requestId, reason);
+	}
+
 	private rememberIncompleteAudio(sequence: number): void {
 		this.incompleteAudioSequences.add(sequence);
 		if (this.incompleteAudioSequences.size <= 256) return;
@@ -492,6 +654,24 @@ export class VoiceTransport {
 	private reportProtocolError(error: Error): void {
 		this.options.onProtocolError?.(error);
 	}
+}
+
+function isBookingCommand(
+	event: ClientWsEvent,
+): event is PendingBookingCommand {
+	return (
+		event.type === "booking.form.submit" ||
+		event.type === "booking.draft.confirm" ||
+		event.type === "booking.conflict.resolve"
+	);
+}
+
+function deepFreeze<T>(value: T): T {
+	if (value && typeof value === "object" && !Object.isFrozen(value)) {
+		Object.freeze(value);
+		for (const child of Object.values(value)) deepFreeze(child);
+	}
+	return value;
 }
 
 function toError(error: unknown, fallback: string): Error {

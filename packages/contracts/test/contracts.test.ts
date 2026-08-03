@@ -21,6 +21,7 @@ import {
 	BookingToolExecutionSchema,
 	BrainTurnInputSchema,
 	ClientWsEventSchema,
+	ContactSchema,
 	CreateBookingInputSchema,
 	CreateConversationRequestSchema,
 	decodeBinaryAudioFrame,
@@ -105,6 +106,31 @@ describe("shared contracts", () => {
 		).toBe(false);
 	});
 
+	test("accepts bounded international phone contacts without unsafe separators", () => {
+		for (const value of [
+			"+79991234567",
+			"+7 999 123-45-67",
+			"+1 202-555-0101",
+		]) {
+			expect(ContactSchema.safeParse({ channel: "phone", value }).success).toBe(
+				true,
+			);
+		}
+		for (const value of [
+			"89991234567",
+			"+7/999/123/45/67",
+			"+7,999,123,45,67",
+			"+7 999 123 45\u200b67",
+			"+٧٩٩٩١٢٣٤٥٦٧",
+			"+1234567",
+			"+1234567890123456",
+		]) {
+			expect(ContactSchema.safeParse({ channel: "phone", value }).success).toBe(
+				false,
+			);
+		}
+	});
+
 	test("requires complete lead data, consent, and one structured meeting slot", () => {
 		const input = {
 			conversationId,
@@ -185,6 +211,7 @@ describe("shared contracts", () => {
 				moscowWeekday: "четверг",
 				timeOfDayPreference: "none",
 				rejectedTimeOfDayPreferences: [],
+				concreteRequestInterpretation: { kind: "none" },
 				candidateMeetingSlots: candidateMeetingSlots.map((slot) => ({
 					meetingSlot: slot,
 					displayLabel:
@@ -244,6 +271,51 @@ describe("shared contracts", () => {
 		]) {
 			expect(BrainTurnInputSchema.safeParse(invalid).success).toBe(false);
 		}
+
+		const exactRequestInput = {
+			...input,
+			schedulingContext: {
+				...input.schedulingContext,
+				concreteRequestInterpretation: {
+					kind: "included",
+					requestedMoscowLocalDate: "2026-08-03",
+					requestedMoscowLocalTime: "09:00",
+					reason: "exact_request_included",
+					candidateIndex: 0,
+				},
+			},
+		};
+		expect(BrainTurnInputSchema.safeParse(exactRequestInput).success).toBe(
+			true,
+		);
+		expect(
+			BrainTurnInputSchema.safeParse({
+				...exactRequestInput,
+				schedulingContext: {
+					...exactRequestInput.schedulingContext,
+					concreteRequestInterpretation: {
+						...exactRequestInput.schedulingContext
+							.concreteRequestInterpretation,
+						candidateIndex: 1,
+					},
+				},
+			}).success,
+		).toBe(false);
+		expect(
+			BrainTurnInputSchema.safeParse({
+				...input,
+				schedulingContext: {
+					...input.schedulingContext,
+					concreteRequestInterpretation: {
+						kind: "not_included",
+						requestedMoscowLocalDate: "2026-08-03",
+						requestedMoscowLocalTime: "09:00",
+						reason: "same_day",
+						candidateIndex: null,
+					},
+				},
+			}).success,
+		).toBe(false);
 	});
 
 	test("limits qualification to two optional bounded fields", () => {

@@ -2,6 +2,7 @@ import { eq, inArray, or } from "drizzle-orm";
 import type { DomainDatabase } from "../../db/database";
 import {
 	bookings,
+	conversationContexts,
 	conversations,
 	domainEvents,
 	idempotencyKeys,
@@ -19,6 +20,7 @@ export interface DeletionResult {
 	conversationId: string;
 	deleted: boolean;
 	deletedBookings: number;
+	deletedConversationContexts: number;
 	deletedTurns: number;
 	deletedOutboxEntries: number;
 	auditEventId?: string;
@@ -49,6 +51,11 @@ export class LeadDataDeletionService {
 					.from(bookings)
 					.where(eq(bookings.conversationId, conversationId))
 					.all();
+				const contextRows = transaction
+					.select({ conversationId: conversationContexts.conversationId })
+					.from(conversationContexts)
+					.where(eq(conversationContexts.conversationId, conversationId))
+					.all();
 				const turnRows = transaction
 					.select({ id: turns.id })
 					.from(turns)
@@ -59,6 +66,7 @@ export class LeadDataDeletionService {
 						conversationId,
 						deleted: false,
 						deletedBookings: 0,
+						deletedConversationContexts: 0,
 						deletedTurns: 0,
 						deletedOutboxEntries: 0,
 					};
@@ -96,6 +104,10 @@ export class LeadDataDeletionService {
 					)
 					.run();
 				transaction
+					.delete(conversationContexts)
+					.where(eq(conversationContexts.conversationId, conversationId))
+					.run();
+				transaction
 					.delete(turns)
 					.where(eq(turns.conversationId, conversationId))
 					.run();
@@ -125,6 +137,7 @@ export class LeadDataDeletionService {
 							data: {
 								conversationId,
 								deletedBookingCount: bookingRows.length,
+								deletedConversationContextCount: contextRows.length,
 								deletedTurnCount: turnRows.length,
 							},
 						}),
@@ -135,6 +148,7 @@ export class LeadDataDeletionService {
 					conversationId,
 					deleted: true,
 					deletedBookings: bookingRows.length,
+					deletedConversationContexts: contextRows.length,
 					deletedTurns: turnRows.length,
 					deletedOutboxEntries,
 					auditEventId,

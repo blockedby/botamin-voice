@@ -29,6 +29,48 @@ export const conversations = sqliteTable("conversations", {
 	lastErrorCode: text("last_error_code"),
 });
 
+export const conversationContexts = sqliteTable(
+	"conversation_contexts",
+	{
+		conversationId: text("conversation_id")
+			.primaryKey()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		revision: integer("revision").notNull(),
+		draftJson: text("draft_json").notNull(),
+		updatedAt: text("updated_at").notNull(),
+	},
+	(table) => [
+		index("conversation_contexts_committing_cursor_idx").on(
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN json_extract(${table.draftJson}, '$.commitStatus') ELSE NULL END`,
+			table.conversationId,
+		),
+		check(
+			"conversation_contexts_revision_nonnegative",
+			sql`typeof(${table.revision}) = 'integer' AND ${table.revision} >= 0`,
+		),
+		check(
+			"conversation_contexts_draft_json_valid",
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN COALESCE(json_type(${table.draftJson}, '$') = 'object', 0) ELSE 0 END`,
+		),
+		check(
+			"conversation_contexts_draft_revision_matches",
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN COALESCE(json_type(${table.draftJson}, '$.revision') = 'integer' AND json_extract(${table.draftJson}, '$.revision') >= 0 AND json_extract(${table.draftJson}, '$.revision') = ${table.revision}, 0) ELSE 0 END`,
+		),
+		check(
+			"conversation_contexts_fact_registry_structure",
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN COALESCE(json_type(${table.draftJson}, '$.factRegistry') = 'object' AND json_type(${table.draftJson}, '$.factRegistry.schemaVersion') = 'integer' AND json_extract(${table.draftJson}, '$.factRegistry.schemaVersion') = 1 AND json_type(${table.draftJson}, '$.factRegistry.facts') = 'object', 0) ELSE 0 END`,
+		),
+		check(
+			"conversation_contexts_fact_revision_matches",
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN COALESCE(json_type(${table.draftJson}, '$.factRegistry.revision') = 'integer' AND json_extract(${table.draftJson}, '$.factRegistry.revision') >= 0 AND json_extract(${table.draftJson}, '$.factRegistry.revision') = ${table.revision}, 0) ELSE 0 END`,
+		),
+		check(
+			"conversation_contexts_updated_at_matches",
+			sql`CASE WHEN json_valid(${table.draftJson}) THEN COALESCE(json_type(${table.draftJson}, '$.updatedAt') = 'text' AND json_extract(${table.draftJson}, '$.updatedAt') = ${table.updatedAt}, 0) ELSE 0 END`,
+		),
+	],
+);
+
 export const turns = sqliteTable(
 	"turns",
 	{
@@ -164,6 +206,7 @@ export const notificationOutbox = sqliteTable(
 
 export const schema = {
 	bookings,
+	conversationContexts,
 	conversations,
 	domainEvents,
 	idempotencyKeys,

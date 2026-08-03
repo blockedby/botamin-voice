@@ -9,6 +9,19 @@ import {
 	type MeetingTimePreference,
 	MeetingTimePreferenceSchema,
 } from "@botamin/contracts";
+import {
+	type ConcreteMeetingRequestParseResult,
+	parseConcreteMeetingRequest,
+} from "./concrete-request";
+
+export type {
+	ConcreteMeetingRequestParseResult,
+	ConcreteMeetingRequestReason,
+} from "./concrete-request";
+export {
+	ConcreteMeetingRequestReasons,
+	parseConcreteMeetingRequest,
+} from "./concrete-request";
 
 export type Clock = () => Date;
 export type IdFactory = () => string;
@@ -211,6 +224,112 @@ function meetingSlotAtMoscowDay(
 		timeZone: MEETING_TIME_ZONE,
 		durationMinutes: MEETING_DURATION_MINUTES,
 	});
+}
+
+export type MeetingSlotProposal = {
+	slots: [MeetingSlot, MeetingSlot];
+	concreteRequest: ConcreteMeetingRequestParseResult;
+	requestedDateSatisfied: boolean;
+	requestedExactTimeIncluded: boolean;
+};
+
+function nearestConcreteMinutes(
+	available: readonly number[],
+	requestedMinute: number,
+): [number, number] {
+	const selected = [...available]
+		.sort(
+			(left, right) =>
+				Math.abs(left - requestedMinute) - Math.abs(right - requestedMinute) ||
+				left - right,
+		)
+		.slice(0, 2)
+		.sort((left, right) => left - right);
+	const [first, second] = selected;
+	if (first === undefined || second === undefined) {
+		throw new RangeError("Expected two available concrete meeting starts");
+	}
+	return [first, second];
+}
+
+function availableConcreteMinutes(
+	moscowDay: number,
+	unavailable: ReadonlySet<string>,
+): number[] {
+	const weekday = new Date(moscowDay * 86_400_000).getUTCDay();
+	if (weekday === 0 || weekday === 6) return [];
+	return ALL_POLICY_MINUTES.filter(
+		(minute) =>
+			!unavailable.has(meetingSlotAtMoscowDay(moscowDay, minute).startAt),
+	);
+}
+
+/**
+ * Produces two server-approved slots and explicit concrete-request fulfillment
+ * metadata. Non-concrete or rejected concrete text retains contextual behavior.
+ */
+export function generateMeetingSlotProposal(
+	now: Date,
+	userText = "",
+	unavailableStartAts: Iterable<string> = [],
+	preference: MeetingTimePreference = "none",
+	rejectedPreferences: readonly MeetingTimeBand[] = [],
+): MeetingSlotProposal {
+	validDate(now);
+	const concreteRequest = parseConcreteMeetingRequest(userText, now);
+	if (concreteRequest.kind !== "valid") {
+		return {
+			slots: generateCandidateMeetingSlots(
+				now,
+				unavailableStartAts,
+				preference,
+				rejectedPreferences,
+			),
+			concreteRequest,
+			requestedDateSatisfied: false,
+			requestedExactTimeIncluded: false,
+		};
+	}
+
+	const unavailable = new Set(unavailableStartAts);
+	const requestedDay = moscowDayNumber(new Date(concreteRequest.startAt));
+	const sameDateMinutes = availableConcreteMinutes(requestedDay, unavailable);
+	if (sameDateMinutes.length >= 2) {
+		const minutes = nearestConcreteMinutes(
+			sameDateMinutes,
+			concreteRequest.minuteOfDay,
+		);
+		return {
+			slots: [
+				meetingSlotAtMoscowDay(requestedDay, minutes[0]),
+				meetingSlotAtMoscowDay(requestedDay, minutes[1]),
+			],
+			concreteRequest,
+			requestedDateSatisfied: true,
+			requestedExactTimeIncluded: minutes.includes(concreteRequest.minuteOfDay),
+		};
+	}
+
+	let proposalDay = requestedDay + 1;
+	while (true) {
+		const available = availableConcreteMinutes(proposalDay, unavailable);
+		if (available.length >= 2) {
+			const minutes = nearestConcreteMinutes(
+				available,
+				concreteRequest.minuteOfDay,
+			);
+			return {
+				slots: [
+					meetingSlotAtMoscowDay(proposalDay, minutes[0]),
+					meetingSlotAtMoscowDay(proposalDay, minutes[1]),
+				],
+				concreteRequest,
+				requestedDateSatisfied: false,
+				requestedExactTimeIncluded: false,
+			};
+		}
+		proposalDay += 1;
+	}
 }
 
 function compareScores(

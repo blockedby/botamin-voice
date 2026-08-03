@@ -3,9 +3,13 @@ import type { BookingService } from "@botamin/contracts";
 import {
 	type AudioClientConfig,
 	BINARY_AUDIO_FRAME_KIND,
+	type BookingConflictResolution,
+	type BookingFormDetails,
+	type BookingRevisionConfirmation,
 	ClientHelloEventSchema,
 	ClientWsEventSchema,
 	decodeBinaryAudioFrame,
+	deriveInternalVirtualMeetingProjection,
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
 	type KnownFacts,
@@ -13,6 +17,10 @@ import {
 	type ServerWsEvent,
 	ServerWsEventSchema,
 } from "@botamin/contracts";
+import {
+	BookingDraftError,
+	type BookingDraftStore,
+} from "../domain/booking-draft/store";
 import type { ObservabilityMetrics } from "../observability";
 import type {
 	ConversationOrchestrator,
@@ -73,6 +81,7 @@ export interface GatewaySessionOptions {
 	expiresAt: Date;
 	orchestrator: ConversationOrchestrator;
 	bookings: BookingService;
+	draftStore?: BookingDraftStore;
 	persistence: SessionPersistence;
 	brainModel: string;
 	maxUtteranceMs: number;
@@ -116,6 +125,7 @@ export class GatewaySession {
 	readonly expiresAt: Date;
 	readonly #orchestrator: ConversationOrchestrator;
 	readonly #bookings: BookingService;
+	readonly #draftStore: BookingDraftStore | undefined;
 	readonly #persistence: SessionPersistence;
 	readonly #brainModel: string;
 	readonly #maxJsonBytes: number;
@@ -152,6 +162,7 @@ export class GatewaySession {
 	#stopPromise: Promise<void> | null = null;
 	#currentGenerationId: string | null = null;
 	#turnIntakePending = false;
+	#bookingCommandPending = false;
 	#messageQueue: Promise<void> = Promise.resolve();
 	#pendingMessages = 0;
 	readonly #activeProcesses = new Set<Promise<void>>();
@@ -175,6 +186,7 @@ export class GatewaySession {
 		this.expiresAt = options.expiresAt;
 		this.#orchestrator = options.orchestrator;
 		this.#bookings = options.bookings;
+		this.#draftStore = options.draftStore;
 		this.#persistence = options.persistence;
 		this.#brainModel = options.brainModel;
 		this.#maxJsonBytes = options.maxJsonBytes;
@@ -382,6 +394,17 @@ export class GatewaySession {
 				this.#closeWithError(socket, "SESSION_EXPIRED", false);
 				return;
 			}
+			await this.#ensureDraft();
+			let booking = null;
+			try {
+				booking = await this.#orchestrator.reconcileDurableBooking();
+			} catch {
+				this.#closeWithError(socket, "INTERNAL_ERROR", false);
+				return;
+			}
+			const draft = this.#draftStore
+				? this.#draftStore.browserDraft(this.conversationId)
+				: null;
 			const previous = this.#activeSocket;
 			this.#clearPendingHello();
 			this.#activeSocket = socket;
@@ -405,6 +428,10 @@ export class GatewaySession {
 					state: this.#orchestrator.state.stage,
 					resumeToken: token,
 					clientConfig: this.#clientConfig,
+					bookingDraft: draft,
+					internalMeeting: booking
+						? deriveInternalVirtualMeetingProjection(booking)
+						: null,
 				},
 				false,
 			);
@@ -412,7 +439,11 @@ export class GatewaySession {
 		}
 
 		const parsed = ClientWsEventSchema.safeParse(value);
-		if (!parsed.success || parsed.data.conversationId !== this.conversationId) {
+		if (
+			!parsed.success ||
+			("conversationId" in parsed.data &&
+				parsed.data.conversationId !== this.conversationId)
+		) {
 			this.#closeWithError(socket, "INVALID_EVENT", false);
 			return;
 		}
@@ -449,6 +480,172 @@ export class GatewaySession {
 			case "session.stop":
 				await this.stop("completed");
 				break;
+			case "booking.form.submit":
+				await this.#handleBookingForm(parsed.data.payload);
+				break;
+			case "booking.conflict.resolve":
+				await this.#handleConflictResolution(parsed.data.payload);
+				break;
+			case "booking.draft.confirm":
+				await this.#handleDraftConfirmation(parsed.data.payload);
+				break;
+		}
+	}
+
+	async #ensureDraft() {
+		if (!this.#draftStore) return null;
+		const existing = this.#draftStore.load(this.conversationId);
+		if (existing) return this.#draftStore.browserDraft(this.conversationId);
+		const candidates = await this.#bookings.candidateMeetingSlots();
+		this.#draftStore.initialize(this.conversationId, candidates);
+		return this.#draftStore.browserDraft(this.conversationId);
+	}
+
+	#draftProjection(): ReturnType<BookingDraftStore["browserDraft"]> {
+		if (!this.#draftStore) throw new BookingDraftError("NOT_FOUND");
+		return this.#draftStore.browserDraft(this.conversationId);
+	}
+
+	#draftErrorCode(
+		error: unknown,
+	):
+		| "INVALID_REVISION"
+		| "INVALID_DETAILS"
+		| "MISSING_REQUIRED_FIELD"
+		| "CONFLICT_REQUIRES_RESOLUTION"
+		| "CANDIDATE_MISMATCH"
+		| "NOT_READY"
+		| "ALREADY_COMMITTED" {
+		if (
+			error &&
+			typeof error === "object" &&
+			"code" in error &&
+			String(error.code) === "BOOKING_VALIDATION_FAILED"
+		) {
+			return "CANDIDATE_MISMATCH";
+		}
+		if (!(error instanceof BookingDraftError)) return "INVALID_DETAILS";
+		if (error.code === "INVALID_REVISION") return "INVALID_REVISION";
+		if (
+			error.code === "CONFLICT_REQUIRES_RESOLUTION" ||
+			error.code === "CONFLICT_OPTION_MISMATCH"
+		)
+			return "CONFLICT_REQUIRES_RESOLUTION";
+		if (error.code === "CANDIDATE_MISMATCH") return "CANDIDATE_MISMATCH";
+		if (error.code === "NOT_READY") return "NOT_READY";
+		if (error.code === "ALREADY_COMMITTED") return "ALREADY_COMMITTED";
+		return "INVALID_DETAILS";
+	}
+
+	#rejectDraft(requestId: string, error: unknown): void {
+		if (!this.#draftStore) return;
+		let revision = 0;
+		try {
+			revision = this.#draftProjection().revision;
+		} catch {
+			/* safe default */
+		}
+		const code = this.#draftErrorCode(error);
+		this.#sendEvent("booking.form.rejected", {
+			requestId,
+			currentRevision: revision,
+			error: {
+				code,
+				retryable: code === "INVALID_REVISION" || code === "CANDIDATE_MISMATCH",
+			},
+		});
+	}
+
+	#publishDraft(requestId: string | null): void {
+		if (!this.#draftStore) return;
+		this.#sendEvent("booking.draft.updated", {
+			requestId,
+			bookingDraft: this.#draftProjection(),
+		});
+	}
+
+	#bookingCommandAllowed(): boolean {
+		const committed =
+			this.#draftStore?.load(this.conversationId)?.commitStatus === "committed";
+		return (
+			(this.#orchestrator.state.stage === "COLLECT_BOOKING" || committed) &&
+			this.#currentGenerationId === null &&
+			!this.#turnIntakePending &&
+			!this.#bookingCommandPending
+		);
+	}
+
+	async #handleBookingForm(payload: BookingFormDetails): Promise<void> {
+		if (!this.#draftStore || !this.#bookingCommandAllowed()) {
+			this.#rejectDraft(
+				payload.requestId,
+				new BookingDraftError("INVALID_TRANSITION"),
+			);
+			return;
+		}
+		this.#bookingCommandPending = true;
+		try {
+			this.#draftStore.applyForm(this.conversationId, payload);
+			this.#orchestrator.invalidatePendingDraftConfirmation();
+			this.#publishDraft(payload.requestId);
+		} catch (error) {
+			this.#rejectDraft(payload.requestId, error);
+		} finally {
+			this.#bookingCommandPending = false;
+		}
+	}
+
+	async #handleConflictResolution(
+		payload: BookingConflictResolution,
+	): Promise<void> {
+		if (!this.#draftStore || !this.#bookingCommandAllowed()) {
+			this.#rejectDraft(
+				payload.requestId,
+				new BookingDraftError("INVALID_TRANSITION"),
+			);
+			return;
+		}
+		this.#bookingCommandPending = true;
+		try {
+			this.#draftStore.resolveConflict(this.conversationId, payload);
+			this.#orchestrator.invalidatePendingDraftConfirmation();
+			this.#publishDraft(payload.requestId);
+		} catch (error) {
+			this.#rejectDraft(payload.requestId, error);
+		} finally {
+			this.#bookingCommandPending = false;
+		}
+	}
+
+	async #handleDraftConfirmation(
+		payload: BookingRevisionConfirmation,
+	): Promise<void> {
+		if (!this.#draftStore || !this.#bookingCommandAllowed()) {
+			this.#rejectDraft(
+				payload.requestId,
+				new BookingDraftError("INVALID_TRANSITION"),
+			);
+			return;
+		}
+		this.#bookingCommandPending = true;
+		const turnId = this.#idFactory();
+		const generationId = this.#idFactory();
+		this.#currentGenerationId = generationId;
+		try {
+			for await (const event of this.#orchestrator.confirmBookingDraft({
+				turnId,
+				generationId,
+				confirmation: payload,
+			})) {
+				await this.#mapEvent(event);
+			}
+		} catch (error) {
+			this.#rejectDraft(payload.requestId, error);
+		} finally {
+			if (this.#currentGenerationId === generationId) {
+				this.#currentGenerationId = null;
+			}
+			this.#bookingCommandPending = false;
 		}
 	}
 
@@ -717,6 +914,12 @@ export class GatewaySession {
 				if (event.to === "ERROR") this.#onTerminalError();
 				break;
 			}
+			case "booking.draft.updated":
+				this.#sendEvent("booking.draft.updated", {
+					requestId: event.requestId,
+					bookingDraft: event.bookingDraft,
+				});
+				break;
 			case "booking.committed": {
 				const booking = await this.#bookings.findByConversationId(
 					this.conversationId,
@@ -728,6 +931,9 @@ export class GatewaySession {
 						qualificationStatus: "none",
 						createdAt: booking.createdAt,
 					});
+					this.#sendEvent("internal.meeting.updated", {
+						meeting: deriveInternalVirtualMeetingProjection(booking),
+					});
 				}
 				break;
 			}
@@ -738,10 +944,13 @@ export class GatewaySession {
 				if (!this.#stopped && booking?.id === event.bookingId) {
 					this.#sendEvent("booking.updated", {
 						bookingId: booking.id,
-						qualificationStatus: event.qualificationStatus,
+						qualificationStatus: booking.qualificationStatus,
 						updatedFields: event.updatedFields,
 						qualificationFields: event.qualificationFields,
-						updatedAt: event.updatedAt,
+						updatedAt: booking.updatedAt,
+					});
+					this.#sendEvent("internal.meeting.updated", {
+						meeting: deriveInternalVirtualMeetingProjection(booking),
 					});
 				}
 				break;

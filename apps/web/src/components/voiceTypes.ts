@@ -1,4 +1,10 @@
-import type { ConversationStage } from "@botamin/contracts";
+import type {
+	BookingDraftDetailsPatch,
+	BrowserBookingDraft,
+	ConversationFactField,
+	ConversationStage,
+	InternalVirtualMeetingProjection,
+} from "@botamin/contracts";
 
 type ActiveBookingMarker = { bookingOutcome?: "committed" };
 
@@ -57,9 +63,45 @@ export type TextSubmissionState =
 	| { status: "accepted"; turnId: string }
 	| { status: "rejected"; message: string };
 
+export interface BookingFormSubmission {
+	baseRevision: number;
+	details: BookingDraftDetailsPatch;
+	selectedCandidateId?: string | null;
+}
+
+export interface BookingConflictSelection {
+	baseRevision: number;
+	field: ConversationFactField;
+	conflictOptionId: string;
+}
+
+export type BookingSubmissionState =
+	| { status: "idle" }
+	| { status: "details-pending"; requestId: string; baseRevision: number }
+	| { status: "confirmation-pending"; requestId: string; revision: number }
+	| {
+			status: "conflict-resolution-pending";
+			requestId: string;
+			baseRevision: number;
+			field: ConversationFactField;
+	  }
+	| {
+			status: "rejected";
+			requestId: string;
+			message: string;
+			retryable: boolean;
+	  }
+	| { status: "committed"; requestId: string | null; bookingId: string };
+
 export interface VoiceConversationProjection {
 	/** Exact server-owned stage; null before session.ready. */
 	conversationStage: ConversationStage | null;
 	textInputAvailable: boolean;
 	textSubmission: TextSubmissionState;
+	/** Authoritative server projection; presentation state never synthesizes it. */
+	bookingDraft: BrowserBookingDraft | null;
+	/** Sole source of truth for the final meeting widget. */
+	internalMeeting: InternalVirtualMeetingProjection | null;
+	bookingSubmission: BookingSubmissionState;
+	bookingInputAvailable: boolean;
 }

@@ -27,8 +27,8 @@
 Table-driven cases:
 
 - все допустимые transitions;
-- запрещён `append_booking_qualification` до committed booking, user-facing confirmation и отдельного consent;
-- `create_booking` разрешён только из `COLLECT_BOOKING`, при server contact consent и с одним из двух candidates активного turn;
+- qualification forbidden before committed booking/draft, internal meeting publication, and truthful confirmation; no separate permission bridge exists;
+- automatic booking commit allowed only from a ready exact-confirmed revision, with contact consent and one of two current candidates;
 - disconnect после booking → booking stays;
 - clear refusal → declined;
 - retry не меняет domain effect;
@@ -65,13 +65,15 @@ Table-driven cases:
 - migration preserves legacy rows with null meeting fields and does not invent slots; modern snapshot use fails closed;
 - same idempotency key/same payload → same result;
 - same key/different payload → conflict;
-- exact post-confirmation consent question precedes qualification and same-turn booking envelope cannot grant consent;
-- deterministic question order is monthly inbound leads then integer `salesManagerCount`, one at a time;
+- one `conversation_contexts` JSON row preserves fact provenance/conflicts, lifecycle and revisions; malformed JSON/revision/timestamp mismatch fails closed;
+- form, typed, and spoken facts converge on the same draft; stale revision, bounded conflict resolution, candidate reselection, idempotent confirmation, and reconnect/resume are covered;
+- exact-revision confirmation automatically commits once and the widget cannot publish before durable booking/draft commit;
+- direct qualification asks only missing facts: volume before managers only when both are absent, one known asks the other, both known asks nothing; generic daily volume requires basis clarification;
 - qualification patch merges either field; both-at-once completes, one field remains partial, and model completion claims cannot override persisted truth;
 - zero-answer refusal is skipped; refusal after one answer preserves partial; booking remains booked;
 - empty patch rejected except server-owned explicit-refusal skip operation;
 - notifier failure не rolls back booking;
-- PII redaction.
+- PII redaction plus the sole exact-server-approved-contact TTS exception under contact-processing consent.
 
 ## 3. Provider contract tests
 
@@ -139,13 +141,13 @@ Contract tests that spend provider usage are tagged `external` and excluded from
 - bounded PCM16 chunks → `audio.commit` → gateway-produced validated WAV → atomic `SttPort` request → fake OpenRouter already-WAV request/final transcript → fake brain deltas → fake OpenRouter complete MP3 segments → WS client;
 - sample-derived capture progress/countdown uses accepted PCM16 bytes and stricter server duration/byte ceiling, then auto-commits exactly once;
 - bounded monotonic `visitor.text.submit` clears uncommitted audio, suppresses pending duplicates, retains sequence on rejection, emits server final once, and follows the same brain/state/tool/persistence path as speech;
-- typed composer is stage-gated, and booking form renders only from server-owned `COLLECT_BOOKING`, never transcript wording;
-- real SQLite transaction + fake notifier;
-- Luna receives server-owned current Moscow date/day, parsed preference/rejection and exactly two structured candidates with validated labels;
-- typed and spoken preference turns produce matching refreshed context; rejected band is absent;
-- booking tool call accepts only one active candidate inside brain turn;
-- booking event and user-facing confirmation with exact `Можно задать два коротких вопроса?` appear before qualification consent/question/audio;
-- explicit consent bypasses a model turn and deterministically asks leads first; partial then asks manager count; both-at-once completes; zero/one-answer refusal preserves skipped/partial booking truth;
+- typed composer is stage-gated; structured booking form renders only from server-owned `COLLECT_BOOKING` and submits revisioned patches, never transcript-triggered tools;
+- real SQLite RC3→RC4 migration, durable context CAS/conflicts, booking transaction, and fake notifier;
+- Luna receives server-owned current Moscow date/day and exactly two structured candidates with concrete dates; typed/spoken time-band and concrete date/time requests have parity;
+- spoken/text/form facts complete the same draft; first/second spoken selection and spoken confirmation use the same exact-revision commit path;
+- booking event, committed draft, and `internal.meeting.updated` precede final widget and qualification;
+- server asks only missing qualification facts; both-at-once, both-known, daily-basis clarification, and zero/one-answer refusal preserve booking truth;
+- reconnect restores durable draft/meeting; stale projections cannot replace a newer revision;
 - reconnect with same conversation;
 - barge-in while OpenRouter requests/complete segments are in flight;
 - brain process restart;
@@ -163,11 +165,11 @@ Playwright with synthetic audio fixture:
 5. observe listening/processing states and then exactly one `transcript.final`;
 6. receive assistant text and ordered complete MP3 segment events;
 7. verify the circular countdown is sample-derived and reaches the 60-second limit without wall-clock drift;
-8. submit typed and spoken time-of-day preferences and verify refreshed pairs: default morning+evening, selected in-band roughly hour-apart, rejected band absent;
-9. use the in-chat booking form only at `COLLECT_BOOKING`, choose one of exactly two server-labeled current Moscow alternatives, and complete required name/company/email/phone-or-Telegram/consent data;
-10. see booked UI and verify no external calendar/invitation or exhaustive availability claim;
-11. verify exact two-question consent, deterministic leads→manager order, both-at-once completion, and zero/one-answer refusal outcomes;
-12. verify backend DB/event payload keeps booking `booked`.
+8. submit typed and spoken time-band plus supported concrete date/time requests and verify exactly two concretely dated current Moscow candidates;
+9. use the structured form only at `COLLECT_BOOKING`; verify auto-filled facts, explicit conflicts, stale revision/reselection, and exact-revision confirmation;
+10. verify automatic durable booking commit precedes the server-derived final widget, whose external calendar/invite flags remain false;
+11. verify missing-only qualification matrix: neither known → volume first; one known → only other; both known → no question; daily count → basis clarification; refusal preserves scheduled meeting;
+12. verify DB/event payload keeps booking `booked`, draft `committed`, and widget projection tied to the same booking ID.
 
 Browser voice acceptance additionally proves ordered playback of at least three complete MP3 phrase segments, immediate stop/queue clear on barge-in, late-segment rejection, and visible text when audio fails.
 
@@ -181,7 +183,7 @@ Mobile viewport and slow network profiles included.
 
 ## 6. Conversation eval suite
 
-Минимум 24 сценария:
+The committed RC4 fixture catalog has **44 scenarios**. It is deterministic and credential-free; it does not run Luna/providers and therefore is not model-quality evidence. The scenario groups below describe its minimum behavioral surface:
 
 ### Happy paths
 
@@ -248,14 +250,13 @@ Mobile viewport and slow network profiles included.
 - spoken-language quality;
 - final structured handoff.
 
-Release thresholds:
+Release thresholds and current fixture baseline:
 
-- 100% invariant tests;
-- ≥ 90% scripted scenarios без critical failure;
-- 0 fabricated price/guarantee in eval suite;
-- 0 duplicate bookings;
-- 0 pre-booking qualification tool calls;
-- 0 exposed secrets/stack traces.
+- at least 24 scenarios and ≥90% without critical failure;
+- 100% booking-order/scheduled-payload checks among booking-required scenarios;
+- zero fabricated prices, guarantees, secrets, duplicate bookings, pre-booking qualification, widget-before-commit, external invite claims, repeated-known qualification, silent daily normalization, or unauthorized contact TTS;
+- committed artifact: **44/44 scenarios**, **25/25 applicable booking-order checks**, **28/28 negative controls**, zero critical failures;
+- evidence mode is `fixture-only`, provider calls are `0`, and real Luna is explicitly `not-run`.
 
 ## 8. Latency/load test
 
@@ -297,40 +298,37 @@ Pass condition: p50/p95 SLO under chosen initial concurrency, no unbounded buffe
 
 ## 10. Acceptance checklist P0
 
-### Local release candidate `0.5.0-local-rc.3`
+### Local release candidate `0.5.0-local-rc.4` (recommended; tag pending)
 
-RC3 local acceptance is recorded in [`../VALIDATION.md`](../VALIDATION.md). RC2 remains the prior rollback candidate; local evidence does not close WebKit or target-host gates.
+Fresh RC4 command evidence is recorded in [`../VALIDATION.md`](../VALIDATION.md). The prior RC3 report is preserved separately under `evidence/`; it is historical and not reused as proof.
 
-- [x] Fresh credential-free deterministic suite: 510 tests passed across 58 files with 4,265 assertions and no failures.
-- [x] Typecheck, lint/format, production build, deterministic eval baseline, `scripts/build-spec.sh`, `scripts/validate-spec.py`, and `git diff --check` passed.
-- [x] Docs and generated specification match proactive greeting, contextual candidates, and deterministic two-question qualification contracts.
-- [x] Disposable Chrome exercised automatic static greeting success, blocked/unavailable fallback, zero pre-consent conversation REST/WS/mic/provider calls, session-start cleanup, 780/390 px layouts, and a real typed evening request that received two server-supplied evening candidates. Deterministic gateway/orchestrator coverage proves typed/spoken equivalence plus skipped/partial/complete qualification. Firefox headless rendered 390×844 without CSP/runtime errors; WebKit was not run.
-- [x] `scripts/deploy-local.sh` completed from the RC3 tree; migration, app/Caddy health, dependency readiness, file-secret boundaries, and 60-second/2 MB limits passed.
-- [x] Explicit bounded paid checks passed: static greeting generation through OpenRouter TTS, one real typed Luna/TTS evening-slot turn, and one OpenRouter STT → Luna → OpenRouter TTS voice smoke with two decoder-accepted MP3 segments.
-- [x] Fresh protected backup succeeded; deterministic restore/rollback tests passed. `botamin-voice:0.5.0-local-rc.2` remains the prior rollback tag.
-- [x] Parent regenerated `MANIFEST.txt` and `CHECKSUMS.sha256` and recorded final evidence in `VALIDATION.md`.
+- [x] Credential-free fixture baseline is current: 44/44 scenarios, 25/25 applicable booking-order checks, 28/28 negative controls, zero provider calls; real Luna not run.
+- [x] Chromium desktop/mobile Playwright landing smoke passed through the shared Chromium harness. This proves responsive/pre-consent transport boundaries only, not a full voice booking journey.
+- [x] Focused cutover tests prove protected backup precedes graceful stop, existing stopped DB is protected, migration is delegated to normal startup, readiness precedes `verify-rc4`, and RC3 schema upgrades to migration 0004 without a duplicate meeting table.
+- [x] The provider-independent repository suite is green: 715 tests across 68 files, including the RC4 provider-contract and production-component journeys.
+- [x] Typecheck, build, Biome, generated spec validation, release artifact regeneration, and `git diff --check` are reported with actual fresh outputs in `VALIDATION.md`.
+- [ ] Docker Compose cutover against an owner-configured live local volume and credentials was not run by the documentation handoff; the wrapper is covered statically/fake-Docker and DB tests.
+- [ ] Full local voice booking journey was not run; do not infer it from Chromium landing smoke or fixture evals.
 
-### Later target release gates — not closed by local RC
+### External/not-run gates — not closed by RC4 handoff
 
-- [ ] Complete MP3 playback and voice journey accepted in WebKit.
-- [ ] Clean target-VPS deploy accepted under target CPU/RAM/storage/network conditions.
-- [ ] Public DNS and TLS/WSS accepted on the target host.
-- [ ] Explicitly approved target-host Russian STT/TTS smokes accepted with current model/voice/account configuration.
-- [ ] Target-host latency/load evidence establishes a release profile; local synthetic timings are not reused as a benchmark.
-- [ ] Owner reviews Codex/OpenRouter plan suitability, current rates, capacity, privacy copy, and public commercial operation.
+- [ ] WebKit complete-MP3/full voice journey. The browser binary is downloaded locally, but host libraries `libicu74`, `libxml2`, and `libflite1` are missing.
+- [ ] Clean target-VPS deploy under target CPU/RAM/storage/network conditions.
+- [ ] Public DNS and TLS/WSS on the target host.
+- [ ] Explicitly approved target-host live provider booking through OpenRouter STT/TTS + Codex Luna, including the final internal-meeting widget.
+- [ ] Target-host latency/load release profile and owner review of provider plan/rates/capacity/privacy copy.
 
-A real calendar event is intentionally out of scope rather than an unchecked release gate. The product stores an internal booking and notification outbox event only.
+External calendar creation is intentionally absent, not a release gate. The product creates one durable internal booking and derives an internal virtual meeting projection; it never creates a second meeting table or claims an external event/invite.
 
 ## 11. Candidate evidence bundle
 
-The RC3 evidence bundle contains:
+The RC4 handoff bundle contains:
 
-- final candidate SHA and `v0.5.0-local-rc.3` recommendation;
-- deterministic test/type/lint/build/spec/validator and regenerated checksum evidence;
-- Compose migration, file-secret, health, readiness, and backup observations;
-- Chrome and Firefox results labeled by engine and viewport;
-- safe aggregate results from explicitly approved bounded provider checks;
-- preserved RC2 rollback tag and matching DB-backup guidance;
-- known limitations and explicit WebKit/VPS/TLS blockers.
+- integrated RC4 implementation plus recorded closure fixes; no PR/tag is invented;
+- recommended/pending `v0.5.0-local-rc.4` label;
+- source docs plus regenerated `FULL_SPEC.md`, `technical-spec.html`, `MANIFEST.txt`, and `CHECKSUMS.sha256`;
+- deterministic migration/cutover, contracts, app, web, privacy, eval, type, and Biome evidence as actually run;
+- Chromium desktop/mobile smoke clearly labeled as a landing smoke;
+- preserved RC3 historical report and explicit WebKit/VPS/TLS/WSS/provider-live-booking gates.
 
-Target-VPS compose/health/preflight/provider evidence and benchmark-grade latency remain a later evidence bundle; they must not be inferred from this local release candidate.
+Target-host and full-journey evidence must not be inferred from this local handoff.

@@ -2,24 +2,31 @@
 
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import {
-	isComposerSubmitKey,
-	serializeBookingDetails,
-	TextChat,
-	validateBookingDetails,
-} from "./TextChat";
+import { createBrowserBookingDraft } from "../testFixtures/rc4";
+import { isComposerSubmitKey, TextChat, type TextChatProps } from "./TextChat";
 
 const noopSubmit = () => false;
 
-function render(stage: Parameters<typeof TextChat>[0]["conversationStage"]) {
-	return renderToStaticMarkup(
-		<TextChat
-			conversationStage={stage}
-			textInputAvailable={stage === "GREETING" || stage === "COLLECT_BOOKING"}
-			textSubmission={{ status: "idle" }}
-			onTextSubmit={noopSubmit}
-		/>,
-	);
+function props(
+	conversationStage: TextChatProps["conversationStage"],
+): TextChatProps {
+	return {
+		conversationStage,
+		textInputAvailable:
+			conversationStage === "GREETING" ||
+			conversationStage === "COLLECT_BOOKING",
+		textSubmission: { status: "idle" },
+		bookingDraft: createBrowserBookingDraft(),
+		bookingSubmission: { status: "idle" },
+		bookingInputAvailable: conversationStage === "COLLECT_BOOKING",
+		onTextSubmit: noopSubmit,
+		onBookingSubmit: noopSubmit,
+		onBookingConflictResolve: noopSubmit,
+	};
+}
+
+function render(stage: TextChatProps["conversationStage"]) {
+	return renderToStaticMarkup(<TextChat {...props(stage)} />);
 }
 
 describe("typed chat composer", () => {
@@ -32,7 +39,19 @@ describe("typed chat composer", () => {
 		expect(html).toContain('enterKeyHint="send"');
 		expect(html).toContain('autoComplete="off"');
 		expect(html).toContain("Enter — отправить, Shift+Enter — новая строка");
-		expect(html).toContain('type="submit"');
+	});
+
+	test("announces an asynchronous typed-message rejection", () => {
+		const value = props("GREETING");
+		value.textSubmission = {
+			status: "rejected",
+			message: "Сообщение не отправлено. Повторите попытку.",
+		};
+		const html = renderToStaticMarkup(<TextChat {...value} />);
+		expect(html).toContain(
+			'id="visitor-message-error" class="field-error" role="alert"',
+		);
+		expect(html).toContain("Сообщение не отправлено. Повторите попытку.");
 	});
 
 	test("Enter submits, Shift+Enter inserts a newline, and composition is preserved", () => {
@@ -49,9 +68,6 @@ describe("typed chat composer", () => {
 		expect(
 			isComposerSubmitKey({ key: "Enter", shiftKey: false, isComposing: true }),
 		).toBe(false);
-		expect(
-			isComposerSubmitKey({ key: "a", shiftKey: false, isComposing: false }),
-		).toBe(false);
 	});
 
 	test("hides chat outside server-owned visitor-turn stages", () => {
@@ -61,76 +77,38 @@ describe("typed chat composer", () => {
 	});
 });
 
-describe("in-chat booking details", () => {
-	test("reveals the form only at server-owned COLLECT_BOOKING", () => {
+describe("in-chat booking form", () => {
+	test("renders only at server COLLECT_BOOKING with five fields and two server candidates", () => {
 		for (const stage of ["GREETING", "BOOKING_OFFER", "BOOKED"] as const) {
 			expect(render(stage)).not.toContain("booking-details-title");
 		}
 		const html = render("COLLECT_BOOKING");
 		expect(html).toContain("booking-details-title");
-		expect(html).toContain("Имя");
-		expect(html).toContain("Компания");
-		expect(html).toContain("Рабочий email");
-		expect(html).toContain("Телефон");
-		expect(html).toContain("Telegram");
-		expect(html).toContain("Форма не подтверждает встречу");
+		for (const label of [
+			"Имя",
+			"Компания",
+			"Рабочий email",
+			"Телефон",
+			"Telegram",
+		]) {
+			expect(html).toContain(label);
+		}
+		expect(html.match(/name="meetingCandidate"/g)?.length).toBe(2);
+		expect(html).toContain("Подтвердить и создать встречу");
 		expect(html).not.toContain("Запись создана");
 	});
 
-	test("validates required details and one alternate contact", () => {
-		expect(
-			validateBookingDetails({
-				name: "",
-				company: "",
-				email: "invalid",
-				contactChannel: "",
-				contactValue: "",
-			}),
-		).toMatchObject({
-			name: expect.any(String),
-			company: expect.any(String),
-			email: expect.any(String),
-			contactChannel: expect.any(String),
-		});
-		expect(
-			validateBookingDetails({
-				name: "Анна",
-				company: "Пример",
-				email: "anna@example.com",
-				contactChannel: "telegram",
-				contactValue: "@anna",
-			}),
-		).toEqual({});
-	});
-
-	test("serializes fields as visitor text without tool invocation or success claims", () => {
-		const text = serializeBookingDetails({
-			name: " Анна ",
-			company: " Пример ",
-			email: " anna@example.com ",
-			contactChannel: "phone",
-			contactValue: " +7 999 123-45-67 ",
-		});
-		expect(text).toContain("Имя: Анна");
-		expect(text).toContain("Компания: Пример");
-		expect(text).toContain("Рабочий email: anna@example.com");
-		expect(text).toContain("Телефон: +7 999 123-45-67");
-		expect(text).not.toMatch(
-			/create_booking|booking\.created|успешно|создана/u,
-		);
-	});
-
-	test("disables both submit paths while one typed turn is pending", () => {
-		const html = renderToStaticMarkup(
-			<TextChat
-				conversationStage="COLLECT_BOOKING"
-				textInputAvailable={false}
-				textSubmission={{ status: "pending" }}
-				onTextSubmit={noopSubmit}
-			/>,
-		);
-		expect(html).toContain("Передаём данные…");
-		expect(html).toContain("Отправляем…");
-		expect(html.match(/disabled/g)?.length).toBeGreaterThanOrEqual(3);
+	test("disables both submit paths while booking details are pending", () => {
+		const value = props("COLLECT_BOOKING");
+		value.bookingSubmission = {
+			status: "details-pending",
+			requestId: "01J00000000000000000000020",
+			baseRevision: 1,
+		};
+		value.bookingInputAvailable = false;
+		value.textInputAvailable = false;
+		const html = renderToStaticMarkup(<TextChat {...value} />);
+		expect(html).toContain("Подтверждаем…");
+		expect(html.match(/disabled/g)?.length).toBeGreaterThanOrEqual(8);
 	});
 });

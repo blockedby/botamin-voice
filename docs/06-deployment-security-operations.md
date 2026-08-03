@@ -4,7 +4,7 @@
 
 ![Deployment](../diagrams/05-deployment.svg)
 
-Candidate `0.5.0-local-rc.3` uses this topology on one trusted local machine at `http://localhost:5173`; prior `0.5.0-local-rc.2` remains the rollback image. RC3 deploy/readiness must be freshly accepted per docs 08/11. A target VPS, DNS, public TLS/WSS and target-host smokes are later gates and are not implied by local readiness.
+Candidate `0.5.0-local-rc.4` is recommended but untagged for one trusted local machine at `http://localhost:5173`. RC3 evidence is preserved separately and is not RC4 proof. A target VPS, DNS, public TLS/WSS, target-host provider live booking, and WebKit full journey are external gates and are not implied by local readiness.
 
 Один `docker-compose.yml`, ровно два application-path сервиса рекомендуются:
 
@@ -22,7 +22,7 @@ Persistent volumes:
 
 The tracked [`../docker-compose.yml`](../docker-compose.yml) is the exact runtime contract. It pins app/Caddy inputs, runs the app as non-root with a read-only filesystem, persists SQLite and Codex auth in named volumes, and receives OpenRouter/webhook values only through read-only files under `/run/secrets`.
 
-Do not use `env_file: .env`, source `.env`, or invoke raw `docker compose up` as the documented bootstrap. `scripts/deploy-local.sh` parses dotenv data, materializes mode-`0600` sources below `.runtime/secrets`, exports the three `*_FILE` paths, builds, migrates, force-recreates app, starts Caddy, and requires readiness. Raw `docker compose config` remains safe with `/dev/null` defaults but does not constitute a configured deploy.
+Do not use `env_file: .env`, source `.env`, or invoke raw `docker compose up` as the documented bootstrap. `scripts/deploy-local.sh` parses dotenv data, materializes mode-`0600` secret files, renders/scans Compose config, and builds first. If the app is live it takes a protected online backup and then uses Compose's 30-second graceful stop before any schema mutation; if the app is stopped but `/data/app.db` exists it takes a protected no-migration backup. A fresh volume needs no backup. The replacement app is started with `AUTO_MIGRATE=true`, so migration runs through the normal entrypoint before the server; bounded `/health/ready` and then `db.js verify-rc4` must pass. The script never runs a one-off migration against a live app.
 
 ## 3. Docker image
 
@@ -51,7 +51,7 @@ The wrapper builds the app image, runs interactive device auth, checks login sta
 
 ### Readiness and optional deeper preflight
 
-`scripts/deploy-local.sh` waits for `/health/ready`. The automatic readiness path verifies the isolated Codex runtime configuration and app-server handshake, ChatGPT account/auth state, requested model/effort availability, the compiled prompt file, SQLite read/write, queue capacity, notifier state, and local STT/TTS configuration and circuit health. It does **not** run `thread/start`, inspect `instructionSources` from a created thread, execute a synthetic turn, wait for a streamed delta, or send `turn/interrupt`. Failed required checks make `/health/ready` return `503` and prevent new voice sessions.
+`scripts/deploy-local.sh` waits for `/health/ready`. Before readiness, a bounded DB-only recovery scan processes orphaned `committing` drafts without Luna/STT/TTS or an in-memory session; safe aggregate failures keep orphan-recovery health degraded and rows eligible for a later bounded sweep. The automatic readiness path also verifies the isolated Codex runtime configuration and app-server handshake, ChatGPT account/auth state, requested model/effort availability, the compiled prompt file, SQLite read/write, queue capacity, notifier state, and local STT/TTS configuration and circuit health. It does **not** run `thread/start`, inspect `instructionSources` from a created thread, execute a synthetic turn, wait for a streamed delta, or send `turn/interrupt`. Failed required checks make `/health/ready` return `503` and prevent new voice sessions.
 
 The standalone `scripts/codex-preflight.ts` is a separate, deeper owner-authorized check that has already been observed historically; it is not called by deployment or readiness. After compiling `AGENTS.md` into an isolated runtime directory, an owner may explicitly run:
 
@@ -115,12 +115,13 @@ That optional command performs `thread/start`, verifies `instructionSources`, ru
 
 - raw audio не сохраняется;
 - PII redaction в общих логах;
-- contact values доступны только booking payload и защищённому storage;
+- contact values are stored in the durable draft/booking and exposed to the browser only in stage-gated projections; TTS receives only an exact server-approved contact when contact-processing consent is active, otherwise it is redacted;
 - `.env`, единственный OpenRouter key, webhook secret, Codex auth, WAV/base64 audio и transcript PII не попадают в logs;
 - browser bundle и events не содержат OpenRouter key или direct provider URL;
 - DB volume и backup с ограниченными permissions;
 - privacy/consent copy перед микрофоном;
-- deletion runbook по `conversationId`/`bookingId`;
+- implemented conversation deletion transaction removes booking, context, turns, idempotency, related outbox entries, and conversation; existing redacted append-only domain events remain and a count-only `privacy.deleted` event is appended;
+- transcript retention also purges expired `conversation_contexts` in bounded batches while preserving conversations and bookings;
 - финальная юридическая формулировка требует отдельной проверки владельцем продукта.
 
 ## 7. Observability
@@ -176,15 +177,14 @@ P0 держит bounded process-local aggregates и отдаёт safe JSON че�
 
 Notifier failure не должен делать app unready, если outbox сохраняет событие. TTS config failure may allow startup only when `TTS_TEXT_ONLY_FALLBACK=true`; readiness must expose degraded state rather than pretending OpenRouter is ready. Healthchecks never spend OpenRouter usage.
 
-## 9. Backup and restore
+## 9. Migration, backup, restore, and rollback boundaries
 
-- SQLite online backup или `VACUUM INTO`, не простой copy активного WAL-файла;
-- ежедневный encrypted snapshot;
-- retention configurable;
-- регулярный restore test в временный файл;
-- `codex-home` backup отдельно и только если необходим; auth backup шифруется;
-- prompts восстанавливаются из Git/image;
-- runbook фиксирует RPO/RTO после выбора хостинга.
+- RC4 migration `0004` only adds `conversation_contexts`; it does not backfill existing RC3 conversations and creates no duplicate fact/evidence/meeting table. Existing RC3 bookings remain unchanged.
+- Local cutover takes `VACUUM INTO` backup plus mode-`0600` SHA-256 sidecar before stopping/migrating an existing DB. The server is gracefully stopped before normal startup applies schema changes.
+- Post-start acceptance requires `/health/ready`, `PRAGMA integrity_check`, exact context columns/FK/check constraints, persisted JSON revision/timestamp consistency, `foreign_key_check`, and absence of duplicate RC4 tables.
+- Migrations are forward-only. Code/image rollback without a DB restore is allowed only if the older image is proven compatible with the forward schema. Otherwise stop the app and use the matching pre-cutover backup; never try to reverse `0004` in place.
+- Restore verifies sidecar permissions/digest/integrity before stop, verifies again, migrates a temporary copy, atomically swaps it, retains a protected pre-restore backup, and requires readiness.
+- Repository backups are protected/checksummed but not encrypted and have no automatic retention policy. Host-owner encrypted snapshots, retention, RPO/RTO and restore drills remain operations responsibilities. `codex-home` auth is separate and excluded from ordinary DB backups.
 
 ## 10. Capacity guard
 
@@ -251,6 +251,8 @@ chmod 600 .env
 ./scripts/device-auth.sh
 ./scripts/deploy-local.sh
 curl -fsS http://localhost:5173/health/ready
+# deploy-local already runs this after readiness; manual recheck:
+docker compose exec -T app bun /app/ops/db.js verify-rc4
 ```
 
 The wrapper does not run paid provider smokes. Recovery and observability commands are maintained in [`../infra/README.md`](../infra/README.md) and the release checklist in [`11-local-release-handoff.md`](11-local-release-handoff.md).
@@ -275,10 +277,4 @@ docker compose logs app --since 30m | grep 'booking\.'
 
 ### Restore
 
-1. stop app;
-2. verify backup checksum;
-3. restore into a new DB path;
-4. run integrity check and migrations;
-5. point `DATABASE_URL` to restored file;
-6. start and validate `/health/ready`;
-7. retain old file until manual confirmation.
+Use `./scripts/restore.sh /data/backups/NAME.db`. The wrapper verifies the protected backup before stopping, verifies again after stop, migrates a temporary copy, atomically swaps it, restarts the app, requires `/health/ready`, and retains a protected pre-restore backup. For image rollback, use `scripts/rollback.sh` with an owner-retained immutable image reference; no RC4 predecessor image/tag is invented by this handoff.

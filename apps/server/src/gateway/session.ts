@@ -38,6 +38,7 @@ import {
 export function createAudioClientConfig(
 	maxUtteranceMs: number,
 	maxAudioBytes: number,
+	outputContentType: AudioClientConfig["outputContentType"] = "audio/mpeg",
 ): AudioClientConfig {
 	const durationPcmBytes = Math.floor(maxUtteranceMs * 32);
 	const audioPcmBytes = Math.max(0, maxAudioBytes - WAV_HEADER_BYTES);
@@ -49,7 +50,7 @@ export function createAudioClientConfig(
 		chunkMs: 100,
 		maxUtteranceMs,
 		maxPcmBytes,
-		outputContentType: "audio/mpeg",
+		outputContentType,
 		outputMode: "complete-phrase-segments",
 	};
 }
@@ -89,6 +90,7 @@ export interface GatewaySessionOptions {
 	brainModel: string;
 	maxUtteranceMs: number;
 	maxAudioBytes: number;
+	outputContentType?: AudioClientConfig["outputContentType"];
 	maxFrameBytes: number;
 	maxJsonBytes: number;
 	maxHistoryEvents: number;
@@ -228,6 +230,7 @@ export class GatewaySession {
 		this.#clientConfig = createAudioClientConfig(
 			options.maxUtteranceMs,
 			options.maxAudioBytes,
+			options.outputContentType,
 		);
 		this.#assemblerLimits = {
 			maxUtteranceMs: options.maxUtteranceMs,
@@ -1201,6 +1204,10 @@ export class GatewaySession {
 	async #publishAudioSegment(
 		event: Extract<OrchestratorEvent, { type: "audio.segment" }>,
 	): Promise<void> {
+		if (event.contentType !== this.#clientConfig.outputContentType) {
+			this.#sendSafeError("TTS_UNAVAILABLE", true);
+			return;
+		}
 		if (
 			this.#stopped ||
 			!(await this.#reservePlaybackSegment(
@@ -1216,14 +1223,17 @@ export class GatewaySession {
 			generationId: event.generationId,
 			segmentId: event.segmentId,
 			sequence: event.sequence,
-			contentType: "audio/mpeg",
+			contentType: event.contentType,
 			byteLength: event.bytes.byteLength,
 			final: true,
 		});
 		if (metadata.type !== "audio.segment") return;
 		const json = JSON.stringify(metadata);
 		const binary = encodeBinaryAudioFrame({
-			kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+			kind:
+				event.contentType === "audio/mpeg"
+					? BINARY_AUDIO_FRAME_KIND.serverMp3Segment
+					: BINARY_AUDIO_FRAME_KIND.serverWavSegment,
 			sequence: event.sequence,
 			payload: event.bytes,
 		});

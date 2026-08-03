@@ -117,7 +117,7 @@ export type OrchestratorEvent =
 			generationId: string;
 			segmentId: string;
 			sequence: number;
-			contentType: "audio/mpeg";
+			contentType: TtsAudioSegment["contentType"];
 			bytes: Uint8Array;
 			final: true;
 	  }

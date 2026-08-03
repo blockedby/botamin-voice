@@ -15,7 +15,7 @@ export const AudioClientConfigSchema = z
 		chunkMs: z.literal(100),
 		maxUtteranceMs: z.number().int().min(100).max(120_000),
 		maxPcmBytes: z.number().int().min(3_200).max(3_840_000),
-		outputContentType: z.literal("audio/mpeg"),
+		outputContentType: z.enum(["audio/mpeg", "audio/wav"]),
 		outputMode: z.literal("complete-phrase-segments"),
 	})
 	.strict()

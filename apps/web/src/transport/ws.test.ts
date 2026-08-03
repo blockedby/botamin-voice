@@ -10,6 +10,7 @@ import {
 } from "@botamin/contracts";
 import {
 	createDeterministicMp3Fixture,
+	createDeterministicTtsWavFixture,
 	createDeterministicWavFixture,
 	parseMonoPcm16Wav,
 } from "../../../../packages/test-fixtures/src";
@@ -137,7 +138,12 @@ function transcriptFinal(seq: number) {
 	};
 }
 
-function audioSegment(seq: number, binarySequence: number, byteLength: number) {
+function audioSegment(
+	seq: number,
+	binarySequence: number,
+	byteLength: number,
+	contentType: "audio/mpeg" | "audio/wav" = "audio/mpeg",
+) {
 	return {
 		v: 1,
 		conversationId,
@@ -151,7 +157,7 @@ function audioSegment(seq: number, binarySequence: number, byteLength: number) {
 					? segmentId
 					: `01J${String(binarySequence + 5).padStart(23, "0")}`,
 			sequence: binarySequence,
-			contentType: "audio/mpeg",
+			contentType,
 			byteLength,
 			final: true,
 		},
@@ -495,7 +501,7 @@ describe("voice WebSocket transport", () => {
 		).toBe(true);
 	});
 
-	test("pairs complete MP3 metadata with exactly the next shared binary frame", () => {
+	test("pairs complete MP3 and WAV metadata with exactly their next binary frames", () => {
 		const socket = new FakeSocket();
 		const received: Array<{ sequence: number; bytes: Uint8Array }> = [];
 		const errors: string[] = [];
@@ -522,15 +528,29 @@ describe("voice WebSocket transport", () => {
 		);
 		expect(received).toEqual([{ sequence: 42, bytes: mp3 }]);
 
-		socket.serverJson(audioSegment(3, 43, mp3.byteLength));
+		const wav = createDeterministicTtsWavFixture();
+		socket.serverJson(audioSegment(3, 43, wav.byteLength, "audio/wav"));
+		socket.serverBinary(
+			encodeBinaryAudioFrame({
+				kind: BINARY_AUDIO_FRAME_KIND.serverWavSegment,
+				sequence: 43,
+				payload: wav,
+			}),
+		);
+		expect(received).toEqual([
+			{ sequence: 42, bytes: mp3 },
+			{ sequence: 43, bytes: wav },
+		]);
+
+		socket.serverJson(audioSegment(4, 44, mp3.byteLength));
 		socket.serverBinary(
 			encodeBinaryAudioFrame({
 				kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
-				sequence: 44,
+				sequence: 45,
 				payload: mp3,
 			}),
 		);
-		expect(received).toHaveLength(1);
+		expect(received).toHaveLength(2);
 		expect(errors.at(-1)).toContain("sequence does not match");
 	});
 
@@ -568,7 +588,9 @@ describe("voice WebSocket transport", () => {
 			true,
 		);
 		expect(
-			errors.some((message) => message.includes("server MP3 frame kind")),
+			errors.some((message) =>
+				message.includes("does not match its server frame kind"),
+			),
 		).toBe(true);
 		expect(errors.at(-1)).toBe("Malformed WebSocket JSON event");
 	});
@@ -801,12 +823,12 @@ describe("voice WebSocket transport", () => {
 			onAudio: (metadata) => received.push(metadata.sequence),
 			onProtocolError: (error) => errors.push(error.message),
 		});
-		const mp3 = createDeterministicMp3Fixture();
-		const metadata = audioSegment(2, 42, mp3.byteLength);
+		const wav = createDeterministicTtsWavFixture();
+		const metadata = audioSegment(2, 42, wav.byteLength, "audio/wav");
 		const binary = encodeBinaryAudioFrame({
-			kind: BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
+			kind: BINARY_AUDIO_FRAME_KIND.serverWavSegment,
 			sequence: 42,
-			payload: mp3,
+			payload: wav,
 		});
 
 		transport.connect();

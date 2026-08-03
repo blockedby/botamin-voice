@@ -2,7 +2,10 @@
 import { describe, expect, test } from "bun:test";
 import {
 	createDeterministicMp3Fixture,
+	createDeterministicTtsWavFixture,
+	createInvalidTtsWavFixtures,
 	createMalformedMp3Fixture,
+	createRawTtsPcm16Fixture,
 } from "../../../../packages/test-fixtures/src";
 import {
 	type AudioPlaybackApis,
@@ -36,6 +39,21 @@ function segment(sequence: number, bytes = createDeterministicMp3Fixture()) {
 		segmentId: `01J${String(sequence + 5).padStart(23, "0")}`,
 		sequence,
 		contentType: "audio/mpeg",
+		byteLength: bytes.byteLength,
+		final: true,
+		bytes,
+	} satisfies CompletePlaybackSegment;
+}
+
+function wavSegment(
+	sequence: number,
+	bytes: Uint8Array = createDeterministicTtsWavFixture(),
+) {
+	return {
+		generationId,
+		segmentId: `01J${String(sequence + 15).padStart(23, "0")}`,
+		sequence,
+		contentType: "audio/wav",
 		byteLength: bytes.byteLength,
 		final: true,
 		bytes,
@@ -131,7 +149,7 @@ function playbackHarness(
 	};
 }
 
-describe("bounded complete-MP3 Web Audio playback", () => {
+describe("bounded complete MP3 and WAV Web Audio playback", () => {
 	test("schedules contiguous sources before the first source ends", async () => {
 		const harness = playbackHarness();
 		const started: number[] = [];
@@ -312,6 +330,57 @@ describe("bounded complete-MP3 Web Audio playback", () => {
 			true,
 		]);
 		expect(queue.activeGenerationId).toBeNull();
+	});
+
+	test("validates canonical WAV before injecting exact bytes into decodeAudioData", async () => {
+		const decoded: Uint8Array[] = [];
+		const harness = playbackHarness(async (buffer) => {
+			decoded.push(new Uint8Array(buffer).slice());
+			return 789;
+		});
+		const queue = new PhrasePlaybackQueue(harness.apis);
+		queue.beginGeneration(generationId);
+		const wav = createDeterministicTtsWavFixture();
+
+		expect(await queue.enqueue(wavSegment(0, wav))).toEqual({
+			status: "accepted",
+		});
+		expect(decoded).toEqual([wav]);
+	});
+
+	test("rejects raw PCM, malformed WAV, and content/container mismatches", async () => {
+		const invalidWavs = createInvalidTtsWavFixtures();
+		for (const bytes of [
+			createRawTtsPcm16Fixture(),
+			invalidWavs.truncated,
+			invalidWavs.wrongRate,
+			invalidWavs.wrongChannels,
+			invalidWavs.wrongBitDepth,
+			invalidWavs.trailing,
+		]) {
+			const queue = new PhrasePlaybackQueue(playbackHarness().apis);
+			queue.beginGeneration(generationId);
+			expect(await queue.enqueue(wavSegment(0, bytes))).toMatchObject({
+				status: "rejected",
+				reason: "invalid",
+			});
+		}
+
+		const wavAsMp3 = new PhrasePlaybackQueue(playbackHarness().apis);
+		wavAsMp3.beginGeneration(generationId);
+		expect(
+			await wavAsMp3.enqueue({
+				...segment(0),
+				bytes: createDeterministicTtsWavFixture(),
+				byteLength: createDeterministicTtsWavFixture().byteLength,
+			}),
+		).toMatchObject({ status: "rejected", reason: "invalid" });
+
+		const mp3AsWav = new PhrasePlaybackQueue(playbackHarness().apis);
+		mp3AsWav.beginGeneration(generationId);
+		expect(
+			await mp3AsWav.enqueue(wavSegment(0, createDeterministicMp3Fixture())),
+		).toMatchObject({ status: "rejected", reason: "invalid" });
 	});
 
 	test("rejects and clears malformed MP3 and current-generation metadata errors", async () => {

@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+	CanonicalTtsWavBytesSchema,
+	COMPLETE_AUDIO_SEGMENT_MAX_BYTES,
+} from "./audio";
+import {
 	ContractVersionSchema,
 	EntityIdSchema,
 	MpegAudioBytesSchema,
@@ -65,7 +69,7 @@ const BookingClientEventBaseShape = {
 
 export const PLAYBACK_FLOW_MAX_SEGMENTS = 4;
 export const PLAYBACK_FLOW_MAX_BYTES = 20_000_000;
-export const PLAYBACK_FLOW_MAX_SEGMENT_BYTES = 5_000_000;
+export const PLAYBACK_FLOW_MAX_SEGMENT_BYTES = COMPLETE_AUDIO_SEGMENT_MAX_BYTES;
 
 export const PlaybackFlowControlSchema = z
 	.object({
@@ -354,22 +358,34 @@ export const AssistantTextDoneEventSchema = z
 	})
 	.strict();
 
-export const AudioSegmentMetadataSchema = z
+const AudioSegmentMetadataBaseShape = {
+	generationId: EntityIdSchema,
+	segmentId: EntityIdSchema,
+	sequence: BinaryAudioFrameSequenceSchema,
+	byteLength: z.number().int().positive().max(PLAYBACK_FLOW_MAX_SEGMENT_BYTES),
+	final: z.literal(true),
+};
+
+export const Mp3AudioSegmentMetadataSchema = z
 	.object({
-		generationId: EntityIdSchema,
-		segmentId: EntityIdSchema,
-		sequence: BinaryAudioFrameSequenceSchema,
+		...AudioSegmentMetadataBaseShape,
 		contentType: z.literal("audio/mpeg"),
-		byteLength: z
-			.number()
-			.int()
-			.positive()
-			.max(PLAYBACK_FLOW_MAX_SEGMENT_BYTES),
-		final: z.literal(true),
 	})
 	.strict();
 
-/** Metadata for the one complete binary MP3 payload that follows atomically. */
+export const WavAudioSegmentMetadataSchema = z
+	.object({
+		...AudioSegmentMetadataBaseShape,
+		contentType: z.literal("audio/wav"),
+	})
+	.strict();
+
+export const AudioSegmentMetadataSchema = z.discriminatedUnion("contentType", [
+	Mp3AudioSegmentMetadataSchema,
+	WavAudioSegmentMetadataSchema,
+]);
+
+/** Metadata for the one complete binary MP3 or canonical WAV payload next. */
 export const AudioSegmentEventSchema = z
 	.object({
 		...ServerEventBaseShape,
@@ -528,6 +544,7 @@ export const WsJsonEventSchema = z.union([
 export const BINARY_AUDIO_FRAME_KIND = Object.freeze({
 	clientPcm16: 0x01,
 	serverMp3Segment: 0x02,
+	serverWavSegment: 0x03,
 } as const);
 export const BINARY_AUDIO_FRAME_KIND_OFFSET = 0 as const;
 export const BINARY_AUDIO_FRAME_SEQUENCE_OFFSET = 1 as const;
@@ -548,7 +565,8 @@ export interface BinaryAudioFrame {
 function isBinaryAudioFrameKind(value: number): value is BinaryAudioFrameKind {
 	return (
 		value === BINARY_AUDIO_FRAME_KIND.clientPcm16 ||
-		value === BINARY_AUDIO_FRAME_KIND.serverMp3Segment
+		value === BINARY_AUDIO_FRAME_KIND.serverMp3Segment ||
+		value === BINARY_AUDIO_FRAME_KIND.serverWavSegment
 	);
 }
 
@@ -631,21 +649,34 @@ export const ClientBinaryAudioFrameMetadataSchema = z
 	})
 	.strict();
 
-export const ServerBinaryAudioFrameMetadataSchema = z
-	.object({
-		direction: z.literal("server"),
-		...AudioSegmentMetadataSchema.shape,
-	})
-	.strict();
-
-export const BinaryAudioFrameMetadataSchema = z.discriminatedUnion(
-	"direction",
-	[ClientBinaryAudioFrameMetadataSchema, ServerBinaryAudioFrameMetadataSchema],
+export const ServerBinaryAudioFrameMetadataSchema = z.discriminatedUnion(
+	"contentType",
+	[
+		z
+			.object({
+				direction: z.literal("server"),
+				...AudioSegmentMetadataBaseShape,
+				contentType: z.literal("audio/mpeg"),
+			})
+			.strict(),
+		z
+			.object({
+				direction: z.literal("server"),
+				...AudioSegmentMetadataBaseShape,
+				contentType: z.literal("audio/wav"),
+			})
+			.strict(),
+	],
 );
 
+export const BinaryAudioFrameMetadataSchema = z.union([
+	ClientBinaryAudioFrameMetadataSchema,
+	ServerBinaryAudioFrameMetadataSchema,
+]);
+
 /**
- * Validates the adjacent JSON metadata and canonical raw binary frame as one
- * coherent server MP3 segment. metadata.byteLength counts payload bytes only.
+ * Validates adjacent JSON metadata and its canonical raw binary frame as one
+ * coherent complete segment. metadata.byteLength counts payload bytes only.
  */
 export const AtomicServerAudioSegmentFrameSchema = z
 	.object({
@@ -667,10 +698,14 @@ export const AtomicServerAudioSegmentFrameSchema = z
 			return;
 		}
 
-		if (decoded.kind !== BINARY_AUDIO_FRAME_KIND.serverMp3Segment) {
+		const expectedKind =
+			atomicFrame.metadata.contentType === "audio/mpeg"
+				? BINARY_AUDIO_FRAME_KIND.serverMp3Segment
+				: BINARY_AUDIO_FRAME_KIND.serverWavSegment;
+		if (decoded.kind !== expectedKind) {
 			context.addIssue({
 				code: "custom",
-				message: "audio.segment must be paired with a server MP3 frame kind",
+				message: `audio.segment ${atomicFrame.metadata.contentType} metadata does not match its server frame kind`,
 				path: ["rawFrame", BINARY_AUDIO_FRAME_KIND_OFFSET],
 			});
 		}
@@ -685,15 +720,18 @@ export const AtomicServerAudioSegmentFrameSchema = z
 			context.addIssue({
 				code: "custom",
 				message:
-					"Binary MP3 payload length does not match audio.segment metadata",
+					"Binary audio payload length does not match audio.segment metadata",
 				path: ["rawFrame"],
 			});
 		}
-		const mp3Result = MpegAudioBytesSchema.safeParse(decoded.payload);
-		if (!mp3Result.success) {
+		const payloadResult =
+			atomicFrame.metadata.contentType === "audio/mpeg"
+				? MpegAudioBytesSchema.safeParse(decoded.payload)
+				: CanonicalTtsWavBytesSchema.safeParse(decoded.payload);
+		if (!payloadResult.success) {
 			context.addIssue({
 				code: "custom",
-				message: "Binary audio.segment payload is not structurally valid MP3",
+				message: `Binary audio.segment payload is not valid ${atomicFrame.metadata.contentType}`,
 				path: ["rawFrame", BINARY_AUDIO_FRAME_PAYLOAD_OFFSET],
 			});
 		}

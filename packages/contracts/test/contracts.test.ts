@@ -20,6 +20,7 @@ import {
 	BookingSnapshotSchema,
 	BookingToolExecutionSchema,
 	BrainTurnInputSchema,
+	CanonicalTtsWavBytesSchema,
 	ClientWsEventSchema,
 	ContactSchema,
 	CreateBookingInputSchema,
@@ -27,6 +28,7 @@ import {
 	decodeBinaryAudioFrame,
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
+	encodeCanonicalTtsWav,
 	isCompleteMp3File,
 	LOCAL_REACTION_CAPABILITY_VERSION,
 	LOCAL_REACTION_CLIP_IDS,
@@ -915,7 +917,7 @@ describe("shared contracts", () => {
 		}
 	});
 
-	test("validates complete non-empty MP3 TTS segments", () => {
+	test("validates discriminated complete MP3 and canonical WAV TTS segments", () => {
 		const segment = {
 			generationId: "01J00000000000000000000004",
 			segmentId: "01J00000000000000000000005",
@@ -925,6 +927,15 @@ describe("shared contracts", () => {
 			final: true,
 		};
 		expect(TtsAudioSegmentSchema.safeParse(segment).success).toBe(true);
+		const wavSegment = {
+			...segment,
+			contentType: "audio/wav",
+			bytes: encodeCanonicalTtsWav(new Uint8Array([0, 0, 1, 0])),
+		};
+		expect(TtsAudioSegmentSchema.safeParse(wavSegment).success).toBe(true);
+		expect(CanonicalTtsWavBytesSchema.safeParse(wavSegment.bytes).success).toBe(
+			true,
+		);
 		for (const invalid of [
 			{ ...segment, generationId: "generation" },
 			{ ...segment, segmentId: "segment" },
@@ -933,6 +944,9 @@ describe("shared contracts", () => {
 			{ ...segment, bytes: new TextEncoder().encode("not-mp3") },
 			{ ...segment, bytes: "mp3" },
 			{ ...segment, contentType: "audio/wav" },
+			{ ...wavSegment, contentType: "audio/mpeg" },
+			{ ...wavSegment, bytes: new Uint8Array([0, 0, 1, 0]) },
+			{ ...segment, contentType: "audio/pcm" },
 			{ ...segment, final: false },
 			{ ...segment, encoding: "pcm16le" },
 		]) {
@@ -945,7 +959,7 @@ describe("shared contracts", () => {
 		]);
 	});
 
-	test("freezes MP3 output client configuration and rejects PCM output", () => {
+	test("advertises complete MP3 or WAV output and rejects raw PCM output", () => {
 		const config = {
 			inputSampleRate: 16_000,
 			inputEncoding: "pcm16le",
@@ -956,8 +970,14 @@ describe("shared contracts", () => {
 			outputMode: "complete-phrase-segments",
 		};
 		expect(AudioClientConfigSchema.safeParse(config).success).toBe(true);
+		expect(
+			AudioClientConfigSchema.safeParse({
+				...config,
+				outputContentType: "audio/wav",
+			}).success,
+		).toBe(true);
 		for (const invalid of [
-			{ ...config, outputContentType: "audio/wav" },
+			{ ...config, outputContentType: "audio/pcm" },
 			{ ...config, outputMode: "streaming-chunks" },
 			{ ...config, inputSampleRate: 24_000 },
 			{ ...config, maxUtteranceMs: 60_001, maxPcmBytes: 1_920_034 },
@@ -985,13 +1005,19 @@ describe("shared contracts", () => {
 			},
 		};
 		expect(AudioSegmentEventSchema.safeParse(metadata).success).toBe(true);
+		expect(
+			AudioSegmentEventSchema.safeParse({
+				...metadata,
+				payload: { ...metadata.payload, contentType: "audio/wav" },
+			}).success,
+		).toBe(true);
 		for (const payload of [
 			{ ...metadata.payload, generationId: "generation" },
 			{ ...metadata.payload, segmentId: "segment" },
 			{ ...metadata.payload, sequence: -1 },
 			{ ...metadata.payload, sequence: 0.5 },
 			{ ...metadata.payload, sequence: Number.MAX_SAFE_INTEGER + 1 },
-			{ ...metadata.payload, contentType: "audio/wav" },
+			{ ...metadata.payload, contentType: "audio/pcm" },
 			{ ...metadata.payload, byteLength: 0 },
 			{
 				...metadata.payload,
@@ -1061,8 +1087,14 @@ describe("shared contracts", () => {
 			byteLength: mp3.byteLength,
 			final: true,
 		};
-		const encode = (kind: 1 | 2, sequence: number, payload = mp3) =>
+		const encode = (kind: 1 | 2 | 3, sequence: number, payload = mp3) =>
 			encodeBinaryAudioFrame({ kind, sequence, payload });
+		const wav = encodeCanonicalTtsWav(new Uint8Array([0, 0, 1, 0]));
+		const wavMetadata = {
+			...metadata,
+			contentType: "audio/wav",
+			byteLength: wav.byteLength,
+		};
 
 		for (const invalid of [
 			{
@@ -1083,6 +1115,18 @@ describe("shared contracts", () => {
 					BINARY_AUDIO_FRAME_KIND.serverMp3Segment,
 					7,
 					mp3.slice(0, -1),
+				),
+			},
+			{
+				metadata: wavMetadata,
+				rawFrame: encode(BINARY_AUDIO_FRAME_KIND.serverMp3Segment, 7, wav),
+			},
+			{
+				metadata: wavMetadata,
+				rawFrame: encode(
+					BINARY_AUDIO_FRAME_KIND.serverWavSegment,
+					7,
+					new Uint8Array([0, 0, 1, 0]),
 				),
 			},
 			{ metadata, bytes: mp3 },
@@ -1118,6 +1162,7 @@ describe("shared contracts", () => {
 		expect(BINARY_AUDIO_FRAME_KIND).toEqual({
 			clientPcm16: 0x01,
 			serverMp3Segment: 0x02,
+			serverWavSegment: 0x03,
 		});
 		expect(() =>
 			encodeBinaryAudioFrame({

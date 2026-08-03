@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	type AppendQualificationInput,
 	type AppendQualificationResult,
+	AtomicServerAudioSegmentFrameSchema,
 	BINARY_AUDIO_FRAME_KIND,
 	type BookingService,
 	type BookingSnapshot,
@@ -26,6 +27,7 @@ import {
 	type TtsSynthesisRequest,
 } from "@botamin/contracts";
 import {
+	createDeterministicTtsWavFixture,
 	createTestBookingContacts,
 	createTestMeetingSlot,
 } from "../../../../packages/test-fixtures/src";
@@ -172,6 +174,21 @@ class Tts implements TtsPort {
 	}
 }
 
+class WavTts extends Tts {
+	override async synthesize(
+		request: TtsSynthesisRequest,
+	): Promise<TtsAudioSegment> {
+		this.requests.push(request);
+		return {
+			generationId: request.generationId,
+			segmentId: request.segmentId,
+			contentType: "audio/wav",
+			bytes: createDeterministicTtsWavFixture(),
+			final: true,
+		};
+	}
+}
+
 class BlockingTts implements TtsPort {
 	readonly requests: TtsSynthesisRequest[] = [];
 	async synthesize(request: TtsSynthesisRequest): Promise<TtsAudioSegment> {
@@ -298,6 +315,7 @@ function createHarness(
 		acquireTurn?: GatewaySessionOptions["acquireTurn"];
 		clientHelloTimeoutMs?: number;
 		stopDrainMs?: number;
+		outputContentType?: GatewaySessionOptions["outputContentType"];
 	} = {},
 ) {
 	const stt = options.stt ?? new Stt();
@@ -334,6 +352,9 @@ function createHarness(
 		brainModel: "gpt-5.6-luna",
 		maxUtteranceMs: 60_000,
 		maxAudioBytes: 2_000_000,
+		...(options.outputContentType === undefined
+			? {}
+			: { outputContentType: options.outputContentType }),
 		maxFrameBytes: 3_209,
 		maxJsonBytes: 8_192,
 		maxHistoryEvents: 128,
@@ -484,6 +505,77 @@ describe("gateway fake full WebSocket path", () => {
 		await harness.session.receive(socket, clientEvent("audio.commit"));
 		expect(harness.stt.requests).toHaveLength(1);
 		expect(harness.persisted).toHaveLength(1);
+	});
+
+	test("frames an adapter-independent canonical WAV segment without changing bytes", async () => {
+		const wav = createDeterministicTtsWavFixture();
+		const harness = createHarness({
+			tts: new WavTts(),
+			outputContentType: "audio/wav",
+		});
+		const socket = new Socket();
+		await connect(harness.session, socket);
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", {
+				sequence: 0,
+				text: "Проверка WAV",
+			}),
+		);
+		await harness.session.drain();
+
+		const metadataEvent = socket
+			.events()
+			.find((event) => event.type === "audio.segment");
+		const rawFrame = socket.sent.find(
+			(entry): entry is Uint8Array => entry instanceof Uint8Array,
+		);
+		if (metadataEvent?.type !== "audio.segment" || !rawFrame) {
+			throw new Error("Expected WAV metadata and binary frame");
+		}
+		expect(
+			socket.events().find((event) => event.type === "session.ready")?.payload
+				.clientConfig.outputContentType,
+		).toBe("audio/wav");
+		expect(metadataEvent.payload.contentType).toBe("audio/wav");
+		expect(
+			AtomicServerAudioSegmentFrameSchema.safeParse({
+				metadata: metadataEvent.payload,
+				rawFrame,
+			}).success,
+		).toBe(true);
+		const decoded = decodeBinaryAudioFrame(rawFrame);
+		expect(decoded.kind).toBe(BINARY_AUDIO_FRAME_KIND.serverWavSegment);
+		expect(decoded.payload).toEqual(wav);
+	});
+
+	test("rejects provider audio that differs from the advertised output content", async () => {
+		const harness = createHarness({ tts: new WavTts() });
+		const socket = new Socket();
+		await connect(harness.session, socket);
+		await harness.session.receive(
+			socket,
+			clientEvent("visitor.text.submit", {
+				sequence: 0,
+				text: "Проверка несовпадения",
+			}),
+		);
+		await harness.session.drain();
+
+		expect(
+			socket.events().some((event) => event.type === "audio.segment"),
+		).toBe(false);
+		expect(
+			socket
+				.events()
+				.some(
+					(event) =>
+						event.type === "error" && event.payload.code === "TTS_UNAVAILABLE",
+				),
+		).toBe(true);
+		expect(socket.sent.some((entry) => entry instanceof Uint8Array)).toBe(
+			false,
+		);
 	});
 
 	test("routes one minimal reaction only to a capable client and never adds provider traffic", async () => {

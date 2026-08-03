@@ -1,5 +1,6 @@
 import {
 	type AudioSegmentMetadata,
+	CanonicalTtsWavBytesSchema,
 	LOCAL_REACTION_DELAY_MAX_MS,
 	LOCAL_REACTION_DELAY_MIN_MS,
 	type LocalReactionClipId,
@@ -28,9 +29,9 @@ export interface AudioPlaybackApis<TDecoded = unknown> {
 	close?(): Promise<void>;
 }
 
-export interface CompletePlaybackSegment extends AudioSegmentMetadata {
+export type CompletePlaybackSegment = AudioSegmentMetadata & {
 	bytes: Uint8Array;
-}
+};
 
 export interface LocalReactionRequest {
 	turnId: string;
@@ -129,7 +130,7 @@ const browserPlaybackScheduler: PlaybackScheduler = {
 };
 
 /**
- * Ordered complete-MP3 player with a fixed four-segment/20MB flow window:
+ * Ordered complete MP3/canonical-WAV player with a four-segment/20MB window:
  * two decode/source slots and two validated raw slots. The server receives one
  * credit only after a source ends, so longer valid turns stream through this
  * bounded window without widening decoded memory.
@@ -462,15 +463,18 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 	}
 
 	private isValid(segment: CompletePlaybackSegment): boolean {
-		return (
-			segment.contentType === "audio/mpeg" &&
-			segment.final === true &&
-			Number.isSafeInteger(segment.sequence) &&
-			segment.sequence >= 0 &&
-			segment.byteLength === segment.bytes.byteLength &&
-			segment.byteLength <= PLAYBACK_FLOW_MAX_SEGMENT_BYTES &&
-			MpegAudioBytesSchema.safeParse(segment.bytes).success
-		);
+		if (
+			segment.final !== true ||
+			!Number.isSafeInteger(segment.sequence) ||
+			segment.sequence < 0 ||
+			segment.byteLength !== segment.bytes.byteLength ||
+			segment.byteLength > PLAYBACK_FLOW_MAX_SEGMENT_BYTES
+		) {
+			return false;
+		}
+		return segment.contentType === "audio/mpeg"
+			? MpegAudioBytesSchema.safeParse(segment.bytes).success
+			: CanonicalTtsWavBytesSchema.safeParse(segment.bytes).success;
 	}
 
 	private reserveDecode(

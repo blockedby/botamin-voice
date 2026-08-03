@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CanonicalTtsWavBytesSchema } from "./audio";
 import {
 	EntityIdSchema,
 	MpegAudioBytesSchema,
@@ -379,16 +380,34 @@ export const TtsSynthesisRequestDataSchema = z
 	})
 	.strict();
 
-export const TtsAudioSegmentSchema = z
+const TtsAudioSegmentBaseShape = {
+	generationId: EntityIdSchema,
+	segmentId: EntityIdSchema,
+	providerGenerationId: z.string().min(1).max(512).optional(),
+	final: z.literal(true),
+};
+
+export const TtsMp3AudioSegmentSchema = z
 	.object({
-		generationId: EntityIdSchema,
-		segmentId: EntityIdSchema,
-		providerGenerationId: z.string().min(1).max(512).optional(),
+		...TtsAudioSegmentBaseShape,
 		contentType: z.literal("audio/mpeg"),
 		bytes: MpegAudioBytesSchema,
-		final: z.literal(true),
 	})
 	.strict();
+
+export const TtsWavAudioSegmentSchema = z
+	.object({
+		...TtsAudioSegmentBaseShape,
+		contentType: z.literal("audio/wav"),
+		bytes: CanonicalTtsWavBytesSchema,
+	})
+	.strict();
+
+/** One complete, final MP3 or canonical 24 kHz PCM16 WAV segment. */
+export const TtsAudioSegmentSchema = z.discriminatedUnion("contentType", [
+	TtsMp3AudioSegmentSchema,
+	TtsWavAudioSegmentSchema,
+]);
 
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type BrainToolMode = z.infer<typeof BrainToolModeSchema>;

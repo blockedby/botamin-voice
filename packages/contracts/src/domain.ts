@@ -33,7 +33,16 @@ export const ContactSchema = z.discriminatedUnion("channel", [
 	z
 		.object({
 			channel: z.literal("phone"),
-			value: z.string().regex(/^\+7[0-9]{10}$/u),
+			value: z
+				.string()
+				.trim()
+				.min(8)
+				.max(32)
+				.regex(/^\+[1-9][0-9 ()-]*[0-9]$/u)
+				.refine((value) => {
+					const digitCount = value.replace(/[^0-9]/gu, "").length;
+					return digitCount >= 8 && digitCount <= 15;
+				}),
 		})
 		.strict(),
 	z

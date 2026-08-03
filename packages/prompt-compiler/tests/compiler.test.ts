@@ -1,3 +1,4 @@
+import { afterAll as after, test } from "bun:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -15,7 +16,6 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
 	ATTRIBUTED_REVENUE_CLAIM_LINES,

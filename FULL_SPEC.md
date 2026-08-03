@@ -2712,8 +2712,8 @@ Fresh RC4 command evidence is recorded in [`../VALIDATION.md`](VALIDATION.md). T
 - [x] Credential-free fixture baseline is current: 44/44 scenarios, 25/25 applicable booking-order checks, 28/28 negative controls, zero provider calls; real Luna not run.
 - [x] Chromium desktop/mobile Playwright landing smoke passed through the shared Chromium harness. This proves responsive/pre-consent transport boundaries only, not a full voice booking journey.
 - [x] Focused cutover tests prove protected backup precedes graceful stop, existing stopped DB is protected, migration is delegated to normal startup, readiness precedes `verify-rc4`, and RC3 schema upgrades to migration 0004 without a duplicate meeting table.
-- [x] RC4-focused tests, typecheck, build, Biome, generated spec validation, release artifact regeneration, and `git diff --check` are reported with actual fresh outputs in `VALIDATION.md`.
-- [ ] Repository-wide tests are not fully green: 640 passed and two unchanged integrated journey tests failed; see `VALIDATION.md`.
+- [x] The provider-independent repository suite is green: 660 tests across 66 files, including the RC4 provider-contract and production-component journeys.
+- [x] Typecheck, build, Biome, generated spec validation, release artifact regeneration, and `git diff --check` are reported with actual fresh outputs in `VALIDATION.md`.
 - [ ] Docker Compose cutover against an owner-configured live local volume and credentials was not run by the documentation handoff; the wrapper is covered statically/fake-Docker and DB tests.
 - [ ] Full local voice booking journey was not run; do not infer it from Chromium landing smoke or fixture evals.
 
@@ -2731,7 +2731,7 @@ External calendar creation is intentionally absent, not a release gate. The prod
 
 The RC4 handoff bundle contains:
 
-- implementation baseline through `58aa9ee` and a separate handoff commit; no PR/tag is invented;
+- integrated RC4 implementation plus recorded closure fixes; no PR/tag is invented;
 - recommended/pending `v0.5.0-local-rc.4` label;
 - source docs plus regenerated `FULL_SPEC.md`, `technical-spec.html`, `MANIFEST.txt`, and `CHECKSUMS.sha256`;
 - deterministic migration/cutover, contracts, app, web, privacy, eval, type, and Biome evidence as actually run;
@@ -3270,7 +3270,7 @@ VoiceOrchestrator
 
 **Tag state:** pending/recommendation only. No tag, PR, registry digest, or predecessor image is asserted by this handoff.
 
-**Implementation baseline:** integrated RC4 code through `58aa9ee`; release documentation/operations are committed separately.
+**Implementation baseline:** integrated RC4 code through `58aa9ee`, followed by recorded review-closure, integration-harness, and release-handoff commits on the candidate branch.
 
 **Scope:** local hosting on one trusted machine. This is not target-VPS or public TLS/WSS acceptance.
 
@@ -3293,7 +3293,7 @@ Fresh RC4 results are recorded in [`../VALIDATION.md`](VALIDATION.md). The RC3 r
 - Chromium desktop/mobile Playwright **landing smoke** passed through the shared harness. It covers responsive/pre-consent boundaries, not a full voice booking journey.
 - Fixture-only eval baseline is 44/44 scenarios, 25/25 applicable booking-order checks, and 28/28 negative controls with zero provider calls; real Luna was not run.
 - Migration/cutover wrappers and RC3→RC4 schema compatibility are covered by deterministic tests.
-- Repository-wide tests are not fully green: 640 pass and two unchanged integrated journey tests fail; exact evidence is in `VALIDATION.md`.
+- The provider-independent repository suite is green: 660 tests across 66 files; exact evidence is in `VALIDATION.md`.
 - WebKit full journey is not run. Its browser binary is present, but this host lacks `libicu74`, `libxml2`, and `libflite1`.
 - Full voice booking, owner-configured live Compose cutover, target VPS, public TLS/WSS, and target-host provider live booking remain explicit gates.
 

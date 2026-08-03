@@ -1,6 +1,6 @@
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { dirname, resolve } from "node:path";
-import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
 	AppendQualificationInputSchema,

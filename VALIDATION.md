@@ -6,13 +6,13 @@
 
 **Release label:** `0.5.0-local-rc.4` (recommended; tag pending)
 
-**Candidate branch:** `docs/rc4-handoff`
+**Candidate branch:** `feat/conversation-memory-virtual-meeting`
 
-**Integrated implementation baseline:** `58aa9ee99b2daa4e6d8bceacb537f117cb6fbf1c`
+**Integrated implementation baseline:** `58aa9ee99b2daa4e6d8bceacb537f117cb6fbf1c`; closure fixes and evidence are recorded by the later commits on this branch.
 
-**Release commit:** this handoff commit; hash recorded by Git after commit, not predeclared in this artifact.
+**Release commit:** pending final branch commit; no hash is predeclared in this artifact.
 
-**Result:** documentation, local cutover safety, generated specification, and release artifacts are prepared. RC4-focused tests, typecheck, build, Biome, evals, spec validation, Compose static validation, and Chromium desktop/mobile landing smoke pass. The repository-wide test command still has two failures in unchanged integrated journey tests, so this report does **not** claim a fully green deterministic suite or full release readiness.
+**Result:** RC4 implementation, closure fixes, documentation, local cutover safety, and generated specification are prepared. The full provider-independent test suite, typecheck, build, Biome, evals, spec validation, Compose static validation, and Chromium desktop/mobile landing smoke pass. This report does **not** claim the external gates listed below.
 
 This report does not claim a WebKit/full voice journey, owner-configured live local cutover, target-VPS resources, DNS, public TLS/WSS, target-host provider live booking, external calendar availability/event/invite, or CRM integration.
 
@@ -54,8 +54,8 @@ bun run build: passed across all workspaces; production web/server bundles built
 bun run lint:format: passed, 173 files checked, no fixes
 bunx biome check infra/ops/db.ts infra/ops/db.test.ts infra/ops/scripts.test.ts: passed
 
-RC4-focused test command: 158 passed, 0 failed across 14 files (892 assertions)
-focused infra/ops command: 19 passed, 0 failed (147 assertions; included in the RC4-focused run)
+repository-wide test command: 660 passed, 0 failed across 66 files (5,131 assertions)
+focused infra/ops command: 19 passed, 0 failed (147 assertions)
 offline eval: 44/44 scenarios; 25/25 booking-order; 28/28 negative controls; zero critical failures
 bun evals/src/generate-baseline.ts --check: deterministic artifact current
 
@@ -74,18 +74,7 @@ sha256sum -c CHECKSUMS.sha256: 363 files OK
 git diff --check: passed
 ```
 
-### Repository-wide test exception
-
-```text
-bun test --path-ignore-patterns '**/dist/**': 640 passed, 2 failed across 66 files (4,900 assertions)
-```
-
-Fresh isolated reruns reproduce both failures:
-
-1. `tests/contracts/openrouter-cross-component.test.ts` expects two successful TTS requests but observes five while STT retry counts remain as expected.
-2. `tests/e2e/production-voice-journey.test.ts` expects one `booking.created` event at the legacy journey checkpoint but observes none.
-
-Neither failing test nor its implementation path was modified by this documentation/operations handoff. The failures are retained as explicit integrated-baseline follow-up; they block any claim that the full credential-free suite is green.
+The prior integration-harness failures were closed by updating the provider contract and production-component journey to the RC4 exact-draft-confirmation lifecycle. The canonical credential-free suite is green; this does not substitute for the provider and browser external gates.
 
 ## Privacy and retention boundary
 

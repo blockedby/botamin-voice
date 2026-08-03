@@ -5254,12 +5254,12 @@ prove protected backup precedes graceful stop, existing stopped DB is
 protected, migration is delegated to normal startup, readiness precedes
 <code>verify-rc4</code>, and RC3 schema upgrades to migration 0004
 without a duplicate meeting table.</label></li>
-<li><label><input type="checkbox" checked></input>RC4-focused tests,
-typecheck, build, Biome, generated spec validation, release artifact
-regeneration, and <code>git diff --check</code> are reported with actual
-fresh outputs in <code>VALIDATION.md</code>.</label></li>
-<li><label><input type="checkbox"></input>Repository-wide tests are not fully
-green: 640 passed and two unchanged integrated journey tests failed; see
+<li><label><input type="checkbox" checked></input>The provider-independent
+repository suite is green: 660 tests across 66 files, including the RC4
+provider-contract and production-component journeys.</label></li>
+<li><label><input type="checkbox" checked></input>Typecheck, build, Biome,
+generated spec validation, release artifact regeneration, and
+<code>git diff --check</code> are reported with actual fresh outputs in
 <code>VALIDATION.md</code>.</label></li>
 <li><label><input type="checkbox"></input>Docker Compose cutover against an
 owner-configured live local volume and credentials was not run by the
@@ -5294,8 +5294,8 @@ table or claims an external event/invite.</p>
 <h2 id="candidate-evidence-bundle">11. Candidate evidence bundle</h2>
 <p>The RC4 handoff bundle contains:</p>
 <ul>
-<li>implementation baseline through <code>58aa9ee</code> and a separate
-handoff commit; no PR/tag is invented;</li>
+<li>integrated RC4 implementation plus recorded closure fixes; no PR/tag
+is invented;</li>
 <li>recommended/pending <code>v0.5.0-local-rc.4</code> label;</li>
 <li>source docs plus regenerated <code>FULL_SPEC.md</code>,
 <code>technical-spec.html</code>, <code>MANIFEST.txt</code>, and
@@ -6118,8 +6118,9 @@ booking/qualification проверяемыми и оставляет путь к
 <p><strong>Tag state:</strong> pending/recommendation only. No tag, PR,
 registry digest, or predecessor image is asserted by this handoff.</p>
 <p><strong>Implementation baseline:</strong> integrated RC4 code through
-<code>58aa9ee</code>; release documentation/operations are committed
-separately.</p>
+<code>58aa9ee</code>, followed by recorded review-closure,
+integration-harness, and release-handoff commits on the candidate
+branch.</p>
 <p><strong>Scope:</strong> local hosting on one trusted machine. This is
 not target-VPS or public TLS/WSS acceptance.</p>
 <h2 id="rc4-behavior-being-handed-off">RC4 behavior being handed
@@ -6168,9 +6169,8 @@ booking-order checks, and 28/28 negative controls with zero provider
 calls; real Luna was not run.</li>
 <li>Migration/cutover wrappers and RC3→RC4 schema compatibility are
 covered by deterministic tests.</li>
-<li>Repository-wide tests are not fully green: 640 pass and two
-unchanged integrated journey tests fail; exact evidence is in
-<code>VALIDATION.md</code>.</li>
+<li>The provider-independent repository suite is green: 660 tests across
+66 files; exact evidence is in <code>VALIDATION.md</code>.</li>
 <li>WebKit full journey is not run. Its browser binary is present, but
 this host lacks <code>libicu74</code>, <code>libxml2</code>, and
 <code>libflite1</code>.</li>

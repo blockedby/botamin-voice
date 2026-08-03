@@ -106,18 +106,24 @@ describe("shared contracts", () => {
 		).toBe(false);
 	});
 
-	test("accepts only canonical Russian phone contacts", () => {
-		expect(
-			ContactSchema.safeParse({ channel: "phone", value: "+79991234567" })
-				.success,
-		).toBe(true);
+	test("accepts bounded international phone contacts without unsafe separators", () => {
+		for (const value of [
+			"+79991234567",
+			"+7 999 123-45-67",
+			"+1 202-555-0101",
+		]) {
+			expect(ContactSchema.safeParse({ channel: "phone", value }).success).toBe(
+				true,
+			);
+		}
 		for (const value of [
 			"89991234567",
-			"+7 999 123-45-67",
 			"+7/999/123/45/67",
+			"+7,999,123,45,67",
+			"+7 999 123 45\u200b67",
 			"+٧٩٩٩١٢٣٤٥٦٧",
-			"+7999123456",
-			"+799912345678",
+			"+1234567",
+			"+1234567890123456",
 		]) {
 			expect(ContactSchema.safeParse({ channel: "phone", value }).success).toBe(
 				false,

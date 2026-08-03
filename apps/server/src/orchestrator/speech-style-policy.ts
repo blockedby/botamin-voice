@@ -52,7 +52,97 @@ export interface SpeechDeliveryStyleInput {
 	readonly containsQualificationFacts: boolean;
 	readonly priorTurnInterrupted: boolean;
 	/** Unicode code point count computed by the server; never the response text. */
-	readonly responseLength?: number;
+	readonly responseLength: number;
+}
+
+export interface ModelSpeechResponseClassification {
+	readonly category: SpeechResponseCategory;
+	readonly containsExactMeetingFacts: boolean;
+	readonly responseLength: number;
+}
+
+const QUESTION_MARK = /[?？]/u;
+const NUMERIC_DATE_OR_TIME =
+	/(?:^|[^\p{L}\p{N}])(?:\d{1,2}:\d{2}|\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?)(?![\p{L}\p{N}])/u;
+const DATED_SCHEDULING_CONTEXT =
+	/(?:(?<![\p{L}\p{N}])(?:перв(?:ый|ого)|втор(?:ой|ого))\s+(?:вариант|слот)(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])(?:сегодня|завтра|послезавтра|понедельник|вторник|среда|четверг|пятница|суббота|воскресенье|январ[ья]|феврал[ья]|март[ае]?|апрел[ья]|ма[йя]|июн[ья]|июл[ья]|август[ае]?|сентябр[ья]|октябр[ья]|ноябр[ья]|декабр[ья])(?![\p{L}\p{N}]))/iu;
+const NUMERIC_MEETING_CONTEXT =
+	/(?:(?<![\p{L}\p{N}])(?:встреч|созвон|слот|кандидат|вариант|дат|врем)[\p{L}-]*(?![\p{L}\p{N}])[^.!?]{0,80}\p{N}|\p{N}[^.!?]{0,80}(?<![\p{L}\p{N}])(?:встреч|созвон|слот|кандидат|вариант|дат|врем)[\p{L}-]*(?![\p{L}\p{N}]))/iu;
+const OBJECTION_EXPLANATION_SIGNAL =
+	/(?:риск|огранич|провер|безопас|сомнен|опасен|потому|поэтому|защит|контрол)/iu;
+const VALUE_EXPLANATION_SIGNAL =
+	/(?:команд|результат|быстр|польз|ценн|помог|снижа|увелич|эконом|ответ|обращен|лид|конверс|сценар|процесс|автомат)/iu;
+const SOFT_OFFER_SIGNAL =
+	/(?:можно|хотите|готовы|показ|перейти|обсуд|попроб|давайте|следующ)/iu;
+
+/**
+ * Classifies only completed, provider-safe model speech. Visitor input and
+ * contact objects are deliberately absent. The returned object contains no
+ * text and is safe to pass to the bounded style policy/history.
+ */
+export function classifyModelSpeechResponse(
+	stage: ConversationStage,
+	providerSafeSpokenText: string,
+): ModelSpeechResponseClassification {
+	const responseLength = Array.from(providerSafeSpokenText).length;
+	const containsExactMeetingFacts =
+		NUMERIC_DATE_OR_TIME.test(providerSafeSpokenText) ||
+		DATED_SCHEDULING_CONTEXT.test(providerSafeSpokenText) ||
+		NUMERIC_MEETING_CONTEXT.test(providerSafeSpokenText);
+	if (responseLength === 0 || containsExactMeetingFacts) {
+		return {
+			category: containsExactMeetingFacts ? "scheduling_calculation" : "other",
+			containsExactMeetingFacts,
+			responseLength,
+		};
+	}
+
+	const asksQuestion = QUESTION_MARK.test(providerSafeSpokenText);
+	if (stage === "DISCOVERY" && asksQuestion) {
+		return {
+			category: "discovery_question",
+			containsExactMeetingFacts: false,
+			responseLength,
+		};
+	}
+	if (
+		stage === "OBJECTION" &&
+		!asksQuestion &&
+		OBJECTION_EXPLANATION_SIGNAL.test(providerSafeSpokenText)
+	) {
+		return {
+			category: "objection_explanation",
+			containsExactMeetingFacts: false,
+			responseLength,
+		};
+	}
+	if (
+		stage === "VALUE" &&
+		((asksQuestion && SOFT_OFFER_SIGNAL.test(providerSafeSpokenText)) ||
+			(!asksQuestion && VALUE_EXPLANATION_SIGNAL.test(providerSafeSpokenText)))
+	) {
+		return {
+			category: asksQuestion ? "soft_offer" : "value_explanation",
+			containsExactMeetingFacts: false,
+			responseLength,
+		};
+	}
+	if (
+		stage === "BOOKING_OFFER" &&
+		asksQuestion &&
+		SOFT_OFFER_SIGNAL.test(providerSafeSpokenText)
+	) {
+		return {
+			category: "soft_offer",
+			containsExactMeetingFacts: false,
+			responseLength,
+		};
+	}
+	return {
+		category: "other",
+		containsExactMeetingFacts: false,
+		responseLength,
+	};
 }
 
 const ALWAYS_NEUTRAL_STAGES = new Set<ConversationStage>([
@@ -106,10 +196,9 @@ function candidateStyle(input: SpeechDeliveryStyleInput): SpeechDeliveryStyle {
 	}
 
 	if (
-		input.responseLength !== undefined &&
-		(!Number.isSafeInteger(input.responseLength) ||
-			input.responseLength < 0 ||
-			input.responseLength > MAX_EXPRESSIVE_RESPONSE_LENGTH)
+		!Number.isSafeInteger(input.responseLength) ||
+		input.responseLength < 0 ||
+		input.responseLength > MAX_EXPRESSIVE_RESPONSE_LENGTH
 	) {
 		return "neutral";
 	}

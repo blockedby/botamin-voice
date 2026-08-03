@@ -63,6 +63,12 @@ import {
 	StreamingSentenceChunker,
 } from "./speech";
 import {
+	classifyModelSpeechResponse,
+	type SpeechDeliveryStyle,
+	SpeechDeliveryStyleCooldown,
+	type SpeechResponseCategory,
+} from "./speech-style-policy";
+import {
 	type ConversationEvent,
 	type ConversationState,
 	createInitialConversationState,
@@ -203,10 +209,19 @@ type SpeechSynthesisOutcome =
 interface SpeechPipeline {
 	turn: { turnId: string; generationId: string };
 	controller: AbortController;
+	deliveryStyle: SpeechDeliveryStyle;
 	pending: SpeechSynthesisJob[];
 	failed: boolean;
 	degraded: boolean;
 	audioProduced: boolean;
+}
+
+interface ModelSpeechPresentation {
+	readonly provenance: "model_generated";
+	/** Trusted stage supplied to the model for this response. */
+	readonly stage: ConversationState["stage"];
+	/** False while later model deltas could still add sensitive facts. */
+	readonly completed: boolean;
 }
 
 interface TerminalResponsePermit {
@@ -431,6 +446,9 @@ export class ConversationOrchestrator {
 	readonly #generations = new GenerationCoordinator();
 	readonly #budgets: SpeechBudgetGuard;
 	readonly #prefetch = new SpeechPrefetchCoordinator();
+	readonly #deliveryStyleCooldown = new SpeechDeliveryStyleCooldown();
+	readonly #deliveryStyleByGeneration = new Map<string, SpeechDeliveryStyle>();
+	readonly #priorInterruptionByGeneration = new Map<string, boolean>();
 	readonly #chunkerOptions: SpeechChunkerOptions;
 	readonly #createId: () => string;
 	readonly #metrics: ObservabilityMetrics | undefined;
@@ -461,6 +479,7 @@ export class ConversationOrchestrator {
 	#rejectedTimeOfDayPreferences: MeetingTimeBand[] = [];
 	#pendingDailyLeadVolume: CountAmount | null = null;
 	#pendingDraftConfirmation: PendingDraftConfirmation | null = null;
+	#priorUserInterruptionPending = false;
 	#lifecycleInterruption: Promise<void> = Promise.resolve();
 	#closed = false;
 	#closePromise: Promise<void> | null = null;
@@ -956,6 +975,9 @@ export class ConversationOrchestrator {
 		if (!active || active.generationId !== generationId) {
 			return { type: "ignored", generationId, source: "generation" };
 		}
+		if (reason === "barge_in" || reason === "new_generation") {
+			this.#priorUserInterruptionPending = true;
+		}
 		await this.#invalidateActiveWork("interrupted");
 		return { type: "assistant.interrupted", generationId };
 	}
@@ -986,6 +1008,10 @@ export class ConversationOrchestrator {
 		this.#activeCandidateMeetingSlots.clear();
 		this.#pendingDynamicEvents.clear();
 		this.#pendingDynamicResponses.clear();
+		this.#deliveryStyleByGeneration.clear();
+		this.#priorInterruptionByGeneration.clear();
+		this.#priorUserInterruptionPending = false;
+		this.#deliveryStyleCooldown.clear();
 		this.#deferredDomainEvents.length = 0;
 		this.#threadId = undefined;
 		this.#tools.clear();
@@ -1005,6 +1031,14 @@ export class ConversationOrchestrator {
 		knownFacts: KnownFacts;
 		source: "voice_transcript" | "typed_message";
 	}): AsyncGenerator<OrchestratorEvent> {
+		// This function is entered only for a server-accepted final visitor turn.
+		// Consume trusted interruption state exactly once, without touching durable
+		// conversation, draft, or booking state.
+		this.#priorInterruptionByGeneration.set(
+			input.generationId,
+			this.#priorUserInterruptionPending,
+		);
+		this.#priorUserInterruptionPending = false;
 		const pendingConfirmation = this.#pendingDraftConfirmation;
 		this.#pendingDraftConfirmation = null;
 		if (pendingConfirmation) {
@@ -1530,7 +1564,11 @@ export class ConversationOrchestrator {
 					heldActionSpeech.push(...ready);
 					continue;
 				}
-				const rendered = yield* this.#renderPhrases(input, ready);
+				const rendered = yield* this.#renderPhrases(input, ready, {
+					provenance: "model_generated",
+					stage: context.stage,
+					completed: false,
+				});
 				visible.push(...rendered.visibleTexts);
 				audioProduced ||= rendered.audioProduced;
 			}
@@ -1574,10 +1612,15 @@ export class ConversationOrchestrator {
 				}
 			}
 			if (!suppressModelSpeech && !brainFailure) {
-				const rendered = yield* this.#renderPhrases(input, [
-					...heldActionSpeech,
-					...chunker.flush(),
-				]);
+				const rendered = yield* this.#renderPhrases(
+					input,
+					[...heldActionSpeech, ...chunker.flush()],
+					{
+						provenance: "model_generated",
+						stage: context.stage,
+						completed: true,
+					},
+				);
 				visible.push(...rendered.visibleTexts);
 				audioProduced ||= rendered.audioProduced;
 			}
@@ -2510,6 +2553,7 @@ export class ConversationOrchestrator {
 	async *#renderPhrases(
 		turn: { turnId: string; generationId: string },
 		visibleTexts: readonly string[],
+		presentation?: ModelSpeechPresentation,
 	): AsyncGenerator<
 		OrchestratorEvent,
 		{ visibleTexts: string[]; audioProduced: boolean }
@@ -2518,27 +2562,50 @@ export class ConversationOrchestrator {
 		if (!this.#generations.accept(turn.generationId, turn.turnId)) {
 			return { visibleTexts: visible, audioProduced: false };
 		}
-		const pipeline = this.#createSpeechPipeline(turn);
 		const approvedContacts: Contact[] = this.#state.booking
 			? this.#state.booking.contacts
 			: (this.#draftStore?.approvedContacts(this.conversationId) ?? []);
+		const entries: Array<{
+			visibleText: string;
+			prepared: ReturnType<typeof prepareSpeech>;
+		}> = [];
 		for (const sourceText of visibleTexts) {
 			const text = sourceText.replace(/\s+/gu, " ").trim();
 			if (!text || !this.#generations.accept(turn.generationId, turn.turnId)) {
 				continue;
 			}
 			visible.push(text);
+			entries.push({
+				visibleText: text,
+				prepared: renderPreparedSpeech(
+					prepareSpeech(text, {
+						contactProcessing: this.#state.contactConsentConfirmed,
+						approvedContacts,
+					}),
+				),
+			});
+		}
+		if (entries.length === 0) {
+			return { visibleTexts: visible, audioProduced: false };
+		}
+		const deliveryStyle = this.#selectDeliveryStyle(
+			turn.generationId,
+			entries.map((entry) => entry.prepared),
+			presentation,
+		);
+		const pipeline = this.#createSpeechPipeline(turn, deliveryStyle);
+		for (const entry of entries) {
 			yield {
 				type: "text.delta",
 				generationId: turn.generationId,
-				text,
+				text: entry.visibleText,
 			};
-			const prepared = prepareSpeech(text, {
-				contactProcessing: this.#state.contactConsentConfirmed,
-				approvedContacts,
-			});
-			if (prepared.spokenText) {
-				yield* this.#enqueuePreparedSpeech(pipeline, prepared, text);
+			if (entry.prepared.spokenText) {
+				yield* this.#enqueuePreparedSpeech(
+					pipeline,
+					entry.prepared,
+					entry.visibleText,
+				);
 			}
 		}
 		yield* this.#drainSpeechPipeline(pipeline);
@@ -2558,16 +2625,59 @@ export class ConversationOrchestrator {
 			approvedContacts,
 		});
 		if (!prepared.spokenText) return false;
-		const pipeline = this.#createSpeechPipeline(turn);
-		yield* this.#enqueuePreparedSpeech(pipeline, prepared, visible);
+		const rendered = renderPreparedSpeech(prepared);
+		const pipeline = this.#createSpeechPipeline(
+			turn,
+			this.#selectDeliveryStyle(turn.generationId, [rendered]),
+		);
+		yield* this.#enqueuePreparedSpeech(pipeline, rendered, visible);
 		yield* this.#drainSpeechPipeline(pipeline);
 		return pipeline.audioProduced;
 	}
 
-	#createSpeechPipeline(turn: {
-		turnId: string;
-		generationId: string;
-	}): SpeechPipeline {
+	#selectDeliveryStyle(
+		generationId: string,
+		preparedSpeech: readonly ReturnType<typeof prepareSpeech>[],
+		presentation?: ModelSpeechPresentation,
+	): SpeechDeliveryStyle {
+		const selectedForResponse =
+			this.#deliveryStyleByGeneration.get(generationId);
+		if (selectedForResponse) return selectedForResponse;
+		const providerSafeSpokenText = preparedSpeech
+			.map((prepared) => prepared.spokenText)
+			.filter(Boolean)
+			.join(" ");
+		const classification = presentation?.completed
+			? classifyModelSpeechResponse(presentation.stage, providerSafeSpokenText)
+			: {
+					category: "other" as SpeechResponseCategory,
+					containsExactMeetingFacts: false,
+					responseLength: Array.from(providerSafeSpokenText).length,
+				};
+		const priorTurnInterrupted =
+			this.#priorInterruptionByGeneration.get(generationId) ?? false;
+		this.#priorInterruptionByGeneration.delete(generationId);
+		const style = this.#deliveryStyleCooldown.select({
+			stage: presentation?.stage ?? this.#state.stage,
+			provenance: presentation?.provenance ?? "server_authority",
+			category: classification.category,
+			containsProtectedApprovedContact: preparedSpeech.some(
+				(prepared) => prepared.metadata.forwardedCount > 0,
+			),
+			containsExactMeetingFacts: classification.containsExactMeetingFacts,
+			containsBookingConfirmation: false,
+			containsQualificationFacts: false,
+			priorTurnInterrupted,
+			responseLength: classification.responseLength,
+		});
+		this.#deliveryStyleByGeneration.set(generationId, style);
+		return style;
+	}
+
+	#createSpeechPipeline(
+		turn: { turnId: string; generationId: string },
+		deliveryStyle: SpeechDeliveryStyle,
+	): SpeechPipeline {
 		const controller = new AbortController();
 		const generationSignal = this.#generations.signal(turn.generationId);
 		if (generationSignal.aborted) {
@@ -2582,6 +2692,7 @@ export class ConversationOrchestrator {
 		return {
 			turn,
 			controller,
+			deliveryStyle,
 			pending: [],
 			failed: false,
 			degraded: false,
@@ -2652,6 +2763,7 @@ export class ConversationOrchestrator {
 			generationId: turn.generationId,
 			segmentId,
 			text: spoken,
+			deliveryStyle: pipeline.deliveryStyle,
 			signal: pipeline.controller.signal,
 		});
 		const ttsStartedAt = this.#metrics?.markTtsRequest();
@@ -2768,6 +2880,8 @@ export class ConversationOrchestrator {
 		this.#activeCandidateMeetingSlots.delete(permit.generationId);
 		this.#pendingDynamicEvents.delete(permit.generationId);
 		this.#pendingDynamicResponses.delete(permit.generationId);
+		this.#deliveryStyleByGeneration.delete(permit.generationId);
+		this.#priorInterruptionByGeneration.delete(permit.generationId);
 	}
 
 	async *#finishGeneration(
@@ -2785,6 +2899,8 @@ export class ConversationOrchestrator {
 		this.#activeCandidateMeetingSlots.delete(generationId);
 		this.#pendingDynamicEvents.delete(generationId);
 		this.#pendingDynamicResponses.delete(generationId);
+		this.#deliveryStyleByGeneration.delete(generationId);
+		this.#priorInterruptionByGeneration.delete(generationId);
 		this.#generations.finish(generationId);
 	}
 
@@ -2821,6 +2937,8 @@ export class ConversationOrchestrator {
 		this.#activeCandidateMeetingSlots.delete(active.generationId);
 		this.#pendingDynamicEvents.delete(active.generationId);
 		this.#pendingDynamicResponses.delete(active.generationId);
+		this.#deliveryStyleByGeneration.delete(active.generationId);
+		this.#priorInterruptionByGeneration.delete(active.generationId);
 		const threadId = this.#threadId;
 		if (!threadId) return Promise.resolve();
 		return this.#brain

@@ -18,6 +18,7 @@ export type {
 } from "./speech-contacts";
 
 const MARKDOWN_LINK = /\[([^\x5d]+)\]\(\s*(?:https?:\/\/|www\.)[^)]+\)/giu;
+const BRACKET_STYLE_TAG = /\[[^\]\r\n]*\]/gu;
 const RAW_URL = /(?:https?:\/\/|www\.)[^\s<>()]*[\p{L}\p{N}/#]/giu;
 const EMAIL =
 	/[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/giu;
@@ -251,6 +252,9 @@ function stripCodeAndEnvelopes(input: string): string {
 export function sanitizeSpeech(input: string): string {
 	let text = stripCodeAndEnvelopes(input.replace(/\r\n?/gu, "\n"));
 	text = text.replace(MARKDOWN_LINK, "$1");
+	// Strip the complete bracketed control, not only its delimiters, so model
+	// or visitor-authored voice tags can never become provider instructions.
+	text = text.replace(BRACKET_STYLE_TAG, " ");
 	text = redactPhoneLikeSpeechCandidates(text);
 	text = text.replace(RAW_URL, " ");
 	text = text.replace(EMAIL, CONTACT_REDACTION);

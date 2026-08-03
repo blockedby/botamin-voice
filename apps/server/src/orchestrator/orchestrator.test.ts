@@ -50,8 +50,12 @@ import {
 const conversationId = "01J00000000000000000000000";
 const turn1 = "01J00000000000000000000010";
 const turn2 = "01J00000000000000000000011";
+const turn3 = "01J00000000000000000000012";
+const turn4 = "01J00000000000000000000013";
 const generation1 = "01J00000000000000000000020";
 const generation2 = "01J00000000000000000000021";
+const generation3 = "01J00000000000000000000022";
+const generation4 = "01J00000000000000000000023";
 const promptVersion = "a".repeat(64);
 const audio = new Uint8Array([82, 73, 70, 70]);
 const facts = {
@@ -1329,6 +1333,7 @@ describe("booking and tool timeline", () => {
 		expect(tts.inputs[0]).toMatchObject({
 			turnId: turn1,
 			generationId: generation1,
+			deliveryStyle: "neutral",
 		});
 	});
 
@@ -1786,6 +1791,226 @@ describe("booking and tool timeline", () => {
 		const disconnected = fixture({ initialState: bookedState }).orchestrator;
 		expect(disconnected.apply({ type: "disconnect" }).ok).toBe(true);
 		expect(disconnected.state.booking?.id).toBe(bookingId);
+	});
+});
+
+describe("trusted speech delivery style integration", () => {
+	const typedTurn = (
+		orchestrator: ConversationOrchestrator,
+		turnId: string,
+		generationId: string,
+		text = "Продолжим",
+	) =>
+		orchestrator.acceptTextSubmit({
+			turnId,
+			generationId,
+			text,
+			knownFacts: facts,
+		});
+
+	test("adds one server-owned style to every eligible model request", async () => {
+		for (const scenario of [
+			{
+				stage: "DISCOVERY" as const,
+				text: "Какой результат для вашей команды сейчас важнее?",
+				expected: "curious",
+			},
+			{
+				stage: "OBJECTION" as const,
+				text: "Риск снижается проверкой результата до основного запуска.",
+				expected: "serious",
+			},
+			{
+				stage: "VALUE" as const,
+				text: "Так команда быстрее отвечает на входящие обращения.",
+				expected: "excited",
+			},
+			{
+				stage: "BOOKING_OFFER" as const,
+				text: "Хотите перейти к короткому следующему шагу?",
+				expected: "excited",
+			},
+		] as const) {
+			const tts = new FakeTts();
+			const { orchestrator } = fixture({
+				brain: new FakeBrain(speechScript(scenario.text)),
+				tts,
+				initialState: {
+					...createInitialConversationState(),
+					stage: scenario.stage,
+				},
+			});
+			await collect(typedTurn(orchestrator, turn1, generation1));
+			expect(tts.inputs.length).toBeGreaterThan(0);
+			expect(
+				tts.inputs.every(
+					(request) => request.deliveryStyle === scenario.expected,
+				),
+				`${scenario.stage}/${scenario.text}`,
+			).toBe(true);
+			for (const request of tts.inputs) {
+				expect(Object.keys(request).sort()).toEqual([
+					"conversationId",
+					"deliveryStyle",
+					"generationId",
+					"segmentId",
+					"signal",
+					"text",
+					"turnId",
+				]);
+			}
+		}
+	});
+
+	test("keeps model tags visible but strips them before a server-selected provider style", async () => {
+		const visible = "[serious] Так команда быстрее отвечает на обращения.";
+		const tts = new FakeTts();
+		const { orchestrator } = fixture({
+			brain: new FakeBrain(speechScript(visible)),
+			tts,
+			initialState: valueState(),
+		});
+		const events = await collect(typedTurn(orchestrator, turn1, generation1));
+		const done = events.find((event) => event.type === "text.done");
+		expect(done?.type === "text.done" ? done.text : "").toBe(visible);
+		expect(tts.inputs.length).toBeGreaterThan(0);
+		expect(
+			tts.inputs.every((request) => request.deliveryStyle === "excited"),
+		).toBe(true);
+		expect(tts.inputs.map((request) => request.text).join(" ")).not.toMatch(
+			/\[|\]|serious/iu,
+		);
+	});
+
+	test("forces exact meeting facts and protected approved contacts neutral", async () => {
+		const datedTts = new FakeTts();
+		const dated = fixture({
+			brain: new FakeBrain(
+				speechScript("Покажу результат на встрече 12.08 в 10:30 по Москве."),
+			),
+			tts: datedTts,
+			initialState: valueState(),
+		});
+		await collect(typedTurn(dated.orchestrator, turn1, generation1));
+		expect(datedTts.inputs.length).toBeGreaterThan(0);
+		expect(
+			datedTts.inputs.every((request) => request.deliveryStyle === "neutral"),
+		).toBe(true);
+
+		const bookings = new FakeBookingService();
+		await bookings.createBooking(bookingInput);
+		const booking = await bookings.findByConversationId(conversationId);
+		if (!booking) throw new Error("booking missing");
+		const contactTts = new FakeTts();
+		const contact = fixture({
+			bookings,
+			brain: new FakeBrain(
+				speechScript(`Напишите на ${booking.contacts[0]?.value}.`),
+			),
+			tts: contactTts,
+			initialState: {
+				...valueState(),
+				booking,
+				contactConsentConfirmed: true,
+			},
+		});
+		await collect(typedTurn(contact.orchestrator, turn1, generation1));
+		expect(contactTts.inputs.length).toBeGreaterThan(0);
+		expect(
+			contactTts.inputs.every((request) => request.deliveryStyle === "neutral"),
+		).toBe(true);
+	});
+
+	test("keeps the selected style stable across cooldown, prefetch, and turns", async () => {
+		const tts = new FakeTts();
+		const text = "Так команда быстрее отвечает на входящие обращения.";
+		const brain = new FakeBrain(
+			speechScript(text, turn1, generation1),
+			speechScript(text, turn2, generation2),
+			speechScript(text, turn3, generation3),
+			speechScript(text, turn4, generation4),
+		);
+		const { orchestrator } = fixture({
+			brain,
+			tts,
+			initialState: valueState(),
+		});
+		for (const [turnId, generationId] of [
+			[turn1, generation1],
+			[turn2, generation2],
+			[turn3, generation3],
+			[turn4, generation4],
+		] as const) {
+			await collect(typedTurn(orchestrator, turnId, generationId));
+		}
+		expect(tts.inputs.map((request) => request.deliveryStyle)).toEqual([
+			"excited",
+			"neutral",
+			"neutral",
+			"excited",
+		]);
+	});
+
+	test("consumes only trusted barge-in and new-generation interruption on the next accepted turn", async () => {
+		for (const reason of ["barge_in", "new_generation"] as const) {
+			const tts = new ControlledTts();
+			const text = "Риск снижается проверкой результата до запуска.";
+			const brain = new FakeBrain(
+				speechScript(text, turn1, generation1),
+				speechScript(text, turn2, generation2),
+				speechScript(text, turn3, generation3),
+			);
+			const { orchestrator } = fixture({
+				brain,
+				tts,
+				initialState: { ...valueState(), stage: "OBJECTION" },
+			});
+
+			const first = collect(typedTurn(orchestrator, turn1, generation1));
+			await waitForTtsInputs(tts, 1);
+			expect(tts.inputs[0]?.deliveryStyle).toBe("serious");
+			await orchestrator.interrupt(generation1, reason);
+			tts.succeed(0);
+			await first;
+
+			const second = collect(typedTurn(orchestrator, turn2, generation2));
+			await waitForTtsInputs(tts, 2);
+			expect(tts.inputs[1]?.deliveryStyle).toBe("neutral");
+			tts.succeed(1);
+			await second;
+
+			const third = collect(typedTurn(orchestrator, turn3, generation3));
+			await waitForTtsInputs(tts, 3);
+			expect(tts.inputs[2]?.deliveryStyle).toBe("serious");
+			tts.succeed(2);
+			await third;
+			expect(orchestrator.state.stage).toBe("OBJECTION");
+		}
+	});
+
+	test("playback errors do not count as user interruption", async () => {
+		const tts = new ControlledTts();
+		const text = "Риск снижается проверкой результата до запуска.";
+		const brain = new FakeBrain(
+			speechScript(text, turn1, generation1),
+			speechScript(text, turn2, generation2),
+		);
+		const { orchestrator } = fixture({
+			brain,
+			tts,
+			initialState: { ...valueState(), stage: "OBJECTION" },
+		});
+		const first = collect(typedTurn(orchestrator, turn1, generation1));
+		await waitForTtsInputs(tts, 1);
+		await orchestrator.interrupt(generation1, "playback_error");
+		tts.succeed(0);
+		await first;
+
+		const second = collect(typedTurn(orchestrator, turn2, generation2));
+		await waitForTtsInputs(tts, 2);
+		expect(tts.inputs[1]?.deliveryStyle).toBe("serious");
+		tts.succeed(1);
+		await second;
 	});
 });
 
@@ -2326,6 +2551,12 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		await waitForTtsInputs(tts, 2);
 		expect(tts.inputs).toHaveLength(2);
 		expect(tts.inputs.every((request) => Object.isFrozen(request))).toBe(true);
+		// Streaming starts before the complete response is known, so the policy
+		// fails neutral and keeps that one selection across the prefetch window.
+		expect(tts.inputs.map((request) => request.deliveryStyle)).toEqual([
+			"neutral",
+			"neutral",
+		]);
 		tts.succeed(1);
 		await Promise.resolve();
 		await Promise.resolve();
@@ -2451,6 +2682,9 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		const events = await collect(orchestrator.acceptAudioCommit(commit()));
 		expect(tts.inputs.map((request) => request.text).join(" ")).toBe(source);
 		expect(tts.inputs).toHaveLength(2);
+		expect(
+			tts.inputs.every((request) => request.deliveryStyle === "neutral"),
+		).toBe(true);
 		expect(tts.attempts).toBe(4);
 		expect(new Set(tts.inputs.map((request) => request.segmentId)).size).toBe(
 			2,

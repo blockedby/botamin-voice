@@ -48,6 +48,17 @@ generationId=01J00000000000000000000002
 		expect(streamed).toEqual(["До конверта.", "После конверта."]);
 	});
 
+	test("strips bracket-style model controls without changing visible source text", () => {
+		const source =
+			"[excited] Полезный ответ. [whispers] Только факт. [style: serious!] Без управления.";
+		expect(sanitizeSpeech(source)).toBe(
+			"Полезный ответ. Только факт. Без управления.",
+		);
+		expect(source).toBe(
+			"[excited] Полезный ответ. [whispers] Только факт. [style: serious!] Без управления.",
+		);
+	});
+
 	test("redacts phone, email, and Telegram before provider speech", () => {
 		const source =
 			"Пишите name.surname+sales@example.com, @private_sales или +7 (999) 123-45-67.";

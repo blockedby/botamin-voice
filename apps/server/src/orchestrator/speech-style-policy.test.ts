@@ -8,6 +8,7 @@ import {
 	createTestMeetingSlot,
 } from "../../../../packages/test-fixtures/src";
 import {
+	classifyModelSpeechResponse,
 	SPEECH_DELIVERY_STYLES,
 	SPEECH_RESPONSE_CATEGORIES,
 	SPEECH_RESPONSE_PROVENANCES,
@@ -188,7 +189,52 @@ describe("server-owned speech delivery style policy", () => {
 		}
 		const { responseLength: _responseLength, ...withoutResponseLength } =
 			input();
-		expect(selectSpeechDeliveryStyle(withoutResponseLength)).toBe("curious");
+		expect(
+			selectSpeechDeliveryStyle(
+				withoutResponseLength as SpeechDeliveryStyleInput,
+			),
+		).toBe("neutral");
+	});
+
+	test("classifies only provider-safe model output and returns text-free metadata", () => {
+		expect(
+			classifyModelSpeechResponse(
+				"DISCOVERY",
+				"Какой результат для вашей команды сейчас важнее?",
+			),
+		).toEqual({
+			category: "discovery_question",
+			containsExactMeetingFacts: false,
+			responseLength: 48,
+		});
+		expect(
+			classifyModelSpeechResponse(
+				"OBJECTION",
+				"Это ограничение снимается проверкой результата до запуска.",
+			).category,
+		).toBe("objection_explanation");
+		expect(
+			classifyModelSpeechResponse("VALUE", "Можно показать короткий пример?")
+				.category,
+		).toBe("soft_offer");
+		for (const [stage, spoken] of [
+			["OBJECTION", "Я вас услышала."],
+			["VALUE", "Это отдельная мысль."],
+			["BOOKING_OFFER", "Что вы думаете?"],
+		] as const) {
+			expect(classifyModelSpeechResponse(stage, spoken).category).toBe("other");
+		}
+
+		for (const spoken of [
+			"Первый вариант встречи подойдёт?",
+			"Встреча 12.08 в 10:30 по Москве.",
+			"Давайте созвонимся завтра.",
+		]) {
+			const classified = classifyModelSpeechResponse("VALUE", spoken);
+			expect(classified.category).toBe("scheduling_calculation");
+			expect(classified.containsExactMeetingFacts).toBe(true);
+			expect(JSON.stringify(classified)).not.toContain(spoken);
+		}
 	});
 
 	test("uses neutral after interruption and bounded cooldowns for curious and excited", () => {

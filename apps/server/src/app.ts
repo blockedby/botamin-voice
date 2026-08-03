@@ -33,6 +33,10 @@ interface ServerAppEnv {
 
 export const BUN_REQUEST_BODY_HARD_LIMIT_BYTES = 65_536 as const;
 
+export function staticAssetContentType(path: string): "audio/wav" | null {
+	return path.endsWith(".wav") ? "audio/wav" : null;
+}
+
 export function bunRequestBodyHardLimit(config: RuntimeConfig): number {
 	return Math.max(
 		BUN_REQUEST_BODY_HARD_LIMIT_BYTES,
@@ -243,6 +247,15 @@ export function createServerApp(runtime: ServerRuntime): Hono<ServerAppEnv> {
 
 	// The single-page landing client and its immutable assets share this origin.
 	// API/health/WS namespaces never fall through to HTML on a wrong method/path.
+	// Hono/Bun does not classify .wav consistently; nosniff requires the exact
+	// media type because reaction playback rejects a declared mismatch.
+	app.use("/assets/*", async (context, next) => {
+		await next();
+		const contentType = staticAssetContentType(context.req.path);
+		if (context.res.status === 200 && contentType) {
+			context.header("Content-Type", contentType);
+		}
+	});
 	app.use("/assets/*", serveStatic({ root: "./apps/web/dist" }));
 	app.get("/", serveStatic({ path: "./apps/web/dist/index.html" }));
 

@@ -6,7 +6,11 @@ import {
 	ReadyHealthResponseSchema,
 	StopConversationResponseSchema,
 } from "@botamin/contracts";
-import { bunRequestBodyHardLimit, createServerApp } from "./app";
+import {
+	bunRequestBodyHardLimit,
+	createServerApp,
+	staticAssetContentType,
+} from "./app";
 import { ObservabilityMetrics } from "./observability";
 import type { RuntimeConfig } from "./runtime/config";
 import type { RuntimeGatewaySession, ServerRuntime } from "./runtime/runtime";
@@ -85,6 +89,16 @@ const validRequest = {
 };
 
 describe("production server REST contracts", () => {
+	test("serves canonical WAV assets with an exact nosniff-compatible media type", () => {
+		expect(
+			staticAssetContentType("/assets/reactions/neutral-checking.wav"),
+		).toBe("audio/wav");
+		expect(
+			staticAssetContentType("/assets/botamin-proactive-greeting.wav"),
+		).toBe("audio/wav");
+		expect(staticAssetContentType("/assets/not-a-wav.mp3")).toBeNull();
+	});
+
 	test("serves shallow liveness and dependency readiness", async () => {
 		const app = createServerApp(runtime());
 		const live = await app.request("/health/live");

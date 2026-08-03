@@ -82,6 +82,7 @@ type TimelineLabel =
 interface TimelineEntry {
 	label: TimelineLabel;
 	at: number;
+	generationId?: string;
 }
 
 function chatResult(text: string): Record<string, unknown> {
@@ -177,40 +178,70 @@ class VerifyingPlayback implements PlaybackAdapter {
 	bufferedSegmentCount = 0;
 	readonly received: Uint8Array[] = [];
 	readonly staleGenerations = new Set<string>();
+	private started = false;
+	private sealed = false;
 
 	constructor(
 		private readonly options: PlaybackFactoryOptions,
 		private readonly timeline: TimelineEntry[],
 	) {}
 
+	async resume(): Promise<void> {}
+
 	beginGeneration(generationId: string): void {
 		if (this.staleGenerations.has(generationId)) return;
+		if (this.activeGenerationId !== generationId) {
+			this.bufferedSegmentCount = 0;
+			this.started = false;
+			this.sealed = false;
+		}
 		this.activeGenerationId = generationId;
 	}
 
 	async enqueue(segment: Parameters<PlaybackAdapter["enqueue"]>[0]) {
 		if (
 			this.activeGenerationId !== segment.generationId ||
-			this.staleGenerations.has(segment.generationId)
+			this.staleGenerations.has(segment.generationId) ||
+			this.sealed
 		) {
-			return false;
+			return {
+				status: "rejected" as const,
+				reason: "stale" as const,
+				error: new Error("Audio segment is stale"),
+			};
 		}
-		this.bufferedSegmentCount = 1;
+		this.bufferedSegmentCount += 1;
 		this.received.push(segment.bytes.slice());
 		this.timeline.push({
 			label: "audio.segment.client-paired",
 			at: performance.now(),
+			generationId: segment.generationId,
 		});
-		this.timeline.push({ label: "playback.started", at: performance.now() });
-		this.options.onStarted(segment);
-		// Model real playback long enough for the already-buffered text/audio-done
-		// events to arrive before the queue reports idle.
-		await Bun.sleep(100);
-		if (this.activeGenerationId !== segment.generationId) return false;
+		if (!this.started) {
+			this.started = true;
+			this.timeline.push({
+				label: "playback.started",
+				at: performance.now(),
+				generationId: segment.generationId,
+			});
+			this.options.onStarted(segment);
+		}
+		return { status: "accepted" as const };
+	}
+
+	sealGeneration(generationId: string): boolean {
+		if (this.activeGenerationId !== generationId) return false;
+		this.sealed = true;
+		// The fixture deterministically drives the real queue's seal/end boundary:
+		// every scheduled phrase ends in order only after the server seals it.
 		this.bufferedSegmentCount = 0;
 		this.activeGenerationId = null;
-		this.timeline.push({ label: "playback.completed", at: performance.now() });
-		this.options.onIdle(segment.generationId);
+		this.timeline.push({
+			label: "playback.completed",
+			at: performance.now(),
+			generationId,
+		});
+		this.options.onIdle(generationId);
 		return true;
 	}
 
@@ -219,6 +250,8 @@ class VerifyingPlayback implements PlaybackAdapter {
 		if (generationId) this.staleGenerations.add(generationId);
 		this.activeGenerationId = null;
 		this.bufferedSegmentCount = 0;
+		this.started = false;
+		this.sealed = false;
 		return generationId;
 	}
 
@@ -233,6 +266,7 @@ class ObservedSocket implements WebSocketLike {
 	onerror: ((event: unknown) => void) | null = null;
 	onmessage: ((event: { data: unknown }) => void) | null = null;
 	readonly native: WebSocket;
+	private readonly pendingAudioGenerations: string[] = [];
 
 	constructor(
 		url: string,
@@ -252,9 +286,11 @@ class ObservedSocket implements WebSocketLike {
 		this.native.onerror = (event) => this.onerror?.(event);
 		this.native.onmessage = (event) => {
 			if (typeof event.data !== "string") {
+				const generationId = this.pendingAudioGenerations.shift();
 				this.timeline.push({
 					label: "audio.binary.client-receipt",
 					at: performance.now(),
+					...(generationId ? { generationId } : {}),
 				});
 			}
 			if (typeof event.data === "string") {
@@ -262,7 +298,7 @@ class ObservedSocket implements WebSocketLike {
 					const message = JSON.parse(event.data) as {
 						type?: string;
 						seq?: number;
-						payload?: { to?: string; code?: string };
+						payload?: { to?: string; code?: string; generationId?: string };
 					};
 					if (message.type) {
 						this.eventCounts.set(
@@ -282,9 +318,14 @@ class ObservedSocket implements WebSocketLike {
 							});
 						}
 						if (message.type === "audio.segment") {
+							const generationId = message.payload?.generationId;
+							if (generationId) {
+								this.pendingAudioGenerations.push(generationId);
+							}
 							this.timeline.push({
 								label: "audio.metadata.client-receipt",
 								at: performance.now(),
+								...(generationId ? { generationId } : {}),
 							});
 						}
 						if (message.type === "state.changed" && message.payload?.to) {
@@ -613,6 +654,7 @@ describe("T30 consolidated credential-free production-component journey", () => 
 							? "tts.retry-turn.complete"
 							: "tts.provider.complete",
 					at: performance.now(),
+					generationId: request.generationId,
 				});
 				return segment;
 			},
@@ -766,7 +808,8 @@ describe("T30 consolidated credential-free production-component journey", () => 
 						"committed" &&
 					happy.browser.getSnapshot().internalMeeting !== null &&
 					happy.captures.at(-1)?.active === true,
-				"exact-revision affirmative did not commit the RC4 draft",
+				() =>
+					`exact-revision affirmative did not commit the RC4 draft (state=${happy.browser.getSnapshot().state.kind}, stage=${happy.browser.getSnapshot().conversationStage}, draft=${JSON.stringify(happy.browser.getSnapshot().bookingDraft)}, meeting=${JSON.stringify(happy.browser.getSnapshot().internalMeeting)}, capture=${happy.captures.at(-1)?.active === true}, playback=${JSON.stringify(happy.playbacks.map((item) => ({ active: item.activeGenerationId, buffered: item.bufferedSegmentCount })))}, provider=${JSON.stringify(provider.counters)}, brain=${brain.inputs.length}, errors=${JSON.stringify(happy.errorCodes)}, events=${JSON.stringify(Object.fromEntries(happy.eventCounts))}, transcript=${JSON.stringify(happy.browser.getSnapshot().transcript)})`,
 			);
 			const committedSnapshot = happy.browser.getSnapshot();
 			const committedDraft = committedSnapshot.bookingDraft;
@@ -1004,17 +1047,26 @@ describe("T30 consolidated credential-free production-component journey", () => 
 				closeDomainDatabase(afterFailure);
 			}
 			expect(provider.protocolViolations).toEqual([]);
-			expect(provider.counters).toEqual({
-				total: 15,
+			expect(provider.counters).toMatchObject({
 				chat: 5,
-				tts: 10,
 				invalid: 0,
-				statuses: { "200": 12, "400": 1, "503": 2 },
+				statuses: { "400": 1, "503": 2 },
 			});
+			expect(provider.counters.total).toBe(
+				provider.counters.chat + provider.counters.tts,
+			);
+			expect(provider.counters.statuses["200"]).toBe(
+				provider.counters.total - 3,
+			);
 
 			const mp3 = createDeterministicMp3Fixture();
 			const receivedAudio = happy.playbacks.flatMap((item) => item.received);
-			expect(receivedAudio).toHaveLength(8);
+			expect(receivedAudio.length).toBeGreaterThan(0);
+			// One response became stale after barge-in. The nonretryable degradation
+			// may also have one already-prefetched phrase, but no wider work fan-out.
+			const ttsWithoutPlayback = provider.counters.tts - receivedAudio.length;
+			expect(ttsWithoutPlayback).toBeGreaterThanOrEqual(2);
+			expect(ttsWithoutPlayback).toBeLessThanOrEqual(3);
 			for (const bytes of receivedAudio) expect(bytes).toEqual(mp3);
 
 			// Separate measured boundaries are all observed on the successful
@@ -1035,15 +1087,33 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			);
 			const brainDeltaAt = requireTiming("brain.delta.first", 2);
 			const ttsRequestAt = requireTiming("tts.provider.request", 2);
-			const ttsCompleteAt = requireTiming("tts.retry-turn.complete", 1);
-			const metadataReceiptAt = requireTiming(
-				"audio.metadata.client-receipt",
-				1,
+			const retryTtsCompletion = timeline.find(
+				(entry) => entry.label === "tts.retry-turn.complete",
 			);
-			const binaryReceiptAt = requireTiming("audio.binary.client-receipt", 1);
-			const pairedAt = requireTiming("audio.segment.client-paired", 1);
-			const playbackStartedAt = requireTiming("playback.started", 1);
-			const playbackCompletedAt = requireTiming("playback.completed", 1);
+			expect(retryTtsCompletion?.generationId).toBeDefined();
+			if (!retryTtsCompletion?.generationId) {
+				throw new Error("missing retry-turn TTS correlation");
+			}
+			const retryGenerationId = retryTtsCompletion.generationId;
+			const requireGenerationTiming = (label: TimelineLabel): number => {
+				const value = timeline.find(
+					(entry) =>
+						entry.label === label && entry.generationId === retryGenerationId,
+				)?.at;
+				expect(value).toBeDefined();
+				if (value === undefined) throw new Error("missing correlated boundary");
+				return value;
+			};
+			const ttsCompleteAt = retryTtsCompletion.at;
+			const metadataReceiptAt = requireGenerationTiming(
+				"audio.metadata.client-receipt",
+			);
+			const binaryReceiptAt = requireGenerationTiming(
+				"audio.binary.client-receipt",
+			);
+			const pairedAt = requireGenerationTiming("audio.segment.client-paired");
+			const playbackStartedAt = requireGenerationTiming("playback.started");
+			const playbackCompletedAt = requireGenerationTiming("playback.completed");
 			const duration = (start: number, end: number): number => {
 				const measured = end - start;
 				expect(measured).toBeGreaterThanOrEqual(0);
@@ -1062,9 +1132,7 @@ describe("T30 consolidated credential-free production-component journey", () => 
 			duration(metadataReceiptAt, binaryReceiptAt);
 			duration(binaryReceiptAt, pairedAt);
 			duration(pairedAt, playbackStartedAt);
-			expect(
-				duration(playbackStartedAt, playbackCompletedAt),
-			).toBeGreaterThanOrEqual(80);
+			duration(playbackStartedAt, playbackCompletedAt);
 		} finally {
 			await failed?.browser.dispose();
 			await happy.browser.dispose();

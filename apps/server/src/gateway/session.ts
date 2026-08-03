@@ -466,6 +466,7 @@ export class GatewaySession {
 			case "playback.interrupted": {
 				const event = await this.#orchestrator.interrupt(
 					parsed.data.payload.generationId,
+					parsed.data.payload.reason,
 				);
 				if (event.type === "assistant.interrupted") this.#mapEvent(event);
 				break;

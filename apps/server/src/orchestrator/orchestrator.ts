@@ -237,6 +237,12 @@ interface PendingDraftConfirmation {
 	generationId: string;
 }
 
+type PlaybackInterruptionReason =
+	| "barge_in"
+	| "user_stop"
+	| "new_generation"
+	| "playback_error";
+
 const BOOKING_FAILURE =
 	"Не получилось сохранить данные, поэтому я не буду подтверждать бронь. Проверьте контакт и попробуйте ещё раз.";
 const QUALIFICATION_FAILURE =
@@ -936,8 +942,14 @@ export class ConversationOrchestrator {
 		}
 	}
 
-	async interrupt(generationId: string): Promise<OrchestratorEvent> {
-		if (this.#pendingDraftConfirmation?.generationId === generationId) {
+	async interrupt(
+		generationId: string,
+		reason: PlaybackInterruptionReason = "barge_in",
+	): Promise<OrchestratorEvent> {
+		if (
+			reason !== "playback_error" &&
+			this.#pendingDraftConfirmation?.generationId === generationId
+		) {
 			this.#pendingDraftConfirmation = null;
 		}
 		const active = this.#generations.current();

@@ -68,8 +68,10 @@ class BrowserCapture implements CaptureAdapter {
 }
 
 const playback: PlaybackAdapter = {
+	resume: async () => undefined,
 	beginGeneration: () => undefined,
-	enqueue: async () => true,
+	enqueue: async () => ({ status: "accepted" }),
+	sealGeneration: () => true,
 	bargeIn: () => null,
 	dispose: async () => undefined,
 	activeGenerationId: null,

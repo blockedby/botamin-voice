@@ -26,7 +26,14 @@ The deployment wrappers require a nonblank OpenRouter key. Raw unconfigured
 `/dev/null`; a raw start is intentionally degraded and `/health/ready` stays
 unready rather than receiving a hidden credential. `CODEX_TOOL_MODE=envelope`
 is the safe default because environment-only app wiring cannot inject the
-awaited backend executor required by A3 dynamic mode.
+awaited backend executor required by A3 dynamic mode. Codex stays on
+`gpt-5.6-luna` with reasoning effort `low`; Luna does not support disabled
+reasoning (`low|medium|high|xhigh|max` are advertised). Leave
+`CODEX_SERVICE_TIER=` empty for portable standard service, or let the local
+subscription owner set exact `priority`. Pinned Codex CLI 0.146.0 advertises
+priority as Fast/1.5x speed with increased subscription usage; it has no latency
+SLA. Startup and readiness reject unsupported values or an exact Luna catalog
+entry that does not advertise priority.
 
 ```bash
 cp .env.example .env

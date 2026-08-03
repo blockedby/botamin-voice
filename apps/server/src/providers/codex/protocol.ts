@@ -35,6 +35,12 @@ export interface ModelListResult {
 		model: string;
 		hidden?: boolean;
 		supportedReasoningEfforts?: Array<{ reasoningEffort: string }>;
+		serviceTiers?: Array<{
+			id: string;
+			name: string;
+			description: string;
+		}>;
+		additionalSpeedTiers?: string[];
 	}>;
 	nextCursor: string | null;
 }
@@ -133,11 +139,31 @@ export function parseModelListResult(value: unknown): ModelListResult {
 						),
 					}))
 				: undefined;
+			const serviceTiers = optionalArray(
+				model.serviceTiers,
+				"serviceTiers",
+			)?.map((entry) => {
+				const tier = requireRecord(entry, "service tier");
+				return {
+					id: requireString(tier.id, "serviceTier.id"),
+					name: requireString(tier.name, "serviceTier.name"),
+					description: requireString(
+						tier.description,
+						"serviceTier.description",
+					),
+				};
+			});
+			const additionalSpeedTiers = optionalArray(
+				model.additionalSpeedTiers,
+				"additionalSpeedTiers",
+			)?.map((tier) => requireString(tier, "additionalSpeedTier"));
 			return {
 				id: requireString(model.id, "model.id"),
 				model: requireString(model.model, "model.model"),
 				...(typeof model.hidden === "boolean" ? { hidden: model.hidden } : {}),
 				...(efforts ? { supportedReasoningEfforts: efforts } : {}),
+				...(serviceTiers ? { serviceTiers } : {}),
+				...(additionalSpeedTiers ? { additionalSpeedTiers } : {}),
 			};
 		}),
 		nextCursor:
@@ -145,6 +171,12 @@ export function parseModelListResult(value: unknown): ModelListResult {
 				? null
 				: requireString(root.nextCursor, "nextCursor"),
 	};
+}
+
+function optionalArray(value: unknown, label: string): unknown[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) throw new Error(`Invalid Codex protocol ${label}`);
+	return value;
 }
 
 export function parseAccountReadResult(value: unknown): AccountReadResult {

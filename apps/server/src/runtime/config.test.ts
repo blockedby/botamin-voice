@@ -6,6 +6,7 @@ const validEnv = {
 	BRAIN_PROVIDER: "codex-subscription",
 	CODEX_MODEL: "gpt-5.6-luna",
 	CODEX_EFFORT: "low",
+	CODEX_SERVICE_TIER: "",
 	CODEX_HOME: "/tmp/botamin-test-codex-home",
 	CODEX_CWD: "/tmp/botamin-test-brain",
 	CODEX_TOOL_MODE: "envelope",
@@ -29,8 +30,10 @@ describe("validated runtime configuration", () => {
 		expect(config.brain).toMatchObject({
 			provider: "codex-subscription",
 			model: "gpt-5.6-luna",
+			effort: "low",
 			toolMode: "envelope",
 		});
+		expect(config.brain.serviceTier).toBeUndefined();
 		expect(config.voice.stt).toMatchObject({
 			audioFormat: "wav",
 			maxUtteranceMs: 60_000,
@@ -67,6 +70,21 @@ describe("validated runtime configuration", () => {
 		expect(() =>
 			createRuntimeConfig({ ...geminiEnv, OPENROUTER_TTS_VOICE: "kore" }),
 		).toThrow();
+	});
+
+	test("accepts only an explicit priority Codex service tier", () => {
+		expect(
+			createRuntimeConfig({ ...validEnv, CODEX_SERVICE_TIER: "priority" }).brain
+				.serviceTier,
+		).toBe("priority");
+		const withoutField = { ...validEnv };
+		delete (withoutField as Partial<typeof validEnv>).CODEX_SERVICE_TIER;
+		expect(createRuntimeConfig(withoutField).brain.serviceTier).toBeUndefined();
+		for (const value of ["fast", "standard", " priority", "priority "]) {
+			expect(() =>
+				createRuntimeConfig({ ...validEnv, CODEX_SERVICE_TIER: value }),
+			).toThrow(expect.objectContaining({ field: "CODEX_SERVICE_TIER" }));
+		}
 	});
 
 	test("rejects dynamic tools because production has no injected awaited executor", () => {

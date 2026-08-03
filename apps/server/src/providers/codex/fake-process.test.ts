@@ -197,6 +197,7 @@ function createBrain(
 	) => void | Promise<void>,
 	options: {
 		toolMode?: "dynamic" | "envelope";
+		serviceTier?: "priority";
 		executeTool?: CodexBrainOptions["executeTool"];
 		requestTimeoutMs?: number;
 		turnTimeoutMs?: number;
@@ -215,6 +216,7 @@ function createBrain(
 		env: {
 			PATH: "/usr/bin",
 			HOME: "/safe/home",
+			CODEX_SERVICE_TIER: "priority",
 			OPENROUTER_API_KEY: "must-not-leak",
 			DATABASE_URL: "must-not-leak",
 		},
@@ -227,6 +229,7 @@ function createBrain(
 	const brain = new CodexAppServerBrain({
 		model: "gpt-5.6-luna",
 		effort: "low",
+		...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
 		toolMode: options.toolMode ?? "envelope",
 		runtimeCwd: cwd,
 		turnTimeoutMs: options.turnTimeoutMs ?? 1_000,
@@ -405,6 +408,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		).toHaveLength(1);
 		expect(processRef?.environment.OPENROUTER_API_KEY).toBeUndefined();
 		expect(processRef?.environment.DATABASE_URL).toBeUndefined();
+		expect(processRef?.environment.CODEX_SERVICE_TIER).toBeUndefined();
 		const isolatedHome = processRef?.environment.CODEX_HOME;
 		expect(isolatedHome).toStartWith("/tmp/botamin-codex-app-home-");
 		expect(isolatedHome).not.toBe("/safe/codex-home");
@@ -454,6 +458,7 @@ describe("Codex app-server brain with deterministic fake process", () => {
 			sandboxPolicy: { type: "readOnly", networkAccess: false },
 			environments: [],
 		});
+		expect(Object.hasOwn(turnStart?.params ?? {}, "serviceTier")).toBeFalse();
 		const wireText =
 			(turnStart?.params as { input?: Array<{ text?: string }> } | undefined)
 				?.input?.[0]?.text ?? "";
@@ -481,6 +486,60 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		).toEqual([
 			expect.objectContaining({ params: { threadId: PROVIDER_THREAD_ID } }),
 		]);
+	});
+
+	test("pins priority only in the selected turn/start payload", async () => {
+		const { cwd, agentsPath } = await runtime();
+		let processRef: FakeCodexProcess | undefined;
+		const { brain } = createBrain(
+			cwd,
+			async (message, process) => {
+				processRef = process;
+				if (await standardResponse(message, process, agentsPath)) return;
+				if (message.method !== "turn/start") return;
+				await process.send({
+					id: message.id,
+					result: { turn: { id: PROVIDER_TURN_ID, status: "inProgress" } },
+				});
+				await process.send({
+					method: "item/agentMessage/delta",
+					params: {
+						threadId: PROVIDER_THREAD_ID,
+						turnId: PROVIDER_TURN_ID,
+						itemId: "priority_envelope",
+						delta: JSON.stringify({
+							speech: "Готово.",
+							nextStage: "DISCOVERY",
+							action: { type: "none" },
+						}),
+					},
+				});
+				await process.send({
+					method: "turn/completed",
+					params: {
+						threadId: PROVIDER_THREAD_ID,
+						turn: {
+							id: PROVIDER_TURN_ID,
+							status: "completed",
+							error: null,
+						},
+					},
+				});
+			},
+			{ serviceTier: "priority" },
+		);
+		const threadId = await brain.createThread(CONVERSATION_ID);
+		await collect(
+			brain.runTurn(input({ threadId }), new AbortController().signal),
+		);
+		const turnStart = processRef?.messages.find(
+			(message) => message.method === "turn/start",
+		);
+		expect(turnStart?.params).toMatchObject({
+			model: "gpt-5.6-luna",
+			effort: "low",
+			serviceTier: "priority",
+		});
 	});
 
 	test("interrupt maps external identity to provider turn and drops late deltas", async () => {
@@ -1590,6 +1649,19 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		brains.push(defaultBrain);
 	});
 
+	test("environment factory rejects non-priority service tiers before process startup", async () => {
+		const { cwd } = await runtime();
+		for (const serviceTier of ["fast", "standard", " priority"]) {
+			expect(() =>
+				createCodexBrainFromEnv({
+					CODEX_HOME: "/safe/codex-home",
+					CODEX_CWD: cwd,
+					CODEX_SERVICE_TIER: serviceTier,
+				}),
+			).toThrow("CODEX_SERVICE_TIER must be empty or priority");
+		}
+	});
+
 	test("health fails safely without subscription auth and checks the exact configured model", async () => {
 		const { cwd, agentsPath } = await runtime();
 		let authenticated = false;
@@ -1626,6 +1698,97 @@ describe("Codex app-server brain with deterministic fake process", () => {
 		});
 		authenticated = true;
 		expect(await brain.health()).toEqual({ status: "healthy" });
+	});
+
+	test("priority readiness requires its advertisement on the exact Luna model", async () => {
+		const cases = [
+			{
+				name: "supported",
+				models: [
+					{
+						id: "gpt-5.6-luna",
+						model: "gpt-5.6-luna",
+						supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+						additionalSpeedTiers: ["fast"],
+						serviceTiers: [
+							{
+								id: "priority",
+								name: "Fast",
+								description: "1.5x speed, increased usage",
+							},
+						],
+					},
+				],
+				expected: { status: "healthy" },
+			},
+			{
+				name: "legacy speed field only",
+				models: [
+					{
+						id: "gpt-5.6-luna",
+						model: "gpt-5.6-luna",
+						supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+						additionalSpeedTiers: ["fast"],
+					},
+				],
+				expected: {
+					status: "unavailable",
+					code: "CODEX_MODEL_OR_TIER_UNAVAILABLE",
+				},
+			},
+			{
+				name: "tier belongs only to another model",
+				models: [
+					{
+						id: "gpt-5.6-luna",
+						model: "gpt-5.6-luna",
+						supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+						serviceTiers: [],
+					},
+					{
+						id: "other-model",
+						model: "other-model",
+						supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+						serviceTiers: [
+							{
+								id: "priority",
+								name: "Fast",
+								description: "1.5x speed, increased usage",
+							},
+						],
+					},
+				],
+				expected: {
+					status: "unavailable",
+					code: "CODEX_MODEL_OR_TIER_UNAVAILABLE",
+				},
+			},
+		] as const;
+
+		for (const testCase of cases) {
+			const { cwd, agentsPath } = await runtime();
+			const { brain } = createBrain(
+				cwd,
+				async (message, process) => {
+					if (await standardResponse(message, process, agentsPath)) return;
+					if (message.method === "account/read")
+						await process.send({
+							id: message.id,
+							result: {
+								account: { type: "chatgpt" },
+								requiresOpenaiAuth: true,
+							},
+						});
+					if (message.method === "model/list")
+						await process.send({
+							id: message.id,
+							result: { data: testCase.models, nextCursor: null },
+						});
+				},
+				{ serviceTier: "priority" },
+			);
+			expect(await brain.health(), testCase.name).toEqual(testCase.expected);
+		}
 	});
 
 	test("process exit fails an active turn safely, restarts, and resumes the thread", async () => {

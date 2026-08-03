@@ -69,7 +69,7 @@ Errors: `CONSENT_REQUIRED`, `CAPACITY_EXCEEDED`, `BRAIN_NOT_READY`. Application 
 
 - DB write/read;
 - Codex app-server handshake;
-- наличие auth и модели Luna в `model/list`;
+- наличие auth и exact Luna/`low` в `model/list`; если запрошен `CODEX_SERVICE_TIER=priority`, exact Luna entry обязан рекламировать service-tier id `priority`, иначе readiness возвращает `CODEX_MODEL_OR_TIER_UNAVAILABLE` (отсутствующее legacy-поле допустимо только для standard service);
 - ровно один `OPENROUTER_API_KEY` для обоих voice paths;
 - при `STT_PROVIDER=openrouter`: schema-valid audio-input model/`wav`/language, utterance byte/time limits и request timeout/retry limits; readiness не утверждает наличие provider streaming session;
 - при `TTS_PROVIDER=openrouter`: one exact schema-valid profile (`xai_mp3` → xAI/eve/MP3 by default, or complete opt-in `gemini_3_1_pcm` → Preview model/case-sensitive snapshot voice/PCM), queue/circuit state and text-only startup policy; readiness makes no paid call and selects no fallback;

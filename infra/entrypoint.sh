@@ -103,6 +103,13 @@ case "${AUTO_MIGRATE:-}" in
     exit 64
     ;;
 esac
+case "${CODEX_SERVICE_TIER:-}" in
+  ''|priority) ;;
+  *)
+    log "CODEX_SERVICE_TIER must be empty or priority"
+    exit 64
+    ;;
+esac
 case "${CODEX_TOOL_MODE:-}" in
   envelope) ;;
   *)

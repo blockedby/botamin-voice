@@ -14,6 +14,13 @@ const runtimeCwd = process.env.CODEX_CWD;
 const codexBin = process.env.CODEX_BIN ?? "codex";
 const model = process.env.CODEX_MODEL ?? "gpt-5.6-luna";
 const effort = process.env.CODEX_EFFORT ?? "low";
+const serviceTier = process.env.CODEX_SERVICE_TIER;
+if (
+	serviceTier !== undefined &&
+	serviceTier !== "" &&
+	serviceTier !== "priority"
+)
+	throw new Error("CODEX_SERVICE_TIER must be empty or priority");
 if (!codexHome || !isAbsolute(codexHome))
 	throw new Error("CODEX_HOME must be an absolute path");
 if (!runtimeCwd || !isAbsolute(runtimeCwd))
@@ -47,6 +54,7 @@ let brain!: CodexAppServerBrain;
 brain = new CodexAppServerBrain({
 	model,
 	effort,
+	...(serviceTier === "priority" ? { serviceTier } : {}),
 	toolMode: "envelope",
 	runtimeCwd,
 	turnTimeoutMs: 45_000,

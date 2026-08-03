@@ -23,6 +23,7 @@ services:
       CODEX_HOME: /codex-home
       CODEX_MAX_CONCURRENT_TURNS: ${CODEX_MAX_CONCURRENT_TURNS:-3}
       CODEX_MODEL: ${CODEX_MODEL:-gpt-5.6-luna}
+      CODEX_SERVICE_TIER: ${CODEX_SERVICE_TIER:-}
       CODEX_TOOL_MODE: ${CODEX_TOOL_MODE:-envelope}
       DATABASE_URL: file:/data/app.db
       LOG_LEVEL: ${LOG_LEVEL:-info}

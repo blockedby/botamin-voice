@@ -441,7 +441,10 @@ ABANDONED_SESSION_TIMEOUT_MS=10000
 # Keep CODEX_HOME outside this source repository and use an absolute path.
 BRAIN_PROVIDER=codex-subscription
 CODEX_MODEL=gpt-5.6-luna
+# Luna reasoning cannot be disabled; low is the lowest supported effort.
 CODEX_EFFORT=low
+# Empty is portable standard service; exact priority opts into Fast routing.
+CODEX_SERVICE_TIER=
 CODEX_HOME=/home/your-user/.local/share/botamin-voice/codex-home
 # Production runtime is fixed to the server-validated envelope mode.
 CODEX_TOOL_MODE=envelope
@@ -524,4 +527,4 @@ TRANSCRIPT_RETENTION_DAYS=30
 STORE_RAW_AUDIO=false
 ```
 
-Значение concurrency — initial guardrail, а не окончательная capacity claim; оно настраивается после load test и проверки лимитов конкретной подписки. `MAX_PENDING_BRAIN_TURNS` ограничивает сохранённые в памяти committed WAV; booked sessions имеют отдельную приоритетную FIFO-очередь, а внутри каждой очереди сохраняется порядок поступления. `TRUSTED_PROXY_HOPS=0` безопасно игнорирует forwarding headers для прямого Bun-запуска; Compose явно задаёт `1`, потому что app доступен только через Caddy. `CODEX_MODEL` и `CODEX_EFFORT` конфигурируемы, но любое изменение release-профиля требует полного conversation eval gate.
+Значение concurrency — initial guardrail, а не окончательная capacity claim; оно настраивается после load test и проверки лимитов конкретной подписки. `MAX_PENDING_BRAIN_TURNS` ограничивает сохранённые в памяти committed WAV; booked sessions имеют отдельную приоритетную FIFO-очередь, а внутри каждой очереди сохраняется порядок поступления. `TRUSTED_PROXY_HOPS=0` безопасно игнорирует forwarding headers для прямого Bun-запуска; Compose явно задаёт `1`, потому что app доступен только через Caddy. Production-профиль фиксирует `CODEX_MODEL=gpt-5.6-luna` и минимально поддерживаемый Luna effort `low`: доступные effort — `low|medium|high|xhigh|max`, поэтому reasoning нельзя выключить через `off`/`minimal`. Опциональный `CODEX_SERVICE_TIER=priority` включает advertised Fast tier (1.5x speed) ценой повышенного subscription usage; пустое значение оставляет portable standard service. Это не latency SLA. Любое изменение release-профиля требует полного conversation eval gate.

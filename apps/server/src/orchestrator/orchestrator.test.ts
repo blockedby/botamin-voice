@@ -148,6 +148,30 @@ function speechScript(
 	];
 }
 
+function splitPhraseScript(
+	text: string,
+	turnId = turn1,
+	generationId = generation1,
+): BrainDelta[] {
+	const boundary = text.indexOf(". ") + 1;
+	if (boundary <= 0) throw new Error("expected two complete test phrases");
+	return [
+		{
+			type: "speech.delta",
+			turnId,
+			generationId,
+			text: text.slice(0, boundary),
+		},
+		{
+			type: "speech.delta",
+			turnId,
+			generationId,
+			text: text.slice(boundary),
+		},
+		{ type: "turn.completed", turnId, generationId },
+	];
+}
+
 async function collect(
 	iterable: AsyncIterable<OrchestratorEvent>,
 ): Promise<OrchestratorEvent[]> {
@@ -1862,11 +1886,12 @@ describe("trusted speech delivery style integration", () => {
 		}
 	});
 
-	test("keeps model tags visible but strips them before a server-selected provider style", async () => {
-		const visible = "[serious] Так команда быстрее отвечает на обращения.";
+	test("strips model tags before visible text and a server-selected provider style", async () => {
+		const modelText = "[serious] Так команда быстрее отвечает на обращения.";
+		const visible = "Так команда быстрее отвечает на обращения.";
 		const tts = new FakeTts();
 		const { orchestrator } = fixture({
-			brain: new FakeBrain(speechScript(visible)),
+			brain: new FakeBrain(speechScript(modelText)),
 			tts,
 			initialState: valueState(),
 		});
@@ -2462,7 +2487,7 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		expect(spoken).not.toMatch(/999|123\/45/u);
 	});
 
-	test("complete nested JSON envelope stays visible but no nested PII reaches TTS", async () => {
+	test("strips square-bracket JSON content from visible text and keeps the envelope out of TTS", async () => {
 		const envelope = JSON.stringify({
 			metadata: {
 				company: "Секретная Компания",
@@ -2490,7 +2515,13 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		expect(done?.type === "text.done" ? done.text : "").toContain(
 			"Секретная Компания",
 		);
-		expect(JSON.stringify(events)).toContain("private@example.com");
+		const deliveredText = events
+			.filter(
+				(event) => event.type === "text.delta" || event.type === "text.done",
+			)
+			.map((event) => event.text)
+			.join(" ");
+		expect(deliveredText).not.toMatch(/\[|\]|private@example\.com|999/iu);
 		expect(tts.inputs).toHaveLength(0);
 		expect(events.some((event) => event.type === "audio.segment")).toBe(false);
 	});
@@ -2532,12 +2563,81 @@ describe("speech, TTS degradation, and generation fencing", () => {
 		});
 	});
 
-	test("prefetch starts two complete phrases before the first settles and publishes in source order", async () => {
-		const source =
-			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
+	test("strips split model controls from incremental text, durable projection, and TTS", async () => {
+		const first =
+			"Обычный русский текст полностью сохраняется без служебной разметки.";
+		const second = "Вторая полезная фраза тоже остаётся видимой.";
+		const brain = new FakeBrain([
+			{
+				type: "speech.delta",
+				turnId: turn1,
+				generationId: generation1,
+				text: "[ex",
+			},
+			{
+				type: "speech.delta",
+				turnId: turn1,
+				generationId: generation1,
+				text: `cited] ${first} [lau`,
+			},
+			{
+				type: "speech.delta",
+				turnId: turn1,
+				generationId: generation1,
+				text: `ghs] ${second}`,
+			},
+			{ type: "turn.completed", turnId: turn1, generationId: generation1 },
+		]);
+		const tts = new FakeTts();
+		const { orchestrator } = fixture({
+			brain,
+			tts,
+			initialState: valueState(),
+		});
+		const events = await collect(orchestrator.acceptAudioCommit(commit()));
+		const incremental = events
+			.filter((event) => event.type === "text.delta")
+			.map((event) => event.text);
+		const durable = events.find((event) => event.type === "text.done");
+		const expected = `${first} ${second}`;
+
+		expect(incremental).toEqual([first, second]);
+		expect(incremental.join(" ")).toBe(expected);
+		expect(durable?.type === "text.done" ? durable.text : "").toBe(expected);
+		expect(tts.inputs.map((request) => request.text).join(" ")).toBe(expected);
+		expect(
+			[...incremental, durable?.type === "text.done" ? durable.text : ""].join(
+				" ",
+			),
+		).not.toMatch(/\[|\]|excited|laughs|whispers/iu);
+		expect(tts.inputs.map((request) => request.text).join(" ")).not.toMatch(
+			/\[|\]|excited|laughs|whispers/iu,
+		);
+	});
+
+	test("prefetch spans separate brain deltas, keeps two pending, and publishes in source order", async () => {
+		const first =
+			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг.";
+		const second =
+			"Второй полезный ответ уточняет детали и завершает объяснение.";
+		const source = `${first} ${second}`;
 		const tts = new ControlledTts();
 		const { orchestrator } = fixture({
-			brain: new FakeBrain(speechScript(source)),
+			brain: new FakeBrain([
+				{
+					type: "speech.delta",
+					turnId: turn1,
+					generationId: generation1,
+					text: first,
+				},
+				{
+					type: "speech.delta",
+					turnId: turn1,
+					generationId: generation1,
+					text: ` ${second}`,
+				},
+				{ type: "turn.completed", turnId: turn1, generationId: generation1 },
+			]),
 			tts,
 			initialState: valueState(),
 		});
@@ -2580,7 +2680,7 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
 		const tts = new ControlledTts();
 		const { orchestrator } = fixture({
-			brain: new FakeBrain(speechScript(source)),
+			brain: new FakeBrain(splitPhraseScript(source)),
 			tts,
 			initialState: valueState(),
 		});
@@ -2611,7 +2711,7 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
 		const tts = new ControlledTts();
 		const { orchestrator } = fixture({
-			brain: new FakeBrain(speechScript(source)),
+			brain: new FakeBrain(splitPhraseScript(source)),
 			tts,
 			initialState: valueState(),
 		});
@@ -2645,7 +2745,7 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
 		const tts = new ControlledTts();
 		const { orchestrator } = fixture({
-			brain: new FakeBrain(speechScript(source)),
+			brain: new FakeBrain(splitPhraseScript(source)),
 			tts,
 			initialState: valueState(),
 		});
@@ -2670,7 +2770,7 @@ describe("speech, TTS degradation, and generation fencing", () => {
 			"Первый полезный ответ объясняет основной сценарий и следующий безопасный шаг. Второй полезный ответ уточняет детали и завершает объяснение.";
 		const tts = new RetryTts();
 		const { orchestrator } = fixture({
-			brain: new FakeBrain(speechScript(source)),
+			brain: new FakeBrain(splitPhraseScript(source)),
 			tts,
 			initialState: valueState(),
 			speechBudgets: {

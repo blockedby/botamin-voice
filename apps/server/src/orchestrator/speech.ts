@@ -245,10 +245,7 @@ function stripCodeAndEnvelopes(input: string): string {
 	return text;
 }
 
-/**
- * Produces provider-safe spoken text. Callers retain the original model text
- * for the visible transcript; this function is only for TTS input.
- */
+/** Produces provider-safe spoken text for the TTS boundary. */
 export function sanitizeSpeech(input: string): string {
 	let text = stripCodeAndEnvelopes(input.replace(/\r\n?/gu, "\n"));
 	text = text.replace(MARKDOWN_LINK, "$1");
@@ -279,6 +276,41 @@ export function sanitizeSpeech(input: string): string {
 	text = text.replace(/\s+([,.!?;:])/gu, "$1");
 	text = text.replace(/\s+/gu, " ").trim();
 	return /^[\p{P}\p{S}\s]*$/u.test(text) ? "" : text;
+}
+
+/**
+ * Removes model-authored square-bracket delivery controls before text enters
+ * the visible transcript, durable projection, or speech chunker. A control may
+ * span any number of deltas. Unclosed controls fail closed at end of stream;
+ * ordinary text outside controls is forwarded incrementally without buffering.
+ */
+export class StreamingModelControlSanitizer {
+	#depth = 0;
+
+	push(delta: string): string {
+		let visible = "";
+		for (const character of delta) {
+			if (character === "[") {
+				this.#depth += 1;
+				continue;
+			}
+			if (character === "]") {
+				if (this.#depth > 0) this.#depth -= 1;
+				if (this.#depth === 0) visible += " ";
+				continue;
+			}
+			if (this.#depth === 0) visible += character;
+		}
+		return visible;
+	}
+
+	flush(): void {
+		this.#depth = 0;
+	}
+
+	clear(): void {
+		this.#depth = 0;
+	}
 }
 
 /**

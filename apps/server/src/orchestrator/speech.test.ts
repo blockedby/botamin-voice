@@ -6,6 +6,7 @@ import {
 	renderPreparedSpeech,
 	SpeechBudgetGuard,
 	SpeechPrefetchCoordinator,
+	StreamingModelControlSanitizer,
 	StreamingSentenceChunker,
 	sanitizeSpeech,
 } from "./speech";
@@ -48,14 +49,30 @@ generationId=01J00000000000000000000002
 		expect(streamed).toEqual(["До конверта.", "После конверта."]);
 	});
 
-	test("strips bracket-style model controls without changing visible source text", () => {
+	test("strips bracket-style controls from provider speech", () => {
 		const source =
 			"[excited] Полезный ответ. [whispers] Только факт. [style: serious!] Без управления.";
 		expect(sanitizeSpeech(source)).toBe(
 			"Полезный ответ. Только факт. Без управления.",
 		);
-		expect(source).toBe(
-			"[excited] Полезный ответ. [whispers] Только факт. [style: serious!] Без управления.",
+	});
+
+	test("strips nested model controls across deltas and fails closed on an open tail", () => {
+		const sanitizer = new StreamingModelControlSanitizer();
+		const visible = [
+			sanitizer.push("Обычный русский [ex"),
+			sanitizer.push("cited] текст [laughs [quietly]] сохранён. "),
+			sanitizer.push("Продолжение [whis"),
+			sanitizer.push("pers без закрытия"),
+		].join("");
+		sanitizer.flush();
+		expect(visible.replace(/\s+/gu, " ").trim()).toBe(
+			"Обычный русский текст сохранён. Продолжение",
+		);
+		expect(visible).not.toMatch(/\[|\]|excited|laughs|quietly|whispers/iu);
+		expect(sanitizer.push("Новый обычный текст.")).toBe("Новый обычный текст.");
+		expect(sanitizer.push(' Данные: [{"deliveryStyle":"serious"}].')).toBe(
+			" Данные:  .",
 		);
 	});
 

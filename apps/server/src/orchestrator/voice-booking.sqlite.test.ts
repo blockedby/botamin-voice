@@ -750,7 +750,11 @@ describe("typed and spoken server-owned draft completion", () => {
 				draftJson: JSON.stringify({
 					conversationId: harness.conversationId,
 					revision: committing.revision,
-					factRegistry: { revision: committing.revision },
+					factRegistry: {
+						schemaVersion: 1,
+						revision: committing.revision,
+						facts: {},
+					},
 					updatedAt: committing.updatedAt,
 				}),
 			})

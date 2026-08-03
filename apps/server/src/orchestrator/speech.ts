@@ -1,9 +1,8 @@
 import {
 	type ApprovedSpeechContact,
-	isPhoneLikeSpeechCandidate,
 	MAX_APPROVED_SPEECH_CONTACTS,
 	markApprovedSpeechContacts,
-	PHONE_LIKE_SPEECH_CANDIDATE_SOURCE,
+	redactPhoneLikeSpeechCandidates,
 	type SpeechContactChannel,
 } from "./speech-contacts";
 
@@ -16,10 +15,6 @@ const MARKDOWN_LINK = /\[([^\x5d]+)\]\(\s*(?:https?:\/\/|www\.)[^)]+\)/giu;
 const RAW_URL = /(?:https?:\/\/|www\.)[^\s<>()]*[\p{L}\p{N}/#]/giu;
 const EMAIL =
 	/[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/giu;
-const PHONE = new RegExp(
-	`${PHONE_LIKE_SPEECH_CANDIDATE_SOURCE}(?:\\s*(?:доб\\.?|ext\\.?)\\s*\\p{Nd}+)?`,
-	"giu",
-);
 const TELEGRAM = /(?<![\p{L}\p{N}])@[a-zA-Z][a-zA-Z0-9_]{3,31}\b/gu;
 const UUID =
 	/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/giu;
@@ -204,13 +199,9 @@ function stripCodeAndEnvelopes(input: string): string {
 export function sanitizeSpeech(input: string): string {
 	let text = stripCodeAndEnvelopes(input.replace(/\r\n?/gu, "\n"));
 	text = text.replace(MARKDOWN_LINK, "$1");
+	text = redactPhoneLikeSpeechCandidates(text);
 	text = text.replace(RAW_URL, " ");
 	text = text.replace(EMAIL, CONTACT_REDACTION);
-	text = text.replace(PHONE, (candidate, offset: number, source: string) =>
-		isPhoneLikeSpeechCandidate(candidate, { input: source, start: offset })
-			? CONTACT_REDACTION
-			: candidate,
-	);
 	text = text.replace(TELEGRAM, CONTACT_REDACTION);
 	text = text.replace(HIDDEN_ID, " ");
 	text = text.replace(UUID, " ");

@@ -19,6 +19,11 @@ export interface RuntimeConfig {
 	readonly sessionStopDrainMs: number;
 	readonly turnTimeoutMs: number;
 	readonly transcriptRetentionDays: number;
+	readonly orphanRecovery: {
+		readonly batchSize: number;
+		readonly maxPerSweep: number;
+		readonly intervalMs: number;
+	};
 	readonly qualificationEnabled: boolean;
 	readonly notifier:
 		| { readonly kind: "console" }
@@ -271,6 +276,17 @@ export function createRuntimeConfig(env: Environment = Bun.env): RuntimeConfig {
 			1,
 			3_650,
 		),
+		orphanRecovery: {
+			batchSize: integer(env, "ORPHAN_RECOVERY_BATCH_SIZE", 25, 1, 100),
+			maxPerSweep: integer(env, "ORPHAN_RECOVERY_MAX_PER_SWEEP", 100, 1, 1_000),
+			intervalMs: integer(
+				env,
+				"ORPHAN_RECOVERY_INTERVAL_MS",
+				60_000,
+				1_000,
+				86_400_000,
+			),
+		},
 		qualificationEnabled: boolean(
 			env,
 			"POST_BOOKING_QUALIFICATION_ENABLED",

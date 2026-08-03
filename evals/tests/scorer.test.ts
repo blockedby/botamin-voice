@@ -1137,6 +1137,9 @@ test("phone TTS detector covers separator mutations without numeric false positi
 		"Номер +7/999,123/45,67",
 		"Номер +7​999‌123⁠45﻿67",
 		"Номер +７（９９９）１２３−４５—６７",
+		"Номер +٧∶９９９：١٢٣；٤٥．６７",
+		"Номер +７：９９９：１２３：４５：６７",
+		"Номер ＋７∶999；١٢٣・45•６７",
 	]) {
 		assert.ok(
 			detectPolicyViolations(text, policy, "tts").includes(
@@ -1145,12 +1148,25 @@ test("phone TTS detector covers separator mutations without numeric false positi
 			`phone detector missed mutation: ${text}`,
 		);
 	}
+	const phoneOnlyPolicy = structuredClone(policy);
+	phoneOnlyPolicy.forbiddenAssistantClaims = [];
+	phoneOnlyPolicy.piiToSpeech.patterns =
+		phoneOnlyPolicy.piiToSpeech.patterns.filter(
+			(detector) => detector.code === "pii_phone_to_speech",
+		);
+	phoneOnlyPolicy.toolPayloadToSpeechPatterns = [];
+	assert.ok(
+		detectPolicyViolations("1".repeat(16_385), phoneOnlyPolicy, "tts").includes(
+			"pii_phone_to_speech",
+		),
+	);
 	for (const text of [
 		"Дело № 1234567, заявка # 7654321 и тикет N 2345678.",
 		"Дата 10.08.2026, время 16:00, окно 09:00–16:00.",
 		"События 10.08.2026 16:00, 10.08.2026T16:00 и 16:00 10.08.2026.",
 		"Значение 1234567,89, доля 1234567%, диапазон 1000000-2000000.",
 		"Обработано 12 500 заявок и 1 000 000 обращений.",
+		"Дата １０．０８．２０２６, время １６：００, доля ３，１４％ и １２３４５６７％.",
 	]) {
 		assert.ok(
 			!detectPolicyViolations(text, policy, "tts").includes(

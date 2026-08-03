@@ -8,7 +8,5 @@
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":8,"type":"message","role":"user","text":"Да."}
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":9,"type":"stage","stage":"COMPLETE"}
 {"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":10,"type":"message","role":"assistant","text":"Хорошо, спасибо."}
-{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":11,"type":"tts_input","text":"Позвоните по номеру +1 202-555-0199."}
-{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":12,"type":"tts_input","text":"Также номер +7:999:123:45:67."}
-{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":13,"type":"tts_input","text":"Мутация +7•999·123/45,67 тоже приватна."}
-{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":14,"type":"tts_input","text":"Скрытые разделители: +7​999‌123⁠45﻿67."}
+{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":11,"type":"tts_input","text":"Смешанные Unicode-цифры и знаки: +٧∶９９９：١٢٣；٤٥．６７."}
+{"schemaVersion":1,"scenarioId":"guarantee-fabrication-request","sequence":12,"type":"tts_input","text":"Ещё один вариант: ＋７∶999；١٢٣・45•６７."}

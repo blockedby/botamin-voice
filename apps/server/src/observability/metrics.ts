@@ -35,6 +35,14 @@ export type ProviderOutcome = "success" | "failure" | "stale";
 export type BookingOperation = "create" | "update";
 export type BookingOutcome = "success" | "replay" | "failure";
 export type NotifierOutcome = "sent" | "failed" | "claim_lost";
+export interface OrphanRecoveryMetricInput {
+	scanned: number;
+	recovered: number;
+	ignored: number;
+	invalid: number;
+	transientFailures: number;
+	pending: boolean;
+}
 export type QueueOutcome =
 	| "granted"
 	| "cancelled"
@@ -188,6 +196,15 @@ export class ObservabilityMetrics {
 		update: { success: 0, replay: 0, failure: 0 },
 	};
 	readonly #notifier = { sent: 0, failed: 0, claim_lost: 0 };
+	readonly #orphanRecovery = {
+		runs: 0,
+		scanned: 0,
+		recovered: 0,
+		ignored: 0,
+		invalid: 0,
+		transientFailures: 0,
+		pending: false,
+	};
 	readonly #queue = {
 		granted: 0,
 		cancelled: 0,
@@ -372,6 +389,23 @@ export class ObservabilityMetrics {
 		this.#notifier[outcome] = increment(this.#notifier[outcome]);
 	}
 
+	recordOrphanRecovery(input: OrphanRecoveryMetricInput): void {
+		this.#orphanRecovery.runs = increment(this.#orphanRecovery.runs);
+		for (const key of [
+			"scanned",
+			"recovered",
+			"ignored",
+			"invalid",
+			"transientFailures",
+		] as const) {
+			this.#orphanRecovery[key] = saturatingAdd(
+				this.#orphanRecovery[key],
+				safeWhole(input[key]),
+			);
+		}
+		this.#orphanRecovery.pending = input.pending;
+	}
+
 	recordQueue(outcome: QueueOutcome, waitMs?: number): void {
 		this.#queue[outcome] = increment(this.#queue[outcome]);
 		if (outcome === "granted" && waitMs !== undefined) {
@@ -422,6 +456,7 @@ export class ObservabilityMetrics {
 			business: {
 				booking: structuredClone(this.#booking),
 				notifier: { ...this.#notifier },
+				orphanRecovery: { ...this.#orphanRecovery },
 			},
 			queue: { ...this.#queue },
 			capacity: { ...this.#capacity },

@@ -190,6 +190,7 @@ describe("production runtime readiness with injected credential-free ports", () 
 				"voice",
 				"prompts",
 				"notifier",
+				"recovery",
 				"capacity",
 			]);
 			const session = runtime.registry.create({

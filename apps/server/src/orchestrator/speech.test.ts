@@ -53,6 +53,16 @@ generationId=01J00000000000000000000002
 		expect(spoken).toContain("контакт скрыт");
 		expect(spoken).not.toMatch(/@|example\.com|999|123-45/u);
 		expect(source).toContain("name.surname+sales@example.com");
+		for (const mutation of [
+			"+７：９９９：１２３：４５：６７",
+			"＋٧∶９９９；١٢٣・٤٥•６７",
+		]) {
+			expect(sanitizeSpeech(`Номер ${mutation}`)).toBe("Номер контакт скрыт");
+		}
+	});
+
+	test("fails closed within a fixed phone scan bound", () => {
+		expect(sanitizeSpeech(`Текст ${"1".repeat(16_385)}`)).toBe("контакт скрыт");
 	});
 
 	test("never returns punctuation-only or empty segments", () => {
@@ -183,6 +193,9 @@ describe("approved contact speech", () => {
 			"+7\u200B999\u200C123\u206045\uFEFF67",
 			"+7\u00A0999\u2007123\u202F45\u300067",
 			"+٧/٩٩٩/١٢٣/٤٥/٦٧",
+			"+٧∶９９９：١٢٣；٤٥．６７",
+			"+７：９９９：１２３：４５：６７",
+			"＋７∶999；١٢٣・45•６７",
 			"+7（999）123−45—67",
 			"+7 (999)/123,45\u200B67",
 			"+7:999•123/45,67",
@@ -233,6 +246,7 @@ describe("approved contact speech", () => {
 			"События 10.08.2026 16:00, 10.08.2026T16:00 и 16:00 10.08.2026.",
 			"Значение 1234567,89, доля 1234567%, диапазон 1000000-2000000.",
 			"Обработано 12\u00A0500 заявок и 1\u202F000\u202F000 обращений.",
+			"Дата １０．０８．２０２６, время １６：００, доля ３，１４％ и １２３４５６７％.",
 		];
 		for (const source of controls) {
 			for (const contactProcessing of [false, true]) {

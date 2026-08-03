@@ -20,6 +20,103 @@ export const MAX_APPROVED_SPEECH_CONTACTS = 3;
 
 const CONTACT_REDACTION = "контакт скрыт";
 const PRIVATE_USE = /[\uE000-\uF8FF]/gu;
+const MAX_PHONE_DETECTION_CODE_UNITS = 16_384;
+// Unicode 16 Nd zeroes. Contiguous multi-set blocks are listed per ten digits.
+const UNICODE_DECIMAL_ZEROES = [
+	0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66,
+	0xce6, 0xd66, 0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810,
+	0x1946, 0x19d0, 0x1a80, 0x1a90, 0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620,
+	0xa8d0, 0xa900, 0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10, 0x104a0, 0x10d30,
+	0x10d40, 0x11066, 0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0,
+	0x11650, 0x116c0, 0x116d0, 0x116da, 0x11730, 0x118e0, 0x11950, 0x11bf0,
+	0x11c50, 0x11d50, 0x11da0, 0x11de0, 0x11f50, 0x16130, 0x16a60, 0x16ac0,
+	0x16b50, 0x16d70, 0x1ccf0, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6,
+	0x1e140, 0x1e2f0, 0x1e4f0, 0x1e5f1, 0x1e950, 0x1fbf0,
+] as const;
+const PHONE_MUTATION_MAP = new Map<string, string>([
+	["＋", "+"],
+	["：", ":"],
+	["；", ";"],
+	["∶", ":"],
+	["．", "."],
+	["。", "."],
+	["․", "."],
+	["‥", "."],
+	["⁚", ":"],
+	["⁝", ":"],
+	["⁞", ":"],
+	["꞉", ":"],
+	["﹕", ":"],
+	["﹔", ";"],
+	["﹒", "."],
+	["·", "."],
+	["•", "."],
+	["‣", "."],
+	["∙", "."],
+	["⋅", "."],
+	["◦", "."],
+	["▪", "."],
+	["▫", "."],
+	["●", "."],
+	["○", "."],
+	["・", "."],
+	["･", "."],
+	["，", ","],
+	["﹐", ","],
+	["٫", "."],
+	["٬", ","],
+	["／", "/"],
+	["⁄", "/"],
+	["∕", "/"],
+	["＼", "\\"],
+	["％", "%"],
+	["（", "("],
+	["）", ")"],
+	["［", "["],
+	["］", "]"],
+	["｛", "{"],
+	["｝", "}"],
+]);
+const UNICODE_DASH = /^\p{Pd}$/u;
+
+function decimalDigit(character: string): number | null {
+	const codePoint = character.codePointAt(0);
+	if (codePoint === undefined) return null;
+	for (const zero of UNICODE_DECIMAL_ZEROES) {
+		if (codePoint >= zero && codePoint <= zero + 9) return codePoint - zero;
+	}
+	return null;
+}
+
+interface PhoneDetectionText {
+	text: string;
+	starts: number[];
+	ends: number[];
+}
+
+/** Normalize only the bounded phone alphabet; approval still uses the original text. */
+function normalizePhoneDetection(input: string): PhoneDetectionText | null {
+	if (input.length > MAX_PHONE_DETECTION_CODE_UNITS) return null;
+	let text = "";
+	const starts: number[] = [];
+	const ends: number[] = [];
+	let sourceOffset = 0;
+	for (const character of input) {
+		const digit = decimalDigit(character);
+		const mapped =
+			digit !== null
+				? String(digit)
+				: (PHONE_MUTATION_MAP.get(character) ??
+					(UNICODE_DASH.test(character) ? "-" : character));
+		text += mapped;
+		for (let index = 0; index < mapped.length; index += 1) {
+			starts.push(sourceOffset);
+			ends.push(sourceOffset + character.length);
+		}
+		sourceOffset += character.length;
+	}
+	return { text, starts, ends };
+}
 const EMAIL_CANDIDATE =
 	/(?<![\p{L}\p{N}.!#$%&'*+/=?^_`{|}~@-])[\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+(?![\p{L}\p{N}-])/giu;
 export const PHONE_LIKE_SPEECH_CANDIDATE_SOURCE = String.raw`(?<![\p{L}\p{N}])(?:\+[\p{Z}\s\p{Cf}]*)?[\p{Nd}](?:[\p{Nd}\p{Z}\s\p{Cf}().,:;\/\\（）\[\]{}‐‑‒–—―−·•‣∙⋅◦▪▫●○-]*[\p{Nd}])?(?:[\p{L}_][\p{L}\p{N}_]*)?(?:\s*%)?`;
@@ -163,6 +260,39 @@ export function isPhoneLikeSpeechCandidate(
 		return false;
 	}
 	return true;
+}
+
+/** Redacts residual phone-like text using the bounded normalized shadow. */
+export function redactPhoneLikeSpeechCandidates(input: string): string {
+	const detection = normalizePhoneDetection(input);
+	if (detection === null) return CONTACT_REDACTION;
+	const candidates: Region[] = [];
+	PHONE_CANDIDATE.lastIndex = 0;
+	for (const match of detection.text.matchAll(PHONE_CANDIDATE)) {
+		const detectionStart = match.index;
+		const detectionEnd = detectionStart + match[0].length;
+		const sourceStart = detection.starts[detectionStart];
+		const sourceEnd = detection.ends[detectionEnd - 1];
+		if (sourceStart === undefined || sourceEnd === undefined) continue;
+		if (
+			!isPhoneLikeSpeechCandidate(match[0], {
+				input: detection.text,
+				start: detectionStart,
+			})
+		) {
+			continue;
+		}
+		const extension = input.slice(sourceEnd).match(PHONE_EXTENSION)?.[0] ?? "";
+		candidates.push({ start: sourceStart, end: sourceEnd + extension.length });
+	}
+	let output = "";
+	let cursor = 0;
+	for (const candidate of candidates) {
+		output += input.slice(cursor, candidate.start);
+		output += CONTACT_REDACTION;
+		cursor = candidate.end;
+	}
+	return output + input.slice(cursor);
 }
 
 function canonicalPhone(value: string): string | null {
@@ -334,6 +464,10 @@ export function markApprovedSpeechContacts(
 	approvedContacts: readonly ApprovedSpeechContact[],
 ): MarkedSpeechContacts {
 	const text = input.replace(PRIVATE_USE, "");
+	const phoneDetection = normalizePhoneDetection(text);
+	if (phoneDetection === null) {
+		return { text: CONTACT_REDACTION, contacts: [] };
+	}
 	const approved = new Set(
 		approvedContacts.map(canonicalContact).filter((value) => value !== null),
 	);
@@ -373,25 +507,32 @@ export function markApprovedSpeechContacts(
 	}
 
 	PHONE_CANDIDATE.lastIndex = 0;
-	for (const match of text.matchAll(PHONE_CANDIDATE)) {
+	for (const match of phoneDetection.text.matchAll(PHONE_CANDIDATE)) {
+		const detectionStart = match.index;
+		const detectionEnd = match.index + match[0].length;
+		const sourceStart = phoneDetection.starts[detectionStart];
+		const sourceEnd = phoneDetection.ends[detectionEnd - 1];
+		if (sourceStart === undefined || sourceEnd === undefined) continue;
+		const sourceCandidate = text.slice(sourceStart, sourceEnd);
 		if (
 			!isPhoneLikeSpeechCandidate(match[0], {
-				input: text,
-				start: match.index,
+				input: phoneDetection.text,
+				start: detectionStart,
 			})
 		) {
 			continue;
 		}
-		const matchEnd = match.index + match[0].length;
-		const extension = text.slice(matchEnd).match(PHONE_EXTENSION)?.[0] ?? "";
-		const next = text[matchEnd] ?? "";
+		const extension = text.slice(sourceEnd).match(PHONE_EXTENSION)?.[0] ?? "";
+		const next = text[sourceEnd + extension.length] ?? "";
 		const canonical =
-			extension || /[\p{L}\p{N}]/u.test(next) ? null : canonicalPhone(match[0]);
+			extension || /[\p{L}\p{N}]/u.test(next) || sourceCandidate !== match[0]
+				? null
+				: canonicalPhone(sourceCandidate);
 		pushCandidate(
 			candidates,
 			{
-				start: match.index,
-				end: matchEnd + extension.length,
+				start: sourceStart,
+				end: sourceEnd + extension.length,
 				channel: "phone",
 				canonical: canonical === null ? undefined : `phone:${canonical}`,
 				spoken: canonical === null ? undefined : speakPhone(canonical),

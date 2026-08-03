@@ -496,6 +496,86 @@ function detectsRawUrl(text: string): boolean {
 
 const PHONE_CANDIDATE_SOURCE = String.raw`(?<![\p{L}\p{N}])(?:\+[\p{Z}\s\p{Cf}]*)?[\p{Nd}](?:[\p{Nd}\p{Z}\s\p{Cf}().,:;\/\\（）\[\]{}‐‑‒–—―−·•‣∙⋅◦▪▫●○-]*[\p{Nd}])?(?:[\p{L}_][\p{L}\p{N}_]*)?(?:\s*%)?`;
 const PHONE_CANDIDATE = new RegExp(PHONE_CANDIDATE_SOURCE, "gu");
+const MAX_PHONE_DETECTION_CODE_UNITS = 16_384;
+const UNICODE_DECIMAL_ZEROES = [
+	0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66,
+	0xce6, 0xd66, 0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810,
+	0x1946, 0x19d0, 0x1a80, 0x1a90, 0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620,
+	0xa8d0, 0xa900, 0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10, 0x104a0, 0x10d30,
+	0x10d40, 0x11066, 0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0,
+	0x11650, 0x116c0, 0x116d0, 0x116da, 0x11730, 0x118e0, 0x11950, 0x11bf0,
+	0x11c50, 0x11d50, 0x11da0, 0x11de0, 0x11f50, 0x16130, 0x16a60, 0x16ac0,
+	0x16b50, 0x16d70, 0x1ccf0, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6,
+	0x1e140, 0x1e2f0, 0x1e4f0, 0x1e5f1, 0x1e950, 0x1fbf0,
+] as const;
+const PHONE_MUTATION_MAP = new Map<string, string>([
+	["＋", "+"],
+	["：", ":"],
+	["；", ";"],
+	["∶", ":"],
+	["．", "."],
+	["。", "."],
+	["․", "."],
+	["‥", "."],
+	["⁚", ":"],
+	["⁝", ":"],
+	["⁞", ":"],
+	["꞉", ":"],
+	["﹕", ":"],
+	["﹔", ";"],
+	["﹒", "."],
+	["·", "."],
+	["•", "."],
+	["‣", "."],
+	["∙", "."],
+	["⋅", "."],
+	["◦", "."],
+	["▪", "."],
+	["▫", "."],
+	["●", "."],
+	["○", "."],
+	["・", "."],
+	["･", "."],
+	["，", ","],
+	["﹐", ","],
+	["٫", "."],
+	["٬", ","],
+	["／", "/"],
+	["⁄", "/"],
+	["∕", "/"],
+	["＼", "\\"],
+	["％", "%"],
+	["（", "("],
+	["）", ")"],
+	["［", "["],
+	["］", "]"],
+	["｛", "{"],
+	["｝", "}"],
+]);
+const PHONE_UNICODE_DASH = /^\p{Pd}$/u;
+
+function normalizePhoneDetection(input: string): string | null {
+	if (input.length > MAX_PHONE_DETECTION_CODE_UNITS) return null;
+	let normalized = "";
+	for (const character of input) {
+		const codePoint = character.codePointAt(0);
+		let digit: number | null = null;
+		if (codePoint !== undefined) {
+			for (const zero of UNICODE_DECIMAL_ZEROES) {
+				if (codePoint >= zero && codePoint <= zero + 9) {
+					digit = codePoint - zero;
+					break;
+				}
+			}
+		}
+		normalized +=
+			digit !== null
+				? String(digit)
+				: (PHONE_MUTATION_MAP.get(character) ??
+					(PHONE_UNICODE_DASH.test(character) ? "-" : character));
+	}
+	return normalized;
+}
 const PHONE_GROUPED_NUMBER =
 	/^\p{Nd}{1,3}(?:[\p{Z}\s,]\p{Nd}{3})+(?:[.,]\p{Nd}{1,2})?$/u;
 const PHONE_DECIMAL = /^\p{Nd}+[.,]\p{Nd}{1,2}$/u;
@@ -522,8 +602,10 @@ const PHONE_CASE_PREFIX =
 	/(?:(?:^|[^\p{L}])(?:дело|кейс|заявк[аи]|заказ|тикет|обращение|сч[её]т)\s*(?:№|#|N)?|[№#])\s*$/iu;
 
 function detectsPhoneToSpeech(text: string): boolean {
+	const detectionText = normalizePhoneDetection(text);
+	if (detectionText === null) return true;
 	PHONE_CANDIDATE.lastIndex = 0;
-	for (const match of text.matchAll(PHONE_CANDIDATE)) {
+	for (const match of detectionText.matchAll(PHONE_CANDIDATE)) {
 		const normalized = match[0].normalize("NFKC").trim();
 		const firstSuffix = normalized.search(/[\p{L}_]/u);
 		const numericPart =
@@ -532,7 +614,7 @@ function detectsPhoneToSpeech(text: string): boolean {
 			/\p{Nd}/u.test(character),
 		).length;
 		if (digitCount < 7) continue;
-		const ordinaryDateTimePrefix = text
+		const ordinaryDateTimePrefix = detectionText
 			.slice(match.index)
 			.normalize("NFKC")
 			.match(PHONE_DATE_OR_TIME_LIST_PREFIX)?.[0];
@@ -550,7 +632,7 @@ function detectsPhoneToSpeech(text: string): boolean {
 		}
 		if (
 			!normalized.startsWith("+") &&
-			PHONE_CASE_PREFIX.test(text.slice(0, match.index))
+			PHONE_CASE_PREFIX.test(detectionText.slice(0, match.index))
 		) {
 			continue;
 		}

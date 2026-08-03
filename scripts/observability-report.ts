@@ -98,10 +98,22 @@ const STATUS_KEYS = [
 ] as const;
 const CIRCUIT_KEYS = ["closed", "open", "half-open", "unknown"] as const;
 const CONCURRENCY_KEYS = ["active", "limit", "rejected"] as const;
-const BUSINESS_KEYS = ["booking", "notifier"] as const;
+const BUSINESS_KEYS = ["booking", "notifier", "orphanRecovery"] as const;
 const BOOKING_OPERATION_KEYS = ["create", "update"] as const;
 const BOOKING_OUTCOME_KEYS = ["success", "replay", "failure"] as const;
 const NOTIFIER_KEYS = ["sent", "failed", "claim_lost"] as const;
+const ORPHAN_RECOVERY_KEYS = [
+	"runs",
+	"scanned",
+	"recovered",
+	"ignored",
+	"invalid",
+	"transientFailures",
+	"pending",
+] as const;
+const ORPHAN_RECOVERY_COUNTER_KEYS = ORPHAN_RECOVERY_KEYS.filter(
+	(key) => key !== "pending",
+);
 const QUEUE_KEYS = [
 	"granted",
 	"cancelled",
@@ -258,6 +270,17 @@ function validateSnapshot(
 		);
 	}
 	counterMap(business.notifier, "snapshot.business.notifier", NOTIFIER_KEYS);
+	const orphanRecovery = exactRecord(
+		business.orphanRecovery,
+		"snapshot.business.orphanRecovery",
+		ORPHAN_RECOVERY_KEYS,
+	);
+	for (const key of ORPHAN_RECOVERY_COUNTER_KEYS) {
+		safeInteger(orphanRecovery[key], `snapshot.business.orphanRecovery.${key}`);
+	}
+	if (typeof orphanRecovery.pending !== "boolean") {
+		fail("snapshot.business.orphanRecovery.pending is not a boolean");
+	}
 	counterMap(root.queue, "snapshot.queue", QUEUE_KEYS);
 	counterMap(root.capacity, "snapshot.capacity", CAPACITY_KEYS);
 }

@@ -95,6 +95,7 @@ export const ReadinessCheckSchema = z
 			"voice",
 			"prompts",
 			"notifier",
+			"recovery",
 			"capacity",
 		]),
 		status: z.enum(["ready", "degraded", "unready"]),

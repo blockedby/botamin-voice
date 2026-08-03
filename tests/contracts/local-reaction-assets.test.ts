@@ -17,6 +17,7 @@ import {
 import {
 	ConversationStageSchema,
 	isCompleteMp3File,
+	LOCAL_REACTION_CLIP_IDS,
 } from "../../packages/contracts/src";
 import { createDeterministicMp3Fixture } from "../../packages/test-fixtures/src";
 import {
@@ -55,6 +56,7 @@ describe("local reaction clip manifest and fixed copy", () => {
 		expect(REACTION_CLIP_MANIFEST.map(({ id }) => id)).toEqual([
 			...REACTION_CLIP_IDS,
 		]);
+		expect(LOCAL_REACTION_CLIP_IDS).toEqual(REACTION_CLIP_IDS);
 		expect(new Set(REACTION_CLIP_IDS).size).toBe(REACTION_CLIP_IDS.length);
 		expect(new Set(REACTION_CLIP_MANIFEST.map(({ path }) => path)).size).toBe(
 			REACTION_CLIP_MANIFEST.length,

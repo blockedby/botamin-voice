@@ -72,6 +72,8 @@ const playback: PlaybackAdapter = {
 	beginGeneration: () => undefined,
 	enqueue: async () => ({ status: "accepted" }),
 	sealGeneration: () => true,
+	requestReaction: () => false,
+	cancelReaction: () => undefined,
 	bargeIn: () => null,
 	dispose: async () => undefined,
 	activeGenerationId: null,

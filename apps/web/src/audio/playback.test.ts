@@ -9,6 +9,7 @@ import {
 	type CompletePlaybackSegment,
 	createBrowserAudioPlaybackApis,
 	PhrasePlaybackQueue,
+	type PlaybackScheduler,
 	type PlaybackSourceLike,
 } from "./playback";
 
@@ -49,6 +50,33 @@ function deferred<T>() {
 		reject = rejectPromise;
 	});
 	return { promise, resolve, reject };
+}
+
+class ManualScheduler implements PlaybackScheduler {
+	readonly jobs: Array<{ callback: () => void; delayMs: number }> = [];
+	schedule(callback: () => void, delayMs: number): unknown {
+		const job = { callback, delayMs };
+		this.jobs.push(job);
+		return job;
+	}
+	cancel(handle: unknown): void {
+		const index = this.jobs.indexOf(
+			handle as { callback: () => void; delayMs: number },
+		);
+		if (index >= 0) this.jobs.splice(index, 1);
+	}
+	runNext(): void {
+		this.jobs.shift()?.callback();
+	}
+}
+
+function reactionResponse(bytes = createDeterministicMp3Fixture()) {
+	return {
+		ok: true,
+		status: 200,
+		headers: { get: () => String(bytes.byteLength) },
+		arrayBuffer: async () => bytes.slice().buffer,
+	};
 }
 
 function playbackHarness(
@@ -330,6 +358,177 @@ describe("bounded complete-MP3 Web Audio playback", () => {
 			reason: "stale",
 		});
 		expect(harness.sources).toHaveLength(0);
+	});
+
+	test("starts one fixed-path reaction at 350ms without dynamic callbacks", async () => {
+		const harness = playbackHarness();
+		const scheduler = new ManualScheduler();
+		const fetches: Array<{ input: string; init: RequestInit }> = [];
+		const dynamicStarts: number[] = [];
+		const queue = new PhrasePlaybackQueue(
+			harness.apis,
+			{ onStarted: (value) => dynamicStarts.push(value.sequence) },
+			{
+				scheduler,
+				fetch: async (input, init) => {
+					fetches.push({ input, init });
+					return reactionResponse();
+				},
+			},
+		);
+		expect(
+			queue.requestReaction({
+				turnId: "01J00000000000000000000003",
+				generationId,
+				clipId: "neutral-good",
+				delayMs: 350,
+			}),
+		).toBe(true);
+		expect(
+			queue.requestReaction({
+				turnId: "01J00000000000000000000003",
+				generationId,
+				clipId: "neutral-accepted",
+				delayMs: 350,
+			}),
+		).toBe(false);
+		expect(scheduler.jobs.map((job) => job.delayMs)).toEqual([350]);
+		expect(fetches).toHaveLength(0);
+		scheduler.runNext();
+		await Bun.sleep(0);
+		expect(fetches).toHaveLength(1);
+		expect(fetches[0]).toMatchObject({
+			input: "/assets/reactions/neutral-good.mp3",
+			init: {
+				method: "GET",
+				credentials: "same-origin",
+				mode: "same-origin",
+				redirect: "error",
+			},
+		});
+		expect(harness.sources).toHaveLength(1);
+		expect(harness.sources[0]?.startTimes).toEqual([10]);
+		expect(dynamicStarts).toEqual([]);
+	});
+
+	test("dynamic metadata preempts reaction synchronously with no source overlap", async () => {
+		const harness = playbackHarness();
+		const scheduler = new ManualScheduler();
+		const queue = new PhrasePlaybackQueue(
+			harness.apis,
+			{},
+			{
+				scheduler,
+				fetch: async () => reactionResponse(),
+			},
+		);
+		queue.requestReaction({
+			turnId: "01J00000000000000000000003",
+			generationId,
+			clipId: "neutral-good",
+			delayMs: 350,
+		});
+		scheduler.runNext();
+		await Bun.sleep(0);
+		expect(harness.sources[0]?.stopped).toBe(false);
+
+		queue.beginGeneration(generationId);
+		expect(harness.sources[0]?.stopped).toBe(true);
+		expect(await queue.enqueue(segment(0))).toEqual({ status: "accepted" });
+		expect(harness.sources).toHaveLength(2);
+		expect(harness.sources[1]?.startTimes).toEqual([10]);
+	});
+
+	test("allows a fresh turn reaction after the prior dynamic generation becomes idle", async () => {
+		const harness = playbackHarness();
+		const scheduler = new ManualScheduler();
+		const queue = new PhrasePlaybackQueue(
+			harness.apis,
+			{},
+			{ scheduler, fetch: async () => reactionResponse() },
+		);
+		queue.beginGeneration(generationId);
+		await queue.enqueue(segment(0));
+		queue.sealGeneration(generationId);
+		harness.sources[0]?.finish();
+		expect(
+			queue.requestReaction({
+				turnId: "01J00000000000000000000013",
+				generationId: "01J00000000000000000000014",
+				clipId: "neutral-good",
+				delayMs: 350,
+			}),
+		).toBe(true);
+		expect(scheduler.jobs).toHaveLength(1);
+	});
+
+	test("cancels timer and fences late reaction decode without affecting dynamic audio", async () => {
+		const decode = deferred<number>();
+		const harness = playbackHarness(() => decode.promise);
+		const scheduler = new ManualScheduler();
+		const queue = new PhrasePlaybackQueue(
+			harness.apis,
+			{},
+			{
+				scheduler,
+				fetch: async () => reactionResponse(),
+			},
+		);
+		queue.requestReaction({
+			turnId: "01J00000000000000000000003",
+			generationId,
+			clipId: "neutral-good",
+			delayMs: 350,
+		});
+		scheduler.runNext();
+		await Bun.sleep(0);
+		queue.cancelReaction();
+		decode.resolve(789);
+		await Bun.sleep(0);
+		expect(harness.sources).toHaveLength(0);
+
+		queue.beginGeneration(generationId);
+		const dynamicDecode = queue.enqueue(segment(0));
+		// The test decoder is already resolved for the dynamic segment.
+		expect(await dynamicDecode).toEqual({ status: "accepted" });
+		expect(harness.sources).toHaveLength(1);
+	});
+
+	test("silently skips reaction fetch failure and cancels an unstarted timer", async () => {
+		const harness = playbackHarness();
+		const scheduler = new ManualScheduler();
+		let fetchCalls = 0;
+		const queue = new PhrasePlaybackQueue(
+			harness.apis,
+			{},
+			{
+				scheduler,
+				fetch: async () => {
+					fetchCalls += 1;
+					throw new Error("asset unavailable");
+				},
+			},
+		);
+		queue.requestReaction({
+			turnId: "01J00000000000000000000003",
+			generationId,
+			clipId: "neutral-good",
+			delayMs: 350,
+		});
+		scheduler.runNext();
+		await Bun.sleep(0);
+		expect(fetchCalls).toBe(1);
+		expect(harness.sources).toHaveLength(0);
+		queue.requestReaction({
+			turnId: "01J00000000000000000000013",
+			generationId,
+			clipId: "neutral-good",
+			delayMs: 350,
+		});
+		queue.beginGeneration(generationId);
+		expect(scheduler.jobs).toHaveLength(0);
+		expect(await queue.enqueue(segment(0))).toEqual({ status: "accepted" });
+		expect(harness.sources).toHaveLength(1);
 	});
 
 	test("resumes explicitly and dispose closes the output context", async () => {

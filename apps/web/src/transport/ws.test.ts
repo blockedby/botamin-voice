@@ -5,6 +5,8 @@ import {
 	BINARY_AUDIO_FRAME_KIND,
 	decodeBinaryAudioFrame,
 	encodeBinaryAudioFrame,
+	LOCAL_REACTION_CAPABILITY_VERSION,
+	LOCAL_REACTION_CLIP_IDS,
 } from "@botamin/contracts";
 import {
 	createDeterministicMp3Fixture,
@@ -224,6 +226,80 @@ describe("voice WebSocket transport", () => {
 		expect(transport.beginUtterance()).toBe(true);
 		expect(transport.sendPcmFrame(pcm)).toBe(true);
 		expect(transport.commit()).toBe(true);
+	});
+
+	test("advertises and delivers only the negotiated strict reaction allowlist", () => {
+		const socket = new FakeSocket();
+		const events: string[] = [];
+		const errors: string[] = [];
+		const transport = new VoiceTransport({
+			conversationId,
+			url: "ws://local",
+			createWebSocket: () => socket,
+			now: () => new Date(at),
+			localReactions: {
+				version: LOCAL_REACTION_CAPABILITY_VERSION,
+				clipIds: ["neutral-good"],
+			},
+			onEvent: (event) => events.push(event.type),
+			onProtocolError: (error) => errors.push(error.message),
+		});
+		transport.connect();
+		socket.open();
+		expect(sentJson(socket)[0]).toMatchObject({
+			type: "client.hello",
+			payload: {
+				capabilities: {
+					localReactions: {
+						version: LOCAL_REACTION_CAPABILITY_VERSION,
+						clipIds: ["neutral-good"],
+					},
+				},
+			},
+		});
+		socket.serverJson(sessionReady());
+		socket.serverJson({
+			v: 1,
+			conversationId,
+			seq: 2,
+			at,
+			type: "assistant.reaction.request",
+			payload: { turnId, generationId, clipId: "neutral-good", delayMs: 350 },
+		});
+		expect(events).toEqual(["session.ready", "assistant.reaction.request"]);
+
+		socket.serverJson({
+			v: 1,
+			conversationId,
+			seq: 3,
+			at,
+			type: "assistant.reaction.request",
+			payload: {
+				turnId,
+				generationId,
+				clipId: LOCAL_REACTION_CLIP_IDS[1],
+				delayMs: 350,
+			},
+		});
+		socket.serverJson({
+			v: 1,
+			conversationId,
+			seq: 4,
+			at,
+			type: "assistant.reaction.request",
+			payload: {
+				turnId,
+				generationId,
+				clipId: "neutral-good",
+				delayMs: 350,
+				url: "https://attacker.invalid/reaction.mp3",
+			},
+		});
+		expect(events).toEqual(["session.ready", "assistant.reaction.request"]);
+		expect(errors).toEqual([
+			"Unsupported local reaction request",
+			"Invalid server WebSocket event",
+		]);
 	});
 
 	test("sequences bounded typed turns and suppresses duplicates until final or rejection", () => {

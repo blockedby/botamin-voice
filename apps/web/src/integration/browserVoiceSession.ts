@@ -8,6 +8,7 @@ import {
 	CreateConversationResponseSchema,
 	type InternalVirtualMeetingProjection,
 	InternalVirtualMeetingProjectionSchema,
+	LOCAL_REACTION_CAPABILITY_VERSION,
 	type QualificationField,
 	type ServerWsEvent,
 } from "@botamin/contracts";
@@ -19,9 +20,11 @@ import {
 import {
 	type CompletePlaybackSegment,
 	createBrowserAudioPlaybackApis,
+	type LocalReactionRequest,
 	PhrasePlaybackQueue,
 	type PlaybackEnqueueOutcome,
 } from "../audio/playback";
+import { REACTION_CLIP_IDS } from "../audio/reactionClipManifest";
 import type {
 	BookingConflictSelection,
 	BookingFormSubmission,
@@ -84,6 +87,8 @@ export interface PlaybackAdapter {
 	beginGeneration(generationId: string): void;
 	enqueue(segment: CompletePlaybackSegment): Promise<PlaybackEnqueueOutcome>;
 	sealGeneration(generationId: string): boolean;
+	requestReaction(request: LocalReactionRequest): boolean;
+	cancelReaction(): void;
 	bargeIn(): string | null;
 	dispose(): Promise<void>;
 	readonly activeGenerationId: string | null;
@@ -118,6 +123,11 @@ export interface BrowserVoiceFactories {
 	createAbortController?: () => AbortController;
 	createRequestId?: () => string;
 }
+
+const LOCAL_REACTION_CAPABILITY = {
+	version: LOCAL_REACTION_CAPABILITY_VERSION,
+	clipIds: [...REACTION_CLIP_IDS],
+} as const;
 
 const INITIAL_SNAPSHOT: BrowserVoiceSnapshot = {
 	state: { kind: "idle" },
@@ -187,6 +197,8 @@ export class BrowserVoiceSession {
 	private readonly audioDoneGenerations = new Set<string>();
 	private readonly playbackStartedGenerations = new Set<string>();
 	private readonly audioFailedGenerations = new Set<string>();
+	private readonly acceptedReactionTurns = new Set<string>();
+	private reactionGenerationId: string | null = null;
 	private consent: VoiceConsent | null = null;
 	private epoch = 0;
 	private starting = false;
@@ -237,6 +249,8 @@ export class BrowserVoiceSession {
 		this.audioDoneGenerations.clear();
 		this.playbackStartedGenerations.clear();
 		this.audioFailedGenerations.clear();
+		this.acceptedReactionTurns.clear();
+		this.reactionGenerationId = null;
 		this.captureArmed = false;
 		this.sessionEstablished = false;
 		this.textOnlyGenerationPending = null;
@@ -346,7 +360,16 @@ export class BrowserVoiceSession {
 					? { scheduler: this.factories.reconnectScheduler }
 					: {}),
 				...(this.factories.now ? { now: this.factories.now } : {}),
+				localReactions: {
+					version: LOCAL_REACTION_CAPABILITY.version,
+					clipIds: [...LOCAL_REACTION_CAPABILITY.clipIds],
+				},
 				onEvent: (event) => this.receiveEvent(event, epoch),
+				onAudioMetadata: () => {
+					if (!this.isCurrent(epoch)) return;
+					this.playback?.cancelReaction();
+					this.reactionGenerationId = null;
+				},
 				onAudio: (metadata, bytes) => {
 					if (!this.isCurrent(epoch)) return;
 					void this.receiveAudio({ ...metadata, bytes }, epoch);
@@ -546,6 +569,10 @@ export class BrowserVoiceSession {
 
 	toggleMute(): void {
 		const muted = !this.snapshot.muted;
+		if (muted) {
+			this.playback?.cancelReaction();
+			this.reactionGenerationId = null;
+		}
 		this.capture?.setMuted(muted);
 		this.transport?.setMuted(muted);
 		this.controller?.setMuted(muted);
@@ -569,6 +596,8 @@ export class BrowserVoiceSession {
 	reconnect(): void {
 		if (this.disposed || this.terminalFailurePending) return;
 		if (this.transport) {
+			this.playback?.cancelReaction();
+			this.reactionGenerationId = null;
 			this.transport.connect();
 			return;
 		}
@@ -815,6 +844,7 @@ export class BrowserVoiceSession {
 				break;
 			case "reconnecting": {
 				this.textOnlyGenerationPending = null;
+				this.reactionGenerationId = null;
 				this.playback?.bargeIn();
 				this.controller?.cancelLocalPlaybackForReconnect();
 				if (!this.sessionEstablished) {
@@ -837,6 +867,7 @@ export class BrowserVoiceSession {
 				break;
 			}
 			case "error":
+				this.reactionGenerationId = null;
 				this.playback?.bargeIn();
 				this.controller?.cancelLocalPlaybackForReconnect();
 				if (!this.sessionEstablished) {
@@ -910,6 +941,8 @@ export class BrowserVoiceSession {
 			}
 			case "transcript.final":
 				if (this.controller.acceptEvent(event)) {
+					this.playback?.cancelReaction();
+					this.reactionGenerationId = null;
 					const acceptedTypedText = this.pendingTypedText;
 					this.pendingTypedText = null;
 					this.appendTranscript({
@@ -929,7 +962,17 @@ export class BrowserVoiceSession {
 					this.setState(this.activeState("thinking"));
 				}
 				break;
+			case "assistant.reaction.request":
+				this.acceptReactionRequest(event);
+				break;
 			case "assistant.text.delta":
+				if (
+					this.reactionGenerationId !== null &&
+					this.reactionGenerationId !== event.payload.generationId
+				) {
+					this.playback?.cancelReaction();
+					this.reactionGenerationId = null;
+				}
 				this.controller.acceptEvent(event);
 				break;
 			case "assistant.text.done": {
@@ -971,6 +1014,9 @@ export class BrowserVoiceSession {
 				break;
 			}
 			case "audio.segment":
+				// Dynamic speech wins synchronously before binary fetch/decode or start.
+				this.playback?.cancelReaction();
+				this.reactionGenerationId = null;
 				if (this.controller.acceptEvent(event)) {
 					if (
 						this.audioDoneGenerations.has(event.payload.generationId) ||
@@ -997,6 +1043,7 @@ export class BrowserVoiceSession {
 				}
 				break;
 			case "assistant.interrupted":
+				this.reactionGenerationId = null;
 				this.playback?.bargeIn();
 				if (this.textOnlyGenerationPending === event.payload.generationId) {
 					this.textOnlyGenerationPending = null;
@@ -1051,6 +1098,8 @@ export class BrowserVoiceSession {
 				break;
 			}
 			case "error":
+				this.playback?.cancelReaction();
+				this.reactionGenerationId = null;
 				if (this.pendingTypedText !== null) {
 					this.pendingTypedText = null;
 					this.controller.rejectCommit();
@@ -1082,6 +1131,32 @@ export class BrowserVoiceSession {
 			case "session.capacity_warning":
 			case "server.pong":
 				break;
+		}
+	}
+
+	private acceptReactionRequest(
+		event: Extract<ServerWsEvent, { type: "assistant.reaction.request" }>,
+	): void {
+		const { turnId, generationId, clipId, delayMs } = event.payload;
+		if (
+			this.snapshot.muted ||
+			this.acceptedReactionTurns.has(turnId) ||
+			!REACTION_CLIP_IDS.includes(clipId) ||
+			!this.controller?.acceptReaction(turnId, generationId) ||
+			!this.playback
+		) {
+			return;
+		}
+		rememberBounded(this.acceptedReactionTurns, turnId);
+		if (
+			this.playback.requestReaction({
+				turnId,
+				generationId,
+				clipId,
+				delayMs,
+			})
+		) {
+			this.reactionGenerationId = generationId;
 		}
 	}
 
@@ -1556,6 +1631,7 @@ export class BrowserVoiceSession {
 		this.captureArmed = false;
 		this.sessionEstablished = false;
 		this.textOnlyGenerationPending = null;
+		this.reactionGenerationId = null;
 		this.pendingTypedText = null;
 		this.pendingBookingBaseline = null;
 		this.abortController?.abort();
@@ -2010,6 +2086,8 @@ export function createBrowserVoiceSession(): BrowserVoiceSession {
 				onLimit: options.onLimit,
 			}),
 		createPlayback: (options) =>
-			new PhrasePlaybackQueue(createBrowserAudioPlaybackApis(), options),
+			new PhrasePlaybackQueue(createBrowserAudioPlaybackApis(), options, {
+				fetch: (input, init) => window.fetch(input, init),
+			}),
 	});
 }

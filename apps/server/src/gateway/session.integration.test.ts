@@ -14,6 +14,8 @@ import {
 	collectedQualificationFields,
 	decodeBinaryAudioFrame,
 	encodeBinaryAudioFrame,
+	LOCAL_REACTION_CAPABILITY_VERSION,
+	type LOCAL_REACTION_CLIP_IDS,
 	type MeetingSlot,
 	qualificationStatusFor,
 	ServerWsEventSchema,
@@ -356,7 +358,10 @@ function createHarness(
 	return { session, stt, brain, tts, bookings, persisted, orchestrator };
 }
 
-function hello(token: string | null = initialClientToken): string {
+function hello(
+	token: string | null = initialClientToken,
+	clipIds?: readonly (typeof LOCAL_REACTION_CLIP_IDS)[number][],
+): string {
 	return JSON.stringify(
 		ClientWsEventSchema.parse({
 			v: 1,
@@ -371,6 +376,16 @@ function hello(token: string | null = initialClientToken): string {
 					channels: 1,
 					chunkMs: 100,
 				},
+				...(clipIds
+					? {
+							capabilities: {
+								localReactions: {
+									version: LOCAL_REACTION_CAPABILITY_VERSION,
+									clipIds: [...clipIds],
+								},
+							},
+						}
+					: {}),
 			},
 		}),
 	);
@@ -393,9 +408,10 @@ async function connect(
 	session: GatewaySession,
 	socket: Socket,
 	token: string | null = initialClientToken,
+	clipIds?: readonly (typeof LOCAL_REACTION_CLIP_IDS)[number][],
 ): Promise<void> {
 	session.attach(socket);
-	await session.receive(socket, hello(token));
+	await session.receive(socket, hello(token, clipIds));
 }
 
 async function sendUtterance(
@@ -468,6 +484,125 @@ describe("gateway fake full WebSocket path", () => {
 		await harness.session.receive(socket, clientEvent("audio.commit"));
 		expect(harness.stt.requests).toHaveLength(1);
 		expect(harness.persisted).toHaveLength(1);
+	});
+
+	test("routes one minimal reaction only to a capable client and never adds provider traffic", async () => {
+		const legacy = createHarness();
+		const legacySocket = new Socket();
+		await connect(legacy.session, legacySocket);
+		await sendUtterance(legacy.session, legacySocket);
+		expect(
+			legacySocket
+				.events()
+				.some((event) => event.type === "assistant.reaction.request"),
+		).toBe(false);
+
+		const capable = createHarness();
+		const capableSocket = new Socket();
+		await connect(capable.session, capableSocket, initialClientToken, [
+			"neutral-good",
+		]);
+		await sendUtterance(capable.session, capableSocket);
+		const events = capableSocket.events();
+		const reactions = events.filter(
+			(event) => event.type === "assistant.reaction.request",
+		);
+		expect(reactions).toHaveLength(1);
+		expect(reactions[0]).toMatchObject({
+			type: "assistant.reaction.request",
+			payload: {
+				clipId: "neutral-good",
+				delayMs: 350,
+			},
+		});
+		if (reactions[0]?.type !== "assistant.reaction.request") {
+			throw new Error("Expected a reaction request");
+		}
+		expect(Object.keys(reactions[0].payload).sort()).toEqual([
+			"clipId",
+			"delayMs",
+			"generationId",
+			"turnId",
+		]);
+		expect(events.indexOf(reactions[0])).toBeGreaterThan(
+			events.findIndex((event) => event.type === "transcript.final"),
+		);
+		expect(events.indexOf(reactions[0])).toBeGreaterThan(
+			events.findIndex((event) => event.type === "assistant.text.delta"),
+		);
+		expect(capable.brain.runs).toBe(1);
+		expect((capable.tts as Tts).requests).toHaveLength(1);
+
+		const ready = events.find((event) => event.type === "session.ready");
+		if (ready?.type !== "session.ready") throw new Error("Expected ready");
+		capable.session.detach(capableSocket);
+		const resumedLegacy = new Socket();
+		await connect(capable.session, resumedLegacy, ready.payload.resumeToken);
+		expect(
+			resumedLegacy
+				.events()
+				.some((event) => event.type === "assistant.reaction.request"),
+		).toBe(false);
+		expect(
+			resumedLegacy.events().some((event) => event.type === "transcript.final"),
+		).toBe(true);
+	});
+
+	test("suppresses reactions for private, exact, and failed turns", async () => {
+		const exactBrain = new Brain((input) => [
+			{
+				type: "speech.delta",
+				turnId: input.turnId,
+				generationId: input.generationId,
+				text: "Точный срок — 4 дня.",
+			},
+			{
+				type: "turn.completed",
+				turnId: input.turnId,
+				generationId: input.generationId,
+			},
+		]);
+		const failed = createHarness({
+			brain: new Brain((input) => [
+				{
+					type: "error",
+					turnId: input.turnId,
+					generationId: input.generationId,
+					error: {
+						code: "BRAIN_PROTOCOL_ERROR",
+						message: "private failure",
+						retryable: true,
+					},
+				},
+			]),
+			tts: null,
+		});
+		for (const { value, text } of [
+			{
+				value: createHarness({ brain: exactBrain, tts: null }),
+				text: "Объясните подход",
+			},
+			{
+				value: createHarness({ tts: null }),
+				text: "Напишите на visitor@example.com",
+			},
+			{ value: failed, text: "Продолжайте рассказ" },
+		]) {
+			const socket = new Socket();
+			await connect(value.session, socket, initialClientToken, [
+				"neutral-good",
+			]);
+			await value.session.receive(
+				socket,
+				clientEvent("visitor.text.submit", { sequence: 0, text }),
+			);
+			await value.session.drain();
+			expect(
+				socket
+					.events()
+					.some((event) => event.type === "assistant.reaction.request"),
+			).toBe(false);
+		}
 	});
 
 	test("accepts one sequenced typed final through brain without STT or client booking authority", async () => {
@@ -784,7 +919,9 @@ describe("gateway fake full WebSocket path", () => {
 		]);
 		const harness = createHarness({ brain, tts, collectBooking: true });
 		const socket = new Socket();
-		await connect(harness.session, socket);
+		await connect(harness.session, socket, initialClientToken, [
+			"neutral-good",
+		]);
 		await sendUtterance(harness.session, socket);
 		const events = socket.events();
 		expect(harness.bookings.createCalls).toBe(1);
@@ -801,6 +938,9 @@ describe("gateway fake full WebSocket path", () => {
 			),
 		).toBe(true);
 		expect(events.some((event) => event.type === "audio.segment")).toBe(false);
+		expect(
+			events.some((event) => event.type === "assistant.reaction.request"),
+		).toBe(false);
 		// Qualification starts automatically only after the durable confirmation.
 		expect(harness.orchestrator.state.stage).toBe("POST_BOOKING_QUALIFICATION");
 	});

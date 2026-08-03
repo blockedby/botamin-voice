@@ -6,6 +6,7 @@ import {
 	type ClientWsEvent,
 	ClientWsEventSchema,
 	CONTRACT_VERSION,
+	type LocalReactionCapability,
 	type ServerWsEvent,
 	ServerWsEventSchema,
 } from "@botamin/contracts";
@@ -79,7 +80,9 @@ export interface VoiceTransportOptions {
 		maxDelayMs?: number;
 		maxAttempts?: number;
 	};
+	localReactions?: LocalReactionCapability;
 	onEvent?(event: ServerWsEvent): void;
+	onAudioMetadata?(metadata: AudioSegmentMetadata): void;
 	onAudio?(metadata: AudioSegmentMetadata, bytes: Uint8Array): void;
 	onStatus?(status: VoiceTransportStatus): void;
 	onProtocolError?(error: Error): void;
@@ -415,12 +418,22 @@ export class VoiceTransport {
 			this.reportProtocolError(new Error("Server event conversation mismatch"));
 			return;
 		}
+		if (
+			event.type === "assistant.reaction.request" &&
+			!this.options.localReactions?.clipIds.includes(event.payload.clipId)
+		) {
+			this.reportProtocolError(new Error("Unsupported local reaction request"));
+			return;
+		}
 
 		if (event.type === "audio.segment") {
 			const incomplete = this.incompleteAudioSequences.has(event.seq);
 			const suppressDelivery =
 				event.seq <= this.lastServerSequence && !incomplete;
-			if (!suppressDelivery) this.rememberIncompleteAudio(event.seq);
+			if (!suppressDelivery) {
+				this.rememberIncompleteAudio(event.seq);
+				this.options.onAudioMetadata?.(event.payload);
+			}
 			this.pendingSegment = { event, suppressDelivery };
 			return;
 		}
@@ -501,6 +514,9 @@ export class VoiceTransport {
 				channels: 1,
 				chunkMs: 100,
 			},
+			...(this.options.localReactions
+				? { capabilities: { localReactions: this.options.localReactions } }
+				: {}),
 		});
 	}
 

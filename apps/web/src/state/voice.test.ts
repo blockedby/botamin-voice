@@ -236,6 +236,36 @@ describe("final-only voice state", () => {
 		expect(controller.state.assistantText).toBe("Старый");
 	});
 
+	test("validates reaction ownership without changing state or accepting replay", () => {
+		const controller = new VoiceSessionController();
+		controller.beginListening();
+		expect(controller.commit(() => true)).toBe(true);
+		expect(
+			controller.acceptEvent(
+				serverEvent("transcript.final", { turnId, text: "Финал" }),
+			),
+		).toBe(true);
+		expect(
+			controller.acceptEvent(
+				serverEvent("assistant.text.delta", {
+					generationId,
+					text: "Ответ",
+				}),
+			),
+		).toBe(true);
+		const before = controller.state;
+		expect(controller.acceptReaction(turnId, generationId)).toBe(true);
+		expect(controller.state).toBe(before);
+		expect(
+			controller.acceptReaction("01J00000000000000000000099", generationId),
+		).toBe(false);
+		expect(
+			controller.acceptReaction(turnId, "01J00000000000000000000098"),
+		).toBe(false);
+		controller.bargeIn({ stopLocalPlayback: () => undefined });
+		expect(controller.acceptReaction(turnId, generationId)).toBe(false);
+	});
+
 	test("audio metadata does not speak until the first source starts, once per generation", () => {
 		const controller = new VoiceSessionController();
 		controller.beginListening();

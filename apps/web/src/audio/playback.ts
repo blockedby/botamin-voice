@@ -1,7 +1,14 @@
 import {
 	type AudioSegmentMetadata,
+	LOCAL_REACTION_DELAY_MAX_MS,
+	LOCAL_REACTION_DELAY_MIN_MS,
+	type LocalReactionClipId,
 	MpegAudioBytesSchema,
 } from "@botamin/contracts";
+import {
+	REACTION_CLIP_MANIFEST,
+	type ReactionClipManifestEntry,
+} from "./reactionClipManifest";
 
 export interface PlaybackSourceLike {
 	onended: (() => void) | null;
@@ -20,6 +27,44 @@ export interface AudioPlaybackApis<TDecoded = unknown> {
 
 export interface CompletePlaybackSegment extends AudioSegmentMetadata {
 	bytes: Uint8Array;
+}
+
+export interface LocalReactionRequest {
+	turnId: string;
+	generationId: string;
+	clipId: LocalReactionClipId;
+	delayMs: number;
+}
+
+export interface ReactionFetchResponseLike {
+	readonly ok: boolean;
+	readonly status: number;
+	readonly headers?: { get(name: string): string | null };
+	readonly body?: {
+		getReader(): {
+			read(): Promise<
+				{ done: true; value?: undefined } | { done: false; value: Uint8Array }
+			>;
+			cancel?(): Promise<void>;
+		};
+	} | null;
+	arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+export type ReactionFetchLike = (
+	input: string,
+	init: RequestInit,
+) => Promise<ReactionFetchResponseLike>;
+
+export interface PlaybackScheduler {
+	schedule(callback: () => void, delayMs: number): unknown;
+	cancel(handle: unknown): void;
+}
+
+export interface LocalReactionPlaybackOptions {
+	fetch: ReactionFetchLike;
+	scheduler?: PlaybackScheduler;
+	createAbortController?: () => AbortController;
 }
 
 export type PlaybackEnqueueRejection =
@@ -72,6 +117,13 @@ interface HandoffSlot {
 }
 
 const ACCEPTED = { status: "accepted" } as const;
+const REACTION_CLIPS = new Map<LocalReactionClipId, ReactionClipManifestEntry>(
+	REACTION_CLIP_MANIFEST.map((clip) => [clip.id, clip]),
+);
+const browserPlaybackScheduler: PlaybackScheduler = {
+	schedule: (callback, delayMs) => setTimeout(callback, delayMs),
+	cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
 
 /**
  * Ordered complete-MP3 player with a fixed capacity: one current slot, one
@@ -88,6 +140,13 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 	private sealed = false;
 	private started = false;
 	private idleNotified = false;
+	private reactionEpoch = 0;
+	private reactionTimer: unknown = null;
+	private reactionAbortController: AbortController | null = null;
+	private reactionSource: PlaybackSourceLike | null = null;
+	private reactionGenerationId: string | null = null;
+	private readonly seenReactionTurns = new Set<string>();
+	private readonly reactionScheduler: PlaybackScheduler;
 
 	constructor(
 		private readonly apis: AudioPlaybackApis<TDecoded>,
@@ -100,13 +159,18 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 				reason: Exclude<PlaybackEnqueueRejection, "stale">,
 			): void;
 		} = {},
-	) {}
+		private readonly reactionOptions?: LocalReactionPlaybackOptions,
+	) {
+		this.reactionScheduler =
+			reactionOptions?.scheduler ?? browserPlaybackScheduler;
+	}
 
 	resume(): Promise<void> {
 		return this.apis.resume();
 	}
 
 	beginGeneration(generationId: string): void {
+		this.cancelReaction();
 		if (generationId === this.generationId) return;
 		this.clearSlots();
 		this.generationId = generationId;
@@ -117,6 +181,7 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 	}
 
 	enqueue(segment: CompletePlaybackSegment): Promise<PlaybackEnqueueOutcome> {
+		this.cancelReaction();
 		if (
 			this.muted ||
 			this.generationId === null ||
@@ -177,8 +242,72 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 		return true;
 	}
 
+	requestReaction(request: LocalReactionRequest): boolean {
+		const clip = REACTION_CLIPS.get(request.clipId);
+		if (
+			!this.reactionOptions ||
+			this.muted ||
+			this.seenReactionTurns.has(request.turnId) ||
+			!clip ||
+			request.delayMs < LOCAL_REACTION_DELAY_MIN_MS ||
+			request.delayMs > LOCAL_REACTION_DELAY_MAX_MS ||
+			!Number.isInteger(request.delayMs)
+		) {
+			return false;
+		}
+		if (this.generationId !== null) {
+			if (
+				!this.sealed ||
+				!this.idleNotified ||
+				this.current !== null ||
+				this.prefetch !== null ||
+				this.handoff !== null
+			) {
+				return false;
+			}
+			this.generationId = null;
+			this.lastAcceptedSequence = null;
+			this.sealed = false;
+			this.started = false;
+			this.idleNotified = false;
+		}
+		rememberBounded(this.seenReactionTurns, request.turnId);
+		this.cancelReaction();
+		const epoch = this.reactionEpoch;
+		this.reactionGenerationId = request.generationId;
+		this.reactionTimer = this.reactionScheduler.schedule(() => {
+			if (epoch !== this.reactionEpoch) return;
+			this.reactionTimer = null;
+			void this.startReaction(clip, request.generationId, epoch);
+		}, request.delayMs);
+		return true;
+	}
+
+	/** Synchronously fences timers/fetch/decode and stops a started decoration. */
+	cancelReaction(): void {
+		this.reactionEpoch += 1;
+		if (this.reactionTimer !== null) {
+			this.reactionScheduler.cancel(this.reactionTimer);
+			this.reactionTimer = null;
+		}
+		this.reactionAbortController?.abort("reaction cancelled");
+		this.reactionAbortController = null;
+		const source = this.reactionSource;
+		this.reactionSource = null;
+		this.reactionGenerationId = null;
+		if (source) {
+			source.onended = null;
+			try {
+				source.stop();
+			} catch {
+				// It may have ended between the fence and synchronous stop.
+			}
+		}
+	}
+
 	/** Immediate local barge-in: stop, clear, and make the generation stale. */
 	bargeIn(): string | null {
+		this.cancelReaction();
 		const interrupted = this.generationId;
 		this.clearSlots();
 		this.generationId = null;
@@ -209,6 +338,104 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 	/** Raw transport handoff is separate from the two decode/source slots. */
 	get pendingHandoffCount(): number {
 		return this.handoff === null ? 0 : 1;
+	}
+
+	get activeReactionGenerationId(): string | null {
+		return this.reactionGenerationId;
+	}
+
+	private async startReaction(
+		clip: ReactionClipManifestEntry,
+		generationId: string,
+		epoch: number,
+	): Promise<void> {
+		const options = this.reactionOptions;
+		if (
+			!options ||
+			epoch !== this.reactionEpoch ||
+			this.reactionGenerationId !== generationId ||
+			this.generationId !== null ||
+			this.muted
+		) {
+			return;
+		}
+		const abortController =
+			options.createAbortController?.() ?? new AbortController();
+		this.reactionAbortController = abortController;
+		try {
+			const response = await options.fetch(clip.path, {
+				method: "GET",
+				credentials: "same-origin",
+				mode: "same-origin",
+				redirect: "error",
+				cache: "force-cache",
+				signal: abortController.signal,
+			});
+			if (!response.ok) return;
+			const bytes = await readBoundedReactionBytes(
+				response,
+				clip.maxBytes,
+				abortController,
+			);
+			if (
+				epoch !== this.reactionEpoch ||
+				this.reactionGenerationId !== generationId ||
+				this.generationId !== null ||
+				this.muted ||
+				!MpegAudioBytesSchema.safeParse(bytes).success
+			) {
+				return;
+			}
+			const decoded = await this.apis.decodeAudioData(bytes.buffer);
+			if (
+				epoch !== this.reactionEpoch ||
+				this.reactionGenerationId !== generationId ||
+				this.generationId !== null ||
+				this.muted
+			) {
+				return;
+			}
+			const duration = this.apis.duration(decoded);
+			if (
+				!Number.isFinite(duration) ||
+				duration <= 0 ||
+				duration * 1_000 > clip.maxDurationMs
+			) {
+				return;
+			}
+			const source = this.apis.createSource(decoded);
+			if (
+				epoch !== this.reactionEpoch ||
+				this.reactionGenerationId !== generationId ||
+				this.generationId !== null ||
+				this.muted
+			) {
+				try {
+					source.stop();
+				} catch {
+					// The source was never started.
+				}
+				return;
+			}
+			this.reactionSource = source;
+			source.onended = () => {
+				if (epoch !== this.reactionEpoch || this.reactionSource !== source)
+					return;
+				this.reactionSource = null;
+				this.reactionGenerationId = null;
+			};
+			source.start(Math.max(this.apis.currentTime(), 0));
+		} catch {
+			// Decorative playback failure never affects dynamic text or audio.
+			if (epoch === this.reactionEpoch) this.cancelReaction();
+		} finally {
+			if (this.reactionAbortController === abortController) {
+				this.reactionAbortController = null;
+			}
+			if (epoch === this.reactionEpoch && this.reactionSource === null) {
+				this.reactionGenerationId = null;
+			}
+		}
 	}
 
 	private isValid(segment: CompletePlaybackSegment): boolean {
@@ -421,6 +648,62 @@ export class PhrasePlaybackQueue<TDecoded = unknown> {
 		}
 		handoff?.resolve(rejected("stale", "Audio handoff was cancelled"));
 	}
+}
+
+async function readBoundedReactionBytes(
+	response: ReactionFetchResponseLike,
+	maxBytes: number,
+	abortController: AbortController,
+): Promise<Uint8Array<ArrayBuffer>> {
+	const declaredLength = response.headers?.get("content-length");
+	if (declaredLength !== undefined && declaredLength !== null) {
+		const parsed = Number(declaredLength);
+		if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > maxBytes) {
+			throw new Error("Reaction asset length is invalid");
+		}
+	}
+	if (response.body) {
+		const reader = response.body.getReader();
+		const chunks: Uint8Array[] = [];
+		let total = 0;
+		while (true) {
+			const result = await reader.read();
+			if (result.done) break;
+			if (
+				!(result.value instanceof Uint8Array) ||
+				result.value.byteLength === 0
+			) {
+				throw new Error("Reaction asset stream is invalid");
+			}
+			total += result.value.byteLength;
+			if (total > maxBytes) {
+				abortController.abort("reaction asset too large");
+				await reader.cancel?.().catch(() => undefined);
+				throw new Error("Reaction asset is too large");
+			}
+			chunks.push(result.value.slice());
+		}
+		if (total === 0) throw new Error("Reaction asset is empty");
+		const bytes = new Uint8Array(total);
+		let offset = 0;
+		for (const chunk of chunks) {
+			bytes.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		return bytes;
+	}
+	const buffer = await response.arrayBuffer();
+	if (buffer.byteLength === 0 || buffer.byteLength > maxBytes) {
+		throw new Error("Reaction asset length is invalid");
+	}
+	return new Uint8Array(buffer.slice(0));
+}
+
+function rememberBounded(values: Set<string>, value: string): void {
+	values.add(value);
+	if (values.size <= 256) return;
+	const oldest = values.values().next().value;
+	if (oldest !== undefined) values.delete(oldest);
 }
 
 function rejected(

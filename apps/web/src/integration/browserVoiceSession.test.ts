@@ -11,6 +11,7 @@ import {
 import { createDeterministicMp3Fixture } from "../../../../packages/test-fixtures/src";
 import type {
 	CompletePlaybackSegment,
+	LocalReactionRequest,
 	PlaybackEnqueueOutcome,
 } from "../audio/playback";
 import type { VoiceUiState } from "../components/voiceTypes";
@@ -146,6 +147,8 @@ class FakePlayback implements PlaybackAdapter {
 	bufferedSegmentCount = 0;
 	sealed = false;
 	started = false;
+	cancelReactionCalls = 0;
+	readonly reactions: LocalReactionRequest[] = [];
 	readonly enqueued: number[] = [];
 
 	constructor(
@@ -187,6 +190,13 @@ class FakePlayback implements PlaybackAdapter {
 		this.sealed = true;
 		if (this.bufferedSegmentCount === 0) this.options.onIdle(generationIdValue);
 		return true;
+	}
+	requestReaction(request: LocalReactionRequest): boolean {
+		this.reactions.push(request);
+		return true;
+	}
+	cancelReaction(): void {
+		this.cancelReactionCalls += 1;
 	}
 	bargeIn(): string | null {
 		this.bargeInCalls += 1;
@@ -556,6 +566,15 @@ describe("production browser voice integration", () => {
 					sampleRate: 16_000,
 					channels: 1,
 					chunkMs: 100,
+				},
+				capabilities: {
+					localReactions: {
+						version: 1,
+						clipIds: expect.arrayContaining([
+							"neutral-good",
+							"clarification-meaning",
+						]),
+					},
 				},
 			},
 		});
@@ -1328,6 +1347,76 @@ describe("production browser voice integration", () => {
 			{ id: turnId, speaker: "visitor", text: "Финальная реплика" },
 			{ id: generationId, speaker: "agent", text: "Готовый ответ" },
 		]);
+	});
+
+	test("keeps reactions decorative, deduplicated, and preempted by dynamic metadata", async () => {
+		const value = await readySession();
+		value.capture.emit();
+		await value.session.commit();
+		value.socket.server(
+			event("transcript.final", 2, { turnId, text: "Финальная реплика" }),
+		);
+		value.socket.server(
+			event("assistant.text.delta", 3, {
+				generationId,
+				text: "Динамический ответ",
+			}),
+		);
+		const beforeReaction = value.session.getSnapshot();
+		const playback = value.playbacks[0] as FakePlayback;
+		const cancelCalls = playback.cancelReactionCalls;
+		value.socket.server(
+			event("assistant.reaction.request", 4, {
+				turnId,
+				generationId: "01J00000000000000000000098",
+				clipId: "neutral-good",
+				delayMs: 350,
+			}),
+		);
+		value.socket.server(
+			event("assistant.reaction.request", 5, {
+				turnId,
+				generationId,
+				clipId: "neutral-good",
+				delayMs: 350,
+			}),
+		);
+		value.socket.server(
+			event("assistant.reaction.request", 6, {
+				turnId,
+				generationId,
+				clipId: "neutral-accepted",
+				delayMs: 350,
+			}),
+		);
+		expect(playback.reactions).toEqual([
+			{ turnId, generationId, clipId: "neutral-good", delayMs: 350 },
+		]);
+		expect(value.session.getSnapshot()).toBe(beforeReaction);
+		expect(value.session.getSnapshot()).toMatchObject({
+			state: { kind: "processing" },
+			transcript: [
+				{ id: turnId, speaker: "visitor", text: "Финальная реплика" },
+			],
+		});
+		expect(playback.cancelReactionCalls).toBe(cancelCalls);
+		expect(
+			sentJson(value.socket).some((item) => item.type === "playback.started"),
+		).toBe(false);
+
+		const mp3 = createDeterministicMp3Fixture();
+		value.socket.server(
+			event("audio.segment", 7, {
+				generationId,
+				segmentId,
+				sequence: 0,
+				contentType: "audio/mpeg",
+				byteLength: mp3.byteLength,
+				final: true,
+			}),
+		);
+		expect(playback.cancelReactionCalls).toBe(cancelCalls + 1);
+		expect(value.session.getSnapshot().state.kind).not.toBe("speaking");
 	});
 
 	test("enters speaking and sends playback.started only when the first source starts", async () => {

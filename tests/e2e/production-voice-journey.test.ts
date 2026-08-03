@@ -245,6 +245,12 @@ class VerifyingPlayback implements PlaybackAdapter {
 		return true;
 	}
 
+	requestReaction(): boolean {
+		return false;
+	}
+
+	cancelReaction(): void {}
+
 	bargeIn(): string | null {
 		const generationId = this.activeGenerationId;
 		if (generationId) this.staleGenerations.add(generationId);

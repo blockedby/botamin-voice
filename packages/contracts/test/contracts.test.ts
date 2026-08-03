@@ -28,6 +28,8 @@ import {
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
 	isCompleteMp3File,
+	LOCAL_REACTION_CAPABILITY_VERSION,
+	LOCAL_REACTION_CLIP_IDS,
 	MeetingSlotSchema,
 	MpegAudioBytesSchema,
 	PersistedQualificationPatchSchema,
@@ -572,6 +574,99 @@ describe("shared contracts", () => {
 				},
 			}).success,
 		).toBe(true);
+	});
+
+	test("negotiates strict additive local reactions without changing legacy hello", () => {
+		const legacyHello = {
+			v: 1,
+			type: "client.hello",
+			conversationId,
+			at,
+			payload: {
+				resumeToken: "resume-token-0000000000000000",
+				audio: {
+					encoding: "pcm16le",
+					sampleRate: 16_000,
+					channels: 1,
+					chunkMs: 100,
+				},
+			},
+		};
+		expect(ClientWsEventSchema.safeParse(legacyHello).success).toBe(true);
+		expect(
+			ClientWsEventSchema.safeParse({
+				...legacyHello,
+				payload: {
+					...legacyHello.payload,
+					capabilities: {
+						localReactions: {
+							version: LOCAL_REACTION_CAPABILITY_VERSION,
+							clipIds: [...LOCAL_REACTION_CLIP_IDS],
+						},
+					},
+				},
+			}).success,
+		).toBe(true);
+		for (const localReactions of [
+			{ version: 2, clipIds: [LOCAL_REACTION_CLIP_IDS[0]] },
+			{ version: 1, clipIds: [] },
+			{ version: 1, clipIds: ["visitor-supplied"] },
+			{
+				version: 1,
+				clipIds: [LOCAL_REACTION_CLIP_IDS[0], LOCAL_REACTION_CLIP_IDS[0]],
+			},
+			{
+				version: 1,
+				clipIds: [LOCAL_REACTION_CLIP_IDS[0]],
+				url: "https://attacker.invalid/reaction.mp3",
+			},
+		]) {
+			expect(
+				ClientWsEventSchema.safeParse({
+					...legacyHello,
+					payload: {
+						...legacyHello.payload,
+						capabilities: { localReactions },
+					},
+				}).success,
+			).toBe(false);
+		}
+	});
+
+	test("carries only bounded allowlisted reaction request fields", () => {
+		const request = {
+			v: 1,
+			type: "assistant.reaction.request",
+			conversationId,
+			seq: 3,
+			at,
+			payload: {
+				turnId: "01J00000000000000000000003",
+				generationId: "01J00000000000000000000004",
+				clipId: LOCAL_REACTION_CLIP_IDS[0],
+				delayMs: 350,
+			},
+		};
+		const parsed = ServerWsEventSchema.parse(request);
+		expect(parsed.type).toBe("assistant.reaction.request");
+		expect(Object.keys(parsed.payload).sort()).toEqual([
+			"clipId",
+			"delayMs",
+			"generationId",
+			"turnId",
+		]);
+		for (const payload of [
+			{ ...request.payload, clipId: "arbitrary-id" },
+			{ ...request.payload, delayMs: 299 },
+			{ ...request.payload, delayMs: 501 },
+			{ ...request.payload, text: "visitor copy" },
+			{ ...request.payload, path: "/private/reaction.mp3" },
+			{ ...request.payload, url: "https://attacker.invalid/a.mp3" },
+		]) {
+			expect(
+				ServerWsEventSchema.safeParse({ ...request, payload }).success,
+			).toBe(false);
+		}
 	});
 
 	test("freezes atomic STT request data and its TypeScript-only AbortSignal boundary", async () => {

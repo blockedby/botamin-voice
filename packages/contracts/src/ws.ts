@@ -17,6 +17,11 @@ import {
 	BrowserBookingDraftSchema,
 	InternalVirtualMeetingProjectionSchema,
 } from "./rc4";
+import {
+	LocalReactionCapabilitySchema,
+	LocalReactionClipIdSchema,
+	LocalReactionDelayMsSchema,
+} from "./reactions";
 import { AudioClientConfigSchema } from "./rest";
 
 /** Binary-frame sequences are unsigned integers exactly representable by JS. */
@@ -66,6 +71,12 @@ export const ClientHelloEventSchema = z
 			.object({
 				resumeToken: z.string().min(16).max(512).nullable(),
 				audio: InputAudioConfigSchema,
+				capabilities: z
+					.object({
+						localReactions: LocalReactionCapabilitySchema.optional(),
+					})
+					.strict()
+					.optional(),
 			})
 			.strict(),
 	})
@@ -249,6 +260,21 @@ const AssistantGenerationPayloadSchema = z
 	})
 	.strict();
 
+export const AssistantReactionRequestEventSchema = z
+	.object({
+		...ServerEventBaseShape,
+		type: z.literal("assistant.reaction.request"),
+		payload: z
+			.object({
+				turnId: EntityIdSchema,
+				generationId: EntityIdSchema,
+				clipId: LocalReactionClipIdSchema,
+				delayMs: LocalReactionDelayMsSchema,
+			})
+			.strict(),
+	})
+	.strict();
+
 export const AssistantTextDeltaEventSchema = z
 	.object({
 		...ServerEventBaseShape,
@@ -417,6 +443,7 @@ export const ServerWsEventSchema = z.discriminatedUnion("type", [
 	SessionReadyEventSchema,
 	StateChangedEventSchema,
 	TranscriptFinalEventSchema,
+	AssistantReactionRequestEventSchema,
 	AssistantTextDeltaEventSchema,
 	AssistantTextDoneEventSchema,
 	AudioSegmentEventSchema,

@@ -13,6 +13,8 @@ import {
 	EntityIdSchema,
 	encodeBinaryAudioFrame,
 	type KnownFacts,
+	LOCAL_REACTION_DELAY_MS,
+	type LocalReactionClipId,
 	type SafeErrorCode,
 	type ServerWsEvent,
 	ServerWsEventSchema,
@@ -26,6 +28,7 @@ import type {
 	ConversationOrchestrator,
 	OrchestratorEvent,
 } from "../orchestrator/orchestrator";
+import { selectLocalReaction } from "../orchestrator/reaction";
 import {
 	PcmUtteranceAssembler,
 	PcmUtteranceError,
@@ -156,6 +159,7 @@ export class GatewaySession {
 	#pendingSocket: GatewaySocket | null = null;
 	#helloTimer: ReturnType<typeof setTimeout> | null = null;
 	#helloAccepted = false;
+	#localReactionClipIds = new Set<LocalReactionClipId>();
 	#initialClientToken: string | null;
 	#resumeTokenHash: Uint8Array;
 	#stopped = false;
@@ -176,6 +180,8 @@ export class GatewaySession {
 			assistantText: string;
 			stateBefore: string;
 			stateAfter: string;
+			reactionSent: boolean;
+			reactionSuppressed: boolean;
 		}
 	>();
 	readonly #turnIdsByGeneration = new Map<string, string>();
@@ -394,6 +400,9 @@ export class GatewaySession {
 				this.#closeWithError(socket, "SESSION_EXPIRED", false);
 				return;
 			}
+			const candidateLocalReactionClipIds = new Set(
+				hello.data.payload.capabilities?.localReactions?.clipIds ?? [],
+			);
 			await this.#ensureDraft();
 			let booking = null;
 			try {
@@ -408,6 +417,7 @@ export class GatewaySession {
 			const previous = this.#activeSocket;
 			this.#clearPendingHello();
 			this.#activeSocket = socket;
+			this.#localReactionClipIds = candidateLocalReactionClipIds;
 			if (previous && previous !== socket) {
 				previous.close(1000, "session resumed elsewhere");
 			}
@@ -831,6 +841,8 @@ export class GatewaySession {
 			assistantText: "",
 			stateBefore: this.#orchestrator.state.stage,
 			stateAfter: this.#orchestrator.state.stage,
+			reactionSent: false,
+			reactionSuppressed: false,
 		});
 		this.#turnIdsByGeneration.set(generationId, input.turnId);
 		try {
@@ -922,6 +934,7 @@ export class GatewaySession {
 				});
 				break;
 			case "booking.committed": {
+				this.#suppressReaction(event.generationId);
 				const booking = await this.#bookings.findByConversationId(
 					this.conversationId,
 				);
@@ -939,6 +952,7 @@ export class GatewaySession {
 				break;
 			}
 			case "booking.updated": {
+				this.#suppressReaction(event.generationId);
 				const booking = await this.#bookings.findByConversationId(
 					this.conversationId,
 				);
@@ -961,6 +975,7 @@ export class GatewaySession {
 					generationId: event.generationId,
 					text: event.text,
 				});
+				this.#maybeSendReaction(event.generationId, event.text);
 				break;
 			case "text.done": {
 				const turnId = this.#turnIdsByGeneration.get(event.generationId);
@@ -986,12 +1001,51 @@ export class GatewaySession {
 				});
 				break;
 			case "degraded":
+				this.#suppressReaction(event.generationId);
 				this.#sendSafeError(event.code, event.code !== "TTS_UNAVAILABLE");
 				break;
 			case "tool.result":
 			case "ignored":
 				break;
 		}
+	}
+
+	#maybeSendReaction(generationId: string, assistantText: string): void {
+		const turnId = this.#turnIdsByGeneration.get(generationId);
+		const turn = turnId ? this.#turnsById.get(turnId) : undefined;
+		if (
+			!turn ||
+			turn.reactionSent ||
+			turn.reactionSuppressed ||
+			this.#localReactionClipIds.size === 0
+		) {
+			return;
+		}
+		const clipId = selectLocalReaction({
+			turnId: turn.id,
+			generationId,
+			stage: this.#orchestrator.state.stage,
+			userText: turn.userText,
+			assistantText,
+			supportedClipIds: this.#localReactionClipIds,
+		});
+		if (!clipId) {
+			turn.reactionSuppressed = true;
+			return;
+		}
+		turn.reactionSent = true;
+		this.#sendEvent("assistant.reaction.request", {
+			turnId: turn.id,
+			generationId,
+			clipId,
+			delayMs: LOCAL_REACTION_DELAY_MS,
+		});
+	}
+
+	#suppressReaction(generationId: string): void {
+		const turnId = this.#turnIdsByGeneration.get(generationId);
+		const turn = turnId ? this.#turnsById.get(turnId) : undefined;
+		if (turn && !turn.reactionSent) turn.reactionSuppressed = true;
 	}
 
 	#publishAudioSegment(
@@ -1098,6 +1152,12 @@ export class GatewaySession {
 	}
 
 	#sendRecord(socket: GatewaySocket, record: HistoryRecord): void {
+		if (
+			record.event.type === "assistant.reaction.request" &&
+			!this.#localReactionClipIds.has(record.event.payload.clipId)
+		) {
+			return;
+		}
 		try {
 			socket.send(record.json);
 			if ("binary" in record) socket.send(record.binary);

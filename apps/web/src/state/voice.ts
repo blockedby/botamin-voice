@@ -252,6 +252,18 @@ export class VoiceSessionController {
 		return generationId;
 	}
 
+	/** Validate decoration ownership without changing any user-visible state. */
+	acceptReaction(turnId: string, generationId: string): boolean {
+		return (
+			!this.stopped &&
+			!this.awaitingFinal &&
+			this.state.status === "processing" &&
+			this.state.transcript?.turnId === turnId &&
+			this.state.generationId === generationId &&
+			this.acceptGeneration(generationId)
+		);
+	}
+
 	playbackStarted(generationId: string): boolean {
 		if (
 			!this.acceptGeneration(generationId) ||

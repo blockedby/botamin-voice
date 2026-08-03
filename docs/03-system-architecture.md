@@ -146,7 +146,7 @@ export interface LeadNotifier {
 }
 ```
 
-P0 adapter — structured console JSON. P1 — signed HTTP webhook с retry/outbox.
+P0 adapter — fixed-schema non-PII console acknowledgment. P1 — signed HTTP webhook с полным lead payload и retry/outbox.
 
 ## 3. Критический путь turn
 
@@ -496,7 +496,7 @@ TTS_MAX_CHARS_PER_SESSION=8000
 # Booking and qualification
 POST_BOOKING_QUALIFICATION_ENABLED=true
 
-# Notifications: console is sufficient for local development
+# Notifications: console safely acknowledges and discards the lead payload
 NOTIFIER=console
 WEBHOOK_URL=
 WEBHOOK_SIGNING_SECRET=

@@ -7,24 +7,32 @@ export interface NamedLeadNotifier extends LeadNotifier {
 
 export type NotificationSink = (line: string) => void;
 
-/** Deliberately separate from ordinary console loggers, which must never see PII. */
-export const dedicatedConsoleLeadSink: NotificationSink = (line) => {
+/** Emits only the notifier's fixed, non-PII acknowledgment schema. */
+export const consoleAcknowledgmentSink: NotificationSink = (line) => {
 	process.stdout.write(`${line}\n`);
 };
 
-/** Dedicated lead handoff channel; do not reuse this sink for general logs. */
+/**
+ * Acknowledges local outbox delivery without handing lead data to process logs.
+ * Use SignedWebhookNotifier when a recipient must receive the full lead payload.
+ */
 export class ConsoleLeadNotifier implements NamedLeadNotifier {
 	readonly kind = "console" as const;
 
 	constructor(
-		private readonly sink: NotificationSink = dedicatedConsoleLeadSink,
+		private readonly sink: NotificationSink = consoleAcknowledgmentSink,
 	) {}
 
 	async publish(event: BookingDomainEvent): Promise<void> {
+		const eventKind =
+			event.type === "booking.created" || event.type === "booking.updated"
+				? event.type
+				: "unknown";
 		this.sink(
 			JSON.stringify({
 				channel: "lead-notifier",
-				event,
+				status: "accepted",
+				eventKind,
 			}),
 		);
 	}

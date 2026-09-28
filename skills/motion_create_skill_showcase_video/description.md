@@ -1,0 +1,1 @@
+Creates a 60–120 second video presentation of any skill from its SKILL.md: scenario, visual style, asset pipeline (keyframes → clips → voiceover → music → assembly) and validation. Use when a promo/explainer video for a concrete skill is needed.

@@ -1,0 +1,287 @@
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Assistant Profile — Cody</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+    background: #0a0c12;
+    color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    padding: 24px;
+    height: 100vh;
+    overflow: hidden;
+    }
+    h1 {
+    text-align: center; font-size: 1.5rem; font-weight: 800;
+    color: #f8fafc; margin-bottom: 4px; letter-spacing: -0.02em;
+    text-transform: uppercase;
+    }
+    .subtitle {
+    text-align: center; color: #64748b; font-size: 0.75rem;
+    letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 24px;
+    }
+    .grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 16px;
+    height: calc(100vh - 120px);
+    max-width: 1400px;
+    margin: 0 auto;
+    }
+    .card {
+    background: #111420; border: 1px solid #1e293b;
+    border-radius: 12px; padding: 16px; position: relative;
+    display: flex; flex-direction: column;
+    }
+    .card-header {
+    display: flex; align-items: center;
+    justify-content: space-between; margin-bottom: 12px;
+    }
+    .card-title {
+    font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: #94a3b8;
+    }
+    .btn-maximize {
+    width: 24px; height: 24px;
+    border: 1px solid #334155; border-radius: 6px;
+    background: #0f172a; color: #94a3b8;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s;
+    }
+    .btn-maximize:hover { border-color: #38bdf8; color: #38bdf8; background: #1e293b; }
+    .btn-maximize svg { width: 12px; height: 12px; }
+
+    .overlay {
+    display: none; position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,0.85); backdrop-filter: blur(8px);
+    align-items: center; justify-content: center;
+    }
+    .overlay.active { display: flex; }
+    .overlay-card {
+    background: #0f172a; border: 1px solid #334155; border-radius: 16px;
+    padding: 32px; width: 90vw; max-width: 1100px; height: 85vh;
+    position: relative; display: flex; flex-direction: column;
+    }
+    .overlay-close {
+    position: absolute; top: 16px; right: 16px;
+    width: 32px; height: 32px; border: 1px solid #334155;
+    border-radius: 8px; background: #020617; color: #94a3b8;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    }
+
+    #cy, #cy-overlay { flex: 1; width: 100%; min-height: 200px; background: #0a0c12; border-radius: 8px; }
+    #chart, #chart-overlay { flex: 1; width: 100%; min-height: 200px; }
+
+    .status-bar {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;
+    }
+    .tag {
+    padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 600;
+    display: flex; align-items: center; gap: 6px;
+    }
+    .tag-red { background: rgba(239, 68, 68, 0.1); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.2); }
+    .tag-blue { background: rgba(56, 189, 248, 0.1); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.2); }
+    .tag-green { background: rgba(34, 197, 94, 0.1); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.2); }
+  
+    .capability-list {
+    list-style: none; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    }
+    .cap-item {
+    background: #1e293b; padding: 10px; border-radius: 8px; border-left: 3px solid #38bdf8;
+    }
+    .cap-name { font-size: 0.8rem; font-weight: 700; color: #f1f5f9; display: block; }
+    .cap-desc { font-size: 0.65rem; color: #94a3b8; margin-top: 2px; }
+
+    .delegation-box {
+    margin-top: auto; padding: 12px; background: #020617; border: 1px dashed #334155; border-radius: 8px;
+    display: flex; justify-content: space-around; align-items: center;
+    }
+    .helper { text-align: center; }
+    .helper-icon { font-size: 1.2rem; margin-bottom: 4px; }
+    .helper-name { font-size: 0.6rem; font-weight: 800; color: #cbd5e1; text-transform: uppercase; }
+</style>
+</head>
+<body>
+
+<h1>Assistant Intelligence Profile</h1>
+<p class="subtitle">Role: Cody · Mode: Exploration · System Mapping</p>
+
+<div class="grid">
+    <!-- ARCHITECTURE FLOW -->
+    <div class="card" style="grid-row: span 2;">
+    <div class="card-header">
+        <span class="card-title">Functional Architecture</span>
+        <button class="btn-maximize" onclick="openOverlay('overlay-cy')">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 5V1h4M9 1h4v4M13 9v4H9M5 13H1V9"/></svg>
+        </button>
+    </div>
+    <div id="cy"></div>
+    <div class="status-bar">
+        <span class="tag tag-red">● Exploration Mode (Read-Only)</span>
+        <span class="tag tag-blue">● DAP Debugging Active</span>
+        <span class="tag tag-green">● Multi-Tool Core</span>
+    </div>
+    </div>
+
+    <!-- RADAR METRICS -->
+    <div class="card">
+    <div class="card-header">
+        <span class="card-title">Power Distribution</span>
+        <button class="btn-maximize" onclick="openOverlay('overlay-chart')">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 5V1h4M9 1h4v4M13 9v4H9M5 13H1V9"/></svg>
+        </button>
+    </div>
+    <div id="chart"></div>
+    </div>
+
+    <!-- CAPABILITY DETAILS -->
+    <div class="card">
+    <div class="card-header">
+        <span class="card-title">Active Toolset Summary</span>
+    </div>
+    <div class="capability-list">
+        <div class="cap-item">
+        <span class="cap-name">Code Exploration</span>
+        <span class="cap-desc">Semantic, Vector & Exact search</span>
+        </div>
+        <div class="cap-item">
+        <span class="cap-name">Runtime Analysis</span>
+        <span class="cap-desc">Full Browser & DOM manipulation</span>
+        </div>
+        <div class="cap-item">
+        <span class="cap-name">Live Debug</span>
+        <span class="cap-desc">Attach to DAP, Step, Eval expressions</span>
+        </div>
+        <div class="cap-item">
+        <span class="cap-name">Research (Tavily)</span>
+        <span class="cap-desc">Web crawl, search & download</span>
+        </div>
+    </div>
+    <div class="delegation-box">
+        <div class="helper">
+            <div class="helper-icon">🎨</div>
+            <div class="helper-name">Lumi (Design)</div>
+        </div>
+        <div class="helper">
+            <div class="helper-icon">🔊</div>
+            <div class="helper-name">Sonic (Media)</div>
+        </div>
+        <div class="helper" style="opacity: 0.5;">
+            <div class="helper-icon">🤖</div>
+            <div class="helper-name">Cody (Core)</div>
+        </div>
+    </div>
+    </div>
+</div>
+
+<!-- OVERLAYS -->
+<div class="overlay" id="overlay-cy" onclick="closeOverlayOnBg(event,'overlay-cy')">
+    <div class="overlay-card">
+    <button class="overlay-close" onclick="closeOverlay('overlay-cy')">✕</button>
+    <div id="cy-overlay"></div>
+    </div>
+</div>
+
+<div class="overlay" id="overlay-chart" onclick="closeOverlayOnBg(event,'overlay-chart')">
+    <div class="overlay-card">
+    <button class="overlay-close" onclick="closeOverlay('overlay-chart')">✕</button>
+    <div id="chart-overlay"></div>
+    </div>
+</div>
+
+<script>
+let cyOverlayInited = false, chartOverlayInited = false;
+function openOverlay(id) {
+  document.getElementById(id).classList.add('active');
+    if (id === 'overlay-cy' && !cyOverlayInited) { initCyOverlay(); cyOverlayInited = true; }
+    if (id === 'overlay-chart' && !chartOverlayInited) { initChartOverlay(); chartOverlayInited = true; }
+}
+function closeOverlay(id) { document.getElementById(id).classList.remove('active'); }
+function closeOverlayOnBg(e, id) { if (e.target === e.currentTarget) closeOverlay(id); }
+
+// Cytoscape logic
+cytoscape.use(cytoscapeDagre);
+const cyElements = [
+    { data: { id: 'core', label: 'CODY CORE', sub: 'Assistant Engine', type: 'process' } },
+  { data: { id: 'tools', label: 'BUILT-IN TOOLS', sub: 'Search/Read/DAP', type: 'input' } },
+  { data: { id: 'browser', label: 'APP STATE', sub: 'DOM/Console/JS', type: 'input' } },
+  { data: { id: 'web', label: 'RESEARCH', sub: 'Tavily/Extract', type: 'input' } },
+  { data: { id: 'output', label: 'ANALYSIS', sub: 'Read-only report', type: 'output' } },
+  { data: { id: 'delegate', label: 'DELEGATION', sub: 'Lumi / Sonic', type: 'deliver' } },
+  { data: { id: 'restrict', label: 'CONSTRAINT', sub: 'Exploration Mode', type: 'error' } },
+  { data: { source: 'tools', target: 'core' } },
+  { data: { source: 'browser', target: 'core' } },
+  { data: { source: 'web', target: 'core' } },
+  { data: { source: 'core', target: 'output' } },
+  { data: { source: 'core', target: 'delegate' } },
+  { data: { source: 'restrict', target: 'core' } },
+];
+
+const cyStyle = [
+    { selector: 'node', style: {
+      'background-color': '#1e293b', 'border-color': '#334155', 'border-width': 2,
+      'shape': 'roundrectangle', 'width': 140, 'height': 50,
+      'label': (ele) => ele.data('label') + '\n' + ele.data('sub'),
+      'text-valign': 'center', 'text-halign': 'center', 'color': '#cbd5e1',
+      'font-size': '10px', 'font-family': 'sans-serif', 'font-weight': 'bold',
+      'text-wrap': 'wrap', 'line-height': 1.4,
+  }},
+  { selector: 'node[type="process"]', style: { 'background-color': '#1e1b4b', 'border-color': '#6366f1', 'color': '#a5b4fc' }},
+  { selector: 'node[type="input"]',   style: { 'background-color': '#0c2a4a', 'border-color': '#0ea5e9', 'color': '#7dd3fc' }},
+  { selector: 'node[type="output"]',  style: { 'background-color': '#052e16', 'border-color': '#22c55e', 'color': '#86efac' }},
+  { selector: 'node[type="error"]',   style: { 'background-color': '#450a0a', 'border-color': '#ef4444', 'color': '#fca5a5' }},
+  { selector: 'node[type="deliver"]', style: { 'background-color': '#3b0764', 'border-color': '#a855f7', 'color': '#d8b4fe' }},
+  { selector: 'edge', style: { 'width': 2, 'line-color': '#334155', 'target-arrow-shape': 'triangle', 'target-arrow-color': '#334155', 'curve-style': 'bezier' }},
+];
+
+function makeCy(container) {
+  return cytoscape({
+    container, elements: cyElements, style: cyStyle,
+    layout: { name: 'dagre', rankDir: 'TB', nodeSep: 40, rankSep: 60, padding: 20 },
+    userZoomingEnabled: true, boxSelectionEnabled: false,
+  });
+}
+makeCy(document.getElementById('cy'));
+function initCyOverlay() { makeCy(document.getElementById('cy-overlay')); }
+
+// ECharts Radar
+const radarOption = {
+  backgroundColor: 'transparent',
+  radar: {
+    indicator: [
+        { name: 'Code Analysis', max: 100 },
+      { name: 'Debugging', max: 100 },
+      { name: 'App Inspection', max: 100 },
+      { name: 'Research', max: 100 },
+      { name: 'Media/UX', max: 100 },
+      { name: 'File Modification', max: 100 },
+    ],
+    shape: 'circle',
+    axisName: { color: '#94a3b8', fontSize: 10, fontWeight: 600 },
+    splitLine: { lineStyle: { color: 'rgba(51, 65, 85, 0.5)' } },
+    splitArea: { show: false },
+    axisLine:  { lineStyle: { color: 'rgba(51, 65, 85, 0.5)' } },
+  },
+  series: [{
+    type: 'radar',
+    data: [{
+      value: [95, 90, 85, 80, 15, 0],
+      areaStyle: { color: 'rgba(14, 165, 233, 0.2)' },
+      lineStyle: { color: '#0ea5e9', width: 2 },
+      itemStyle: { color: '#0ea5e9' },
+      symbol: 'none'
+    }]
+    }]
+};
+const chart = echarts.init(document.getElementById('chart'), 'dark');
+chart.setOption(radarOption);
+function initChartOverlay() { echarts.init(document.getElementById('chart-overlay'), 'dark').setOption(radarOption); }
+</script>
+</body>
+</html>
